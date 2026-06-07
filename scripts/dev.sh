@@ -1,0 +1,604 @@
+#!/usr/bin/env bash
+# dev.sh - cms-novel-localize 本地开发入口脚本
+#
+# 用法：./scripts/dev.sh <command> [service]
+# 命令：bootstrap, start, stop, restart, status, logs, migrate, test, smoke, check, help
+# 服务：api, worker；start/stop/restart/status 不传服务名时处理完整本地服务栈。
+# 作用域：只管理当前仓库的本地 FastAPI/Celery 服务和 docker compose 本地依赖。
+# 模式：后台服务生命周期 + 一次性初始化/迁移/验证任务。
+# 副作用：bootstrap 可能创建 .env 并更新 .venv/uv.lock；start/migrate 会修改本地开发数据库 schema；
+#        stop 会停止当前 compose project 的 postgres/redis 容器。
+# 边界：不部署、不重置数据库、不触碰生产配置或其他仓库；.env 指向非本地数据库/Redis 时拒绝生命周期动作。
+# 查看完整命令说明：./scripts/dev.sh --help
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUN_DIR="$ROOT_DIR/.run"
+LOG_DIR="$ROOT_DIR/logs"
+
+API_HOST="${API_HOST:-127.0.0.1}"
+API_PORT="${API_PORT:-8100}"
+API_URL="${API_URL:-http://${API_HOST}:${API_PORT}}"
+API_DOCS_URL="${API_DOCS_URL:-${API_URL}/docs}"
+API_OPENAPI_URL="${API_OPENAPI_URL:-${API_URL}/openapi.json}"
+API_HEALTH_URL="${API_HEALTH_URL:-${API_URL}/health}"
+
+APP_SERVICES=(api worker)
+DEP_SERVICES=(postgres redis)
+
+mkdir -p "$RUN_DIR" "$LOG_DIR"
+cd "$ROOT_DIR"
+
+section() {
+  printf "\n== %s ==\n" "$1"
+}
+
+row() {
+  printf "  %-14s %-10s %s\n" "$1" "$2" "${3:-}"
+}
+
+
+detail() {
+  printf "    %-9s %s\n" "${1}:" "$2"
+}
+
+event() {
+  printf "%-9s %-10s %s\n" "$1" "$2" "${3:-}"
+}
+
+die() {
+  printf "ERROR: %s\n" "$1" >&2
+  exit "${2:-1}"
+}
+
+usage() {
+  cat <<EOF
+用法：
+  ./scripts/dev.sh <command> [service]
+  ./scripts/dev.sh --help
+
+作用域：
+  当前仓库的本地开发入口。管理 FastAPI API、Celery worker，以及 docker compose 中的 postgres/redis 本地依赖。
+  不负责部署、生产运维、数据库重置、远程资源或其他仓库。
+
+服务：
+  api       FastAPI 服务，URL: ${API_URL}，文档: ${API_DOCS_URL}，OpenAPI: ${API_OPENAPI_URL}，健康检查: ${API_HEALTH_URL}
+  worker    Celery worker，处理 jobs.process 异步任务
+
+命令：
+  bootstrap           缺少 .env 时从 .env.example 创建，并执行 uv sync。
+  start [service]     启动服务；不传 service 时启动依赖、执行迁移、启动 api 和 worker。
+  stop [service]      停止服务；不传 service 时停止 api、worker、postgres 和 redis。
+  restart [service]   重启服务；不传 service 时重启完整本地服务栈。
+  status [service]    查看状态；不传 service 时展示依赖、api、worker 和健康检查。
+  logs <service>      跟随查看 api 或 worker 日志，Ctrl-C 退出。
+  migrate             对本地开发数据库执行 Alembic 迁移。
+  test                运行 pytest。
+  smoke               对已运行 API 执行完整 Job 冒烟验证。
+  check               执行脚本语法检查和 pytest。
+  help                显示帮助。
+
+成功标准：
+  start 成功 = postgres/redis healthy，迁移成功，api/worker 进程存活，/health 可访问。
+  smoke 成功 = mock localization job 进入 succeeded 状态。
+
+运行产物：
+  PID:  ${RUN_DIR}/api.pid, ${RUN_DIR}/worker.pid
+  日志: ${LOG_DIR}/api.log, ${LOG_DIR}/worker.log
+
+保护边界：
+  生命周期和迁移动作会拒绝非本地 DATABASE_URL / REDIS_URL。
+  未知 service 会直接报错。
+  启动 api 前会检查端口 ${API_PORT} 是否已被其他进程占用。
+EOF
+}
+
+service_pid_file() {
+  case "$1" in
+    api) printf "%s/api.pid" "$RUN_DIR" ;;
+    worker) printf "%s/worker.pid" "$RUN_DIR" ;;
+    *) die "unknown service: $1" 2 ;;
+  esac
+}
+
+service_log_file() {
+  case "$1" in
+    api) printf "%s/api.log" "$LOG_DIR" ;;
+    worker) printf "%s/worker.log" "$LOG_DIR" ;;
+    *) die "unknown service: $1" 2 ;;
+  esac
+}
+
+service_url() {
+  case "$1" in
+    api) printf "%s" "$API_URL" ;;
+    worker) printf "-" ;;
+    *) die "unknown service: $1" 2 ;;
+  esac
+}
+
+service_command() {
+  case "$1" in
+    api)
+      printf "%q " "$ROOT_DIR/.venv/bin/uvicorn" app.main:app --host "$API_HOST" --port "$API_PORT"
+      ;;
+    worker)
+      printf "%q " "$ROOT_DIR/.venv/bin/celery" -A app.tasks.celery_app.celery_app worker --loglevel=info
+      ;;
+    *)
+      die "unknown service: $1" 2
+      ;;
+  esac
+}
+
+is_app_service() {
+  local target="$1"
+  local service
+  for service in "${APP_SERVICES[@]}"; do
+    [[ "$service" == "$target" ]] && return 0
+  done
+  return 1
+}
+
+require_app_service() {
+  local target="$1"
+  is_app_service "$target" || die "unknown service: $target; expected api or worker" 2
+}
+
+compose() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+    return
+  fi
+  if command -v docker-compose >/dev/null 2>&1; then
+    docker-compose "$@"
+    return
+  fi
+  die "Docker Compose is not available. Install Docker Desktop or docker-compose." 2
+}
+
+env_value() {
+  local key="$1"
+  [[ -f "$ROOT_DIR/.env" ]] || return 0
+  grep -E "^${key}=" "$ROOT_DIR/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- || true
+}
+
+assert_local_url() {
+  local key="$1"
+  local value
+  value="$(env_value "$key")"
+  [[ -n "$value" ]] || return 0
+
+  case "$value" in
+    *127.0.0.1*|*localhost*|*0.0.0.0*|*//postgres:*|*@postgres:*|*//redis:*|*@redis:*|*host.docker.internal*)
+      return 0
+      ;;
+  esac
+
+  die "$key in .env does not look local: $value" 3
+}
+
+guard_local_env() {
+  [[ -f "$ROOT_DIR/.env" ]] || die ".env not found; run: ./scripts/dev.sh bootstrap" 2
+  assert_local_url DATABASE_URL
+  assert_local_url REDIS_URL
+}
+
+require_command() {
+  local name="$1"
+  local hint="$2"
+  command -v "$name" >/dev/null 2>&1 || die "$name is not available; $hint" 2
+}
+
+require_executable() {
+  local path="$1"
+  local hint="$2"
+  [[ -x "$path" ]] || die "$path not found or not executable; $hint" 2
+}
+
+pid_of() {
+  local pid_file="$1"
+  [[ -f "$pid_file" ]] && cat "$pid_file" 2>/dev/null || true
+}
+
+is_running_pid_file() {
+  local pid_file="$1"
+  local pid
+  pid="$(pid_of "$pid_file")"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+port_owner_pid() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n 1 || true
+  fi
+}
+
+assert_api_port_free() {
+  local api_pid_file
+  local running_pid
+  local owner_pid
+
+  api_pid_file="$(service_pid_file api)"
+  running_pid="$(pid_of "$api_pid_file")"
+  owner_pid="$(port_owner_pid "$API_PORT")"
+
+  [[ -z "$owner_pid" ]] && return 0
+  [[ -n "$running_pid" && "$owner_pid" == "$running_pid" ]] && return 0
+
+  die "api port ${API_PORT} is already used by pid=${owner_pid}; stop that process or set API_PORT" 4
+}
+
+wait_for_pid_exit() {
+  local pid="$1"
+  local timeout_seconds="$2"
+  local elapsed=0
+
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( elapsed >= timeout_seconds )); then
+      return 1
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+}
+
+wait_for_container_health() {
+  local service="$1"
+  local timeout_seconds="$2"
+  local elapsed=0
+
+  while true; do
+    if compose ps "$service" 2>/dev/null | grep -qi "healthy"; then
+      event "READY" "$service" "healthy"
+      return 0
+    fi
+
+    if (( elapsed >= timeout_seconds )); then
+      compose ps "$service" >&2 || true
+      die "$service did not become healthy within ${timeout_seconds}s"
+    fi
+
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+}
+
+wait_for_api() {
+  local timeout_seconds="$1"
+  local elapsed=0
+
+  while true; do
+    if curl -fsS "$API_HEALTH_URL" >/dev/null 2>&1; then
+      event "READY" "api" "$API_HEALTH_URL"
+      return 0
+    fi
+
+    if (( elapsed >= timeout_seconds )); then
+      tail -n 60 "$(service_log_file api)" >&2 2>/dev/null || true
+      die "api health check failed after ${timeout_seconds}s; inspect: ./scripts/dev.sh logs api"
+    fi
+
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+}
+
+bootstrap() {
+  section "Bootstrap"
+  require_command uv "install uv first"
+
+  if [[ -f "$ROOT_DIR/.env" ]]; then
+    event "EXISTS" ".env" "kept"
+  else
+    cp "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
+    event "CREATED" ".env" "from .env.example"
+  fi
+
+  uv sync
+}
+
+start_dependencies() {
+  section "Dependencies"
+  compose up -d "${DEP_SERVICES[@]}"
+  wait_for_container_health postgres 90
+  wait_for_container_health redis 60
+}
+
+stop_dependencies() {
+  section "Dependencies"
+  if compose ps "${DEP_SERVICES[@]}" >/dev/null 2>&1; then
+    compose stop "${DEP_SERVICES[@]}"
+  else
+    event "SKIP" "compose" "no local services found"
+  fi
+}
+
+migrate() {
+  guard_local_env
+  section "Database"
+  require_executable "$ROOT_DIR/.venv/bin/alembic" "run: ./scripts/dev.sh bootstrap"
+  "$ROOT_DIR/.venv/bin/alembic" upgrade head
+}
+
+start_service() {
+  local service="$1"
+  local pid_file
+  local log_file
+  local pid
+  local command
+
+  require_app_service "$service"
+  require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
+  [[ "$service" == "api" ]] && require_executable "$ROOT_DIR/.venv/bin/uvicorn" "run: ./scripts/dev.sh bootstrap"
+  [[ "$service" == "worker" ]] && require_executable "$ROOT_DIR/.venv/bin/celery" "run: ./scripts/dev.sh bootstrap"
+
+  pid_file="$(service_pid_file "$service")"
+  log_file="$(service_log_file "$service")"
+
+  if is_running_pid_file "$pid_file"; then
+    event "RUNNING" "$service" "pid=$(pid_of "$pid_file") url=$(service_url "$service")"
+    return
+  fi
+
+  rm -f "$pid_file"
+  [[ "$service" == "api" ]] && assert_api_port_free
+
+  command="$(service_command "$service")"
+  nohup bash -c "exec ${command}" > "$log_file" 2>&1 &
+  echo $! > "$pid_file"
+  pid="$(pid_of "$pid_file")"
+
+  sleep 1
+  if ! kill -0 "$pid" 2>/dev/null; then
+    tail -n 60 "$log_file" >&2 2>/dev/null || true
+    rm -f "$pid_file"
+    die "$service failed to stay running; inspect: ./scripts/dev.sh logs $service"
+  fi
+
+  event "STARTED" "$service" "pid=$pid log=$log_file url=$(service_url "$service")"
+}
+
+start_application() {
+  section "Application"
+  start_service api
+  start_service worker
+  wait_for_api 30
+}
+
+stop_service() {
+  local service="$1"
+  local pid_file
+  local pid
+
+  require_app_service "$service"
+  pid_file="$(service_pid_file "$service")"
+  pid="$(pid_of "$pid_file")"
+
+  if [[ -z "$pid" ]]; then
+    event "STOPPED" "$service" "already stopped"
+    return
+  fi
+
+  if ! kill -0 "$pid" 2>/dev/null; then
+    event "STALE" "$service" "removed pid=$pid"
+    rm -f "$pid_file"
+    return
+  fi
+
+  event "STOPPING" "$service" "pid=$pid"
+  kill "$pid" 2>/dev/null || true
+  if ! wait_for_pid_exit "$pid" 10; then
+    event "KILLING" "$service" "pid=$pid"
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pid_file"
+  event "STOPPED" "$service" ""
+}
+
+start_all() {
+  guard_local_env
+  start_dependencies
+  migrate
+  start_application
+  status_application
+}
+
+stop_all() {
+  section "Application"
+  stop_service api
+  stop_service worker
+  stop_dependencies
+}
+
+status_service() {
+  local service="$1"
+  local pid_file
+  local log_file
+  local pid
+  local state
+  local summary
+  local display_log
+
+  require_app_service "$service"
+  pid_file="$(service_pid_file "$service")"
+  log_file="$(service_log_file "$service")"
+  display_log="${log_file#$ROOT_DIR/}"
+  pid="$(pid_of "$pid_file")"
+
+  if [[ -z "$pid" ]]; then
+    state="stopped"
+    summary="pid=-"
+  elif kill -0 "$pid" 2>/dev/null; then
+    state="running"
+    summary="pid=$pid"
+  else
+    state="stale"
+    summary="pid=$pid"
+  fi
+
+  row "$service" "$state" "$summary"
+  if [[ "$service" == "api" ]]; then
+    detail "app" "$API_URL"
+    detail "docs" "$API_DOCS_URL"
+    detail "openapi" "$API_OPENAPI_URL"
+    detail "health" "$API_HEALTH_URL"
+    detail "log" "$display_log"
+  else
+    detail "log" "$display_log"
+  fi
+}
+
+status_dependencies() {
+  local service
+  local line
+  local name
+  local state
+  local health
+  local ports
+
+  section "Dependencies"
+  if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
+    row docker "missing" "Docker Compose is unavailable"
+    return
+  fi
+
+  for service in "${DEP_SERVICES[@]}"; do
+    line="$(compose ps "$service" --format '{{.Service}}|{{.State}}|{{.Health}}|{{.Ports}}' 2>/dev/null || true)"
+    if [[ -z "$line" ]]; then
+      row "$service" "missing" "container not found"
+      continue
+    fi
+
+    IFS='|' read -r name state health ports <<< "$line"
+    [[ -n "$health" ]] || health="-"
+    ports="${ports%%, *}"
+    row "$name" "$health" "state=$state ports=${ports:-none}"
+  done
+}
+
+status_application() {
+  section "Application"
+  status_service api
+  status_service worker
+
+  if curl -fsS "$API_URL/health" >/dev/null 2>&1; then
+    row health "ok" "$API_HEALTH_URL"
+  else
+    row health "down" "$API_HEALTH_URL"
+  fi
+}
+
+run_tests() {
+  section "Test"
+  require_executable "$ROOT_DIR/.venv/bin/pytest" "run: ./scripts/dev.sh bootstrap"
+  "$ROOT_DIR/.venv/bin/pytest" -q
+}
+
+run_smoke() {
+  guard_local_env
+  section "Smoke"
+  require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
+  "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/smoke_job.py"
+}
+
+run_check() {
+  section "Script"
+  bash -n "$ROOT_DIR/scripts/dev.sh"
+  event "OK" "dev.sh" "syntax"
+  run_tests
+}
+
+follow_logs() {
+  local service="${1:-}"
+  [[ -n "$service" ]] || die "logs requires service: api or worker" 2
+  require_app_service "$service"
+  tail -f "$(service_log_file "$service")"
+}
+
+start_target() {
+  local service="${1:-}"
+  if [[ -z "$service" ]]; then
+    start_all
+    return
+  fi
+  guard_local_env
+  section "Application"
+  start_service "$service"
+  [[ "$service" == "api" ]] && wait_for_api 30
+}
+
+stop_target() {
+  local service="${1:-}"
+  if [[ -z "$service" ]]; then
+    stop_all
+    return
+  fi
+  section "Application"
+  stop_service "$service"
+}
+
+restart_target() {
+  local service="${1:-}"
+  if [[ -z "$service" ]]; then
+    stop_all
+    start_all
+    return
+  fi
+  stop_target "$service"
+  start_target "$service"
+}
+
+status_target() {
+  local service="${1:-}"
+  if [[ -z "$service" ]]; then
+    status_dependencies
+    status_application
+    return
+  fi
+  section "Application"
+  status_service "$service"
+}
+
+command="${1:-help}"
+case "$command" in
+  --help|-h|help)
+    usage
+    ;;
+  bootstrap)
+    bootstrap
+    ;;
+  start)
+    start_target "${2:-}"
+    ;;
+  stop)
+    stop_target "${2:-}"
+    ;;
+  restart)
+    restart_target "${2:-}"
+    ;;
+  status)
+    status_target "${2:-}"
+    ;;
+  logs)
+    follow_logs "${2:-}"
+    ;;
+  migrate)
+    migrate
+    ;;
+  test)
+    run_tests
+    ;;
+  smoke)
+    run_smoke
+    ;;
+  check)
+    run_check
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
