@@ -32,6 +32,7 @@ def generate_text(model_id: str, messages: list[dict[str, str]]) -> TextGenerati
         model=model.litellm_model,
         messages=messages,
         temperature=0.7,
+        timeout=120,
         num_retries=0,
         drop_params=True,
     )

@@ -1,0 +1,149 @@
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from app.infrastructure.config import settings
+
+
+ExecutionMode = Literal["p1", "p5"]
+
+
+@dataclass(frozen=True)
+class PlannedWorkItem:
+    name: str
+    kind: str
+    chunk_index: int
+    input_payload: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class JobPlan:
+    execution_mode: ExecutionMode
+    chunk_count: int
+    work_items: list[PlannedWorkItem]
+    chunk_registry: list[dict[str, Any]]
+
+    def model_dump(self) -> dict[str, Any]:
+        return {
+            "execution_mode": self.execution_mode,
+            "chunk_count": self.chunk_count,
+            "chunk_registry": self.chunk_registry,
+            "work_items": [
+                {
+                    "name": item.name,
+                    "kind": item.kind,
+                    "chunk_index": item.chunk_index,
+                    "input_payload": item.input_payload,
+                }
+                for item in self.work_items
+            ],
+        }
+
+
+def _count_chars(text: str) -> int:
+    return sum(1 for char in text if not char.isspace())
+
+
+def split_text(text: str, max_chars: int | None = None) -> list[str]:
+    return [item["text"] for item in split_text_with_registry(text, max_chars=max_chars)]
+
+
+def split_text_with_registry(text: str, max_chars: int | None = None) -> list[dict[str, Any]]:
+    limit = max_chars or settings.NOVEL_LOCALIZATION_CHUNK_SIZE
+    paragraphs = [item.strip() for item in text.split("\n\n") if item.strip()]
+    if not paragraphs:
+        return [{"chunk_index": 1, "text": text, "char_count": _count_chars(text)}]
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_chars = 0
+
+    for paragraph in paragraphs:
+        paragraph_chars = _count_chars(paragraph)
+        if current and current_chars + paragraph_chars > limit:
+            chunks.append("\n\n".join(current))
+            current = []
+            current_chars = 0
+        current.append(paragraph)
+        current_chars += paragraph_chars
+
+    if current:
+        chunks.append("\n\n".join(current))
+
+    return [
+        {
+            "chunk_index": index,
+            "text": chunk,
+            "char_count": _count_chars(chunk),
+        }
+        for index, chunk in enumerate(chunks, start=1)
+    ]
+
+
+def build_job_plan(job_type: str, input_text: str) -> JobPlan:
+    char_count = _count_chars(input_text)
+    if char_count <= settings.NOVEL_LOCALIZATION_P1_MAX_CHARS:
+        return JobPlan(
+            execution_mode="p1",
+            chunk_count=1,
+            chunk_registry=[
+                {
+                    "chunk_index": 1,
+                    "text": input_text,
+                    "char_count": char_count,
+                }
+            ],
+            work_items=[
+                PlannedWorkItem(
+                    name=f"{job_type}.whole",
+                    kind="whole",
+                    chunk_index=0,
+                    input_payload={"text": input_text},
+                )
+            ],
+        )
+
+    chunk_registry = split_text_with_registry(input_text)
+    work_items: list[PlannedWorkItem] = []
+    if job_type == "novel_localization.step1_localize":
+        work_items.append(
+            PlannedWorkItem(
+                name=f"{job_type}.memory",
+                kind="memory",
+                chunk_index=0,
+                input_payload={"chunks": chunk_registry},
+            )
+        )
+
+    for chunk in chunk_registry:
+        work_items.append(
+            PlannedWorkItem(
+                name=f"{job_type}.chunk",
+                kind="chunk",
+                chunk_index=chunk["chunk_index"],
+                input_payload={"text": chunk["text"], "char_count": chunk["char_count"]},
+            )
+        )
+
+    work_items.append(
+        PlannedWorkItem(
+            name=f"{job_type}.merge",
+            kind="merge",
+            chunk_index=len(chunk_registry) + 1,
+            input_payload={"chunk_count": len(chunk_registry)},
+        )
+    )
+    if job_type == "novel_localization.step3_translate":
+        work_items.append(
+            PlannedWorkItem(
+                name=f"{job_type}.scan",
+                kind="scan",
+                chunk_index=len(chunk_registry) + 2,
+                input_payload={"chunk_count": len(chunk_registry)},
+            )
+        )
+    return JobPlan(
+        execution_mode="p5",
+        chunk_count=len(chunk_registry),
+        chunk_registry=chunk_registry,
+        work_items=work_items,
+    )

@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     CELERY_MAX_RETRIES: int = 0
     CELERY_RETRY_DELAY: int = 60
     CELERY_RESULT_EXPIRES: int = 86400
+    NOVEL_LOCALIZATION_P1_MAX_CHARS: int = 5000
+    NOVEL_LOCALIZATION_CHUNK_SIZE: int = 4500
 
     LOG_LEVEL: str = Field(default="INFO")
 

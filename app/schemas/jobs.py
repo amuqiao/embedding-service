@@ -109,7 +109,7 @@ class Artifact(StrictBaseModel):
     oss_region: str | None = None
     content_hash: str | None = None
     content_size_bytes: int | None = None
-    content: str | None = None
+    content: Any | None = None
     target: ArtifactTarget | None = None
 
 

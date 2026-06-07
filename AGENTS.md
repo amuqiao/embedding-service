@@ -33,6 +33,8 @@
 ./scripts/dev.sh start
 ./scripts/dev.sh status
 ./scripts/dev.sh smoke
+./scripts/dev.sh workflow-smoke
+./scripts/dev.sh e2e
 ./scripts/dev.sh check
 ./scripts/dev.sh stop
 ```
@@ -63,12 +65,29 @@
 ./scripts/dev.sh stop
 ```
 
+修改 Job 内部执行、Celery workflow、分块或 merge 后，优先运行可重复的 mock 长文本验证：
+
+```bash
+./scripts/dev.sh start
+./scripts/dev.sh workflow-smoke
+./scripts/dev.sh stop
+```
+
+需要验证真实模型调用时，确认 `.env` 已配置 `OPENAI_API_KEY` 且 `.data/` 下存在 `.txt` 文件，然后运行：
+
+```bash
+./scripts/dev.sh start
+./scripts/dev.sh e2e
+./scripts/dev.sh stop
+```
+
 如果因本机环境、Docker 权限或端口占用无法验证，必须在回复中明确说明未验证项和原因。
 
 ## 环境与安全
 
 - `.env` 是本地私有配置，不提交。
 - `.env.example` 是可提交的配置模板。
+- `.data/` 是本地验证输入，不提交。
 - 本地默认端口：API `8100`，PostgreSQL `15432`，Redis `16379`。
 - `scripts/dev.sh` 会拒绝明显非本地的 `DATABASE_URL` 和 `REDIS_URL`。
 - 不要在本仓库脚本中加入生产部署、远程数据库重置、密钥写入或跨仓库清理逻辑。

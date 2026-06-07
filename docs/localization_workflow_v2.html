@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>本地化翻译工作流 v2 · 核心流程</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #f5f4ef;
+      font-family: -apple-system, "Segoe UI", sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px 60px;
+      color: #1f1e1d;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    header h1 {
+      font-size: 22px;
+      font-weight: 600;
+      color: #1f1e1d;
+      letter-spacing: -0.3px;
+    }
+    header p {
+      margin-top: 6px;
+      font-size: 13px;
+      color: #73726c;
+    }
+
+    .card {
+      background: #ffffff;
+      border-radius: 16px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.05);
+      padding: 32px 24px 28px;
+      width: 100%;
+      max-width: 760px;
+    }
+
+    .diagram-wrap {
+      width: 100%;
+      overflow-x: auto;
+    }
+
+    svg {
+      display: block;
+      width: 100%;
+      max-width: 680px;
+      margin: 0 auto;
+      height: auto;
+    }
+
+    /* Legend row below diagram */
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px 28px;
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid #e8e7e2;
+      justify-content: center;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #3d3d3a;
+    }
+    .legend-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+    .dot-serial   { background: #eeedfe; border: 1px solid #534ab7; }
+    .dot-validate { background: #e1f5ee; border: 1px solid #0f6e56; }
+    .dot-translate{ background: #faece7; border: 1px solid #993c1d; }
+    .dot-map      { background: #faeedc; border: 1px solid #854f0b; }
+
+    footer {
+      margin-top: 24px;
+      font-size: 11px;
+      color: #a8a79f;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>本地化翻译工作流 v2</h1>
+  <p>三阶段流程：串行本地化 → 并行校验 → 并行翻译 → 合并扫描 → 英文终稿</p>
+</header>
+
+<div class="card">
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 680 920" role="img" xmlns="http://www.w3.org/2000/svg">
+      <title>本地化翻译工作流 v2 核心流程</title>
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+        <mask id="txt-gaps" maskUnits="userSpaceOnUse">
+          <rect x="0" y="0" width="680" height="920" fill="white"/>
+          <rect x="301" y="31.25" width="78" height="21.5" fill="black" rx="2"/>
+          <rect x="360" y="71" width="170" height="19" fill="black" rx="2"/>
+          <rect x="234" y="105.25" width="212" height="21.5" fill="black" rx="2"/>
+          <rect x="313" y="157.25" width="54" height="21.5" fill="black" rx="2"/>
+          <rect x="252" y="176.5" width="176" height="19" fill="black" rx="2"/>
+          <rect x="301" y="234.25" width="78" height="21.5" fill="black" rx="2"/>
+          <rect x="236" y="251.5" width="208" height="19" fill="black" rx="2"/>
+          <rect x="269" y="305.25" width="142" height="21.5" fill="black" rx="2"/>
+          <rect x="266" y="324.5" width="148" height="19" fill="black" rx="2"/>
+          <rect x="360" y="361" width="68" height="19" fill="black" rx="2"/>
+          <rect x="233" y="399.25" width="214" height="21.5" fill="black" rx="2"/>
+          <rect x="99" y="469.25" width="62" height="21.5" fill="black" rx="2"/>
+          <rect x="92" y="486.5" width="76" height="19" fill="black" rx="2"/>
+          <rect x="237" y="469.25" width="65" height="21.5" fill="black" rx="2"/>
+          <rect x="231" y="486.5" width="78" height="19" fill="black" rx="2"/>
+          <rect x="378" y="469.25" width="64" height="21.5" fill="black" rx="2"/>
+          <rect x="371" y="486.5" width="78" height="19" fill="black" rx="2"/>
+          <rect x="516" y="469.25" width="68" height="21.5" fill="black" rx="2"/>
+          <rect x="510" y="486.5" width="80" height="19" fill="black" rx="2"/>
+          <rect x="330" y="476" width="20" height="19" fill="black" rx="2"/>
+          <rect x="360" y="530" width="92" height="19" fill="black" rx="2"/>
+          <rect x="240" y="559.25" width="200" height="21.5" fill="black" rx="2"/>
+          <rect x="99" y="629.25" width="62" height="21.5" fill="black" rx="2"/>
+          <rect x="96" y="646.5" width="68" height="19" fill="black" rx="2"/>
+          <rect x="237" y="629.25" width="65" height="21.5" fill="black" rx="2"/>
+          <rect x="236" y="646.5" width="68" height="19" fill="black" rx="2"/>
+          <rect x="378" y="629.25" width="64" height="21.5" fill="black" rx="2"/>
+          <rect x="376" y="646.5" width="68" height="19" fill="black" rx="2"/>
+          <rect x="516" y="629.25" width="68" height="21.5" fill="black" rx="2"/>
+          <rect x="516" y="646.5" width="68" height="19" fill="black" rx="2"/>
+          <rect x="330" y="636" width="20" height="19" fill="black" rx="2"/>
+          <rect x="279" y="721.25" width="122" height="21.5" fill="black" rx="2"/>
+          <rect x="238" y="740.5" width="204" height="19" fill="black" rx="2"/>
+          <rect x="308" y="811.25" width="64" height="21.5" fill="black" rx="2"/>
+        </mask>
+      </defs>
+
+      <!-- ── 原始中文稿 ── -->
+      <rect x="240" y="20" width="200" height="44" rx="8" fill="#f1efe8" stroke="#5f5e5a" stroke-width="0.5"/>
+      <text x="340" y="42" text-anchor="middle" dominant-baseline="central" fill="#444441" font-size="14" font-weight="500">原始中文稿</text>
+
+      <!-- 向下箭头 -->
+      <line x1="340" y1="64" x2="340" y2="94" marker-end="url(#arrow)" stroke="#73726c" stroke-width="1.5" fill="none"/>
+      <text x="364" y="85" fill="#3d3d3a" font-size="12">按段落/场景边界切分（≈5块）</text>
+
+      <!-- ── STEP 1 标题栏 ── -->
+      <rect x="60" y="100" width="560" height="32" rx="8" fill="#eeedfe" stroke="#534ab7" stroke-width="0.5"/>
+      <text x="340" y="116" text-anchor="middle" dominant-baseline="central" fill="#3c3489" font-size="14" font-weight="500">Step 1 · 本地化处理　　串行执行</text>
+
+      <!-- Trunk 1 -->
+      <rect x="200" y="148" width="280" height="56" rx="8" fill="#eeedfe" stroke="#534ab7" stroke-width="0.5"/>
+      <text x="340" y="168" text-anchor="middle" dominant-baseline="central" fill="#3c3489" font-size="14" font-weight="500">Trunk 1</text>
+      <text x="340" y="186" text-anchor="middle" dominant-baseline="central" fill="#534ab7" font-size="12">自主决策 · 生成角色/地名映射表</text>
+
+      <!-- 提取映射表 -->
+      <line x1="340" y1="204" x2="340" y2="228" marker-end="url(#arrow)" stroke="#73726c" stroke-width="1.5" fill="none"/>
+      <rect x="180" y="228" width="320" height="44" rx="8" fill="#faeedc" stroke="#854f0b" stroke-width="0.5"/>
+      <text x="340" y="245" text-anchor="middle" dominant-baseline="central" fill="#633806" font-size="14" font-weight="500">提取映射表</text>
+      <text x="340" y="261" text-anchor="middle" dominant-baseline="central" fill="#854f0b" font-size="12">角色 · 地名 · 故事 Type　→　固定参数</text>
+
+      <!-- 映射表向下 -->
+      <line x1="340" y1="272" x2="340" y2="296" marker-end="url(#arrow)" stroke="#73726c" stroke-width="1.5" fill="none"/>
+
+      <!-- Trunk 2~N -->
+      <rect x="200" y="296" width="280" height="56" rx="8" fill="#eeedfe" stroke="#534ab7" stroke-width="0.5"/>
+      <text x="340" y="316" text-anchor="middle" dominant-baseline="central" fill="#3c3489" font-size="14" font-weight="500">Trunk 2 → 3 → … → N</text>
+      <text x="340" y="334" text-anchor="middle" dominant-baseline="central" fill="#534ab7" font-size="12">注入映射表 · 遇新角色追加</text>
+
+      <!-- Step1 → Step2 -->
+      <line x1="340" y1="352" x2="340" y2="388" marker-end="url(#arrow)" stroke="#73726c" stroke-width="1.5" fill="none"/>
+      <text x="364" y="375" fill="#3d3d3a" font-size="12">映射表冻结</text>
+
+      <!-- ── STEP 2 标题栏 ── -->
+      <rect x="60" y="394" width="560" height="32" rx="8" fill="#e1f5ee" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="340" y="410" text-anchor="middle" dominant-baseline="central" fill="#085041" font-size="14" font-weight="500">Step 2 · 本地化校验　　并行执行</text>
+
+      <!-- 并行分叉线 -->
+      <line x1="340" y1="426" x2="340" y2="444" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="130" y1="444" x2="550" y2="444" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="130" y1="444" x2="130" y2="460" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="270" y1="444" x2="270" y2="460" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="410" y1="444" x2="410" y2="460" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="550" y1="444" x2="550" y2="460" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+
+      <!-- 4个并行校验块 -->
+      <rect x="72" y="460" width="116" height="52" rx="8" fill="#e1f5ee" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="130" y="480" text-anchor="middle" dominant-baseline="central" fill="#085041" font-size="14" font-weight="500">块 1 校验</text>
+      <text x="130" y="496" text-anchor="middle" dominant-baseline="central" fill="#0f6e56" font-size="12">对比原文块 1</text>
+
+      <rect x="212" y="460" width="116" height="52" rx="8" fill="#e1f5ee" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="270" y="480" text-anchor="middle" dominant-baseline="central" fill="#085041" font-size="14" font-weight="500">块 2 校验</text>
+      <text x="270" y="496" text-anchor="middle" dominant-baseline="central" fill="#0f6e56" font-size="12">对比原文块 2</text>
+
+      <rect x="352" y="460" width="116" height="52" rx="8" fill="#e1f5ee" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="410" y="480" text-anchor="middle" dominant-baseline="central" fill="#085041" font-size="14" font-weight="500">块 3 校验</text>
+      <text x="410" y="496" text-anchor="middle" dominant-baseline="central" fill="#0f6e56" font-size="12">对比原文块 3</text>
+
+      <rect x="492" y="460" width="116" height="52" rx="8" fill="#e1f5ee" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="550" y="480" text-anchor="middle" dominant-baseline="central" fill="#085041" font-size="14" font-weight="500">块 N 校验</text>
+      <text x="550" y="496" text-anchor="middle" dominant-baseline="central" fill="#0f6e56" font-size="12">对比原文块 N</text>
+
+      <text x="340" y="490" text-anchor="middle" fill="#3d3d3a" font-size="12">…</text>
+
+      <!-- 汇合线 Step2 -->
+      <line x1="130" y1="512" x2="130" y2="530" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="270" y1="512" x2="270" y2="530" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="410" y1="512" x2="410" y2="530" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="550" y1="512" x2="550" y2="530" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="130" y1="530" x2="550" y2="530" stroke="rgba(31,30,29,0.3)" stroke-width="1" mask="url(#txt-gaps)"/>
+      <line x1="340" y1="530" x2="340" y2="548" marker-end="url(#arrow)" stroke="#73726c" stroke-width="1.5" fill="none"/>
+      <text x="364" y="544" fill="#3d3d3a" font-size="12">问题块单独修订</text>
+
+      <!-- ── STEP 3 标题栏 ── -->
+      <rect x="60" y="554" width="560" height="32" rx="8" fill="#faece7" stroke="#993c1d" stroke-width="0.5"/>
+      <text x="340" y="570" text-anchor="middle" dominant-baseline="central" fill="#712b13" font-size="14" font-weight="500">Step 3 · 英文翻译　　并行执行</text>
+
+      <!-- 并行分叉 Step3 -->
+      <line x1="340" y1="586" x2="340" y2="604" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="130" y1="604" x2="550" y2="604" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="130" y1="604" x2="130" y2="620" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="270" y1="604" x2="270" y2="620" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="410" y1="604" x2="410" y2="620" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="550" y1="604" x2="550" y2="620" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+
+      <!-- 4个并行翻译块 -->
+      <rect x="72" y="620" width="116" height="52" rx="8" fill="#faece7" stroke="#993c1d" stroke-width="0.5"/>
+      <text x="130" y="640" text-anchor="middle" dominant-baseline="central" fill="#712b13" font-size="14" font-weight="500">块 1 翻译</text>
+      <text x="130" y="656" text-anchor="middle" dominant-baseline="central" fill="#993c1d" font-size="12">注入映射表</text>
+
+      <rect x="212" y="620" width="116" height="52" rx="8" fill="#faece7" stroke="#993c1d" stroke-width="0.5"/>
+      <text x="270" y="640" text-anchor="middle" dominant-baseline="central" fill="#712b13" font-size="14" font-weight="500">块 2 翻译</text>
+      <text x="270" y="656" text-anchor="middle" dominant-baseline="central" fill="#993c1d" font-size="12">注入映射表</text>
+
+      <rect x="352" y="620" width="116" height="52" rx="8" fill="#faece7" stroke="#993c1d" stroke-width="0.5"/>
+      <text x="410" y="640" text-anchor="middle" dominant-baseline="central" fill="#712b13" font-size="14" font-weight="500">块 3 翻译</text>
+      <text x="410" y="656" text-anchor="middle" dominant-baseline="central" fill="#993c1d" font-size="12">注入映射表</text>
+
+      <rect x="492" y="620" width="116" height="52" rx="8" fill="#faece7" stroke="#993c1d" stroke-width="0.5"/>
+      <text x="550" y="640" text-anchor="middle" dominant-baseline="central" fill="#712b13" font-size="14" font-weight="500">块 N 翻译</text>
+      <text x="550" y="656" text-anchor="middle" dominant-baseline="central" fill="#993c1d" font-size="12">注入映射表</text>
+
+      <text x="340" y="650" text-anchor="middle" fill="#3d3d3a" font-size="12">…</text>
+
+      <!-- 汇合线 Step3 -->
+      <line x1="130" y1="672" x2="130" y2="692" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="270" y1="672" x2="270" y2="692" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="410" y1="672" x2="410" y2="692" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="550" y1="672" x2="550" y2="692" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="130" y1="692" x2="550" y2="692" stroke="rgba(31,30,29,0.3)" stroke-width="1"/>
+      <line x1="340" y1="692" x2="340" y2="712" marker-end="url(#arrow)" stroke="#73726c" stroke-width="1.5" fill="none"/>
+
+      <!-- ── 合并 + 一致性扫描 ── -->
+      <rect x="180" y="712" width="320" height="56" rx="8" fill="#f1efe8" stroke="#5f5e5a" stroke-width="0.5"/>
+      <text x="340" y="732" text-anchor="middle" dominant-baseline="central" fill="#444441" font-size="14" font-weight="500">合并 + 一致性扫描</text>
+      <text x="340" y="750" text-anchor="middle" dominant-baseline="central" fill="#5f5e5a" font-size="12">轻量 Prompt 检查全文人名/称谓统一</text>
+
+      <line x1="340" y1="768" x2="340" y2="800" marker-end="url(#arrow)" stroke="#73726c" stroke-width="1.5" fill="none"/>
+
+      <!-- ── 英文终稿 ── -->
+      <rect x="240" y="800" width="200" height="44" rx="8" fill="#f1efe8" stroke="#5f5e5a" stroke-width="0.5"/>
+      <text x="340" y="822" text-anchor="middle" dominant-baseline="central" fill="#444441" font-size="14" font-weight="500">英文终稿</text>
+    </svg>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <div class="legend-item"><span class="legend-dot dot-serial"></span>串行（Step 1）</div>
+    <div class="legend-item"><span class="legend-dot dot-validate"></span>并行·校验（Step 2）</div>
+    <div class="legend-item"><span class="legend-dot dot-translate"></span>并行·翻译（Step 3）</div>
+    <div class="legend-item"><span class="legend-dot dot-map"></span>映射表</div>
+  </div>
+</div>
+
+<footer>本地化翻译工作流 v2 &nbsp;·&nbsp; 核心流程图</footer>
+
+</body>
+</html>

@@ -49,6 +49,8 @@ Authorization: Bearer dev-service-key
 ./scripts/dev.sh migrate
 ./scripts/dev.sh test
 ./scripts/dev.sh smoke
+./scripts/dev.sh workflow-smoke
+./scripts/dev.sh e2e
 ./scripts/dev.sh check
 ./scripts/dev.sh --help
 ```
@@ -63,7 +65,31 @@ Authorization: Bearer dev-service-key
 - `logs api|worker`：跟随查看 API 或 worker 日志。
 - `migrate`：显式执行 Alembic 迁移。
 - `test`：运行本地 pytest。
-- `smoke`：对已运行 API 执行完整 Job 冒烟验证。
+- `smoke`：对已运行 API 执行 mock Job 冒烟验证。
+- `workflow-smoke`：使用 mock 模型和放大输入验证服务内部自动分块、Celery canvas 和 merge。
+- `e2e`：从 `.data` 读取 `.txt`，使用真实 OpenAI 模型模拟后端调用，依次验证本地化、校验、翻译三个 Job；脚本会把 step1 返回的 `project_memory` 显式注入 step2/step3 的 `work_note`，并产出 `localized.txt` 与经过翻译后扫描的 `translated.txt`。
 - `check`：运行脚本语法检查和 pytest。
 
 脚本只面向本地开发环境，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
+
+真实模型端到端验证需要 `.env` 已配置 `OPENAI_API_KEY`，且 `.data/` 下存在至少一个 `.txt` 输入文件：
+
+```bash
+./scripts/dev.sh start
+./scripts/dev.sh e2e
+./scripts/dev.sh stop
+```
+
+`e2e` 完成后会打印本地对象存储中的 `localized.txt`、`translated.txt` 和 `e2e_report.json` 路径。
+
+验证 Job 内部 workflow 可使用 mock 模型，不产生真实模型费用：
+
+```bash
+./scripts/dev.sh start
+./scripts/dev.sh workflow-smoke
+./scripts/dev.sh stop
+```
+
+## 说明文档
+
+- [独立服务抽取与流程说明](docs/独立服务抽取与流程说明.md)

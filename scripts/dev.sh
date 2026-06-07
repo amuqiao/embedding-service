@@ -2,7 +2,7 @@
 # dev.sh - cms-novel-localize 本地开发入口脚本
 #
 # 用法：./scripts/dev.sh <command> [service]
-# 命令：bootstrap, start, stop, restart, status, logs, migrate, test, smoke, check, help
+# 命令：bootstrap, start, stop, restart, status, logs, migrate, test, smoke, workflow-smoke, e2e, check, help
 # 服务：api, worker；start/stop/restart/status 不传服务名时处理完整本地服务栈。
 # 作用域：只管理当前仓库的本地 FastAPI/Celery 服务和 docker compose 本地依赖。
 # 模式：后台服务生命周期 + 一次性初始化/迁移/验证任务。
@@ -65,6 +65,7 @@ usage() {
 服务：
   api       FastAPI 服务，URL: ${API_URL}，文档: ${API_DOCS_URL}，OpenAPI: ${API_OPENAPI_URL}，健康检查: ${API_HEALTH_URL}
   worker    Celery worker，处理 jobs.process 异步任务
+            本地使用 solo pool，避免 macOS/Python 3.13 下 prefork 调用 OpenAI 时崩溃。
 
 命令：
   bootstrap           缺少 .env 时从 .env.example 创建，并执行 uv sync。
@@ -75,13 +76,17 @@ usage() {
   logs <service>      跟随查看 api 或 worker 日志，Ctrl-C 退出。
   migrate             对本地开发数据库执行 Alembic 迁移。
   test                运行 pytest。
-  smoke               对已运行 API 执行完整 Job 冒烟验证。
+  smoke               对已运行 API 执行 mock Job 冒烟验证。
+  workflow-smoke      使用 mock 模型和放大输入验证内部自动分块、canvas 和 merge。
+  e2e                 从 .data 读取 .txt，使用真实 OpenAI 模型验证 step1/step2/step3 链路。
   check               执行脚本语法检查和 pytest。
   help                显示帮助。
 
 成功标准：
   start 成功 = postgres/redis healthy，迁移成功，api/worker 进程存活，/health 可访问。
   smoke 成功 = mock localization job 进入 succeeded 状态。
+  workflow-smoke 成功 = mock 长文本触发内部 workflow，localized.txt 和 translated.txt 存在且非空。
+  e2e 成功 = 三个 Job 均进入 succeeded，localized.txt 和 translated.txt 存在且非空。
 
 运行产物：
   PID:  ${RUN_DIR}/api.pid, ${RUN_DIR}/worker.pid
@@ -124,7 +129,7 @@ service_command() {
       printf "%q " "$ROOT_DIR/.venv/bin/uvicorn" app.main:app --host "$API_HOST" --port "$API_PORT"
       ;;
     worker)
-      printf "%q " "$ROOT_DIR/.venv/bin/celery" -A app.tasks.celery_app.celery_app worker --loglevel=info
+      printf "%q " "$ROOT_DIR/.venv/bin/celery" -A app.tasks.celery_app.celery_app worker --loglevel=info --pool=solo --concurrency=1
       ;;
     *)
       die "unknown service: $1" 2
@@ -504,6 +509,23 @@ run_smoke() {
   "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/smoke_job.py"
 }
 
+run_e2e() {
+  guard_local_env
+  section "E2E"
+  require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
+  PYTHONUNBUFFERED=1 "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/e2e_backend_call.py" "${@:1}"
+}
+
+run_workflow_smoke() {
+  guard_local_env
+  section "Workflow Smoke"
+  require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
+  PYTHONUNBUFFERED=1 "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/e2e_backend_call.py" \
+    --model-id mock-novel-localizer \
+    --repeat-input "${WORKFLOW_SMOKE_REPEAT_INPUT:-80}" \
+    "${@:1}"
+}
+
 run_check() {
   section "Script"
   bash -n "$ROOT_DIR/scripts/dev.sh"
@@ -593,6 +615,14 @@ case "$command" in
     ;;
   smoke)
     run_smoke
+    ;;
+  workflow-smoke)
+    shift
+    run_workflow_smoke "$@"
+    ;;
+  e2e)
+    shift
+    run_e2e "$@"
     ;;
   check)
     run_check
