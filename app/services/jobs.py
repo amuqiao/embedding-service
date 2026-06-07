@@ -1,0 +1,214 @@
+import uuid
+from typing import Any
+from urllib.parse import urlparse
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.exceptions import AppError, NotFoundAppError, ValidationAppError
+from app.infrastructure.config import settings
+from app.infrastructure.model_registry import get_enabled_model
+from app.infrastructure.prompt_templates import get_template
+from app.infrastructure.storage import sha256_digest, storage
+from app.models.job import AIJob
+from app.repositories.job_repo import JobRepo
+from app.schemas.jobs import CreateJobRequest, JobResult, JobStatusResponse
+from app.services.callbacks import deliver_callback
+from app.services.executor import run_ai_job
+
+
+def _status_url(job_id: uuid.UUID) -> str:
+    return f"/api/v1/novel-localization-ai/jobs/{job_id}"
+
+
+def _job_to_response(job: AIJob) -> JobStatusResponse:
+    return JobStatusResponse(
+        job_id=job.id,
+        job_type=job.job_type,
+        status=job.status,
+        progress_percent=job.progress_percent,
+        progress_text=job.progress_text,
+        result=job.result_payload,
+        error=job.error_payload,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+    )
+
+
+def _validate_prompt(job_type: str, prompt_payload: dict[str, Any]) -> None:
+    template = get_template(job_type)
+    if not template:
+        raise ValidationAppError("INVALID_JOB_TYPE", f"不支持的 job_type: {job_type}")
+    expected = {block.key: block.role for block in template.prompt_blocks}
+    received = prompt_payload.get("blocks") or []
+    keys = [block.get("key") for block in received]
+    if len(keys) != len(set(keys)):
+        raise ValidationAppError("INVALID_INPUT", "prompt.blocks contains duplicate key")
+    if set(keys) != set(expected):
+        raise ValidationAppError(
+            "INVALID_INPUT",
+            "prompt.blocks must include exactly the template keys",
+            {"expected": sorted(expected), "received": sorted(keys)},
+        )
+    for block in received:
+        if block.get("role") != expected[block["key"]]:
+            raise ValidationAppError(
+                "INVALID_INPUT",
+                f"prompt block role mismatch: {block['key']}",
+                {"expected_role": expected[block["key"]], "received_role": block.get("role")},
+            )
+
+
+def _validate_create_request(payload: CreateJobRequest) -> None:
+    if not get_template(payload.job_type):
+        raise ValidationAppError("INVALID_JOB_TYPE", f"不支持的 job_type: {payload.job_type}")
+    if not get_enabled_model(payload.model_id):
+        raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不可用: {payload.model_id}")
+    _validate_prompt(payload.job_type, payload.prompt.model_dump())
+    parsed_callback = urlparse(payload.callback.url)
+    if parsed_callback.scheme != "https":
+        local_insecure = (
+            settings.ALLOW_INSECURE_CALLBACKS
+            and parsed_callback.scheme == "http"
+            and parsed_callback.hostname in {"127.0.0.1", "localhost"}
+        )
+        if not local_insecure:
+            raise ValidationAppError("INVALID_INPUT", "callback.url must be HTTPS")
+    if payload.input.type == "text":
+        size = len(payload.input.content.encode("utf-8"))
+        if size == 0:
+            raise ValidationAppError("INVALID_INPUT", "input.content must not be empty")
+        if size > settings.TEXT_INPUT_MAX_BYTES:
+            raise ValidationAppError("INPUT_TOO_LARGE", "text input exceeds service limit")
+        if payload.input.content_hash and sha256_digest(payload.input.content.encode("utf-8")) != payload.input.content_hash:
+            raise ValidationAppError("INPUT_HASH_MISMATCH", "input.content_hash does not match content")
+
+
+async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str) -> tuple[AIJob, bool]:
+    _validate_create_request(payload)
+    if payload.client_request_id:
+        await JobRepo.advisory_lock_for_client_request(db, caller_id, payload.client_request_id)
+        existing = await JobRepo.get_recent_by_client_request(
+            db, caller_id=caller_id, client_request_id=payload.client_request_id
+        )
+        if existing:
+            return existing, False
+
+    job = await JobRepo.create(
+        db,
+        caller_id=caller_id,
+        client_request_id=payload.client_request_id,
+        job_type=payload.job_type,
+        model_id=payload.model_id,
+        input_payload=payload.input.model_dump(),
+        output_payload=payload.output.model_dump(),
+        callback_payload=payload.callback.model_dump(),
+        prompt_payload=payload.prompt.model_dump(),
+        metadata_payload=payload.metadata,
+    )
+    return job, True
+
+
+async def get_job_or_404(db: AsyncSession, job_id: uuid.UUID) -> AIJob:
+    job = await JobRepo.get(db, job_id)
+    if not job:
+        raise NotFoundAppError("JOB_NOT_FOUND", f"job_id 不存在: {job_id}")
+    return job
+
+
+async def get_job_response(db: AsyncSession, job_id: uuid.UUID) -> JobStatusResponse:
+    return _job_to_response(await get_job_or_404(db, job_id))
+
+
+def create_job_response(job: AIJob) -> dict[str, Any]:
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "status_url": _status_url(job.id),
+        "created_at": job.created_at,
+    }
+
+
+def _load_input_text(job: AIJob) -> str:
+    input_payload = job.input_payload
+    if input_payload["type"] == "text":
+        return input_payload["content"]
+
+    try:
+        text = storage.read_text(
+            bucket=input_payload["oss_bucket"],
+            key=input_payload["oss_key"],
+            region=input_payload["oss_region"],
+        )
+    except AppError:
+        raise
+    except Exception as exc:
+        raise AppError("OSS_FETCH_FAILED", "OSS 对象读取失败", status_code=422) from exc
+
+    data = text.encode("utf-8")
+    if len(data) > settings.OSS_INPUT_MAX_BYTES:
+        raise AppError("INPUT_TOO_LARGE", "OSS input exceeds service limit", status_code=422)
+    expected_hash = input_payload.get("content_hash")
+    if expected_hash and sha256_digest(data) != expected_hash:
+        raise AppError("INPUT_HASH_MISMATCH", "OSS input content_hash mismatch", status_code=422)
+    return text
+
+
+def _artifact_key(job: AIJob, artifact_key: str) -> str:
+    prefix = job.output_payload["oss_prefix"].strip("/")
+    filename = {
+        "localized_text": "localized.txt",
+        "translated_text": "translated.txt",
+    }.get(artifact_key, f"{artifact_key}.txt")
+    return f"{prefix}/{filename}" if prefix else filename
+
+
+def _persist_large_artifacts(job: AIJob, result: JobResult) -> dict[str, Any]:
+    result_data = result.model_dump()
+    for artifact in result_data["artifacts"]:
+        if artifact["key"] not in {"localized_text", "translated_text"}:
+            continue
+        content = artifact.pop("content", None)
+        if content is None:
+            continue
+        stored = storage.write_text(
+            bucket=job.output_payload["oss_bucket"],
+            key=_artifact_key(job, artifact["key"]),
+            region=job.output_payload["oss_region"],
+            content=content,
+        )
+        artifact.update({"storage": "oss_object", **stored})
+    return result_data
+
+
+async def process_job(db: AsyncSession, job_id: uuid.UUID) -> None:
+    job = await get_job_or_404(db, job_id)
+    await JobRepo.mark_running(db, job_id)
+    await db.commit()
+
+    try:
+        input_text = _load_input_text(job)
+        await JobRepo.update_progress(db, job_id, progress_percent=30, progress_text="正在调用模型")
+        await db.commit()
+
+        result = run_ai_job(job.job_type, job.model_id, job.prompt_payload, input_text)
+        result_payload = _persist_large_artifacts(job, result)
+
+        await JobRepo.mark_succeeded(db, job_id, result_payload)
+        await db.commit()
+        await db.refresh(job)
+        await deliver_callback(job)
+    except AppError as exc:
+        await JobRepo.mark_failed(db, job_id, {"code": exc.code, "message": exc.message, "details": exc.details})
+        await db.commit()
+        await db.refresh(job)
+        await deliver_callback(job)
+    except Exception as exc:
+        await JobRepo.mark_failed(
+            db,
+            job_id,
+            {"code": "MODEL_CALL_FAILED", "message": "模型调用失败或内部处理失败", "details": {"type": type(exc).__name__}},
+        )
+        await db.commit()
+        await db.refresh(job)
+        await deliver_callback(job)
