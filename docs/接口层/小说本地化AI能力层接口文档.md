@@ -1099,16 +1099,29 @@ Job 创建时间：T0
 ### 13.5 自动清理机制
 
 ```
-执行方式：
-  - 每天定时运行清理任务
+执行方式（由 Celery Beat 驱动）：
+  - 定时运行清理任务（默认：每月 1 日凌晨 2 点）
   - 查询所有 expires_at <= now() 的记录
   - 删除关联的中间数据（ai_job_work_items）
   - 删除 Job 记录（ai_jobs）
+  - 记录清理日志和统计结果
+  
+配置说明：
+  - 任务名：jobs.cleanup_expired
+  - 触发频率：crontab(day_of_month=1, hour=2, minute=0)
+  - 默认：每月 1 日凌晨 2:00 UTC
+  - 可配置：修改 celery_app.py 中的 beat_schedule
   
 数据库影响：
   - 数据量保持稳定（不会无限增长）
   - 自动索引清理，查询性能稳定
   - 无需人工维护
+  
+监控和日志：
+  - 任务结果包括删除记录数
+  - 成功：logger.info("Successfully cleaned up X expired jobs")
+  - 失败：logger.error("Failed to cleanup expired jobs: ...")
+  - 任务结果在 Redis 中保留 1 小时（可查询）
   
 成本节省：
   - 存储空间：每年节省 60-75%

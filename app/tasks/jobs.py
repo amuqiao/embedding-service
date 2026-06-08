@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import uuid
 from typing import Any
 
@@ -11,6 +12,8 @@ from app.infrastructure.config import settings
 from app.repositories.job_repo import JobRepo
 from app.services.job_workflow import build_canvas, execute_work_item, fail_job, finalize_job, plan_job
 from app.tasks.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
 
 
 def _session_factory():
@@ -129,3 +132,39 @@ async def _mark_timeout(job_id: str) -> None:
         )
 
     await _with_db(run)
+
+
+@celery_app.task(name="jobs.cleanup_expired")
+def cleanup_expired_jobs_task() -> dict[str, Any]:
+    """定期清理过期的 Job 记录（expires_at <= now()）
+
+    此任务由 Celery Beat 定时调度，默认每月执行一次（第一天凌晨 2 点）。
+
+    Returns:
+        dict: 包含清理结果统计
+            - deleted_count: 删除的 Job 记录数
+            - status: 执行状态（'success' 或 'error'）
+            - message: 执行信息
+    """
+    async def run(db):
+        deleted_count = await JobRepo.cleanup_expired_jobs(db)
+        return {"deleted_count": deleted_count}
+
+    try:
+        result = asyncio.run(_with_db(run))
+        deleted_count = result.get("deleted_count", 0)
+        message = f"Successfully cleaned up {deleted_count} expired jobs"
+        logger.info(message)
+        return {
+            "deleted_count": deleted_count,
+            "status": "success",
+            "message": message,
+        }
+    except Exception as exc:
+        error_message = f"Failed to cleanup expired jobs: {str(exc)}"
+        logger.error(error_message, exc_info=True)
+        return {
+            "deleted_count": 0,
+            "status": "error",
+            "message": error_message,
+        }
