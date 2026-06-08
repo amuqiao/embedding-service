@@ -345,12 +345,20 @@ model_id 必须来自 models[].id，且对应模型 enabled=true。
     ]
   },
   "metadata": {
-    "external_project_id": "业务项目 ID",
-    "external_step_id": "业务步骤 ID",
-    "user_id": "用户 ID",
-    "custom_field": "任何自定义字段"
+    "caller_internal_project_id": "业务后端的项目 ID（可选示例）",
+    "caller_internal_job_id": "业务后端的任务 ID（可选示例）",
+    "anything_else": "任何其他调用方需要的字段"
   }
 }
+```
+
+**metadata 说明**：
+
+```text
+metadata 完全由调用方定义，无需遵循特定字段名。
+上面示例中的字段名仅为说明，不是协议规定。
+调用方可以使用任何字段名、任何结构来组织自己的业务信息。
+AI 能力层原样保存 metadata，在 callback 时原样返回。
 ```
 
 #### 7.4.2 通过 OSS 对象引用传输入
@@ -417,11 +425,24 @@ OSS 对象内容可以是原文，也可以是上游步骤结果。
 `metadata` 规则：
 
 ```text
-metadata 可选，用于调用方透传业务关联信息、审计信息或排障信息。
-metadata 不参与 AI 执行逻辑；AI 能力层仅保存并在 callback 中原样返回。
-AI 能力层不解释、不依赖、不校验 metadata 内部字段名或含义。
+metadata 可选，完全由调用方自定义。
+```
+
+**metadata 的实际用途**：
+
+- **业务关联**：存放业务后端的项目 ID、步骤 ID、用户 ID，用于关联查询
+- **审计日志**：存放请求来源、操作人、审批信息等追踪字段
+- **排障信息**：存放请求链路 ID、内部追踪码、context ID 等排查线索
+- **其他自定义字段**：调用方可以存放任何需要在 callback 时回传的信息
+
+**约束**：
+
+```text
+AI 能力层不检查、不解释、不依赖 metadata 的字段名或结构。
+metadata 不参与 AI 执行逻辑，不影响 Job 行为。
 metadata 可以是任意嵌套的 JSON 值，包括对象和数组。
 metadata 单次请求序列化后不得超过 8 KB，超过返回 422。
+AI 能力层会在 callback 中原样返回 metadata，由调用方处理。
 ```
 
 `output` 规则：
