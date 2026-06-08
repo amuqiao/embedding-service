@@ -724,6 +724,79 @@ AI 能力层返回 review_summary / optimization_prompt / signals.passed。
 AI 能力层返回新的本地化结果。
 ```
 
+**完整代码示例**：
+
+```python
+# 第一轮：本地化 + 校验
+step1_result = post_api('novel_localization.step1_localize', {
+    'input': { 'type': 'text', 'content': original_text },
+    'prompt': {
+        'blocks': [
+            { 'key': 'system', 'role': 'system', 'content': system_prompt },
+            { 'key': 'user', 'role': 'user', 'content': user_prompt },
+            { 'key': 'work_note', 'role': 'user', 'content': '' }
+        ]
+    },
+    ...
+})
+
+# 轮询等待 step1 完成
+localized_text = poll_until_complete(step1_result['job_id'])
+
+# 执行校验
+step2_result = post_api('novel_localization.step2_review', {
+    'input': { 'type': 'text', 'content': localized_text },
+    'prompt': {
+        'blocks': [
+            { 'key': 'system', 'role': 'system', 'content': review_system },
+            { 'key': 'user', 'role': 'user', 'content': review_user },
+            { 'key': 'work_note', 'role': 'user', 'content': '' }
+        ]
+    },
+    ...
+})
+
+review_result = poll_until_complete(step2_result['job_id'])
+
+# 判断是否通过
+if review_result['result']['signals']['passed']:
+    # 通过：进入翻译
+    step3_result = post_api('novel_localization.step3_translate', ...)
+else:
+    # 失败：提取建议，重跑本地化
+    optimization = next(
+        a for a in review_result['result']['artifacts']
+        if a['key'] == 'optimization_prompt'
+    )
+    
+    # 重跑 step1，注入建议到 work_note
+    step1_retry = post_api('novel_localization.step1_localize', {
+        'input': { 'type': 'text', 'content': original_text },
+        'prompt': {
+            'blocks': [
+                { 'key': 'system', 'role': 'system', 'content': system_prompt },
+                { 'key': 'user', 'role': 'user', 'content': user_prompt },
+                { 'key': 'work_note', 'role': 'user', 
+                  'content': optimization['content'] }  # ← 注入建议
+            ]
+        },
+        ...
+    })
+    
+    # 再次轮询和校验（多轮迭代）
+    localized_text_v2 = poll_until_complete(step1_retry['job_id'])
+    step2_retry = post_api('novel_localization.step2_review', {
+        'input': { 'type': 'text', 'content': localized_text_v2 },
+        'prompt': { ... }
+    })
+```
+
+**关键点**：
+- ✅ step2 校验失败时，从 `artifacts[]` 中提取 `key='optimization_prompt'` 的 artifact
+- ✅ 直接使用 `optimization_prompt.content` 的值，赋给重跑 step1 时的 `work_note.content`
+- ✅ 重跑 step1 时，`job_type` 仍为 `novel_localization.step1_localize`（不改）
+- ✅ 支持多轮迭代，直到 `signals.passed=true` 或达到重试次数上限
+
 ## 14. 后期可能提供的 AI 能力层接口
 
 以下接口不进入首版对接范围。当前只给后端做能力预期参考，不定义具体入参和出参。后续确认需要实现时，再单独补充接口契约。
