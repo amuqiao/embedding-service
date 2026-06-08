@@ -3,23 +3,23 @@
 #
 # 用法：
 #   ./scripts/check_dev_ports.sh
-#   ./scripts/check_dev_ports.sh 8100 15432 16379
+#   ./scripts/check_dev_ports.sh 8100 25432 26379
 #
 # 默认会扫描本项目可能使用的一组候选宿主机端口，并给出每类服务的第一个空闲端口。
 
 set -u
 
 API_CANDIDATES=(8100 18100 28100 38100 48100)
-POSTGRES_CANDIDATES=(15432 25432 35432 45432 55432)
-REDIS_CANDIDATES=(16379 26379 36379 46379 56379)
+POSTGRES_CANDIDATES=(25432 15432 35432 45432 55432)
+REDIS_CANDIDATES=(26379 16379 36379 46379 56379)
 
 service_name() {
   local port="$1"
 
   case "$port" in
     8100|18100|28100|38100|48100) printf "api" ;;
-    15432|25432|35432|45432|55432) printf "postgres" ;;
-    16379|26379|36379|46379|56379) printf "redis" ;;
+    25432|15432|35432|45432|55432) printf "postgres" ;;
+    26379|16379|36379|46379|56379) printf "redis" ;;
     *) printf "custom" ;;
   esac
 }
