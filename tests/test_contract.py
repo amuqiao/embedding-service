@@ -22,7 +22,6 @@ def _valid_payload() -> dict:
                 for block in template.prompt_blocks
             ]
         },
-        "metadata": {"external_job_ref": "test"},
     }
 
 

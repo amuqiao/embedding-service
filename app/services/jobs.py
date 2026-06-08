@@ -102,7 +102,6 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
         output_payload=payload.output.model_dump(),
         callback_payload=payload.callback.model_dump(),
         prompt_payload=payload.prompt.model_dump(),
-        metadata_payload=payload.metadata,
     )
     return job, True
 

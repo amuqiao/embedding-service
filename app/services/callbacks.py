@@ -38,7 +38,6 @@ def build_callback_body(job: AIJob) -> dict:
         "status": job.status,
         "result": job.result_payload,
         "error": job.error_payload,
-        "metadata": job.metadata_payload or {},
         "finished_at": job.finished_at.isoformat() if job.finished_at else datetime.now(timezone.utc).isoformat(),
     }
 

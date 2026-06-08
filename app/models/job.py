@@ -23,7 +23,6 @@ class AIJob(Base):
     output_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     callback_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     prompt_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    metadata_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     execution_mode: Mapped[str | None] = mapped_column(String(24), nullable=True)
     execution_plan: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     result_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

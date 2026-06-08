@@ -74,15 +74,6 @@ class CreateJobRequest(StrictBaseModel):
     output: OutputConfig
     callback: CallbackConfig
     prompt: PromptConfig
-    metadata: dict[str, Any] | None = None
-
-    @model_validator(mode="after")
-    def validate_metadata(self):
-        if self.metadata is not None:
-            metadata_json = str(self.metadata)
-            if len(metadata_json.encode("utf-8")) > 8192:
-                raise ValueError("metadata must not exceed 8 KB")
-        return self
 
 
 class CreateJobResponse(StrictBaseModel):

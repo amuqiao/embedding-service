@@ -72,7 +72,6 @@ Authorization: Bearer <service_api_key>
 ```text
 该 token 标识调用方服务，不标识产品用户。
 本服务不提供登录、获取 token、刷新 token、用户信息接口。
-产品用户身份如需审计，由业务后端放入 metadata。
 ```
 
 ## 5. 接口总览
@@ -102,7 +101,6 @@ input
 prompt.blocks
 output
 callback
-metadata，可选
 ```
 
 本服务不通过 `project_id` 查原文，不通过 `step_code` 查上游结果，不保存用户编辑后的 prompt 配置。本地化正文和英文翻译正文这类大文本结果写入 OSS，接口和 Callback 只返回 OSS 引用。
@@ -343,22 +341,8 @@ model_id 必须来自 models[].id，且对应模型 enabled=true。
         "content": "工作注释 prompt"
       }
     ]
-  },
-  "metadata": {
-    "caller_internal_project_id": "业务后端的项目 ID（可选示例）",
-    "caller_internal_job_id": "业务后端的任务 ID（可选示例）",
-    "anything_else": "任何其他调用方需要的字段"
   }
 }
-```
-
-**metadata 说明**：
-
-```text
-metadata 完全由调用方定义，无需遵循特定字段名。
-上面示例中的字段名仅为说明，不是协议规定。
-调用方可以使用任何字段名、任何结构来组织自己的业务信息。
-AI 能力层原样保存 metadata，在 callback 时原样返回。
 ```
 
 #### 7.4.2 通过 OSS 对象引用传输入
@@ -377,7 +361,7 @@ AI 能力层原样保存 metadata，在 callback 时原样返回。
 }
 ```
 
-使用 OSS 输入时，完整 `POST /jobs` 仍必须同时传入 `output`、`callback`、`prompt.blocks` 和 `metadata`。
+使用 OSS 输入时，完整 `POST /jobs` 仍必须同时传入 `output`、`callback`、`prompt.blocks`。
 
 约束:
 
@@ -420,30 +404,6 @@ OSS 对象内容可以是原文，也可以是上游步骤结果。
 | `output` | 是 | 大文本结果输出位置，首版固定为 `oss_prefix`。 |
 | `callback` | 是 | Job 进入终态后通知业务后端的回调配置。 |
 | `prompt.blocks` | 是 | 本次任务实际使用的 prompt blocks，由业务后端传入。 |
-| `metadata` | 否 | 调用方业务引用，仅用于审计、排障和日志关联。 |
-
-`metadata` 规则：
-
-```text
-metadata 可选，完全由调用方自定义。
-```
-
-**metadata 的实际用途**：
-
-- **业务关联**：存放业务后端的项目 ID、步骤 ID、用户 ID，用于关联查询
-- **审计日志**：存放请求来源、操作人、审批信息等追踪字段
-- **排障信息**：存放请求链路 ID、内部追踪码、context ID 等排查线索
-- **其他自定义字段**：调用方可以存放任何需要在 callback 时回传的信息
-
-**约束**：
-
-```text
-AI 能力层不检查、不解释、不依赖 metadata 的字段名或结构。
-metadata 不参与 AI 执行逻辑，不影响 Job 行为。
-metadata 可以是任意嵌套的 JSON 值，包括对象和数组。
-metadata 单次请求序列化后不得超过 8 KB，超过返回 422。
-AI 能力层会在 callback 中原样返回 metadata，由调用方处理。
-```
 
 `output` 规则：
 
@@ -743,11 +703,6 @@ AI 能力层在 Job 进入终态后，向 `POST /jobs` 中的 `callback.url` 发
     "signals": {}
   },
   "error": null,
-  "metadata": {
-    "external_project_id": "业务项目 ID",
-    "external_step_id": "业务步骤 ID",
-    "user_id": "用户 ID"
-  },
   "finished_at": "datetime"
 }
 ```
@@ -765,11 +720,6 @@ AI 能力层在 Job 进入终态后，向 `POST /jobs` 中的 `callback.url` 发
     "code": "MODEL_CALL_FAILED",
     "message": "模型调用失败或内部处理失败",
     "details": {}
-  },
-  "metadata": {
-    "external_project_id": "业务项目 ID",
-    "external_step_id": "业务步骤 ID",
-    "user_id": "用户 ID"
   },
   "finished_at": "datetime"
 }
@@ -1035,7 +985,7 @@ step2_result = post_job('novel_localization.step2_review', {
 使用方式：
   1. 业务后端 POST /jobs，指定 callback.url
   2. 任务执行完毕，AI 能力层主动 POST callback
-  3. Callback 中包含完整 result 和 metadata
+  3. Callback 中包含完整 result
   4. 业务后端保存到自己的数据库
   5. AI 能力层 24 小时后自动删除 Job 记录
 

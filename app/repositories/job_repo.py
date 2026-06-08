@@ -48,7 +48,6 @@ class JobRepo:
         output_payload: dict[str, Any],
         callback_payload: dict[str, Any],
         prompt_payload: dict[str, Any],
-        metadata_payload: dict[str, Any] | None,
     ) -> AIJob:
         job = AIJob(
             caller_id=caller_id,
@@ -62,7 +61,6 @@ class JobRepo:
             output_payload=output_payload,
             callback_payload=callback_payload,
             prompt_payload=prompt_payload,
-            metadata_payload=metadata_payload,
         )
         db.add(job)
         await db.flush()

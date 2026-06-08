@@ -249,12 +249,6 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
         "content": "工作注释 prompt"
       }
     ]
-  },
-  "metadata": {
-    "external_project_id": "业务项目 ID（示例，调用方自定义字段名）",
-    "external_step_id": "业务步骤 ID（示例）",
-    "user_id": "用户 ID（示例）",
-    "custom_field": "任何其他自定义字段"
   }
 }
 ```
@@ -339,11 +333,6 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
         "content": "工作注释 prompt"
       }
     ]
-  },
-  "metadata": {
-    "external_project_ref": "业务项目 ID",
-    "external_step_ref": "业务步骤 ID",
-    "external_job_ref": "业务后端任务 ID"
   }
 }
 ```
@@ -370,7 +359,6 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
 | `output` | 是 | 大文本结果输出位置，首版固定为 `oss_prefix`。 |
 | `callback` | 是 | Job 进入终态后通知业务后端的回调配置。 |
 | `prompt.blocks` | 是 | 必须传齐当前 `job_type` 的全部 prompt blocks。 |
-| `metadata` | 否 | 仅用于审计、排障和日志关联，不参与 AI 执行。 |
 
 `input.type=text`：
 
@@ -459,22 +447,6 @@ role 必须与 prompt_templates 中对应 key 的 role 一致。
 content 不能为 null，允许空字符串。
 缺失 key、未知 key、重复 key 返回 422。
 AI 能力层不会自动用 default_content 补齐缺失 block。
-```
-
-`metadata` 规则：
-
-```text
-metadata 可选，完全由调用方自定义。
-metadata 不参与 AI 执行逻辑；AI 能力层仅保存并在 callback 中原样返回。
-AI 能力层不解释、不依赖、不校验 metadata 内部字段名或含义。
-metadata 可以是任意嵌套的 JSON 值，包括对象和数组。
-metadata 单次请求序列化后不得超过 8 KB，超过返回 422。
-
-metadata 的实际用途（示例，不限制）：
-- 业务关联：存放业务后端的项目 ID、步骤 ID、用户 ID
-- 审计日志：存放请求来源、操作人、审批信息
-- 排障信息：存放请求链路 ID、内部追踪码、context ID
-- 其他自定义字段：调用方根据需要自定义
 ```
 
 ## 8. GET /jobs/{job_id}
@@ -641,10 +613,6 @@ AI 能力层在 Job 进入终态后，向 `POST /jobs` 中的 `callback.url` 发
     "signals": {}
   },
   "error": null,
-  "metadata": {
-    "external_project_ref": "业务项目 ID",
-    "external_job_ref": "业务后端任务 ID"
-  },
   "finished_at": "datetime"
 }
 ```
@@ -662,10 +630,6 @@ AI 能力层在 Job 进入终态后，向 `POST /jobs` 中的 `callback.url` 发
     "code": "MODEL_CALL_FAILED",
     "message": "模型调用失败或内部处理失败",
     "details": {}
-  },
-  "metadata": {
-    "external_project_ref": "业务项目 ID",
-    "external_job_ref": "业务后端任务 ID"
   },
   "finished_at": "datetime"
 }
@@ -757,14 +721,19 @@ Job 记录在 24 小时后自动清理
 ```text
 Job 创建时间：T0
 
-T0 ~ T0+24h：数据完全可用
-  ├─ GET /jobs/{job_id}：可查询（轮询模式）
+T0 ~ T0+24h：标记为过期
+  ├─ GET /jobs/{job_id}：仍可查询
   ├─ Callback：已发送（若已完成）
-  └─ 中间执行数据：可用于故障排查
+  └─ 数据仍然完整可用
 
-T0+24h 之后：自动清理
-  ├─ Job 记录：自动删除
-  ├─ 关联的中间数据：自动删除
+T0+24h ~ 下月 1 日 02:00 UTC：等待清理
+  ├─ 数据已过期但尚未被删除
+  ├─ GET /jobs/{job_id}：仍可查询
+  └─ 实际保留时间：24h ~ 最长 1 个月
+
+下月 1 日 02:00 UTC：定时清理执行
+  ├─ 删除所有 expires_at <= now() 的 Job 记录
+  ├─ 关联的中间数据自动级联删除
   └─ GET /jobs/{job_id}：返回 404
 ```
 
@@ -788,7 +757,7 @@ T0+24h 之后：自动清理
 
 | 能力 | 方法 | 路径 | 用途 | 当前状态 |
 |---|---|---|---|---|
-| 查询任务快照 | `GET` | `/jobs/{job_id}/snapshot` | 用于排障和审计，查看某次 Job 冻结的模型、输入摘要、Prompt 摘要和调用方 metadata。 | 后期可选 |
+| 查询任务快照 | `GET` | `/jobs/{job_id}/snapshot` | 用于排障和审计，查看某次 Job 冻结的模型、输入摘要、Prompt 摘要。 | 后期可选 |
 | 查询完整 Prompt | `GET` | `/jobs/{job_id}/full-prompt` | 用于排查 Prompt 拼接问题，查看某次 Job 实际发送给模型的 Prompt。 | 后期可选 |
 | 取消任务 | `POST` | `/jobs/{job_id}/cancel` | 用于取消排队中或运行中的长耗时任务。 | 后期可选 |
 | 任务 SSE | `GET` | `/jobs/{job_id}/stream` | 用于替代轮询，实时推送 Job 状态和进度。 | 后期可选 |
