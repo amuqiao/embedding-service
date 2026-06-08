@@ -6,6 +6,39 @@
 
 ---
 
+## 快速参考
+
+**step2 校验失败，如何重跑 step1？**
+
+```python
+# 1. 提取优化建议
+optimization = next(
+    a for a in step2_result['artifacts']
+    if a['key'] == 'optimization_prompt'
+)
+
+# 2. 重跑 step1，注入建议（只改 work_note）
+step1_retry = call_api('step1_localize', {
+    'prompt': {
+        'blocks': [
+            { 'key': 'system', 'role': 'system', 'content': system_prompt },
+            { 'key': 'user', 'role': 'user', 'content': user_prompt },
+            { 'key': 'work_note', 'role': 'user', 
+              'content': optimization['content'] }  # ← 直接使用建议内容
+        ]
+    }
+})
+
+# 3. 再次校验，循环迭代
+```
+
+**关键点**：
+- ✅ `job_type` 保持不变（仍为 `step1_localize`）
+- ✅ 仅修改 `prompt.blocks` 中 `work_note` 的 `content`
+- ✅ 将 `optimization_prompt.content` **直接**赋值给 `work_note.content`
+
+---
+
 ## 背景
 
 在三步本地化流程中：
