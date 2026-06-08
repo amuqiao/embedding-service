@@ -251,10 +251,10 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
     ]
   },
   "metadata": {
-    "external_project_ref": "业务项目 ID",
-    "external_step_ref": "业务步骤 ID",
-    "external_job_ref": "业务后端任务 ID",
-    "triggered_by": "optional-external-user-ref"
+    "external_project_id": "业务项目 ID（示例，调用方自定义字段名）",
+    "external_step_id": "业务步骤 ID（示例）",
+    "user_id": "用户 ID（示例）",
+    "custom_field": "任何其他自定义字段"
   }
 }
 ```
@@ -464,11 +464,17 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
 `metadata` 规则：
 
 ```text
-metadata 不参与 AI 执行逻辑。
-AI 能力层不校验 metadata 内部字段含义。
-metadata 中的值必须是 string、number、boolean 或 null。
-metadata 不允许嵌套对象和数组。
+metadata 可选，完全由调用方自定义。
+metadata 不参与 AI 执行逻辑；AI 能力层仅保存并在 callback 中原样返回。
+AI 能力层不解释、不依赖、不校验 metadata 内部字段名或含义。
+metadata 可以是任意嵌套的 JSON 值，包括对象和数组。
 metadata 单次请求序列化后不得超过 8 KB，超过返回 422。
+
+metadata 的实际用途（示例，不限制）：
+- 业务关联：存放业务后端的项目 ID、步骤 ID、用户 ID
+- 审计日志：存放请求来源、操作人、审批信息
+- 排障信息：存放请求链路 ID、内部追踪码、context ID
+- 其他自定义字段：调用方根据需要自定义
 ```
 
 ## 8. GET /jobs/{job_id}
@@ -724,7 +730,59 @@ queued / running 状态每 2 秒轮询一次。
 首版不提供 GET /jobs/{job_id}/stream。
 ```
 
-## 13. 后期可能提供的 AI 能力层接口
+## 13. 数据保留策略
+
+### 13.1 双模式支持
+
+本服务同时支持两种调用模式：
+
+**Callback 模式（推荐）**
+```text
+业务后端 POST /jobs 时指定 callback.url
+AI 能力层在任务完成时主动 POST callback
+业务后端从 callback 获取完整结果
+Job 记录在 24 小时后自动清理
+```
+
+**轮询模式（备选）**
+```text
+业务后端 POST /jobs 后轮询 GET /jobs/{job_id}
+支持 24 小时内查询
+24 小时后 Job 记录自动删除，无法查询
+业务后端应在此时间内保存数据到自己的数据库
+```
+
+### 13.2 数据生命周期
+
+```text
+Job 创建时间：T0
+
+T0 ~ T0+24h：数据完全可用
+  ├─ GET /jobs/{job_id}：可查询（轮询模式）
+  ├─ Callback：已发送（若已完成）
+  └─ 中间执行数据：可用于故障排查
+
+T0+24h 之后：自动清理
+  ├─ Job 记录：自动删除
+  ├─ 关联的中间数据：自动删除
+  └─ GET /jobs/{job_id}：返回 404
+```
+
+### 13.3 最佳实践
+
+业务后端应该：
+
+```text
+✅ 优先使用 Callback 获取结果
+✅ 在 Callback 中立即保存完整结果到业务库
+✅ 轮询仅作为短期排障手段（<24h）
+❌ 不要依赖 AI 能力层做长期数据存储
+❌ 不要假设超过 24h 后仍然能查询 Job
+```
+
+---
+
+## 14. 后期可能提供的 AI 能力层接口
 
 以下接口不进入首版对接范围。当前只给后端做能力预期参考，不定义具体入参和出参。后续确认需要实现时，再单独补充接口契约。
 
@@ -737,7 +795,7 @@ queued / running 状态每 2 秒轮询一次。
 
 首版后端必须按 `GET /jobs/{job_id}` 轮询实现，不依赖以上接口。
 
-## 14. 不属于 AI 能力层的接口
+## 15. 不属于 AI 能力层的接口
 
 以下接口属于业务后端 / BFF，不由 AI 能力层提供：
 
