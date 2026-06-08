@@ -21,6 +21,15 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = "http://localhost:3000"
     STORAGE_BACKEND: str = "local"
     LOCAL_OBJECT_STORAGE_PATH: str = "storage/objects"
+    OSS_BUCKET: str = ""
+    OSS_REGION: str = ""
+    OSS_ACCESS_KEY_ID: str = ""
+    OSS_ACCESS_KEY_SECRET: str = ""
+    OSS_PROJECT_ROOT: str = ""
+    OSS_PUBLIC_ENDPOINT: str = ""
+    OSS_ENDPOINT: str = ""
+    OSS_ENDPOINT_STYLE: str = ""
+    OSS_SCHEME: str = "https"
 
     CALLBACK_SIGNING_SECRET: str = ""
     ALLOW_INSECURE_CALLBACKS: bool = False
@@ -48,9 +57,25 @@ class Settings(BaseSettings):
     @field_validator("STORAGE_BACKEND")
     @classmethod
     def validate_storage_backend(cls, value: str) -> str:
-        if value != "local":
-            raise ValueError("Only STORAGE_BACKEND=local is implemented in v1")
+        if value not in {"local", "aliyun_oss"}:
+            raise ValueError("STORAGE_BACKEND must be local or aliyun_oss")
         return value
+
+    @property
+    def oss_endpoint(self) -> str:
+        if self.OSS_ENDPOINT:
+            return self.OSS_ENDPOINT
+        if self.OSS_PUBLIC_ENDPOINT:
+            return self.OSS_PUBLIC_ENDPOINT
+        return f"oss-{self.OSS_REGION}.aliyuncs.com"
+
+    @property
+    def oss_endpoint_style(self) -> str:
+        if self.OSS_ENDPOINT_STYLE:
+            return self.OSS_ENDPOINT_STYLE
+        if self.OSS_PUBLIC_ENDPOINT and self.oss_endpoint == self.OSS_PUBLIC_ENDPOINT:
+            return "custom_domain"
+        return "virtual_host"
 
     @property
     def allowed_origins(self) -> list[str]:

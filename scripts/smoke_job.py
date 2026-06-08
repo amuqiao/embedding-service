@@ -27,6 +27,8 @@ def load_dotenv_value(key: str) -> str | None:
 
 
 SERVICE_API_KEY = os.getenv("SERVICE_API_KEY") or load_dotenv_value("SERVICE_API_KEY") or "dev-service-key"
+OUTPUT_BUCKET = os.getenv("OSS_BUCKET") or load_dotenv_value("OSS_BUCKET") or "local-dev"
+OUTPUT_REGION = os.getenv("OSS_REGION") or load_dotenv_value("OSS_REGION") or "local"
 
 
 def sha256_text(text: str) -> str:
@@ -64,9 +66,9 @@ def main() -> int:
             "input": {"type": "text", "content": text, "content_hash": sha256_text(text)},
             "output": {
                 "type": "oss_prefix",
-                "oss_bucket": "local-dev",
+                "oss_bucket": OUTPUT_BUCKET,
                 "oss_prefix": "novel-localization/smoke/",
-                "oss_region": "local",
+                "oss_region": OUTPUT_REGION,
             },
             "callback": {"url": "http://127.0.0.1:9/callback", "events": ["job.succeeded", "job.failed"]},
             "prompt": {"blocks": blocks},

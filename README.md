@@ -66,6 +66,27 @@ Authorization: Bearer dev-service-key
 
 默认使用 `mock-novel-localizer`，不需要真实 OpenAI Key。对象存储默认使用本地模拟后端，文件写入 `storage/objects/`。
 
+## 阿里云 OSS 连通性测试
+
+开发环境 OSS 凭据只写入本地 `.env.dev` 或 `.env`，不要提交。配置键：
+
+```bash
+OSS_BUCKET=
+OSS_REGION=
+OSS_ACCESS_KEY_ID=
+OSS_ACCESS_KEY_SECRET=
+OSS_PROJECT_ROOT=
+OSS_PUBLIC_ENDPOINT=
+```
+
+运行连通性测试：
+
+```bash
+./.venv/bin/python scripts/check_aliyun_oss.py --env-file .env.dev
+```
+
+脚本会在 `OSS_PROJECT_ROOT` 下写入一个临时对象，验证 `PUT`、`GET`、`HEAD` 后默认删除。服务运行时要使用阿里云 OSS 时，将本地 `.env` 中的 `STORAGE_BACKEND` 设为 `aliyun_oss`，并配置同一组 `OSS_*` 环境变量。
+
 ## 开发脚本
 
 ```bash
