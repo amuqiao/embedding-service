@@ -18,6 +18,28 @@
 - 包管理：`uv`
 - 本地依赖服务：`docker compose`
 
+## 部署模式
+
+本项目维护 3 种部署模式：
+
+- `local`：宿主机运行 API/worker，`docker compose` 只提供 PostgreSQL/Redis；入口是 `./scripts/dev.sh`。
+- `compose-deps`：只启动 PostgreSQL/Redis 依赖服务；入口是 `./scripts/deploy.sh up compose-deps`。
+- `compose-full`：API、worker、PostgreSQL、Redis 全部由 `docker compose` 管理；入口是 `./scripts/deploy.sh up compose-full`。
+
+部署配置加载优先级：
+
+```text
+运行时显式环境变量
+> docker-compose.yml environment
+> ENV_FILE 指定的 env 文件
+> .env
+> 应用默认值
+```
+
+`docker-compose.yml environment` 只放容器网络地址、容器内端口和容器内路径等运行形态覆盖；业务配置、密钥、模型参数和限制参数来自 env 文件或运行时注入。
+
+本项目不维护生产部署、远程数据库、K8s、云平台 Secrets 或 CI/CD 发布流水线。
+
 ## 开发入口
 
 本项目的本地开发统一入口是：
@@ -37,6 +59,7 @@
 ./scripts/dev.sh e2e
 ./scripts/dev.sh check
 ./scripts/dev.sh stop
+./scripts/deploy.sh check
 ```
 
 `start`、`stop`、`restart`、`status` 支持指定服务：
@@ -82,6 +105,12 @@
 ```
 
 如果因本机环境、Docker 权限或端口占用无法验证，必须在回复中明确说明未验证项和原因。
+
+修改 Dockerfile、docker compose、部署脚本或配置加载规则后，至少运行：
+
+```bash
+./scripts/deploy.sh check
+```
 
 ## 环境与安全
 

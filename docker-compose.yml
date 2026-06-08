@@ -25,5 +25,86 @@ services:
       timeout: 5s
       retries: 10
 
+  migrate:
+    profiles: ["app"]
+    build:
+      context: .
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/novel_localize
+      REDIS_URL: redis://redis:6379/0
+      LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  api:
+    profiles: ["app"]
+    build:
+      context: .
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/novel_localize
+      REDIS_URL: redis://redis:6379/0
+      LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
+    ports:
+      - "8100:8100"
+    volumes:
+      - object_storage:/app/storage/objects
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    profiles: ["app"]
+    build:
+      context: .
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/novel_localize
+      REDIS_URL: redis://redis:6379/0
+      LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
+    command:
+      [
+        "celery",
+        "-A",
+        "app.tasks.celery_app.celery_app",
+        "worker",
+        "--loglevel=info",
+        "--pool=solo",
+        "--concurrency=1",
+      ]
+    volumes:
+      - object_storage:/app/storage/objects
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
 volumes:
   postgres_data:
+  object_storage:

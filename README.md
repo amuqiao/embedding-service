@@ -12,6 +12,38 @@
 
 `./scripts/dev.sh start` 会启动 PostgreSQL / Redis，执行 Alembic 迁移，并启动 FastAPI API 与 Celery worker。
 
+## 部署模式
+
+本项目维护 3 种部署模式：
+
+- `local`：宿主机运行 FastAPI API 和 Celery worker，`docker compose` 只提供 PostgreSQL / Redis。本地开发默认使用此模式，入口是 `./scripts/dev.sh`。
+- `compose-deps`：只启动 PostgreSQL / Redis 依赖服务，适合给宿主机上的应用进程提供依赖。
+- `compose-full`：API、worker、PostgreSQL、Redis 全部由 `docker compose` 管理，并在应用启动前执行 Alembic 迁移。
+
+部署入口：
+
+```bash
+./scripts/deploy.sh modes
+./scripts/deploy.sh check
+./scripts/deploy.sh up compose-deps
+./scripts/deploy.sh down compose-deps
+./scripts/deploy.sh up compose-full
+./scripts/deploy.sh status compose-full
+./scripts/deploy.sh down compose-full
+```
+
+配置加载优先级：
+
+```text
+运行时显式环境变量
+> docker-compose.yml environment
+> ENV_FILE 指定的 env 文件
+> .env
+> 应用默认值
+```
+
+`docker-compose.yml` 中的 `environment` 只覆盖容器运行形态必须不同的值，例如容器网络内的 `DATABASE_URL` / `REDIS_URL` 和容器内对象存储路径。业务配置、密钥、模型参数和限制参数应来自 `.env`、`ENV_FILE` 指定文件或运行时显式环境变量。
+
 默认接口：
 
 - `GET /health`
@@ -71,6 +103,8 @@ Authorization: Bearer dev-service-key
 - `check`：运行脚本语法检查和 pytest。
 
 脚本只面向本地开发环境，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
+
+`deploy.sh` 只面向本项目已验收的本地/compose 部署形态，不负责生产部署、远程数据库、K8s、云平台 Secrets 或 CI/CD 发布流水线。
 
 真实模型端到端验证需要 `.env` 已配置 `OPENAI_API_KEY`，且 `.data/` 下存在至少一个 `.txt` 输入文件：
 

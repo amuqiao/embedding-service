@@ -4,11 +4,29 @@ import hashlib
 import os
 import sys
 import time
+from pathlib import Path
 
 import httpx
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8100")
-SERVICE_API_KEY = os.getenv("SERVICE_API_KEY", "dev-service-key")
+
+
+def load_dotenv_value(key: str) -> str | None:
+    env_path = ROOT_DIR / ".env"
+    if not env_path.exists():
+        return None
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, value = stripped.split("=", 1)
+        if name == key:
+            return value.strip().strip('"').strip("'")
+    return None
+
+
+SERVICE_API_KEY = os.getenv("SERVICE_API_KEY") or load_dotenv_value("SERVICE_API_KEY") or "dev-service-key"
 
 
 def sha256_text(text: str) -> str:
@@ -52,7 +70,6 @@ def main() -> int:
             },
             "callback": {"url": "http://127.0.0.1:9/callback", "events": ["job.succeeded", "job.failed"]},
             "prompt": {"blocks": blocks},
-            "metadata": {"external_job_ref": "smoke"},
         }
         created = client.post("/api/v1/novel-localization-ai/jobs", headers=headers, json=payload)
         created.raise_for_status()

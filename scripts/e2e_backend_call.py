@@ -169,12 +169,6 @@ def create_payload(
         },
         "callback": {"url": "http://127.0.0.1:9/callback", "events": ["job.failed"]},
         "prompt": {"blocks": prompt_blocks},
-        "metadata": {
-            "caller": "scripts/e2e_backend_call.py",
-            "stage": stage.name,
-            "input_label": stage.input_label,
-            "real_model": model_id != "mock-novel-localizer",
-        },
     }
 
 
