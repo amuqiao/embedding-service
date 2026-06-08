@@ -263,7 +263,9 @@ def submit_stage(
         return StageResult(stage=stage, job_id="", status="dry_run", output_paths=[], final_body={})
 
     created = client.post("/api/v1/novel-localization-ai/jobs", headers=headers, json=payload)
-    created.raise_for_status()
+    if created.status_code != 202:
+        print(f"[{stage.name}] ERROR {created.status_code}: {created.text}")
+        created.raise_for_status()
     created_body = created.json()
     print(f"[{stage.name}] created:", created_body)
 

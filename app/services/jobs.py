@@ -12,8 +12,6 @@ from app.infrastructure.storage import sha256_digest, storage
 from app.models.job import AIJob
 from app.repositories.job_repo import JobRepo
 from app.schemas.jobs import CreateJobRequest, JobResult, JobStatusResponse
-from app.services.callbacks import deliver_callback
-from app.services.executor import run_ai_job
 
 
 def _status_url(job_id: uuid.UUID) -> str:
@@ -181,34 +179,3 @@ def _persist_large_artifacts(job: AIJob, result: JobResult) -> dict[str, Any]:
     return result_data
 
 
-async def process_job(db: AsyncSession, job_id: uuid.UUID) -> None:
-    job = await get_job_or_404(db, job_id)
-    await JobRepo.mark_running(db, job_id)
-    await db.commit()
-
-    try:
-        input_text = _load_input_text(job)
-        await JobRepo.update_progress(db, job_id, progress_percent=30, progress_text="正在调用模型")
-        await db.commit()
-
-        result = run_ai_job(job.job_type, job.model_id, job.prompt_payload, input_text)
-        result_payload = _persist_large_artifacts(job, result)
-
-        await JobRepo.mark_succeeded(db, job_id, result_payload)
-        await db.commit()
-        await db.refresh(job)
-        await deliver_callback(job)
-    except AppError as exc:
-        await JobRepo.mark_failed(db, job_id, {"code": exc.code, "message": exc.message, "details": exc.details})
-        await db.commit()
-        await db.refresh(job)
-        await deliver_callback(job)
-    except Exception as exc:
-        await JobRepo.mark_failed(
-            db,
-            job_id,
-            {"code": "MODEL_CALL_FAILED", "message": "模型调用失败或内部处理失败", "details": {"type": type(exc).__name__}},
-        )
-        await db.commit()
-        await db.refresh(job)
-        await deliver_callback(job)

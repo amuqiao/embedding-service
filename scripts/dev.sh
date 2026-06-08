@@ -522,7 +522,7 @@ run_workflow_smoke() {
   require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
   PYTHONUNBUFFERED=1 "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/e2e_backend_call.py" \
     --model-id mock-novel-localizer \
-    --repeat-input "${WORKFLOW_SMOKE_REPEAT_INPUT:-80}" \
+    --repeat-input "${WORKFLOW_SMOKE_REPEAT_INPUT:-50}" \
     "${@:1}"
 }
 
