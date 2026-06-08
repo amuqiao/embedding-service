@@ -345,10 +345,10 @@ model_id 必须来自 models[].id，且对应模型 enabled=true。
     ]
   },
   "metadata": {
-    "external_project_ref": "业务项目 ID",
-    "external_step_ref": "业务步骤 ID",
-    "external_job_ref": "业务后端任务 ID",
-    "triggered_by": "optional-external-user-ref"
+    "external_project_id": "业务项目 ID",
+    "external_step_id": "业务步骤 ID",
+    "user_id": "用户 ID",
+    "custom_field": "任何自定义字段"
   }
 }
 ```
@@ -417,9 +417,10 @@ OSS 对象内容可以是原文，也可以是上游步骤结果。
 `metadata` 规则：
 
 ```text
-metadata 不参与 AI 执行逻辑。
-AI 能力层不校验 metadata 内部字段含义。
-metadata 中的值必须是 string、number、boolean 或 null，不允许嵌套对象和数组。
+metadata 可选，用于调用方透传业务关联信息、审计信息或排障信息。
+metadata 不参与 AI 执行逻辑；AI 能力层仅保存并在 callback 中原样返回。
+AI 能力层不解释、不依赖、不校验 metadata 内部字段名或含义。
+metadata 可以是任意嵌套的 JSON 值，包括对象和数组。
 metadata 单次请求序列化后不得超过 8 KB，超过返回 422。
 ```
 
@@ -722,8 +723,9 @@ AI 能力层在 Job 进入终态后，向 `POST /jobs` 中的 `callback.url` 发
   },
   "error": null,
   "metadata": {
-    "external_project_ref": "业务项目 ID",
-    "external_job_ref": "业务后端任务 ID"
+    "external_project_id": "业务项目 ID",
+    "external_step_id": "业务步骤 ID",
+    "user_id": "用户 ID"
   },
   "finished_at": "datetime"
 }
@@ -744,8 +746,9 @@ AI 能力层在 Job 进入终态后，向 `POST /jobs` 中的 `callback.url` 发
     "details": {}
   },
   "metadata": {
-    "external_project_ref": "业务项目 ID",
-    "external_job_ref": "业务后端任务 ID"
+    "external_project_id": "业务项目 ID",
+    "external_step_id": "业务步骤 ID",
+    "user_id": "用户 ID"
   },
   "finished_at": "datetime"
 }
@@ -904,7 +907,92 @@ AI 能力层返回新的本地化结果
 - ✅ 直接使用 `optimization_prompt.content`，无需再处理
 - ✅ 支持多轮迭代，直到 `signals.passed=true` 或达到重试次数上限
 
-## 12. 不应该由本服务承担的接口
+## 12. 项目记忆（Project Memory）
+
+### 12.1 什么是项目记忆
+
+项目记忆是 AI 能力层为长文本一致性生成的结果 artifact。它包括：
+
+```text
+characters - 人物列表和描述
+places - 地点列表和描述
+glossary - 术语表
+style_guide - 风格指南
+cultural_rules - 文化转换规则
+continuity_notes - 连续性笔记
+chunk_summaries - 分块总结
+```
+
+### 12.2 项目记忆的性质
+
+```text
+项目记忆是本服务内部为了 AI 质量而生成的执行 artifact，不是业务项目状态。
+本服务不按 project_id 长期保存或管理项目记忆。
+调用方如果希望后续 Job 使用同一份项目记忆，需要显式传入。
+```
+
+### 12.3 如何使用项目记忆
+
+#### 步骤 1：从 step1 结果中获取项目记忆
+
+```text
+业务后端执行 novel_localization.step1_localize 后获得 result.artifacts[]。
+如果某个 artifact 的 key 为 project_memory，则表示该 Job 生成了项目记忆。
+业务后端保存该项目记忆（可存于自己的数据库或临时存储）。
+```
+
+#### 步骤 2：后续 Job 中重复使用项目记忆
+
+```text
+业务后端在 step2、step3 或后续 Job 的 prompt.blocks 中的 work_note 传入：
+
+<project_memory>
+{
+  "characters": [...],
+  "places": [...],
+  ...
+}
+</project_memory>
+
+AI 能力层会从 work_note 的 XML 标签中提取项目记忆，并在执行时使用。
+```
+
+#### 步骤 3：示例代码
+
+```python
+# step1 执行
+step1_result = post_job('novel_localization.step1_localize', {...})
+
+# 从结果中提取项目记忆
+project_memory = next(
+    (a['content'] for a in step1_result['result']['artifacts'] 
+     if a['key'] == 'project_memory'),
+    None
+)
+
+# step2 中重用项目记忆
+work_note_content = f"""<project_memory>
+{json.dumps(project_memory, ensure_ascii=False, indent=2)}
+</project_memory>"""
+
+step2_result = post_job('novel_localization.step2_review', {
+    'prompt': {'blocks': [
+        ...,
+        {'key': 'work_note', 'role': 'user', 'content': work_note_content}
+    ]}
+})
+```
+
+### 12.4 关键约定
+
+```text
+✅ 项目记忆由调用方管理和显式传回，不由本服务长期持久化。
+✅ 每个 Job 请求仍然是完整自包含的。
+✅ 项目记忆作为 artifact 可能出现在 step1 结果中，但不是强制的。
+✅ 本服务不提供"查询项目记忆"或"管理项目"的接口。
+```
+
+## 13. 不应该由本服务承担的接口
 
 以下接口属于业务后端，AI 能力层首版不提供：
 
@@ -918,7 +1006,7 @@ PUT /projects/{project_id}/steps/{step_code}/prompt
 GET /projects/{project_id}/export
 ```
 
-## 13. 最终建议
+## 14. 最终建议
 
 首版实现：
 

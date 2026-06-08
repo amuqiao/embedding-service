@@ -62,12 +62,6 @@ def project_memory_from_generation(result: TextGenerationResult) -> dict[str, An
 
 
 def project_memory_from_job(job: AIJob) -> dict[str, Any] | None:
-    metadata = job.metadata_payload or {}
-    for key in ("project_memory", "mapping_table"):
-        value = metadata.get(key)
-        if isinstance(value, dict):
-            return normalize_project_memory(value)
-
     work_note = prompt_block_content(job.prompt_payload, "work_note")
     parsed = extract_tagged_json(work_note, "project_memory") or extract_tagged_json(work_note, "mapping_table")
     if parsed:

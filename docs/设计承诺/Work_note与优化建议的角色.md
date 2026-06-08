@@ -225,9 +225,19 @@ if not step2_result['signals']['passed']:
 
 ### Q3：work_note 中可以包含 JSON 吗？
 
-**A**：可以，但不推荐。目前 AI 能力层不解析 work_note 的结构，仅当做自由文本传递给 LLM。如果需要结构化数据，应该：
-- 用自然语言表述（推荐）
-- 或在 metadata 中传递，而不是 work_note
+**A**：可以。work_note 支持两种用途：
+- **自由文本**：上下文指导、优化建议等
+- **结构化数据**：在 XML 标签中嵌入 JSON，如项目记忆
+
+```json
+{
+  "key": "work_note",
+  "role": "user",
+  "content": "<project_memory>\n{\"characters\": [...], \"places\": [...]}\n</project_memory>\n\n额外的文本说明..."
+}
+```
+
+AI 能力层会从 `<project_memory>` 和 `</project_memory>` 标签中提取 JSON，用于长文本执行的一致性约束。详见《项目记忆（Project Memory）》。
 
 ### Q4：step2_review 和 step3_translate 需要 work_note 吗？
 
