@@ -1,3 +1,4 @@
+from app.main import app
 from app.infrastructure.prompt_templates import get_template
 from app.schemas.jobs import CreateJobRequest
 
@@ -39,3 +40,13 @@ def test_create_job_request_rejects_execution_mode():
         assert "execution_mode" in str(exc)
     else:
         raise AssertionError("execution_mode should be rejected")
+
+
+def test_openapi_declares_bearer_auth_for_protected_routes():
+    schema = app.openapi()
+
+    security_schemes = schema["components"]["securitySchemes"]
+    assert security_schemes["HTTPBearer"] == {"type": "http", "scheme": "bearer"}
+
+    prompt_templates = schema["paths"]["/api/v1/novel-localization-ai/prompt-templates"]["get"]
+    assert {"HTTPBearer": []} in prompt_templates["security"]
