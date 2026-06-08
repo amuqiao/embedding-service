@@ -873,13 +873,36 @@ AI 能力层返回 review_summary / optimization_prompt / passed signal
 
 ### 11.4 使用校验建议重跑
 
+**快速参考**（三行代码）：
+
+```python
+# 1. 从 step2 结果中提取建议
+optimization = next(a for a in step2_result['result']['artifacts'] if a['key'] == 'optimization_prompt')
+
+# 2. 重跑 step1，注入建议到 work_note
+step1_retry = post_job('novel_localization.step1_localize', {
+    'prompt': {'blocks': [
+        ...,
+        {'key': 'work_note', 'role': 'user', 'content': optimization['content']}  # ← 直接用建议内容
+    ]}
+})
+```
+
+**详细说明**：
+
 ```text
-业务后端 POST /jobs
-job_type = novel_localization.step1_localize
+业务后端从 step2 的失败结果中提取 optimization_prompt artifact
+业务后端 POST /jobs，job_type = novel_localization.step1_localize
+业务后端把 optimization_prompt.content 直接赋给 prompt.blocks 中 work_note 的 content
 input = 原文或业务后端选择的输入，支持 text 或 oss_object
-业务后端把 optimization_prompt 合并到 prompt.blocks 中，例如追加到 work_note.content
 AI 能力层返回新的本地化结果
 ```
+
+**关键约定**：
+- ✅ `job_type` 保持不变（仍为 `novel_localization.step1_localize`）
+- ✅ 仅修改 `prompt.blocks` 中 `work_note` 的 `content`
+- ✅ 直接使用 `optimization_prompt.content`，无需再处理
+- ✅ 支持多轮迭代，直到 `signals.passed=true` 或达到重试次数上限
 
 ## 12. 不应该由本服务承担的接口
 
