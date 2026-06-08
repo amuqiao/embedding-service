@@ -259,7 +259,45 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
 }
 ```
 
-### 7.2 OSS 输入请求
+### 7.2 step1_localize 重跑时的关键差异
+
+**初始调用** step1_localize，work_note 通常为空：
+
+```json
+{
+  "job_type": "novel_localization.step1_localize",
+  "prompt": {
+    "blocks": [
+      {"key": "system", "role": "system", "content": "..."},
+      {"key": "user", "role": "user", "content": "..."},
+      {"key": "work_note", "role": "user", "content": ""}
+    ]
+  }
+}
+```
+
+**根据 step2_review 反馈重跑** step1_localize，work_note 填入优化建议：
+
+```json
+{
+  "job_type": "novel_localization.step1_localize",
+  "prompt": {
+    "blocks": [
+      {"key": "system", "role": "system", "content": "..."},
+      {"key": "user", "role": "user", "content": "..."},
+      {"key": "work_note", "role": "user", "content": "【来自 step2 返回的 optimization_prompt artifact 的 content 字段】"}
+    ]
+  }
+}
+```
+
+**关键差异**：
+- ✅ `job_type` 保持 `novel_localization.step1_localize`（不改）
+- ✅ `input`、`output`、`callback` 保持一致（不改）
+- ✅ **仅改** `prompt.blocks` 中 `work_note` 的 `content` 字段
+- ✅ work_note 的内容来自 step2_review 响应中的 `artifacts[].key='optimization_prompt'` 的 `content` 值
+
+### 7.3 OSS 输入请求
 
 ```json
 {
@@ -310,7 +348,7 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
 }
 ```
 
-### 7.3 成功响应
+### 7.4 成功响应
 
 ```json
 {
@@ -321,7 +359,7 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
 }
 ```
 
-### 7.4 字段规则
+### 7.5 字段规则
 
 | 字段 | 必填 | 规则 |
 |---|---|---|
