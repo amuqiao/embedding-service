@@ -47,12 +47,13 @@
 默认接口：
 
 - `GET /health`
+- `GET /healthz`，兼容部署平台健康检查
 - `GET /api/v1/novel-localization-ai/models`
 - `GET /api/v1/novel-localization-ai/prompt-templates`
 - `POST /api/v1/novel-localization-ai/jobs`
 - `GET /api/v1/novel-localization-ai/jobs/{job_id}`
 
-除 `/health` 外，请求必须携带：
+除 `/health` 和 `/healthz` 外，请求必须携带：
 
 ```http
 Authorization: Bearer dev-service-key

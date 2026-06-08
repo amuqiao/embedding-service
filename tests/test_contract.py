@@ -50,3 +50,15 @@ def test_openapi_declares_bearer_auth_for_protected_routes():
 
     prompt_templates = schema["paths"]["/api/v1/novel-localization-ai/prompt-templates"]["get"]
     assert {"HTTPBearer": []} in prompt_templates["security"]
+
+
+def test_healthz_matches_health():
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+    health = client.get("/health")
+    healthz = client.get("/healthz")
+
+    assert health.status_code == 200
+    assert healthz.status_code == 200
+    assert healthz.json() == health.json()
