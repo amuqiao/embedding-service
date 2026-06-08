@@ -5,26 +5,27 @@
 #   ./scripts/check_dev_ports.sh
 #   ./scripts/check_dev_ports.sh 8100 15432 16379
 #
-# 默认检查本项目本地/compose 运行会用到的宿主机端口：
-#   8100  API
-#   15432 PostgreSQL
-#   16379 Redis
+# 默认会扫描本项目可能使用的一组候选宿主机端口，并给出每类服务的第一个空闲端口。
 
 set -u
 
-DEFAULT_PORTS=(8100 15432 16379)
+API_CANDIDATES=(8100 18100 28100 38100 48100)
+POSTGRES_CANDIDATES=(15432 25432 35432 45432 55432)
+REDIS_CANDIDATES=(16379 26379 36379 46379 56379)
 
 service_name() {
-  case "$1" in
-    8100) printf "api" ;;
-    15432) printf "postgres" ;;
-    16379) printf "redis" ;;
-    *) printf "-" ;;
+  local port="$1"
+
+  case "$port" in
+    8100|18100|28100|38100|48100) printf "api" ;;
+    15432|25432|35432|45432|55432) printf "postgres" ;;
+    16379|26379|36379|46379|56379) printf "redis" ;;
+    *) printf "custom" ;;
   esac
 }
 
 print_header() {
-  printf "== Dev Port Check ==\n"
+  printf "== Dev Server Port Scan ==\n"
   printf "host: %s\n" "$(hostname 2>/dev/null || printf unknown)"
   printf "date: %s\n" "$(date '+%Y-%m-%d %H:%M:%S %z' 2>/dev/null || printf unknown)"
   printf "\n"
@@ -70,11 +71,10 @@ list_docker_port_users() {
 
 check_port() {
   local port="$1"
-  local name
+  local name="${2:-$(service_name "$port")}"
   local listeners
   local containers
 
-  name="$(service_name "$port")"
   listeners="$(list_tcp_listeners "$port")"
   containers="$(list_docker_port_users "$port")"
 
@@ -102,16 +102,46 @@ check_port() {
   return 1
 }
 
-main() {
+scan_group() {
+  local name="$1"
+  shift
   local ports=("$@")
-  local busy=0
   local port
+  local first_free=""
+  local busy=0
 
-  if [[ "${#ports[@]}" -eq 0 ]]; then
-    ports=("${DEFAULT_PORTS[@]}")
+  printf "## %s candidates\n" "$name"
+
+  for port in "${ports[@]}"; do
+    if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+      printf "PORT %-6s %-10s INVALID\n" "$port" "$name"
+      busy=$((busy + 1))
+      continue
+    fi
+
+    if check_port "$port" "$name"; then
+      if [[ -z "$first_free" ]]; then
+        first_free="$port"
+      fi
+    else
+      busy=$((busy + 1))
+    fi
+  done
+
+  if [[ -n "$first_free" ]]; then
+    printf "recommended_%s_port=%s\n" "$name" "$first_free"
+  else
+    printf "recommended_%s_port=NONE\n" "$name"
   fi
+  printf "\n"
+}
 
-  print_header
+scan_custom_ports() {
+  local ports=("$@")
+  local port
+  local busy=0
+
+  printf "## custom ports\n"
 
   for port in "${ports[@]}"; do
     if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
@@ -134,6 +164,21 @@ main() {
   printf "summary: %s checked port(s) are busy or invalid\n" "$busy"
   printf "hint: if process names are missing, rerun with sudo or paste this output directly.\n"
   return 1
+}
+
+main() {
+  print_header
+
+  if [[ "$#" -gt 0 ]]; then
+    scan_custom_ports "$@"
+    return
+  fi
+
+  scan_group api "${API_CANDIDATES[@]}"
+  scan_group postgres "${POSTGRES_CANDIDATES[@]}"
+  scan_group redis "${REDIS_CANDIDATES[@]}"
+
+  printf "summary: paste the full output back, especially the recommended_*_port lines.\n"
 }
 
 main "$@"
