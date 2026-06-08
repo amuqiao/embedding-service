@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.job import AIJob, AIJobWorkItem
@@ -232,4 +232,36 @@ class JobRepo:
             item.error_payload = error_payload
             item.finished_at = now
             item.updated_at = now
+            await db.flush()
+
+    @staticmethod
+    async def cleanup_expired_jobs(db: AsyncSession) -> int:
+        """删除所有过期的 Job 记录（expires_at <= now）"""
+        stmt = delete(AIJob).where(AIJob.expires_at <= func.now())
+        result = await db.execute(stmt)
+        await db.commit()
+        return result.rowcount
+
+    @staticmethod
+    async def list_jobs_before(
+        db: AsyncSession,
+        expires_before: datetime,
+    ) -> list[AIJob]:
+        """查询在指定时间前过期的 Job（用于清理前的日志或备份）"""
+        result = await db.execute(
+            select(AIJob)
+            .where(AIJob.expires_at <= expires_before)
+            .order_by(AIJob.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def mark_callback_delivered(
+        db: AsyncSession,
+        job_id: uuid.UUID,
+    ) -> None:
+        """标记 Callback 已成功发送（可选，用于高级重试控制）"""
+        job = await JobRepo.get(db, job_id)
+        if job:
+            job.updated_at = datetime.now(timezone.utc)
             await db.flush()
