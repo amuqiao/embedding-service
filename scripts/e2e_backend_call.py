@@ -116,6 +116,25 @@ def sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def write_source_object(config: Config, stage: StageSpec, input_text: str) -> dict[str, dict[str, str]]:
+    content_hash = sha256_text(input_text)
+    object_key = (
+        config.output_prefix.rstrip("/")
+        + f"/inputs/{stage.name}-{int(time.time())}.txt"
+    )
+    path = config.storage_dir / config.output_bucket / object_key
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(input_text, encoding="utf-8")
+    return {
+        "oss": {
+            "oss_key": object_key,
+            "oss_url": f"local://{object_key}",
+            "content_hash": content_hash,
+            "content_type": "text/plain; charset=utf-8",
+        },
+    }
+
+
 def select_model(models_body: dict[str, Any], requested_model_id: str | None) -> str:
     available = {item["id"] for item in models_body["models"]}
     if requested_model_id:
@@ -156,17 +175,7 @@ def create_payload(
         "client_request_id": f"e2e-{request_suffix}-{stage.name}",
         "job_type": stage.job_type,
         "model_id": model_id,
-        "input": {
-            "type": "text",
-            "content": input_text,
-            "content_hash": sha256_text(input_text),
-        },
-        "output": {
-            "type": "oss_prefix",
-            "oss_bucket": config.output_bucket,
-            "oss_prefix": config.output_prefix.rstrip("/") + "/",
-            "oss_region": config.output_region,
-        },
+        "source": write_source_object(config, stage, input_text),
         "callback": {"url": "http://127.0.0.1:9/callback", "events": ["job.failed"]},
         "prompt": {"blocks": prompt_blocks},
     }

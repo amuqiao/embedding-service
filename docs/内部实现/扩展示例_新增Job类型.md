@@ -227,16 +227,13 @@ POST /api/v1/novel-localization-ai/jobs
 {
   "job_type": "novel_localization.step4_translate_review",  // ← 新 job_type
   "model_id": "gpt-4o-mini",
-  "input": {
-    "type": "text",
-    "content": "（英文翻译的全文）",
-    "content_hash": "sha256:..."
-  },
-  "output": {
-    "type": "oss_prefix",
-    "oss_bucket": "output",
-    "oss_prefix": "step4_review/",
-    "oss_region": "cn-hangzhou"
+  "source": {
+    "oss": {
+      "oss_key": "step3/translated.txt",
+      "oss_url": "https://example.com/step3/translated.txt",
+      "content_hash": "sha256:...",
+      "content_type": "text/plain; charset=utf-8"
+    }
   },
   "callback": {
     "url": "https://backend.example.com/ai-callbacks/novel-localization"
@@ -360,7 +357,7 @@ if step_code == 'step4_translate_review':
 // ❌ 坏：改变了 POST /jobs 请求体结构
 {
   "job_type": "step4_translate_review",
-  "input": { ... },
+  "source": { ... },
   "translation_specific_config": {    // ← 新字段，破坏契约
     "quality_threshold": 0.8,
     "check_terminology": true
@@ -380,7 +377,7 @@ if step_code == 'step4_translate_review':
 // ✅ 好：请求体结构完全相同
 {
   "job_type": "novel_localization.step4_translate_review",  // ← 枚举扩展
-  "input": { ... },
+  "source": { ... },
   "prompt": { ... },  // ← 仍然是通用 prompt
   "metadata": {
     "translation_quality_threshold": 0.8,  // ← 业务参数放在 metadata

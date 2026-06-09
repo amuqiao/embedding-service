@@ -240,7 +240,13 @@ POST /jobs
 {
   "job_type": "novel_localization.step1_localize",
   "model_id": "gpt-4o-mini",
-  "input": {"type": "text", "content": "..."},
+  "source": {
+    "oss": {
+      "oss_key": "novel-localization/editable/10001/res_translate_001/final_en.txt",
+      "oss_url": "https://novel-localization/editable/10001/res_translate_001/final_en.txt",
+      "content_type": "text/plain; charset=utf-8"
+    }
+  },
   "prompt": {
     "blocks": [
       {"key": "system", "role": "system", "content": "..."},
@@ -248,7 +254,6 @@ POST /jobs
       {"key": "work_note", "role": "user", "content": ""}
     ]
   },
-  "output": {"type": "oss_prefix", ...},
   "callback": {"url": "..."}
 }
 ```

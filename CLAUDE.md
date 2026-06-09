@@ -117,7 +117,7 @@
 - `.env` 是本地私有配置，不提交。
 - `.env.example` 是可提交的配置模板。
 - `.data/` 是本地验证输入，不提交。
-- 本地默认端口：API `8100`，PostgreSQL `15432`，Redis `16379`。
+- 本地默认端口：API `8100`，PostgreSQL `25432`，Redis `26379`。
 - `scripts/dev.sh` 会拒绝明显非本地的 `DATABASE_URL` 和 `REDIS_URL`。
 - 不要在本仓库脚本中加入生产部署、远程数据库重置、密钥写入或跨仓库清理逻辑。
 

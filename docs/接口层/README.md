@@ -47,7 +47,13 @@ curl -X POST -H "Authorization: Bearer <api_key>" \
   -d '{
     "job_type": "novel_localization.step1_localize",
     "model_id": "gpt-4o-mini",
-    "input": {"type": "text", "content": "..."},
+    "source": {
+      "oss": {
+        "oss_key": "novel-localization/editable/10001/res_translate_001/final_en.txt",
+        "oss_url": "https://novel-localization/editable/10001/res_translate_001/final_en.txt",
+        "content_type": "text/plain; charset=utf-8"
+      }
+    },
     "prompt": {"blocks": [...]},
     ...
   }' http://api/jobs
@@ -61,9 +67,9 @@ curl -H "Authorization: Bearer <api_key>" http://api/jobs/{job_id}
 ## 关键约定
 
 ### 请求体原则
-- 业务后端必须传入**本次任务完整输入** → 不通过 project_id 查询原文
+- 业务后端必须传入**本次任务 source.oss 引用** → 不通过 project_id 查询原文
 - 业务后端必须传入**完整 prompt.blocks** → AI 层不自动补齐
-- 业务后端必须指定**输出位置** → 大文本写入 OSS
+- OSS 配置和输出前缀由 AI 层配置文件控制 → 调用方不传 bucket/region/output
 
 ### 响应体约定
 - 所有产物统一用 `artifacts[]` 表示 → key, type, content/storage
@@ -90,8 +96,8 @@ A: 首版不支持。每个任务独立提交，可并发创建多个 Job。
 **Q: 是否支持实时进度推送？**  
 A: 首版不支持 WebSocket/SSE。使用轮询 `GET /jobs/{job_id}` 查询（推荐间隔 2-5 秒）。
 
-**Q: 输入超过 1MB 怎么办？**  
-A: 使用 `input.type=oss_object` 传递，最大支持 5MB。AI 层使用自身 OSS 凭证读取。
+**Q: 输入文本怎么传？**
+A: 新建 Job 只支持 `source.oss`，调用方先写入 OSS，再传 `oss_key`、`oss_url` 和 `content_type`。最大支持 5MB，AI 层使用自身 OSS 配置和凭证读取。
 
 **Q: 如何处理 Callback 通知？**  
 A: 实现 POST `/internal/ai-callbacks/novel-localization` 端点，验证 HMAC-SHA256 签名，实现幂等去重。

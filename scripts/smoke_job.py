@@ -31,8 +31,30 @@ OUTPUT_BUCKET = os.getenv("OSS_BUCKET") or load_dotenv_value("OSS_BUCKET") or "l
 OUTPUT_REGION = os.getenv("OSS_REGION") or load_dotenv_value("OSS_REGION") or "local"
 
 
+def local_storage_dir() -> Path:
+    configured = os.getenv("LOCAL_OBJECT_STORAGE_PATH") or load_dotenv_value("LOCAL_OBJECT_STORAGE_PATH")
+    path = Path(configured or "storage/objects")
+    return path if path.is_absolute() else ROOT_DIR / path
+
+
 def sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def write_source_object(text: str) -> dict[str, dict[str, str]]:
+    content_hash = sha256_text(text)
+    object_key = f"novel-localization/smoke/input-{int(time.time())}.txt"
+    path = local_storage_dir() / OUTPUT_BUCKET / object_key
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return {
+        "oss": {
+            "oss_key": object_key,
+            "oss_url": f"local://{object_key}",
+            "content_hash": content_hash,
+            "content_type": "text/plain; charset=utf-8",
+        },
+    }
 
 
 def main() -> int:
@@ -63,13 +85,7 @@ def main() -> int:
             "client_request_id": f"smoke-{int(time.time())}",
             "job_type": "novel_localization.step1_localize",
             "model_id": default_model_id,
-            "input": {"type": "text", "content": text, "content_hash": sha256_text(text)},
-            "output": {
-                "type": "oss_prefix",
-                "oss_bucket": OUTPUT_BUCKET,
-                "oss_prefix": "novel-localization/smoke/",
-                "oss_region": OUTPUT_REGION,
-            },
+            "source": write_source_object(text),
             "callback": {"url": "http://127.0.0.1:9/callback", "events": ["job.succeeded", "job.failed"]},
             "prompt": {"blocks": blocks},
         }

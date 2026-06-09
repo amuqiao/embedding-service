@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     SERVICE_API_KEY: str
 
-    REDIS_URL: str = "redis://127.0.0.1:16379/0"
+    REDIS_URL: str = "redis://127.0.0.1:26379/0"
     ALLOWED_ORIGINS: str = "http://localhost:3000"
     STORAGE_BACKEND: str = "local"
     LOCAL_OBJECT_STORAGE_PATH: str = "storage/objects"
@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     OSS_ACCESS_KEY_ID: str = ""
     OSS_ACCESS_KEY_SECRET: str = ""
     OSS_PROJECT_ROOT: str = ""
+    OSS_OUTPUT_PREFIX: str = "novel-localization/jobs"
     OSS_PUBLIC_ENDPOINT: str = ""
     OSS_ENDPOINT: str = ""
     OSS_ENDPOINT_STYLE: str = ""
@@ -40,7 +41,6 @@ class Settings(BaseSettings):
     DEFAULT_MODEL_ID: str = "mock-novel-localizer"
     ENABLE_MOCK_MODEL: bool = True
 
-    TEXT_INPUT_MAX_BYTES: int = 1_048_576
     OSS_INPUT_MAX_BYTES: int = 5_242_880
     JOB_QUEUE_TIMEOUT_SECONDS: int = 600
     JOB_EXECUTION_TIMEOUT_SECONDS: int = 1800

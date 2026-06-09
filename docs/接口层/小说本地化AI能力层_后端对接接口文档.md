@@ -209,23 +209,22 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
 
 创建 AI 异步任务。成功返回 `202 Accepted`。
 
-### 7.1 text 输入请求
+### 7.1 source.oss 输入请求
+
+新建 Job 只支持 OSS 对象输入。业务后端应先把原文或上游步骤结果写入 OSS，再把对象引用传给 AI 能力层。OSS bucket、region、endpoint 和访问凭证由 AI 能力层配置文件提供，不在请求体中传递。
 
 ```json
 {
   "client_request_id": "optional-idempotency-key",
   "job_type": "novel_localization.step1_localize",
   "model_id": "gpt-xxx",
-  "input": {
-    "type": "text",
-    "content": "小说原文或上一步结果",
-    "content_hash": "sha256:<64位小写hex>"
-  },
-  "output": {
-    "type": "oss_prefix",
-    "oss_bucket": "output-bucket-name",
-    "oss_prefix": "novel-localization/jobs/job-123/",
-    "oss_region": "cn-hangzhou"
+  "source": {
+    "oss": {
+      "oss_key": "novel-localization/editable/10001/res_translate_001/final_en.txt",
+      "oss_url": "https://novel-localization/editable/10001/res_translate_001/final_en.txt",
+      "content_hash": "sha256:<64位小写hex>",
+      "content_type": "text/plain; charset=utf-8"
+    }
   },
   "callback": {
     "url": "https://backend.example.com/internal/ai-callbacks/novel-localization",
@@ -287,57 +286,11 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
 
 **关键差异**：
 - ✅ `job_type` 保持 `novel_localization.step1_localize`（不改）
-- ✅ `input`、`output`、`callback` 保持一致（不改）
+- ✅ `source`、`callback` 保持一致（不改）
 - ✅ **仅改** `prompt.blocks` 中 `work_note` 的 `content` 字段
 - ✅ work_note 的内容来自 step2_review 响应中的 `artifacts[].key='optimization_prompt'` 的 `content` 值
 
-### 7.3 OSS 输入请求
-
-```json
-{
-  "client_request_id": "optional-idempotency-key",
-  "job_type": "novel_localization.step1_localize",
-  "model_id": "gpt-xxx",
-  "input": {
-    "type": "oss_object",
-    "oss_bucket": "your-bucket-name",
-    "oss_key": "novels/project-123/original.txt",
-    "oss_region": "cn-hangzhou",
-    "content_hash": "sha256:<64位小写hex>"
-  },
-  "output": {
-    "type": "oss_prefix",
-    "oss_bucket": "output-bucket-name",
-    "oss_prefix": "novel-localization/jobs/job-123/",
-    "oss_region": "cn-hangzhou"
-  },
-  "callback": {
-    "url": "https://backend.example.com/internal/ai-callbacks/novel-localization",
-    "events": ["job.succeeded", "job.failed"]
-  },
-  "prompt": {
-    "blocks": [
-      {
-        "key": "system",
-        "role": "system",
-        "content": "系统 prompt"
-      },
-      {
-        "key": "user",
-        "role": "user",
-        "content": "用户 prompt"
-      },
-      {
-        "key": "work_note",
-        "role": "user",
-        "content": "工作注释 prompt"
-      }
-    ]
-  }
-}
-```
-
-### 7.4 成功响应
+### 7.3 成功响应
 
 ```json
 {
@@ -348,53 +301,45 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
 }
 ```
 
-### 7.5 字段规则
+### 7.4 字段规则
 
 | 字段 | 必填 | 规则 |
 |---|---|---|
 | `client_request_id` | 否 | 幂等键。24 小时内相同调用方、相同 key 返回首次创建的 `job_id`。 |
 | `job_type` | 是 | 必须来自 `GET /prompt-templates`。 |
 | `model_id` | 是 | 必须来自 `GET /models` 且 `enabled=true`。 |
-| `input` | 是 | 支持 `text` 或 `oss_object`。 |
-| `output` | 是 | 大文本结果输出位置，首版固定为 `oss_prefix`。 |
+| `source` | 是 | 本次任务输入对象引用，仅支持 `source.oss`。 |
 | `callback` | 是 | Job 进入终态后通知业务后端的回调配置。 |
 | `prompt.blocks` | 是 | 必须传齐当前 `job_type` 的全部 prompt blocks。 |
 
-`input.type=text`：
+`source.oss`：
 
 | 字段 | 必填 | 规则 |
 |---|---|---|
-| `type` | 是 | 固定为 `text`。 |
-| `content` | 是 | UTF-8 文本，最大 1 MB。 |
-| `content_hash` | 否 | 格式必须为 `sha256:<64位小写hex>`；传入时必须校验。 |
-
-`input.type=oss_object`：
-
-| 字段 | 必填 | 规则 |
-|---|---|---|
-| `type` | 是 | 固定为 `oss_object`。 |
-| `oss_bucket` | 是 | OSS bucket 名称。 |
 | `oss_key` | 是 | OSS object key。 |
-| `oss_region` | 是 | OSS region，例如 `cn-hangzhou`。 |
+| `oss_url` | 是 | 调用方用于追踪或展示的对象 URL，AI 能力层不依赖该 URL 读取对象。 |
 | `content_hash` | 否 | 格式必须为 `sha256:<64位小写hex>`；传入时读取后必须校验。 |
+| `content_type` | 是 | 当前固定为 `text/plain; charset=utf-8`。 |
 
 OSS 规则：
 
 ```text
 调用方不得传 OSS AccessKey、Secret 或临时凭证。
-AI 能力层使用自身配置的 OSS 凭证读取对象。
+调用方不得传 OSS bucket、region、endpoint。
+AI 能力层使用自身配置的 OSS bucket、region、endpoint 和凭证读取对象。
 OSS 对象必须是 UTF-8 文本。
+content_type 必须为 text/plain; charset=utf-8。
 OSS 对象读取后最大 5 MB。
 OSS 拉取失败时，Job 进入 failed，error.code=OSS_FETCH_FAILED。
 content_hash 校验失败时，Job 进入 failed，error.code=INPUT_HASH_MISMATCH。
 ```
 
-`output` 规则：
+结果输出规则：
 
 ```text
-output.type 首版固定为 oss_prefix。
-output.oss_bucket、output.oss_prefix、output.oss_region 必填。
-AI 能力层使用自身配置的 OSS 凭证写入结果文件。
+调用方不在 POST /jobs 中传 output。
+AI 能力层使用配置文件中的 OSS_OUTPUT_PREFIX 和 job_id 生成结果前缀。
+AI 能力层使用自身配置的 OSS bucket、region、endpoint 和凭证写入结果文件。
 本地化正文和英文翻译正文必须写入 OSS，不得在 JSON 中直接返回全文。
 AI 能力层写入完成后，在 artifact 中返回实际 oss_key、content_hash 和 content_size_bytes。
 OSS 写入失败时，Job 进入 failed，error.code=OSS_WRITE_FAILED。
@@ -679,8 +624,7 @@ Callback 失败不改变 Job 状态；业务后端可通过 GET /jobs/{job_id} �
 
 | 项 | 限制 | 失败行为 |
 |---|---:|---|
-| `input.type=text` | 最大 1 MB | 返回 `INPUT_TOO_LARGE`。 |
-| `input.type=oss_object` | 最大 5 MB | Job 进入 `failed`，`error.code=INPUT_TOO_LARGE`。 |
+| `source.oss` | 最大 5 MB | Job 进入 `failed`，`error.code=INPUT_TOO_LARGE`。 |
 | OSS 文本编码 | UTF-8 | Job 进入 `failed`，`error.code=INVALID_INPUT`。 |
 | Job 排队超时 | 10 分钟 | Job 进入 `failed`，`error.code=JOB_TIMEOUT`。 |
 | Job 执行超时 | 30 分钟 | Job 进入 `failed`，`error.code=JOB_TIMEOUT`。 |

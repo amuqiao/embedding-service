@@ -18,6 +18,25 @@ def _status_url(job_id: uuid.UUID) -> str:
     return f"/api/v1/novel-localization-ai/jobs/{job_id}"
 
 
+def _configured_oss_bucket() -> str:
+    return settings.OSS_BUCKET or "local-dev"
+
+
+def _configured_oss_region() -> str:
+    return settings.OSS_REGION or "local"
+
+
+def _job_output_payload(job_id: uuid.UUID) -> dict[str, str]:
+    root = settings.OSS_OUTPUT_PREFIX.strip("/")
+    prefix = f"{root}/{job_id}/" if root else f"{job_id}/"
+    return {
+        "type": "oss_prefix",
+        "oss_bucket": _configured_oss_bucket(),
+        "oss_prefix": prefix,
+        "oss_region": _configured_oss_region(),
+    }
+
+
 def _job_to_response(job: AIJob) -> JobStatusResponse:
     return JobStatusResponse(
         job_id=job.id,
@@ -72,14 +91,6 @@ def _validate_create_request(payload: CreateJobRequest) -> None:
         )
         if not local_insecure:
             raise ValidationAppError("INVALID_INPUT", "callback.url must be HTTPS")
-    if payload.input.type == "text":
-        size = len(payload.input.content.encode("utf-8"))
-        if size == 0:
-            raise ValidationAppError("INVALID_INPUT", "input.content must not be empty")
-        if size > settings.TEXT_INPUT_MAX_BYTES:
-            raise ValidationAppError("INPUT_TOO_LARGE", "text input exceeds service limit")
-        if payload.input.content_hash and sha256_digest(payload.input.content.encode("utf-8")) != payload.input.content_hash:
-            raise ValidationAppError("INPUT_HASH_MISMATCH", "input.content_hash does not match content")
 
 
 async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str) -> tuple[AIJob, bool]:
@@ -98,11 +109,13 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
         client_request_id=payload.client_request_id,
         job_type=payload.job_type,
         model_id=payload.model_id,
-        input_payload=payload.input.model_dump(),
-        output_payload=payload.output.model_dump(),
+        input_payload=payload.source.model_dump(),
+        output_payload=_job_output_payload(uuid.uuid4()),
         callback_payload=payload.callback.model_dump(),
         prompt_payload=payload.prompt.model_dump(),
     )
+    job.output_payload = _job_output_payload(job.id)
+    await db.flush()
     return job, True
 
 
@@ -128,14 +141,15 @@ def create_job_response(job: AIJob) -> dict[str, Any]:
 
 def _load_input_text(job: AIJob) -> str:
     input_payload = job.input_payload
-    if input_payload["type"] == "text":
+    if input_payload.get("type") == "text":
         return input_payload["content"]
+    oss_payload = input_payload.get("oss") or input_payload
 
     try:
         text = storage.read_text(
-            bucket=input_payload["oss_bucket"],
-            key=input_payload["oss_key"],
-            region=input_payload["oss_region"],
+            bucket=input_payload.get("oss_bucket") or _configured_oss_bucket(),
+            key=oss_payload["oss_key"],
+            region=input_payload.get("oss_region") or _configured_oss_region(),
         )
     except AppError:
         raise
@@ -145,7 +159,7 @@ def _load_input_text(job: AIJob) -> str:
     data = text.encode("utf-8")
     if len(data) > settings.OSS_INPUT_MAX_BYTES:
         raise AppError("INPUT_TOO_LARGE", "OSS input exceeds service limit", status_code=422)
-    expected_hash = input_payload.get("content_hash")
+    expected_hash = oss_payload.get("content_hash")
     if expected_hash and sha256_digest(data) != expected_hash:
         raise AppError("INPUT_HASH_MISMATCH", "OSS input content_hash mismatch", status_code=422)
     return text
@@ -176,5 +190,3 @@ def _persist_large_artifacts(job: AIJob, result: JobResult) -> dict[str, Any]:
         )
         artifact.update({"storage": "oss_object", **stored})
     return result_data
-
-

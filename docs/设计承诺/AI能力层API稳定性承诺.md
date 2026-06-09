@@ -27,19 +27,13 @@
   "client_request_id": "string (optional, 24h 幂等key)",
   "job_type": "novel_localization.step1_localize | step2_review | step3_translate",
   "model_id": "string (来自 /models)",
-  "input": {
-    "type": "text | oss_object",
-    "content": "string (仅 text 类型)",
-    "content_hash": "sha256:... (可选)",
-    "oss_bucket": "string (仅 oss_object)",
-    "oss_key": "string (仅 oss_object)",
-    "oss_region": "string (仅 oss_object)"
-  },
-  "output": {
-    "type": "oss_prefix (首版固定)",
-    "oss_bucket": "string",
-    "oss_prefix": "string",
-    "oss_region": "string"
+  "source": {
+    "oss": {
+      "oss_key": "string",
+      "oss_url": "string",
+      "content_hash": "sha256:... (可选)",
+      "content_type": "text/plain; charset=utf-8"
+    }
   },
   "callback": {
     "url": "https://...",
@@ -65,9 +59,9 @@
 **承诺**：
 - `client_request_id` 不变 → 仍用于幂等去重
 - `job_type` 枚举可扩展（新增 step4, step5），不删改现有值
-- `input` 的三个字段（type, content, oss_*）保持结构不变
+- `source` 固定使用 `source.oss`，字段为 `oss_key`、`oss_url`、`content_hash`、`content_type`
 - `prompt.blocks[]` 的三个字段（key, role, content）保持不变
-- `metadata` 的任意字段不会被 AI 层处理，只用于审计和日志关联
+- OSS bucket、region、endpoint、访问凭证和输出前缀由 AI 能力层配置文件提供，不由调用方 POST 传递
 
 #### GET /jobs/{job_id} 响应体结构
 

@@ -21,7 +21,7 @@
 返回支持的模型列表
 返回默认 Prompt 模板
 创建 AI 任务
-读取任务输入文本，支持直接文本或 OSS 对象引用
+读取 OSS 对象中的任务输入文本
 将大文本结果写入 OSS
 查询 AI 任务状态和结果
 任务结束后回调业务后端
@@ -97,26 +97,24 @@ Authorization: Bearer <service_api_key>
 ```text
 job_type
 model_id
-input
+source
 prompt.blocks
-output
 callback
 ```
 
 本服务不通过 `project_id` 查原文，不通过 `step_code` 查上游结果，不保存用户编辑后的 prompt 配置。本地化正文和英文翻译正文这类大文本结果写入 OSS，接口和 Callback 只返回 OSS 引用。
 
-所有步骤都使用同一套 `input` 结构。无论输入是原文、上一步本地化结果、校验对象还是待翻译文本，都由业务后端在 `POST /jobs` 时传入。AI 能力层只读取本次任务的 `input`，不理解业务项目中的上下游关系。
+所有步骤都使用同一套 `source` 结构。无论输入是原文、上一步本地化结果、校验对象还是待翻译文本，都由业务后端先写入 OSS，再在 `POST /jobs` 时传入对象引用。AI 能力层只读取本次任务的 `source`，不理解业务项目中的上下游关系。
 
-`input` 支持两种方式：
+新建 Job 的 `source` 只支持 OSS 对象引用：
 
 ```text
-text：直接传入文本。
-oss_object：传入 OSS 对象引用。
+source.oss：传入 OSS object key 和可追踪 URL。
 ```
 
-当 `input.type = oss_object` 时，AI 能力层使用自己配置的 OSS 凭证读取对象。调用方不得在请求体中传 OSS AccessKey、Secret 或临时凭证。
+调用方应先把原文或上游步骤结果写入 OSS，再在 `POST /jobs` 中传入 `source.oss.oss_key`。AI 能力层使用自己配置的 OSS bucket、region、endpoint 和访问凭证读取对象。调用方不得在请求体中传 OSS AccessKey、Secret、bucket、region 或临时凭证。
 
-`output` 用于指定大文本结果的 OSS 输出位置。首版 `output.type` 固定为 `oss_prefix`。AI 能力层把本地化正文、英文翻译正文写入该 OSS 前缀，并在 `artifacts[]` 中返回实际 OSS key。
+大文本结果输出位置由 AI 能力层配置决定。服务使用 `OSS_OUTPUT_PREFIX` 和 `job_id` 生成结果前缀，把本地化正文、英文翻译正文写入 OSS，并在 `artifacts[]` 中返回实际 OSS key。
 
 `callback` 用于指定 Job 终态通知地址。AI 能力层在 Job 进入 `succeeded` 或 `failed` 后主动 POST `callback.url`。Callback 是完成通知，不替代 `GET /jobs/{job_id}` 查询。
 
@@ -297,119 +295,63 @@ model_id 必须来自 models[].id，且对应模型 enabled=true。
 
 `job_type` 枚举值来自 `GET /prompt-templates` 返回的 `job_types[].job_type`。
 
-#### 7.4.1 直接传文本
+#### 7.4.1 通过 OSS 对象引用传输入
 
-业务后端直接把待处理文本放入 `input.content`。
+业务后端只传 OSS 对象引用，AI 能力层使用自身配置的 OSS 访问凭证读取对象。
 
-请求：
+请求中的 `source` 示例：
 
 ```json
 {
-  "client_request_id": "optional-idempotency-key",
-  "job_type": "novel_localization.step1_localize",
-  "model_id": "gpt-xxx",
-  "input": {
-    "type": "text",
-    "content": "小说原文或上一步结果",
-    "content_hash": "sha256:<64位小写hex>"
-  },
-  "output": {
-    "type": "oss_prefix",
-    "oss_bucket": "output-bucket-name",
-    "oss_prefix": "novel-localization/jobs/job-123/",
-    "oss_region": "cn-hangzhou"
-  },
-  "callback": {
-    "url": "https://backend.example.com/internal/ai-callbacks/novel-localization",
-    "events": ["job.succeeded", "job.failed"]
-  },
-  "prompt": {
-    "blocks": [
-      {
-        "key": "system",
-        "role": "system",
-        "content": "系统 prompt"
-      },
-      {
-        "key": "user",
-        "role": "user",
-        "content": "用户 prompt"
-      },
-      {
-        "key": "work_note",
-        "role": "user",
-        "content": "工作注释 prompt"
-      }
-    ]
+  "oss": {
+    "oss_key": "novel-localization/editable/10001/res_translate_001/final_en.txt",
+    "oss_url": "https://novel-localization/editable/10001/res_translate_001/final_en.txt",
+    "content_hash": "sha256:<64位小写hex>",
+    "content_type": "text/plain; charset=utf-8"
   }
 }
 ```
 
-#### 7.4.2 通过 OSS 对象引用传输入
-
-业务后端只传 OSS 对象引用，AI 能力层使用自身配置的 OSS 访问凭证读取对象。
-
-请求中的 `input` 示例：
-
-```json
-{
-  "type": "oss_object",
-  "oss_bucket": "your-bucket-name",
-  "oss_key": "novels/project-123/original.txt",
-  "oss_region": "cn-hangzhou",
-  "content_hash": "sha256:<64位小写hex>"
-}
-```
-
-使用 OSS 输入时，完整 `POST /jobs` 仍必须同时传入 `output`、`callback`、`prompt.blocks`。
+完整 `POST /jobs` 仍必须同时传入 `callback`、`prompt.blocks`。
 
 约束:
 
 ```text
 调用方不得传 OSS AccessKey、Secret 或临时凭证。
 OSS 对象必须是 UTF-8 文本。
+content_type 必须为 text/plain; charset=utf-8。
 OSS 对象内容可以是原文，也可以是上游步骤结果。
 如果传入 `content_hash`，AI 能力层读取对象后必须校验 hash；校验失败时 Job 进入 `failed`，`error.code = INPUT_HASH_MISMATCH`。
 如果 OSS 拉取失败，Job 进入 `failed`，`error.code = OSS_FETCH_FAILED`。
 ```
 
-#### 7.4.3 input 字段说明
+#### 7.4.2 source 字段说明
 
-`input.type = text`：
-
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `type` | 是 | 固定为 `text`。 |
-| `content` | 是 | 本次任务要处理的 UTF-8 文本，可以是原文，也可以是上游步骤结果。 |
-| `content_hash` | 否 | 输入文本 hash，格式必须为 `sha256:<64位小写hex>`；传入时 AI 能力层必须校验。 |
-
-`input.type = oss_object`：
+`source.oss`：
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| `type` | 是 | 固定为 `oss_object`。 |
-| `oss_bucket` | 是 | OSS bucket 名称。 |
 | `oss_key` | 是 | OSS object key。 |
-| `oss_region` | 是 | OSS region，例如 `cn-hangzhou`。 |
+| `oss_url` | 是 | 调用方用于追踪或展示的对象 URL，AI 能力层不依赖该 URL 读取对象。 |
 | `content_hash` | 否 | OSS 对象内容 hash，格式必须为 `sha256:<64位小写hex>`；传入时 AI 能力层读取后必须校验。 |
+| `content_type` | 是 | 当前固定为 `text/plain; charset=utf-8`。 |
 
-#### 7.4.4 字段说明
+#### 7.4.3 字段说明
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `client_request_id` | 否 | 调用方生成的幂等键。相同调用方、相同 key 可复用已创建任务，避免重复提交。 |
 | `job_type` | 是 | 任务类型，取值来自 `GET /prompt-templates`。 |
 | `model_id` | 是 | 模型 ID，取值来自 `GET /models`。 |
-| `input` | 是 | 本次任务输入，支持 `text` 或 `oss_object`。 |
-| `output` | 是 | 大文本结果输出位置，首版固定为 `oss_prefix`。 |
+| `source` | 是 | 本次任务输入对象引用，仅支持 `source.oss`。 |
 | `callback` | 是 | Job 进入终态后通知业务后端的回调配置。 |
 | `prompt.blocks` | 是 | 本次任务实际使用的 prompt blocks，由业务后端传入。 |
 
-`output` 规则：
+结果输出规则：
 
 ```text
-output.type 首版固定为 oss_prefix。
-output.oss_bucket、output.oss_prefix、output.oss_region 必填。
+调用方不在 POST /jobs 中传 output。
+AI 能力层使用配置文件中的 OSS bucket、region、endpoint、OSS_OUTPUT_PREFIX 写入结果文件。
 AI 能力层使用自身配置的 OSS 凭证写入结果文件。
 本地化正文和英文翻译正文必须写入 OSS，不得在 JSON 中直接返回全文。
 AI 能力层写入完成后，在 artifact 中返回实际 oss_key、content_hash 和 content_size_bytes。
@@ -806,13 +748,12 @@ Job 状态枚举仍保持 queued | running | succeeded | failed | canceled。
 
 | 项 | 限制 | 说明 |
 |---|---:|---|
-| `input.type = text` | 最大 1 MB | 超出返回 `INPUT_TOO_LARGE`；长文本使用 `oss_object`。 |
-| `input.type = oss_object` | 最大 5 MB | 读取后超过限制返回 `INPUT_TOO_LARGE`。 |
+| `source.oss` | 最大 5 MB | 读取后超过限制返回 `INPUT_TOO_LARGE`。 |
 | OSS 文本编码 | UTF-8 | 非 UTF-8 返回 `INVALID_INPUT`。 |
 | Job 排队超时 | 10 分钟 | 超时后 `status=failed`，`error.code=JOB_TIMEOUT`。 |
 | Job 执行超时 | 30 分钟 | 超时后 `status=failed`，`error.code=JOB_TIMEOUT`。 |
 
-超过首版输入限制的内容，调用方必须使用 `oss_object`。AI 能力层内部是否分 chunk、分析和合并，不影响接口契约。
+超过首版输入限制的内容，调用方必须拆分或压缩到限制内再写入 OSS。AI 能力层内部是否分 chunk、分析和合并，不影响接口契约。
 
 ## 11. 业务后端如何使用
 
@@ -828,7 +769,7 @@ Job 状态枚举仍保持 queued | running | succeeded | failed | canceled。
 
 ```text
 业务后端读取自己的项目原文和 PromptConfig
-业务后端直接传 `input.type=text`，或传 `input.type=oss_object`
+业务后端把本次输入写入 OSS，并传 `source.oss`
 业务后端 POST /jobs，job_type = novel_localization.step1_localize
 AI 能力层返回 job_id
 业务后端 GET /jobs/{job_id} 轮询
@@ -868,7 +809,7 @@ step1_retry = post_job('novel_localization.step1_localize', {
 业务后端从 step2 的失败结果中提取 optimization_prompt artifact
 业务后端 POST /jobs，job_type = novel_localization.step1_localize
 业务后端把 optimization_prompt.content 直接赋给 prompt.blocks 中 work_note 的 content
-input = 原文或业务后端选择的输入，支持 text 或 oss_object
+input = 原文或业务后端选择的输入，使用 oss_object 传入
 AI 能力层返回新的本地化结果
 ```
 
