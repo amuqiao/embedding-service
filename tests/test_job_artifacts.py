@@ -59,7 +59,7 @@ def test_step2_returns_work_note_suggestion_artifact(monkeypatch):
 
     assert result.signals["passed"] is False
     assert work_note.type == "work_note"
-    assert work_note.apply_mode == "append"
+    assert work_note.apply_mode == "replace"
     assert work_note.content == "请统一角色称呼。"
 
 
@@ -124,11 +124,11 @@ def test_step2_rejects_missing_suggested_work_note(monkeypatch):
     assert exc_info.value.code == "MODEL_OUTPUT_INVALID"
 
 
-def test_p5_step1_merge_uses_work_note_artifact():
+def test_chunked_step1_merge_uses_work_note_artifact():
     job = AIJob(
         job_type="novel_localization.step1_localize",
         model_id="gpt-4.1",
-        execution_mode="p5",
+        execution_mode="chunked",
         input_payload={},
         output_payload={},
         callback_payload={},
@@ -185,11 +185,11 @@ def test_p5_step1_merge_uses_work_note_artifact():
     assert work_note.content == "第一段注释\n\n第二段注释"
 
 
-def test_p5_step2_merge_uses_work_note_artifact():
+def test_chunked_step2_merge_uses_work_note_artifact():
     job = AIJob(
         job_type="novel_localization.step2_review",
         model_id="gpt-4.1",
-        execution_mode="p5",
+        execution_mode="chunked",
         input_payload={},
         output_payload={},
         callback_payload={},
@@ -226,11 +226,11 @@ def test_p5_step2_merge_uses_work_note_artifact():
     assert work_note.content == "分块 0:\n请统一称呼。"
 
 
-def test_p5_step2_passed_does_not_return_empty_work_note():
+def test_chunked_step2_passed_does_not_return_empty_work_note():
     job = AIJob(
         job_type="novel_localization.step2_review",
         model_id="gpt-4.1",
-        execution_mode="p5",
+        execution_mode="chunked",
         input_payload={},
         output_payload={},
         callback_payload={},

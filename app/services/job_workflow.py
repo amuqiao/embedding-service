@@ -86,7 +86,7 @@ def _merge_review(items: list[AIJobWorkItem]) -> JobResult:
 
 
 def merge_work_items(job: AIJob, items: list[AIJobWorkItem]) -> JobResult:
-    if job.execution_mode == "p1":
+    if job.execution_mode == "single":
         whole = next(item for item in items if item.kind == "whole")
         return JobResult.model_validate(whole.result_payload)
 
@@ -310,7 +310,7 @@ def build_canvas(job_id: uuid.UUID, plan: JobPlan, item_ids: dict[str, uuid.UUID
     from app.tasks.jobs import execute_work_item_task, fanout_after_mapping_task, finalize_job_task
 
     job_id_text = str(job_id)
-    if plan.execution_mode == "p1":
+    if plan.execution_mode == "single":
         whole_id = str(item_ids["whole:0"])
         return chain(
             execute_work_item_task.s(job_id_text, whole_id),

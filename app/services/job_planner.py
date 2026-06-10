@@ -4,7 +4,7 @@ from typing import Any, Literal
 from app.infrastructure.config import settings
 
 
-ExecutionMode = Literal["p1", "p5"]
+ExecutionMode = Literal["single", "chunked"]
 
 
 @dataclass(frozen=True)
@@ -149,9 +149,9 @@ def split_text_with_registry(text: str, max_chars: int | None = None) -> list[di
 
 def build_job_plan(job_type: str, input_text: str) -> JobPlan:
     char_count = _count_chars(input_text)
-    if char_count <= settings.NOVEL_LOCALIZATION_P1_MAX_CHARS:
+    if not settings.NOVEL_LOCALIZATION_CHUNKING_ENABLED or char_count <= settings.NOVEL_LOCALIZATION_SINGLE_MAX_CHARS:
         return JobPlan(
-            execution_mode="p1",
+            execution_mode="single",
             chunk_count=1,
             chunk_registry=[
                 {
@@ -210,7 +210,7 @@ def build_job_plan(job_type: str, input_text: str) -> JobPlan:
             )
         )
     return JobPlan(
-        execution_mode="p5",
+        execution_mode="chunked",
         chunk_count=len(chunk_registry),
         chunk_registry=chunk_registry,
         work_items=work_items,
