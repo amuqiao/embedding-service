@@ -18,19 +18,6 @@ class TextModel:
 
 def _models() -> list[TextModel]:
     models: list[TextModel] = []
-    if settings.ENABLE_MOCK_MODEL:
-        models.append(
-            TextModel(
-                id="mock-novel-localizer",
-                name="Mock Novel Localizer",
-                provider="mock",
-                litellm_model="mock",
-                enabled=True,
-                context_window=128000,
-                supports_json_output=True,
-                notes="本地冒烟验证模型，不调用外部 API",
-            )
-        )
     if settings.OPENAI_API_KEY:
         models.extend(
             [

@@ -23,17 +23,12 @@ def generate_text(model_id: str, messages: list[dict[str, str]]) -> TextGenerati
     model = get_enabled_model(model_id)
     if not model:
         raise KeyError(model_id)
-    if model.provider == "mock":
-        joined = "\n".join(m["content"] for m in messages)
-        sample = joined[-1200:]
-        return TextGenerationResult(text=f"{sample}\n\n[mock-result]")
-
     response = litellm.completion(
         model=model.litellm_model,
         messages=messages,
         temperature=0.7,
-        timeout=120,
-        num_retries=0,
+        timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
+        num_retries=settings.MODEL_CALL_MAX_RETRIES,
         drop_params=True,
     )
     choice = response.choices[0]

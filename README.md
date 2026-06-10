@@ -53,6 +53,8 @@
 - `POST /api/v1/novel-localization-ai/jobs`
 - `GET /api/v1/novel-localization-ai/jobs/{job_id}`
 
+Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/infrastructure/novel_loc/prompts.yaml`。该 YAML 是运行时 Prompt 的唯一默认配置源，定义各 `job_type` 的 `system/user/work_note` 默认值和运行时输出契约；`docs/prompt` 仅作为原始提示词素材留档，不参与运行时加载。
+
 除 `/health` 和 `/healthz` 外，请求必须携带：
 
 ```http
@@ -65,7 +67,7 @@ Authorization: Bearer dev-service-key
 ./scripts/dev.sh smoke
 ```
 
-默认使用 `mock-novel-localizer`，不需要真实 OpenAI Key。对象存储默认使用本地模拟后端，文件写入 `storage/objects/`。
+默认使用真实模型；需要在 `.env` 配置 `OPENAI_API_KEY`。对象存储默认使用本地后端，文件写入 `storage/objects/`。单次模型调用超时由 `MODEL_CALL_TIMEOUT_SECONDS` 控制，e2e 脚本的 `--timeout-seconds` 只控制脚本轮询等待时间。
 
 ## 阿里云 OSS 连通性测试
 
@@ -104,7 +106,7 @@ OSS_PUBLIC_ENDPOINT=
 ./scripts/dev.sh test
 ./scripts/dev.sh smoke
 ./scripts/dev.sh workflow-smoke
-./scripts/dev.sh e2e
+./scripts/dev.sh e2e --input-file .data/test_novel.txt
 ./scripts/dev.sh check
 ./scripts/dev.sh --help
 ```
@@ -119,9 +121,9 @@ OSS_PUBLIC_ENDPOINT=
 - `logs api|worker`：跟随查看 API 或 worker 日志。
 - `migrate`：显式执行 Alembic 迁移。
 - `test`：运行本地 pytest。
-- `smoke`：对已运行 API 执行 mock Job 冒烟验证。
-- `workflow-smoke`：使用 mock 模型和放大输入验证服务内部自动分块、Celery canvas 和 merge。
-- `e2e`：从 `.data` 读取 `.txt`，使用真实 OpenAI 模型模拟后端调用，依次验证本地化、校验、翻译三个 Job；脚本会把 step1 返回的 `project_memory` 显式注入 step2/step3 的 `work_note`，并产出 `localized.txt` 与经过翻译后扫描的 `translated.txt`。
+- `smoke`：对已运行 API 执行真实模型短链路验证。
+- `workflow-smoke`：使用真实模型和放大输入验证服务内部自动分块、Celery canvas 和 merge。
+- `e2e`：从 `.data` 读取 `.txt`，使用真实模型模拟调用方请求，枚举 `health`、`models`、`prompt-templates`、`jobs`、轮询和 callback，并依次验证本地化、校验、翻译三个 Job 的 artifact 契约。
 - `check`：运行脚本语法检查和 pytest。
 
 脚本只面向本地开发环境，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
@@ -132,13 +134,13 @@ OSS_PUBLIC_ENDPOINT=
 
 ```bash
 ./scripts/dev.sh start
-./scripts/dev.sh e2e
+./scripts/dev.sh e2e --input-file .data/test_novel.txt
 ./scripts/dev.sh stop
 ```
 
-`e2e` 完成后会打印本地对象存储中的 `localized.txt`、`translated.txt` 和 `e2e_report.json` 路径。
+`e2e` 默认会启动本地 callback receiver，并校验 callback body、header、签名与轮询终态一致；如只想跑旧的三阶段主链路，可追加 `--skip-contract-check`；如只想验证 meta 和 `POST /jobs` 错误请求契约、不创建真实模型 Job，可追加 `--contract-only`。完成后会打印本地对象存储中的 `localized.txt`、`translated.txt` 和 `e2e_report.json` 路径，并在 `e2e_downloads/` 保存 inline artifact 副本，例如 `step1_localize_work_note.txt`、`step2_review_review_summary.txt`，便于回溯分析。
 
-验证 Job 内部 workflow 可使用 mock 模型，不产生真实模型费用：
+验证 Job 内部 workflow 会调用真实模型，可能产生费用：
 
 ```bash
 ./scripts/dev.sh start

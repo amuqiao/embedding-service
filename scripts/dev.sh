@@ -76,17 +76,17 @@ usage() {
   logs <service>      跟随查看 api 或 worker 日志，Ctrl-C 退出。
   migrate             对本地开发数据库执行 Alembic 迁移。
   test                运行 pytest。
-  smoke               对已运行 API 执行 mock Job 冒烟验证。
-  workflow-smoke      使用 mock 模型和放大输入验证内部自动分块、canvas 和 merge。
-  e2e                 从 .data 读取 .txt，使用真实 OpenAI 模型验证 step1/step2/step3 链路。
+  smoke               对已运行 API 执行真实模型 Job 冒烟验证。
+  workflow-smoke      使用真实模型和放大输入验证内部自动分块、canvas 和 merge。
+  e2e                 从 .data 读取 .txt，使用真实模型验证 meta、jobs、轮询、callback 和三阶段链路。
   check               执行脚本语法检查和 pytest。
   help                显示帮助。
 
 成功标准：
   start 成功 = postgres/redis healthy，迁移成功，api/worker 进程存活，/health 可访问。
-  smoke 成功 = mock localization job 进入 succeeded 状态。
-  workflow-smoke 成功 = mock 长文本触发内部 workflow，localized.txt 和 translated.txt 存在且非空。
-  e2e 成功 = 三个 Job 均进入 succeeded，localized.txt 和 translated.txt 存在且非空。
+  smoke 成功 = 真实模型 localization job 进入 succeeded 状态。
+  workflow-smoke 成功 = 真实模型长文本触发内部 workflow，localized.txt 和 translated.txt 存在且非空。
+  e2e 成功 = meta 契约、错误请求预检、三个 Job、轮询结果、callback 和核心 artifact 均通过校验。
 
 运行产物：
   PID:  ${RUN_DIR}/api.pid, ${RUN_DIR}/worker.pid
@@ -521,7 +521,6 @@ run_workflow_smoke() {
   section "Workflow Smoke"
   require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
   PYTHONUNBUFFERED=1 "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/e2e_backend_call.py" \
-    --model-id mock-novel-localizer \
     --repeat-input "${WORKFLOW_SMOKE_REPEAT_INPUT:-50}" \
     "${@:1}"
 }

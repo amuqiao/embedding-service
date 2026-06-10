@@ -38,8 +38,9 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = ""
-    DEFAULT_MODEL_ID: str = "mock-novel-localizer"
-    ENABLE_MOCK_MODEL: bool = True
+    DEFAULT_MODEL_ID: str = "gpt-4.1"
+    MODEL_CALL_TIMEOUT_SECONDS: int = 300
+    MODEL_CALL_MAX_RETRIES: int = 0
     PROMPT_CONFIG_PATH: str = "app/infrastructure/novel_loc/prompts.yaml"
 
     OSS_INPUT_MAX_BYTES: int = 5_242_880
@@ -51,7 +52,7 @@ class Settings(BaseSettings):
     CELERY_RETRY_DELAY: int = 60
     CELERY_RESULT_EXPIRES: int = 86400
     NOVEL_LOCALIZATION_P1_MAX_CHARS: int = 5000
-    NOVEL_LOCALIZATION_CHUNK_SIZE: int = 4500
+    NOVEL_LOCALIZATION_CHUNK_SIZE: int = 3000
 
     LOG_LEVEL: str = Field(default="INFO")
 
