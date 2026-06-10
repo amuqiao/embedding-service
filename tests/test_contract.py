@@ -40,10 +40,12 @@ def test_create_job_request_accepts_valid_payload():
 def test_step1_prompt_requires_chinese_localized_output():
     template = get_template("novel_localization.step1_localize")
     assert template is not None
-    content = "\n".join(block.default_content for block in template.prompt_blocks)
+    user_block = next((b for b in template.prompt_blocks if b.key == "user"), None)
+    assert user_block is not None
+    content = user_block.default_content
 
-    assert "输出语言必须为中文" in content
-    assert "不得输出英文译文" in content
+    assert "语言是中文" in content
+    assert "小说本地化方法论" in content
 
 
 def _block_content(job_type: str, key: str) -> str:

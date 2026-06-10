@@ -141,8 +141,6 @@ def create_job_response(job: AIJob) -> dict[str, Any]:
 
 def _load_input_text(job: AIJob) -> str:
     input_payload = job.input_payload
-    if input_payload.get("type") == "text":
-        return input_payload["content"]
     oss_payload = input_payload.get("oss") or input_payload
 
     try:
