@@ -114,7 +114,7 @@ model_id 必须来自 models[].id，且 enabled=true。
 
 ```json
 {
-  "version": "2026-06-05",
+  "version": "2026-06-10.1",
   "job_types": [
     {
       "job_type": "novel_localization.step1_localize",
@@ -136,7 +136,7 @@ model_id 必须来自 models[].id，且 enabled=true。
         {
           "key": "work_note",
           "role": "user",
-          "label": "工作注释 Prompt",
+          "label": "已有工作注释 Prompt",
           "default_content": ""
         }
       ]
@@ -144,7 +144,7 @@ model_id 必须来自 models[].id，且 enabled=true。
     {
       "job_type": "novel_localization.step2_review",
       "name": "本地化校验",
-      "description": "检查本地化结果是否满足要求，并在失败时生成优化建议。",
+      "description": "检查本地化结果是否满足要求，并在失败时生成建议工作注释。",
       "prompt_blocks": [
         {
           "key": "system",
@@ -161,7 +161,7 @@ model_id 必须来自 models[].id，且 enabled=true。
         {
           "key": "work_note",
           "role": "user",
-          "label": "工作注释 Prompt",
+          "label": "当前工作注释 Prompt",
           "default_content": ""
         }
       ]
@@ -186,7 +186,7 @@ model_id 必须来自 models[].id，且 enabled=true。
         {
           "key": "work_note",
           "role": "user",
-          "label": "工作注释 Prompt",
+          "label": "当前工作注释 Prompt",
           "default_content": ""
         }
       ]
@@ -201,8 +201,12 @@ model_id 必须来自 models[].id，且 enabled=true。
 job_type 必须来自 job_types[].job_type。
 prompt.blocks 必须传齐当前 job_type 返回的全部 prompt_blocks。
 当前首版固定为 system、user、work_note 三个 block。
-work_note.content 可以是空字符串。
+work_note.content 可以是空字符串。空字符串表示本次没有已确认的工作注释输入，AI 能力层运行时不会向模型发送空的工作注释 message。
 AI 能力层不会自动用 default_content 补齐缺失 block。
+role 只属于 prompt block，表示 AI 能力层组装模型 messages 时使用的消息角色。
+user.default_content 默认来自 PROMPT_CONFIG_PATH 指定的 YAML 配置；当前默认 YAML 已内置用户提示词内容。
+业务后端如需使用默认用户提示词，应读取 user.default_content 后显式放入 POST /jobs 的 prompt.blocks。
+AI 能力层运行时会按 job_type 追加输出格式契约，确保模型输出能解析为标准 artifact。
 ```
 
 ## 7. POST /jobs
@@ -245,7 +249,7 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
       {
         "key": "work_note",
         "role": "user",
-        "content": "工作注释 prompt"
+        "content": "已有工作注释；初始 step1 通常为空"
       }
     ]
   }
@@ -269,7 +273,7 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
 }
 ```
 
-**根据 step2_review 反馈重跑** step1_localize，work_note 填入优化建议：
+**根据 step2_review 反馈重跑** step1_localize，work_note 填入当前完整工作注释与已确认的建议工作注释：
 
 ```json
 {
@@ -278,7 +282,7 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
     "blocks": [
       {"key": "system", "role": "system", "content": "..."},
       {"key": "user", "role": "user", "content": "..."},
-      {"key": "work_note", "role": "user", "content": "【来自 step2 返回的 optimization_prompt artifact 的 content 字段】"}
+      {"key": "work_note", "role": "user", "content": "【当前完整工作注释 + step2 返回的建议工作注释】"}
     ]
   }
 }
@@ -288,7 +292,7 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
 - ✅ `job_type` 保持 `novel_localization.step1_localize`（不改）
 - ✅ `source`、`callback` 保持一致（不改）
 - ✅ **仅改** `prompt.blocks` 中 `work_note` 的 `content` 字段
-- ✅ work_note 的内容来自 step2_review 响应中的 `artifacts[].key='optimization_prompt'` 的 `content` 值
+- ✅ work_note 的内容由业务后端按 `apply_mode` 处理：step1 返回的 `replace` 形成当前完整工作注释；step2 返回的 `append` 只作为建议片段，需确认后追加到当前完整工作注释
 
 ### 7.3 成功响应
 
@@ -341,6 +345,7 @@ content_hash 校验失败时，Job 进入 failed，error.code=INPUT_HASH_MISMATC
 AI 能力层使用配置文件中的 OSS_OUTPUT_PREFIX 和 job_id 生成结果前缀。
 AI 能力层使用自身配置的 OSS bucket、region、endpoint 和凭证写入结果文件。
 本地化正文和英文翻译正文必须写入 OSS，不得在 JSON 中直接返回全文。
+本地化正文是完成美国文化语境改写后的中文小说稿，不是英文译文。
 AI 能力层写入完成后，在 artifact 中返回实际 oss_key、content_hash 和 content_size_bytes。
 OSS 写入失败时，Job 进入 failed，error.code=OSS_WRITE_FAILED。
 ```
@@ -348,11 +353,30 @@ OSS 写入失败时，Job 进入 failed，error.code=OSS_WRITE_FAILED。
 大文本 artifact key 规则：
 
 ```text
-novel_localization.step1_localize 的正文结果 key 固定为 localized_text。
-novel_localization.step3_translate 的正文结果 key 固定为 translated_text。
+novel_localization.step1_localize 的正文结果 key 固定为 localized_text，语义是中文本地化稿。
+novel_localization.step3_translate 的正文结果 key 固定为 translated_text，语义是英文终稿。
 localized_text 和 translated_text 必须使用 storage=oss_object 返回，不得使用 content 返回全文。
-review_summary、optimization_prompt、notes 这类短文本可以使用 content 返回。
+review_summary、work_note 这类短文本可以使用 content 返回。
+work_note 是统一的工作注释类 artifact，但必须按阶段和 `apply_mode` 区分方向：
+- step1_localize 返回 work_note，apply_mode=replace，表示这是本次本地化模型输出的完整工作注释，和 localized_text 同属 step1 输出结果。
+- step2_review 校验不通过时返回 work_note，apply_mode=append，表示这只是建议追加的工作注释片段，不是完整工作注释。
+响应 artifact 不是 prompt block，不返回 role。AI 能力层只定义 artifact 结构和 apply_mode 语义，不定义调用方如何持久化或映射业务对象。
 ```
+
+artifact 字段规则：
+
+| 字段 | 必填 | 规则 |
+| --- | --- | --- |
+| `key` | 是 | 业务语义唯一键。正文固定为 `localized_text` 或 `translated_text`；工作注释统一为 `work_note`。 |
+| `type` | 是 | artifact 类型。工作注释统一使用 `work_note`，不要再拆成 `notes`、`prompt_suggestion` 等结构。 |
+| `label` | 是 | 给业务后端展示用的中文名称，不作为程序判断依据。 |
+| `role` | 不支持 | artifact 不使用该字段。`role` 只属于请求中的 `prompt.blocks[]`。 |
+| `apply_mode` | 否 | 仅 `work_note` 使用。`replace` 表示用 step1 输出替换当前完整工作注释；`append` 表示 step2 给出的建议片段，业务后端确认后追加。 |
+| `content` | 否 | 短文本内容。`review_summary`、`work_note` 可以直接放在 `content`。 |
+| `storage` | 否 | 大文本正文使用 `oss_object`，并配套返回 OSS 字段。 |
+| `oss_key` | 否 | `storage=oss_object` 时必填，表示 AI 能力层写出的对象 key。 |
+| `content_hash` | 否 | `storage=oss_object` 时返回，格式为 `sha256:<64位小写hex>`。 |
+| `content_size_bytes` | 否 | `storage=oss_object` 时返回，表示写出对象大小。 |
 
 `callback` 规则：
 
@@ -438,9 +462,10 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
         "content_size_bytes": 123456
       },
       {
-        "key": "notes",
-        "type": "text",
+        "key": "work_note",
+        "type": "work_note",
         "label": "工作注释",
+        "apply_mode": "replace",
         "content": "模型输出的注释..."
       }
     ],
@@ -452,6 +477,8 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
   "finished_at": "datetime"
 }
 ```
+
+说明：`localized_text` 的文件内容应为中文本地化正文。它已经完成角色、称谓、场景、文化元素等美国语境改写，但叙述语言仍是中文。英文文件只应出现在 `step3_translate` 的 `translated_text`。
 
 ### 8.3 校验未通过但任务成功响应
 
@@ -470,15 +497,11 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
         "content": "校验未通过，存在称呼不一致问题。"
       },
       {
-        "key": "optimization_prompt",
-        "type": "prompt_suggestion",
-        "label": "优化建议 Prompt",
-        "content": "重新本地化时请统一角色称呼，并保持语气一致。",
-        "target": {
-          "job_type": "novel_localization.step1_localize",
-          "prompt_block_key": "work_note",
-          "default_mode": "append"
-        }
+        "key": "work_note",
+        "type": "work_note",
+        "label": "建议工作注释",
+        "apply_mode": "append",
+        "content": "重新本地化时请统一角色称呼，并保持语气一致。"
       }
     ],
     "signals": {
@@ -496,6 +519,7 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
 status=succeeded 表示 AI Job 执行成功。
 signals.passed=false 表示校验业务结果未通过。
 校验未通过不是系统错误，不返回 status=failed。
+step2_review 仅在 signals.passed=false 时返回 work_note 建议工作注释；signals.passed=true 时通常只返回 review_summary。
 ```
 
 ### 8.4 失败响应
@@ -553,6 +577,13 @@ AI 能力层在 Job 进入终态后，向 `POST /jobs` 中的 `callback.url` 发
         "oss_region": "cn-hangzhou",
         "content_hash": "sha256:<64位小写hex>",
         "content_size_bytes": 123456
+      },
+      {
+        "key": "work_note",
+        "type": "work_note",
+        "label": "工作注释",
+        "apply_mode": "replace",
+        "content": "模型输出的注释..."
       }
     ],
     "signals": {}
@@ -561,6 +592,8 @@ AI 能力层在 Job 进入终态后，向 `POST /jobs` 中的 `callback.url` 发
   "finished_at": "datetime"
 }
 ```
+
+说明：callback 中的 `localized_text` 与轮询接口语义一致，仍然是中文本地化正文；不要把它当成英文翻译结果消费。
 
 失败通知示例：
 
@@ -618,6 +651,7 @@ Callback 失败不改变 Job 状态；业务后端可通过 GET /jobs/{job_id} �
 | `JOB_NOT_FOUND` | `job_id` 不存在。 |
 | `JOB_ALREADY_CANCELED` | 任务已取消。 |
 | `MODEL_CALL_FAILED` | 模型调用失败。 |
+| `MODEL_OUTPUT_INVALID` | 模型输出不符合当前 `job_type` 的解析约定。 |
 | `JOB_TIMEOUT` | 任务排队或执行超时。 |
 
 ## 11. 限制与超时
@@ -626,6 +660,7 @@ Callback 失败不改变 Job 状态；业务后端可通过 GET /jobs/{job_id} �
 |---|---:|---|
 | `source.oss` | 最大 5 MB | Job 进入 `failed`，`error.code=INPUT_TOO_LARGE`。 |
 | OSS 文本编码 | UTF-8 | Job 进入 `failed`，`error.code=INVALID_INPUT`。 |
+| 单次模型 API 调用超时 | 默认 300 秒，由 `MODEL_CALL_TIMEOUT_SECONDS` 配置 | Job 进入 `failed`，`error.code=MODEL_CALL_FAILED`。 |
 | Job 排队超时 | 10 分钟 | Job 进入 `failed`，`error.code=JOB_TIMEOUT`。 |
 | Job 执行超时 | 30 分钟 | Job 进入 `failed`，`error.code=JOB_TIMEOUT`。 |
 

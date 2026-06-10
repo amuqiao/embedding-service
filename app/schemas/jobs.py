@@ -77,16 +77,11 @@ class CreateJobResponse(StrictBaseModel):
     created_at: datetime
 
 
-class ArtifactTarget(StrictBaseModel):
-    job_type: str
-    prompt_block_key: str
-    default_mode: str
-
-
 class Artifact(StrictBaseModel):
     key: str
     type: str
     label: str
+    apply_mode: Literal["replace", "append"] | None = None
     storage: Literal["oss_object"] | None = None
     oss_bucket: str | None = None
     oss_key: str | None = None
@@ -94,7 +89,6 @@ class Artifact(StrictBaseModel):
     content_hash: str | None = None
     content_size_bytes: int | None = None
     content: Any | None = None
-    target: ArtifactTarget | None = None
 
 
 class JobResult(StrictBaseModel):

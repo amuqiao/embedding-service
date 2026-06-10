@@ -1,50 +1,105 @@
+from typing import Any
+
+import yaml
+
+from app.infrastructure.config import settings
 from app.schemas.meta import JobTypeTemplate, PromptBlockTemplate, PromptTemplatesResponse
 
-PROMPT_VERSION = "2026-06-05"
+PROMPT_BLOCK_ORDER = ("system", "user", "work_note")
 
 
-def _blocks(system: str, user: str) -> list[PromptBlockTemplate]:
-    return [
-        PromptBlockTemplate(key="system", role="system", label="系统 Prompt", default_content=system),
-        PromptBlockTemplate(key="user", role="user", label="用户 Prompt", default_content=user),
-        PromptBlockTemplate(key="work_note", role="user", label="工作注释 Prompt", default_content=""),
-    ]
+def _load_prompt_config() -> dict[str, Any]:
+    try:
+        raw = settings.prompt_config_path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"prompt config not found: {settings.prompt_config_path}") from exc
+    data = yaml.safe_load(raw)
+    if not isinstance(data, dict):
+        raise RuntimeError("prompt config must be a YAML object")
+    return data
 
 
-JOB_TEMPLATES = [
-    JobTypeTemplate(
-        job_type="novel_localization.step1_localize",
-        name="本地化",
-        description="将中文短篇小说进行本地化改写。",
-        prompt_blocks=_blocks(
-            "你是一位资深的美式通俗小说本地化编辑，负责将中文短篇小说进行文化移植。你的目标是改写文化背景、人物称谓、地名和表达方式，使其适合美国读者理解和欣赏，同时保留原文的故事内核和情感。",
-            "请对以下输入小说进行针对美国读者的本地化处理。输出格式严格要求如下：\n\n===本地化正文开始===\n{完整的本地化后的小说正文}\n===本地化正文结束===\n\n===工作注释开始===\n{改动说明、文化转换理由、遇到的难点解决方案，如无特殊说明可为空}\n===工作注释结束===\n\n请确保本地化后的文本逻辑通顺、格式完整。",
-        ),
-    ),
-    JobTypeTemplate(
-        job_type="novel_localization.step2_review",
-        name="本地化校验",
-        description="检查本地化结果是否满足要求，并在失败时生成优化建议。",
-        prompt_blocks=_blocks(
-            "你是一位小说本地化质量审核编辑，负责检查文化合规性、称谓和内容完整性。审核标准包括：1) 人物名字和身份描述是否自然；2) 地名和文化背景是否恰当转换；3) 表达和对白是否符合美国读者习惯；4) 原文内容是否有遗漏或额外添加；5) 段落分隔是否保留。",
-            "请复查以下本地化稿。输出格式严格要求如下：\n\n【校验结论】通过\n\n（若不通过，追加以下部分：）\n【问题说明】\n{按优先级列出主要问题，每个问题占一行}\n\n【优化建议】\n{生成一段提示词片段，供业务后端注入到 step1 的 work_note 中进行重新本地化，格式例如：\"请重新处理人物称谓，使用更自然的美国常见名字；检查文化背景转换是否过度...\"}\n\n请基于实际检查结果判断是否通过。若仅有极轻微的改进空间可视为通过。",
-        ),
-    ),
-    JobTypeTemplate(
-        job_type="novel_localization.step3_translate",
-        name="英文翻译",
-        description="将本地化后的中文稿翻译为英文。",
-        prompt_blocks=_blocks(
-            "你是一位精通中英双语的小说译者，负责输出地道自然的美式英文终稿。翻译原则：1) 忠实原文情节和人物；2) 保留中文原文的段落结构和分段；3) 使用美式英文表达习惯；4) 确保对话自然流畅；5) 保持情感和氛围。",
-            "请将以下本地化后的中文小说翻译为英文。请直接输出翻译后的完整英文文本，不要添加任何翻译注记、标题或解释。保留原文的所有段落分隔和格式。",
-        ),
-    ),
-]
+def _block_content(block: dict[str, Any]) -> str:
+    content = block.get("content", "")
+    if not isinstance(content, str):
+        raise RuntimeError("prompt block content must be a string")
+    return content.strip()
+
+
+def _template_blocks(config: dict[str, Any], job_config: dict[str, Any]) -> list[PromptBlockTemplate]:
+    block_configs = job_config.get("prompt_blocks")
+    if not isinstance(block_configs, dict):
+        raise RuntimeError("job prompt_blocks must be a YAML object")
+
+    blocks: list[PromptBlockTemplate] = []
+    for key in PROMPT_BLOCK_ORDER:
+        block = block_configs.get(key)
+        if not isinstance(block, dict):
+            raise RuntimeError(f"missing prompt block config: {key}")
+        role = block.get("role")
+        label = block.get("label")
+        if not isinstance(role, str) or not isinstance(label, str):
+            raise RuntimeError(f"prompt block {key} requires role and label")
+        blocks.append(
+            PromptBlockTemplate(
+                key=key,
+                role=role,
+                label=label,
+                default_content=_block_content(block),
+            )
+        )
+    return blocks
+
+
+def _job_templates() -> list[JobTypeTemplate]:
+    config = _load_prompt_config()
+    job_configs = config.get("job_types")
+    if not isinstance(job_configs, dict):
+        raise RuntimeError("prompt config job_types must be a YAML object")
+
+    templates: list[JobTypeTemplate] = []
+    for job_type, job_config in job_configs.items():
+        if not isinstance(job_type, str) or not isinstance(job_config, dict):
+            raise RuntimeError("invalid prompt config job_type item")
+        name = job_config.get("name")
+        description = job_config.get("description")
+        if not isinstance(name, str) or not isinstance(description, str):
+            raise RuntimeError(f"job_type {job_type} requires name and description")
+        templates.append(
+            JobTypeTemplate(
+                job_type=job_type,
+                name=name,
+                description=description,
+                prompt_blocks=_template_blocks(config, job_config),
+            )
+        )
+    return templates
+
+
+def prompt_version() -> str:
+    version = _load_prompt_config().get("version")
+    if not isinstance(version, str):
+        raise RuntimeError("prompt config version must be a string")
+    return version
+
+
+def get_output_contract(job_type: str) -> str:
+    config = _load_prompt_config()
+    job_configs = config.get("job_types")
+    if not isinstance(job_configs, dict):
+        raise RuntimeError("prompt config job_types must be a YAML object")
+    job_config = job_configs.get(job_type)
+    if not isinstance(job_config, dict):
+        return ""
+    output_contract = job_config.get("output_contract", "")
+    if not isinstance(output_contract, str):
+        raise RuntimeError(f"job_type {job_type} output_contract must be a string")
+    return output_contract.strip()
 
 
 def list_prompt_templates() -> PromptTemplatesResponse:
-    return PromptTemplatesResponse(version=PROMPT_VERSION, job_types=JOB_TEMPLATES)
+    return PromptTemplatesResponse(version=prompt_version(), job_types=_job_templates())
 
 
 def get_template(job_type: str) -> JobTypeTemplate | None:
-    return next((item for item in JOB_TEMPLATES if item.job_type == job_type), None)
+    return next((item for item in _job_templates() if item.job_type == job_type), None)

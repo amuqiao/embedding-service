@@ -1,6 +1,10 @@
-from app.main import app
+import yaml
+
+from app.infrastructure.config import settings
 from app.infrastructure.prompt_templates import get_template
-from app.schemas.jobs import CreateJobRequest
+from app.main import app
+from app.schemas.jobs import CreateJobRequest, JobResult
+from app.services.executor import _prompt_messages
 
 
 def _valid_payload() -> dict:
@@ -8,7 +12,7 @@ def _valid_payload() -> dict:
     assert template is not None
     return {
         "job_type": "novel_localization.step1_localize",
-        "model_id": "mock-novel-localizer",
+        "model_id": "gpt-4.1",
         "source": {
             "oss": {
                 "oss_key": "jobs/test/input.txt",
@@ -31,6 +35,70 @@ def test_create_job_request_accepts_valid_payload():
     assert payload.job_type == "novel_localization.step1_localize"
     assert payload.source.oss.oss_key == "jobs/test/input.txt"
     assert payload.source.oss.content_type == "text/plain; charset=utf-8"
+
+
+def test_step1_prompt_requires_chinese_localized_output():
+    template = get_template("novel_localization.step1_localize")
+    assert template is not None
+    content = "\n".join(block.default_content for block in template.prompt_blocks)
+
+    assert "输出语言必须为中文" in content
+    assert "不得输出英文译文" in content
+
+
+def _block_content(job_type: str, key: str) -> str:
+    template = get_template(job_type)
+    assert template is not None
+    return next(block.default_content for block in template.prompt_blocks if block.key == key)
+
+
+def test_user_prompt_defaults_to_yaml_config():
+    config = yaml.safe_load(settings.prompt_config_path.read_text(encoding="utf-8"))
+    expected = {
+        job_type: job_config["prompt_blocks"]["user"]["content"].strip()
+        for job_type, job_config in config["job_types"].items()
+    }
+
+    for job_type, content in expected.items():
+        assert _block_content(job_type, "user") == content
+
+
+def test_runtime_prompt_appends_service_output_contract():
+    messages = _prompt_messages(
+        {
+            "blocks": [
+                {"key": "system", "role": "system", "content": "系统提示"},
+                {"key": "user", "role": "user", "content": "用户配置提示"},
+                {"key": "work_note", "role": "user", "content": "工作注释"},
+            ]
+        },
+        "待处理正文",
+        "novel_localization.step1_localize",
+    )
+
+    user_message = messages[1]["content"]
+    assert "用户配置提示" in user_message
+    assert "AI 能力层输出格式契约" in user_message
+    assert "===本地化正文开始===" in user_message
+    assert "===待处理文本开始===" in user_message
+    assert messages[2]["content"].startswith("【已有工作注释 / 上一轮约束】")
+
+
+def test_runtime_prompt_skips_empty_work_note_input():
+    messages = _prompt_messages(
+        {
+            "blocks": [
+                {"key": "system", "role": "system", "content": "系统提示"},
+                {"key": "user", "role": "user", "content": "用户配置提示"},
+                {"key": "work_note", "role": "user", "content": ""},
+            ]
+        },
+        "待处理正文",
+        "novel_localization.step1_localize",
+    )
+
+    assert [message["role"] for message in messages] == ["system", "user"]
+    assert all(not message["content"].startswith("【已有工作注释 / 上一轮约束】") for message in messages)
 
 
 def test_create_job_request_rejects_non_text_content_type():
@@ -65,6 +133,33 @@ def test_create_job_request_rejects_execution_mode():
         assert "execution_mode" in str(exc)
     else:
         raise AssertionError("execution_mode should be rejected")
+
+
+def test_job_result_rejects_legacy_artifact_target():
+    try:
+        JobResult.model_validate(
+            {
+                "artifacts": [
+                    {
+                        "key": "work_note",
+                        "type": "work_note",
+                        "label": "建议工作注释",
+                        "apply_mode": "append",
+                        "content": "请统一角色称呼。",
+                        "target": {
+                            "job_type": "novel_localization.step1_localize",
+                            "prompt_block_key": "work_note",
+                            "default_mode": "append",
+                        },
+                    }
+                ],
+                "signals": {"passed": False},
+            }
+        )
+    except Exception as exc:
+        assert "target" in str(exc)
+    else:
+        raise AssertionError("legacy artifact target should be rejected")
 
 
 def test_openapi_declares_bearer_auth_for_protected_routes():

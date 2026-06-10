@@ -54,33 +54,33 @@ def _merge_review(items: list[AIJobWorkItem]) -> JobResult:
         if signals.get("passed") is False:
             passed = False
         summary = _artifact_content(payload, "review_summary").strip()
-        suggestion = _artifact_content(payload, "optimization_prompt").strip()
+        suggestion = _artifact_content(payload, "work_note").strip()
         if summary:
             summaries.append(f"分块 {item.chunk_index}:\n{summary}")
         if suggestion:
             suggestions.append(f"分块 {item.chunk_index}:\n{suggestion}")
     summary_text = "已满足" if passed else "\n\n".join(summaries)
     suggestion_text = "" if passed else "\n\n".join(suggestions)
-    return JobResult(
-        artifacts=[
+    artifacts = [
+        {
+            "key": "review_summary",
+            "type": "text",
+            "label": "校验结果",
+            "content": summary_text,
+        }
+    ]
+    if not passed:
+        artifacts.append(
             {
-                "key": "review_summary",
-                "type": "text",
-                "label": "校验结果",
-                "content": summary_text,
-            },
-            {
-                "key": "optimization_prompt",
-                "type": "prompt_suggestion",
-                "label": "优化建议 Prompt",
+                "key": "work_note",
+                "type": "work_note",
+                "label": "建议工作注释",
+                "apply_mode": "append",
                 "content": suggestion_text,
-                "target": {
-                    "job_type": "novel_localization.step1_localize",
-                    "prompt_block_key": "work_note",
-                    "default_mode": "append",
-                },
-            },
-        ],
+            }
+        )
+    return JobResult(
+        artifacts=artifacts,
         signals={"passed": passed},
     )
 
@@ -93,20 +93,19 @@ def merge_work_items(job: AIJob, items: list[AIJobWorkItem]) -> JobResult:
     chunk_items = [item for item in items if item.kind == "chunk"]
     if job.job_type == "novel_localization.step1_localize":
         localized = _merge_texts(chunk_items, "localized_text")
-        notes = _merge_texts(chunk_items, "notes")
-        project_memory = _first_result_value(items, "memory", "project_memory")
+        notes = _merge_texts(chunk_items, "work_note")
         return JobResult(
             artifacts=[
                 {"key": "localized_text", "type": "text", "label": "本地化正文", "content": localized},
                 {
-                    "key": "project_memory",
-                    "type": "json",
-                    "label": "项目记忆",
-                    "content": project_memory,
+                    "key": "work_note",
+                    "type": "work_note",
+                    "label": "工作注释",
+                    "apply_mode": "replace",
+                    "content": notes,
                 },
-                {"key": "notes", "type": "text", "label": "工作注释", "content": notes},
             ],
-            signals={"project_memory_frozen": bool(project_memory)},
+            signals={},
         )
 
     if job.job_type == "novel_localization.step2_review":

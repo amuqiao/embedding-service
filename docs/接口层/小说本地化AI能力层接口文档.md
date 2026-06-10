@@ -133,8 +133,8 @@ GET /prompt-templates
 AI 能力层只接收本次任务最终要使用的 `prompt.blocks`。
 
 ```text
-系统 Prompt、用户 Prompt、工作注释 Prompt 都由业务后端在 POST /jobs 时显式传入。
-用户接受校验失败后的优化建议时，业务后端负责把建议文本合并到 `work_note` 或 `user` prompt 中，再重新 `POST /jobs`。
+系统 Prompt、用户 Prompt、已有工作注释 Prompt 都由业务后端在 POST /jobs 时显式传入。
+用户接受校验失败后的建议工作注释时，业务后端负责把建议文本追加到 `work_note` prompt 中，再重新 `POST /jobs`。
 AI 能力层不提供额外的 runtime_prompt_blocks，也不根据 artifact_key 查询历史结果。
 ```
 
@@ -151,7 +151,7 @@ AI 能力层不提供额外的 runtime_prompt_blocks，也不根据 artifact_key
 }
 ```
 
-`artifacts` 表示任务产物，例如正文、注释、校验报告、优化建议 Prompt。`signals` 表示结构化业务信号，例如校验是否通过。
+`artifacts` 表示任务产物，例如正文、完整工作注释、校验报告、建议工作注释。`signals` 表示结构化业务信号，例如校验是否通过。
 
 ## 7. 接口契约
 
@@ -230,7 +230,7 @@ model_id 必须来自 models[].id，且对应模型 enabled=true。
         {
           "key": "work_note",
           "role": "user",
-          "label": "工作注释 Prompt",
+          "label": "已有工作注释 Prompt",
           "default_content": ""
         }
       ]
@@ -238,7 +238,7 @@ model_id 必须来自 models[].id，且对应模型 enabled=true。
     {
       "job_type": "novel_localization.step2_review",
       "name": "本地化校验",
-      "description": "检查本地化结果是否满足要求，并在失败时生成优化建议。",
+      "description": "检查本地化结果是否满足要求，并在失败时生成建议工作注释。",
       "prompt_blocks": [
         {
           "key": "system",
@@ -255,7 +255,7 @@ model_id 必须来自 models[].id，且对应模型 enabled=true。
         {
           "key": "work_note",
           "role": "user",
-          "label": "工作注释 Prompt",
+          "label": "当前工作注释 Prompt",
           "default_content": ""
         }
       ]
@@ -280,7 +280,7 @@ model_id 必须来自 models[].id，且对应模型 enabled=true。
         {
           "key": "work_note",
           "role": "user",
-          "label": "工作注释 Prompt",
+          "label": "当前工作注释 Prompt",
           "default_content": ""
         }
       ]
@@ -364,7 +364,7 @@ OSS 写入失败时，Job 进入 failed，error.code=OSS_WRITE_FAILED。
 novel_localization.step1_localize 的正文结果 key 固定为 localized_text。
 novel_localization.step3_translate 的正文结果 key 固定为 translated_text。
 localized_text 和 translated_text 必须使用 storage=oss_object 返回，不得使用 content 返回全文。
-review_summary、optimization_prompt、notes 这类短文本可以使用 content 返回。
+review_summary、work_note 这类短文本可以使用 content 返回。step1 的 work_note 是完整工作注释，apply_mode=replace；step2 失败时的 work_note 是建议工作注释片段，apply_mode=append。
 ```
 
 `callback` 规则：
@@ -430,9 +430,10 @@ client_request_id 可以使用业务任务 ID、请求流水号或 UUID。
 ```text
 prompt.blocks 必须传齐当前 job_type 在 GET /prompt-templates 中返回的全部 prompt_blocks。
 当前首版固定为 system、user、work_note 三个 block。
-work_note 可以是空字符串。
+work_note 可以是空字符串；空字符串表示没有已确认的工作注释输入。
 AI 能力层不会自动用默认模板补齐缺失 block。
 如果业务后端希望使用默认 prompt，应先从 GET /prompt-templates 读取默认值，再在 POST /jobs 中显式传入。
+当前 user.default_content 默认来自 PROMPT_CONFIG_PATH 指定的 YAML 配置；默认 YAML 已内置用户提示词内容。AI 能力层运行时会按 job_type 追加输出格式契约，保证模型输出能解析为标准 artifact。
 缺失 key、未知 key、重复 key 都返回 422。
 ```
 
@@ -502,9 +503,10 @@ AI 能力层默认使用自动执行策略，包括内部是否分 chunk、是�
         "content_size_bytes": 123456
       },
       {
-        "key": "notes",
-        "type": "text",
+        "key": "work_note",
+        "type": "work_note",
         "label": "工作注释",
+        "apply_mode": "replace",
         "content": "模型输出的注释..."
       }
     ],
@@ -534,15 +536,11 @@ AI 能力层默认使用自动执行策略，包括内部是否分 chunk、是�
         "content": "校验未通过，存在称呼不一致问题。"
       },
       {
-        "key": "optimization_prompt",
-        "type": "prompt_suggestion",
-        "label": "优化建议 Prompt",
-        "content": "重新本地化时请统一角色称呼，并保持语气一致。",
-        "target": {
-          "job_type": "novel_localization.step1_localize",
-          "prompt_block_key": "work_note",
-          "default_mode": "append"
-        }
+        "key": "work_note",
+        "type": "work_note",
+        "label": "建议工作注释",
+        "apply_mode": "append",
+        "content": "重新本地化时请统一角色称呼，并保持语气一致。"
       }
     ],
     "signals": {
@@ -597,7 +595,7 @@ queued / running 状态每 2 秒轮询一次。
 |---|---|
 | `status` | Job 执行状态，只表达任务是否执行完成，不表达校验是否通过。 |
 | `progress_percent` | 任务进度，整数范围 `0-100`。`status=succeeded` 时必须为 `100`；`failed/canceled` 时返回最后一次已知进度。 |
-| `result.artifacts[]` | AI 任务产物列表，例如正文、注释、校验报告、优化建议 Prompt。 |
+| `result.artifacts[]` | AI 任务产物列表，例如正文、完整工作注释、校验报告、建议工作注释。 |
 | `result.signals` | 结构化业务信号，例如校验任务的 `passed=false`。前端或业务后端可用它决定下一步动作。 |
 | `error` | 任务失败时的结构化错误；`status=failed` 时返回。 |
 
@@ -773,8 +771,8 @@ Job 状态枚举仍保持 queued | running | succeeded | failed | canceled。
 业务后端 POST /jobs，job_type = novel_localization.step1_localize
 AI 能力层返回 job_id
 业务后端 GET /jobs/{job_id} 轮询
-AI 能力层返回 localized_text 的 OSS 引用 / notes
-业务后端保存 OSS 引用和 notes 到自己的业务库
+AI 能力层返回 localized_text 的 OSS 引用 / work_note(apply_mode=replace)
+业务后端保存 OSS 引用和当前完整工作注释到自己的业务库
 ```
 
 ### 11.3 执行校验
@@ -782,8 +780,8 @@ AI 能力层返回 localized_text 的 OSS 引用 / notes
 ```text
 业务后端读取 step1 的本地化结果，或传入 step1 结果所在的 OSS 对象引用
 业务后端 POST /jobs，job_type = novel_localization.step2_review
-AI 能力层返回 review_summary / optimization_prompt / passed signal
-业务后端和前端决定是否用 optimization_prompt 重跑 step1
+AI 能力层返回 review_summary / work_note(apply_mode=append) / passed signal
+业务后端和前端决定是否确认建议工作注释并重跑 step1
 ```
 
 ### 11.4 使用校验建议重跑
@@ -792,13 +790,13 @@ AI 能力层返回 review_summary / optimization_prompt / passed signal
 
 ```python
 # 1. 从 step2 结果中提取建议
-optimization = next(a for a in step2_result['result']['artifacts'] if a['key'] == 'optimization_prompt')
+suggestion = next(a for a in step2_result['result']['artifacts'] if a['key'] == 'work_note')
 
-# 2. 重跑 step1，注入建议到 work_note
+# 2. 重跑 step1，注入当前完整工作注释 + 建议工作注释
 step1_retry = post_job('novel_localization.step1_localize', {
     'prompt': {'blocks': [
         ...,
-        {'key': 'work_note', 'role': 'user', 'content': optimization['content']}  # ← 直接用建议内容
+        {'key': 'work_note', 'role': 'user', 'content': current_work_note + "\n\n" + suggestion['content']}
     ]}
 })
 ```
@@ -806,17 +804,17 @@ step1_retry = post_job('novel_localization.step1_localize', {
 **详细说明**：
 
 ```text
-业务后端从 step2 的失败结果中提取 optimization_prompt artifact
+业务后端从 step2 的失败结果中提取 work_note(apply_mode=append) artifact
 业务后端 POST /jobs，job_type = novel_localization.step1_localize
-业务后端把 optimization_prompt.content 直接赋给 prompt.blocks 中 work_note 的 content
-input = 原文或业务后端选择的输入，使用 oss_object 传入
+业务后端把当前完整工作注释和建议工作注释合并后赋给 prompt.blocks 中 work_note 的 content
+input = 原文，使用 oss_object 传入
 AI 能力层返回新的本地化结果
 ```
 
 **关键约定**：
 - ✅ `job_type` 保持不变（仍为 `novel_localization.step1_localize`）
 - ✅ 仅修改 `prompt.blocks` 中 `work_note` 的 `content`
-- ✅ 直接使用 `optimization_prompt.content`，无需再处理
+- ✅ step2 的 `work_note(apply_mode=append)` 是建议片段，不是完整工作注释；应在用户确认后追加到当前完整工作注释
 - ✅ 支持多轮迭代，直到 `signals.passed=true` 或达到重试次数上限
 
 ## 12. 项目记忆（Project Memory）

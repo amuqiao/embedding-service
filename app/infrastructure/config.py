@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = ""
     DEFAULT_MODEL_ID: str = "mock-novel-localizer"
     ENABLE_MOCK_MODEL: bool = True
+    PROMPT_CONFIG_PATH: str = "app/infrastructure/novel_loc/prompts.yaml"
 
     OSS_INPUT_MAX_BYTES: int = 5_242_880
     JOB_QUEUE_TIMEOUT_SECONDS: int = 600
@@ -87,6 +88,13 @@ class Settings(BaseSettings):
         if not path.is_absolute():
             path = ROOT_DIR / path
         path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def prompt_config_path(self) -> Path:
+        path = Path(self.PROMPT_CONFIG_PATH)
+        if not path.is_absolute():
+            path = ROOT_DIR / path
         return path
 
     @property
