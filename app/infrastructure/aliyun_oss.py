@@ -36,7 +36,11 @@ class AliyunOSSError(Exception):
 
 
 def normalize_object_key(project_root: str, key: str) -> str:
-    parts = [part.strip("/") for part in (project_root, key) if part and part.strip("/")]
+    clean_root = project_root.strip().strip("/")
+    clean_key = key.strip().strip("/")
+    if clean_root and (clean_key == clean_root or clean_key.startswith(f"{clean_root}/")):
+        return clean_key
+    parts = [part for part in (clean_root, clean_key) if part]
     return "/".join(parts)
 
 
