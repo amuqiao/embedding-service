@@ -53,7 +53,7 @@ class CallbackConfig(StrictBaseModel):
 
 class PromptBlock(StrictBaseModel):
     key: str = Field(min_length=1)
-    role: Literal["system", "user"]
+    role: Literal["user"]
     content: str
 
 

@@ -2,7 +2,7 @@ import re
 
 from app.core.exceptions import AppError
 from app.infrastructure.ai_gateway import generate_text
-from app.infrastructure.prompt_templates import get_output_contract
+from app.infrastructure.prompt_templates import get_output_contract, get_system_prompt
 from app.schemas.jobs import JobResult
 
 
@@ -14,9 +14,15 @@ def _append_output_contract(content: str, job_type: str) -> str:
 
 
 def _prompt_messages(prompt_payload: dict, input_text: str, job_type: str) -> list[dict[str, str]]:
-    blocks = prompt_payload["blocks"]
+    system_prompt = get_system_prompt(job_type)
     messages: list[dict[str, str]] = []
-    for block in blocks:
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+
+    for block in prompt_payload["blocks"]:
+        if block["key"] == "system":
+            # system is now server-managed via YAML; skip any legacy block in stored payload
+            continue
         content = block["content"].strip()
         if block["key"] == "user":
             content = _append_output_contract(content, job_type)

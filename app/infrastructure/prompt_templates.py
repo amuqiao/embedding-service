@@ -5,7 +5,7 @@ import yaml
 from app.infrastructure.config import settings
 from app.schemas.meta import JobTypeTemplate, PromptBlockTemplate, PromptTemplatesResponse
 
-PROMPT_BLOCK_ORDER = ("system", "user", "work_note")
+PROMPT_BLOCK_ORDER = ("user", "work_note")
 
 
 def _load_prompt_config() -> dict[str, Any]:
@@ -81,6 +81,22 @@ def prompt_version() -> str:
     if not isinstance(version, str):
         raise RuntimeError("prompt config version must be a string")
     return version
+
+
+def get_system_prompt(job_type: str) -> str:
+    config = _load_prompt_config()
+    job_configs = config.get("job_types")
+    if not isinstance(job_configs, dict):
+        return ""
+    job_config = job_configs.get(job_type)
+    if not isinstance(job_config, dict):
+        return ""
+    block_configs = job_config.get("prompt_blocks") or {}
+    system_block = block_configs.get("system")
+    if not isinstance(system_block, dict):
+        return ""
+    content = system_block.get("content", "")
+    return content.strip() if isinstance(content, str) else ""
 
 
 def get_output_contract(job_type: str) -> str:

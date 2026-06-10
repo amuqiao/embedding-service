@@ -12,7 +12,6 @@ from app.services.job_workflow import merge_work_items
 def _prompt_payload() -> dict:
     return {
         "blocks": [
-            {"key": "system", "role": "system", "content": "系统提示"},
             {"key": "user", "role": "user", "content": "用户提示"},
             {"key": "work_note", "role": "user", "content": ""},
         ]

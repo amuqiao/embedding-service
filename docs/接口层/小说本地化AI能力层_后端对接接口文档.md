@@ -122,12 +122,6 @@ model_id 必须来自 models[].id，且 enabled=true。
       "description": "将中文短篇小说进行本地化改写。",
       "prompt_blocks": [
         {
-          "key": "system",
-          "role": "system",
-          "label": "系统 Prompt",
-          "default_content": "系统提示词..."
-        },
-        {
           "key": "user",
           "role": "user",
           "label": "用户 Prompt",
@@ -147,12 +141,6 @@ model_id 必须来自 models[].id，且 enabled=true。
       "description": "检查本地化结果是否满足要求，并在失败时生成建议工作注释。",
       "prompt_blocks": [
         {
-          "key": "system",
-          "role": "system",
-          "label": "系统 Prompt",
-          "default_content": "系统提示词..."
-        },
-        {
           "key": "user",
           "role": "user",
           "label": "用户 Prompt",
@@ -171,12 +159,6 @@ model_id 必须来自 models[].id，且 enabled=true。
       "name": "英文翻译",
       "description": "将本地化后的中文稿翻译为英文。",
       "prompt_blocks": [
-        {
-          "key": "system",
-          "role": "system",
-          "label": "系统 Prompt",
-          "default_content": "系统提示词..."
-        },
         {
           "key": "user",
           "role": "user",
@@ -199,11 +181,11 @@ model_id 必须来自 models[].id，且 enabled=true。
 
 ```text
 job_type 必须来自 job_types[].job_type。
-prompt.blocks 必须传齐当前 job_type 返回的全部 prompt_blocks。
-当前首版固定为 system、user、work_note 三个 block。
+prompt.blocks 必须传齐当前 job_type 返回的全部 prompt_blocks，当前固定为 user、work_note 两个 block。
+系统提示词（system prompt）由 AI 能力层服务端管理，不在 prompt_blocks 中暴露，调用方不得传入。
 work_note.content 可以是空字符串。空字符串表示本次没有已确认的工作注释输入，AI 能力层运行时不会向模型发送空的工作注释 message。
 AI 能力层不会自动用 default_content 补齐缺失 block。
-role 只属于 prompt block，表示 AI 能力层组装模型 messages 时使用的消息角色。
+role 只属于 prompt block，表示 AI 能力层组装模型 messages 时使用的消息角色；调用方只能传 role=user 的 block。
 user.default_content 默认来自 PROMPT_CONFIG_PATH 指定的 YAML 配置；当前默认 YAML 已内置用户提示词内容。
 业务后端如需使用默认用户提示词，应读取 user.default_content 后显式放入 POST /jobs 的 prompt.blocks。
 AI 能力层运行时会按 job_type 追加输出格式契约，确保模型输出能解析为标准 artifact。
@@ -237,11 +219,6 @@ AI 能力层运行时会按 job_type 追加输出格式契约，确保模型输�
   "prompt": {
     "blocks": [
       {
-        "key": "system",
-        "role": "system",
-        "content": "系统 prompt"
-      },
-      {
         "key": "user",
         "role": "user",
         "content": "用户 prompt"
@@ -265,7 +242,6 @@ AI 能力层运行时会按 job_type 追加输出格式契约，确保模型输�
   "job_type": "novel_localization.step1_localize",
   "prompt": {
     "blocks": [
-      {"key": "system", "role": "system", "content": "..."},
       {"key": "user", "role": "user", "content": "..."},
       {"key": "work_note", "role": "user", "content": ""}
     ]
@@ -287,7 +263,6 @@ AI 能力层运行时会按 job_type 追加输出格式契约，确保模型输�
   },
   "prompt": {
     "blocks": [
-      {"key": "system", "role": "system", "content": "..."},
       {"key": "user", "role": "user", "content": "..."},
       {"key": "work_note", "role": "user", "content": "【step2 返回的建议工作注释】"}
     ]
@@ -421,11 +396,12 @@ Callback 签名规则：
 `prompt.blocks[]` 规则：
 
 ```text
-key 必须来自当前 job_type 的 prompt_blocks[].key。
-role 必须与 prompt_templates 中对应 key 的 role 一致。
+key 必须来自当前 job_type 的 prompt_blocks[].key（当前固定为 user、work_note）。
+role 必须与 prompt_templates 中对应 key 的 role 一致（当前固定为 user）。
 content 不能为 null，允许空字符串。
 缺失 key、未知 key、重复 key 返回 422。
 AI 能力层不会自动用 default_content 补齐缺失 block。
+system prompt 由 AI 能力层服务端从 YAML 配置读取，调用方不得传入 key=system 的 block；传入时返回 422。
 ```
 
 ## 8. GET /jobs/{job_id}

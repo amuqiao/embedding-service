@@ -69,7 +69,6 @@ def test_runtime_prompt_appends_service_output_contract():
     messages = _prompt_messages(
         {
             "blocks": [
-                {"key": "system", "role": "system", "content": "系统提示"},
                 {"key": "user", "role": "user", "content": "用户配置提示"},
                 {"key": "work_note", "role": "user", "content": "工作注释"},
             ]
@@ -78,19 +77,18 @@ def test_runtime_prompt_appends_service_output_contract():
         "novel_localization.step1_localize",
     )
 
-    user_message = messages[1]["content"]
+    user_message = messages[0]["content"]
     assert "用户配置提示" in user_message
     assert "AI 能力层输出格式契约" in user_message
     assert "===本地化正文开始===" in user_message
     assert "===待处理文本开始===" in user_message
-    assert messages[2]["content"].startswith("【已有工作注释 / 上一轮约束】")
+    assert messages[1]["content"].startswith("【已有工作注释 / 上一轮约束】")
 
 
 def test_runtime_prompt_skips_empty_work_note_input():
     messages = _prompt_messages(
         {
             "blocks": [
-                {"key": "system", "role": "system", "content": "系统提示"},
                 {"key": "user", "role": "user", "content": "用户配置提示"},
                 {"key": "work_note", "role": "user", "content": ""},
             ]
@@ -99,7 +97,7 @@ def test_runtime_prompt_skips_empty_work_note_input():
         "novel_localization.step1_localize",
     )
 
-    assert [message["role"] for message in messages] == ["system", "user"]
+    assert [message["role"] for message in messages] == ["user"]
     assert all(not message["content"].startswith("【已有工作注释 / 上一轮约束】") for message in messages)
 
 
