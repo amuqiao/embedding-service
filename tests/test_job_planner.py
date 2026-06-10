@@ -1,4 +1,4 @@
-from app.services.job_planner import build_job_plan
+from app.services.job_planner import build_job_plan, split_text_with_registry
 
 
 def test_job_planner_uses_p1_for_short_text():
@@ -29,3 +29,17 @@ def test_job_planner_uses_p5_for_long_step3_with_scan(monkeypatch):
     assert "memory" not in [item.kind for item in plan.work_items]
     assert "merge" in [item.kind for item in plan.work_items]
     assert "scan" in [item.kind for item in plan.work_items]
+
+
+def test_splitter_splits_single_oversized_paragraph():
+    chunks = split_text_with_registry("甲" * 25, max_chars=8)
+
+    assert len(chunks) == 4
+    assert [chunk["char_count"] for chunk in chunks] == [8, 8, 8, 1]
+
+
+def test_splitter_prefers_sentence_boundaries_for_oversized_paragraph():
+    chunks = split_text_with_registry("第一句很长。第二句也很长。第三句也很长。", max_chars=8)
+
+    assert len(chunks) >= 2
+    assert all(chunk["char_count"] <= 8 for chunk in chunks)

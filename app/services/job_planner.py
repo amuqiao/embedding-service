@@ -43,13 +43,81 @@ def _count_chars(text: str) -> int:
     return sum(1 for char in text if not char.isspace())
 
 
+def _split_by_char_limit(text: str, limit: int) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    current_chars = 0
+    for char in text:
+        current.append(char)
+        if not char.isspace():
+            current_chars += 1
+        if current_chars >= limit:
+            chunk = "".join(current).strip()
+            if chunk:
+                parts.append(chunk)
+            current = []
+            current_chars = 0
+    tail = "".join(current).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _split_oversized_paragraph(paragraph: str, limit: int) -> list[str]:
+    if _count_chars(paragraph) <= limit:
+        return [paragraph]
+
+    sentence_endings = set("。！？；.!?;")
+    sentences: list[str] = []
+    current: list[str] = []
+    for char in paragraph:
+        current.append(char)
+        if char in sentence_endings:
+            sentence = "".join(current).strip()
+            if sentence:
+                sentences.append(sentence)
+            current = []
+    tail = "".join(current).strip()
+    if tail:
+        sentences.append(tail)
+    if not sentences:
+        sentences = [paragraph]
+
+    parts: list[str] = []
+    current_parts: list[str] = []
+    current_chars = 0
+    for sentence in sentences:
+        sentence_chars = _count_chars(sentence)
+        if sentence_chars > limit:
+            if current_parts:
+                parts.append("".join(current_parts).strip())
+                current_parts = []
+                current_chars = 0
+            parts.extend(_split_by_char_limit(sentence, limit))
+            continue
+        if current_parts and current_chars + sentence_chars > limit:
+            parts.append("".join(current_parts).strip())
+            current_parts = []
+            current_chars = 0
+        current_parts.append(sentence)
+        current_chars += sentence_chars
+    if current_parts:
+        parts.append("".join(current_parts).strip())
+    return [part for part in parts if part]
+
+
 def split_text(text: str, max_chars: int | None = None) -> list[str]:
     return [item["text"] for item in split_text_with_registry(text, max_chars=max_chars)]
 
 
 def split_text_with_registry(text: str, max_chars: int | None = None) -> list[dict[str, Any]]:
     limit = max_chars or settings.NOVEL_LOCALIZATION_CHUNK_SIZE
-    paragraphs = [item.strip() for item in text.split("\n\n") if item.strip()]
+    paragraphs = [
+        part
+        for item in text.split("\n\n")
+        if item.strip()
+        for part in _split_oversized_paragraph(item.strip(), limit)
+    ]
     if not paragraphs:
         return [{"chunk_index": 1, "text": text, "char_count": _count_chars(text)}]
 
