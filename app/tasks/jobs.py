@@ -55,7 +55,7 @@ async def _process(job_id: str) -> dict[str, Any]:
         await db.commit()
 
         input_text = _load_input_text(job)
-        result = await run_ai_job(job, input_text)
+        result = run_ai_job(job.job_type, job.model_id, job.prompt_payload, input_text)
         result_data = _persist_large_artifacts(job, result)
 
         await JobRepo.mark_succeeded(db, job.id, result_data)
@@ -79,17 +79,23 @@ async def _fail(job_id: str, _work_item_id: str | None, exc: Exception) -> None:
         }
 
     async def run(db):
-        await JobRepo.mark_failed(db, uuid.UUID(job_id), error_payload)
+        job_uuid = uuid.UUID(job_id)
+        await JobRepo.mark_failed(db, job_uuid, error_payload)
         await db.commit()
+        job = await get_job_or_404(db, job_uuid)
+        await deliver_callback(job)
 
     await _with_db(run)
 
 
 async def _mark_timeout(job_id: str) -> None:
     async def run(db):
+        job_uuid = uuid.UUID(job_id)
         error_payload = {"code": "JOB_TIMEOUT", "message": "任务执行超时", "details": {}}
-        await JobRepo.mark_failed(db, uuid.UUID(job_id), error_payload)
+        await JobRepo.mark_failed(db, job_uuid, error_payload)
         await db.commit()
+        job = await get_job_or_404(db, job_uuid)
+        await deliver_callback(job)
 
     await _with_db(run)
 
