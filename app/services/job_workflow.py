@@ -75,7 +75,7 @@ def _merge_review(items: list[AIJobWorkItem]) -> JobResult:
                 "key": "work_note",
                 "type": "work_note",
                 "label": "建议工作注释",
-                "apply_mode": "append",
+                "apply_mode": "replace",
                 "content": suggestion_text,
             }
         )

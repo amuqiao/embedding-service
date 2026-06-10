@@ -222,7 +222,7 @@ def test_chunked_step2_merge_uses_work_note_artifact():
     work_note = _artifact(result, "work_note")
 
     assert result.signals["passed"] is False
-    assert work_note.apply_mode == "append"
+    assert work_note.apply_mode == "replace"
     assert work_note.content == "分块 0:\n请统一称呼。"
 
 
