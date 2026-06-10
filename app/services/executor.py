@@ -48,12 +48,12 @@ def _extract_between(text: str, start_marker: str, end_marker: str) -> str | Non
 
 
 def _parse_step1_output(text: str) -> tuple[str, str]:
-    localized = _extract_between(text, "===本地化正文开始===", "===本地化正文结束===")
     notes = _extract_between(text, "===工作注释开始===", "===工作注释结束===")
-    if not localized:
-        raise _model_output_invalid("step1_localize 模型输出缺少本地化正文标记或正文为空")
+    localized = _extract_between(text, "===本地化正文开始===", "===本地化正文结束===")
     if notes is None:
         raise _model_output_invalid("step1_localize 模型输出缺少工作注释标记")
+    if not localized:
+        raise _model_output_invalid("step1_localize 模型输出缺少本地化正文标记或正文为空")
     if _looks_like_english_translation(localized):
         raise _model_output_invalid("step1_localize 本地化正文疑似英文译文；step1 必须输出中文本地化稿")
     return localized, notes
@@ -130,7 +130,7 @@ def run_ai_job(job_type: str, model_id: str, prompt_payload: dict, input_text: s
                     "key": "work_note",
                     "type": "work_note",
                     "label": "建议工作注释",
-                    "apply_mode": "append",
+                    "apply_mode": "replace",
                     "content": suggested_work_note,
                 }
             )
