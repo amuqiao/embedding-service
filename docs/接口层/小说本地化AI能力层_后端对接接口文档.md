@@ -273,16 +273,23 @@ AI 能力层运行时会按 job_type 追加输出格式契约，确保模型输�
 }
 ```
 
-**根据 step2_review 反馈重跑** step1_localize，work_note 填入当前完整工作注释与已确认的建议工作注释：
+**根据 step2_review 反馈重跑** step1_localize，source 换成本地化稿，work_note 填入 step2 返回的建议工作注释：
 
 ```json
 {
   "job_type": "novel_localization.step1_localize",
+  "source": {
+    "oss": {
+      "oss_key": "step1 输出的 localized_text oss_key",
+      "oss_url": "...",
+      "content_type": "text/plain; charset=utf-8"
+    }
+  },
   "prompt": {
     "blocks": [
       {"key": "system", "role": "system", "content": "..."},
       {"key": "user", "role": "user", "content": "..."},
-      {"key": "work_note", "role": "user", "content": "【当前完整工作注释 + step2 返回的建议工作注释】"}
+      {"key": "work_note", "role": "user", "content": "【step2 返回的建议工作注释】"}
     ]
   }
 }
@@ -290,9 +297,12 @@ AI 能力层运行时会按 job_type 追加输出格式契约，确保模型输�
 
 **关键差异**：
 - ✅ `job_type` 保持 `novel_localization.step1_localize`（不改）
-- ✅ `source`、`callback` 保持一致（不改）
-- ✅ **仅改** `prompt.blocks` 中 `work_note` 的 `content` 字段
-- ✅ work_note 的内容由业务后端按 `apply_mode` 处理：step1 返回的 `replace` 形成当前完整工作注释；step2 返回的 `append` 只作为建议片段，需确认后追加到当前完整工作注释
+- ✅ `callback` 保持一致（不改）
+- ✅ `source` **改为** step1 输出的 `localized_text` 的 OSS key——重跑的输入是本地化稿，不是原文
+- ✅ `work_note` **改为** step2 返回的建议工作注释（`apply_mode=replace`，直接替换使用，不与旧注释合并）
+- ✅ step1 的提示词约束"对于无明显问题的文字保持不变"确保模型只修正 work_note 指出的问题，不重写整篇
+
+**用户手动编辑工作注释后重跑**与上述模式相同：source 传本地化稿 OSS key，work_note 传用户编辑后的注释内容。
 
 ### 7.3 成功响应
 
@@ -359,7 +369,7 @@ localized_text 和 translated_text 必须使用 storage=oss_object 返回，不�
 review_summary、work_note 这类短文本可以使用 content 返回。
 work_note 是统一的工作注释类 artifact，但必须按阶段和 `apply_mode` 区分方向：
 - step1_localize 返回 work_note，apply_mode=replace，表示这是本次本地化模型输出的完整工作注释，和 localized_text 同属 step1 输出结果。
-- step2_review 校验不通过时返回 work_note，apply_mode=append，表示这只是建议追加的工作注释片段，不是完整工作注释。
+- step2_review 校验不通过时返回 work_note，apply_mode=replace，供调用方作为下一次 step1 的 work_note 直接使用，不与 step1 旧注释合并。
 响应 artifact 不是 prompt block，不返回 role。AI 能力层只定义 artifact 结构和 apply_mode 语义，不定义调用方如何持久化或映射业务对象。
 ```
 
@@ -371,7 +381,7 @@ artifact 字段规则：
 | `type` | 是 | artifact 类型。工作注释统一使用 `work_note`，不要再拆成 `notes`、`prompt_suggestion` 等结构。 |
 | `label` | 是 | 给业务后端展示用的中文名称，不作为程序判断依据。 |
 | `role` | 不支持 | artifact 不使用该字段。`role` 只属于请求中的 `prompt.blocks[]`。 |
-| `apply_mode` | 否 | 仅 `work_note` 使用。`replace` 表示用 step1 输出替换当前完整工作注释；`append` 表示 step2 给出的建议片段，业务后端确认后追加。 |
+| `apply_mode` | 否 | 仅 `work_note` 使用。`replace` 表示此 work_note 是本次 step 的完整输出，供调用方直接存储或作为下一次 step1 的 work_note 传入；step1 和 step2 均使用 `replace`。 |
 | `content` | 否 | 短文本内容。`review_summary`、`work_note` 可以直接放在 `content`。 |
 | `storage` | 否 | 大文本正文使用 `oss_object`，并配套返回 OSS 字段。 |
 | `oss_key` | 否 | `storage=oss_object` 时必填，表示 AI 能力层写出的对象 key。 |
@@ -500,7 +510,7 @@ AI 能力层不会自动用 default_content 补齐缺失 block。
         "key": "work_note",
         "type": "work_note",
         "label": "建议工作注释",
-        "apply_mode": "append",
+        "apply_mode": "replace",
         "content": "重新本地化时请统一角色称呼，并保持语气一致。"
       }
     ],
