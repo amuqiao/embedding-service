@@ -9,6 +9,7 @@ import httpx
 
 from app.infrastructure.config import settings
 from app.models.job import AIJob
+from app.services.jobs import _job_to_response
 
 
 def _sign(timestamp: str, body: bytes) -> str:
@@ -31,14 +32,15 @@ def _validate_callback_url(url: str) -> None:
 
 def build_callback_body(job: AIJob) -> dict:
     event = "job.succeeded" if job.status == "succeeded" else "job.failed"
+    response = _job_to_response(job).model_dump(mode="json")
     return {
         "event": event,
-        "job_id": str(job.id),
-        "job_type": job.job_type,
-        "status": job.status,
-        "result": job.result_payload,
-        "error": job.error_payload,
-        "finished_at": job.finished_at.isoformat() if job.finished_at else datetime.now(timezone.utc).isoformat(),
+        "job_id": response["job_id"],
+        "job_type": response["job_type"],
+        "status": response["status"],
+        "result": response["result"],
+        "error": response["error"],
+        "finished_at": response["finished_at"] or datetime.now(timezone.utc).isoformat(),
     }
 
 

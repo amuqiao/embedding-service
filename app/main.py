@@ -2,6 +2,7 @@ import time
 import uuid
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -52,13 +53,13 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     return JSONResponse(
         status_code=422,
-        content={
+        content=jsonable_encoder({
             "error": {
                 "code": "INVALID_INPUT",
                 "message": "Request validation failed",
                 "details": {"errors": exc.errors()},
             }
-        },
+        }),
     )
 
 

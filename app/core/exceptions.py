@@ -16,6 +16,13 @@ class AppError(Exception):
         self.status_code = status_code
         self.details = details or {}
 
+    def __reduce__(self):
+        return (
+            AppError,
+            (self.code, self.message),
+            {"status_code": self.status_code, "details": self.details},
+        )
+
 
 class UnauthorizedError(AppError):
     def __init__(self, message: str = "Missing or invalid service token"):

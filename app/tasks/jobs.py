@@ -8,6 +8,7 @@ from celery import chord, group
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.core.exceptions import AppError
 from app.infrastructure.config import settings
 from app.repositories.job_repo import JobRepo
 from app.services.job_workflow import build_canvas, execute_work_item, fail_job, finalize_job, plan_job
@@ -39,6 +40,9 @@ def process_job_task(self, job_id: str):
             asyncio.run(_mark_timeout(job_id))
             raise
         raise self.retry(exc=exc, countdown=settings.CELERY_RETRY_DELAY, max_retries=settings.CELERY_MAX_RETRIES)
+    except Exception as exc:
+        asyncio.run(_fail(job_id, None, exc))
+        raise
 
 
 async def _dispatch(job_id: str) -> dict[str, Any]:
@@ -107,16 +111,21 @@ async def _finalize(job_id: str):
 
 
 async def _fail(job_id: str, work_item_id: str | None, exc: Exception) -> None:
+    if isinstance(exc, AppError):
+        error_payload = {"code": exc.code, "message": exc.message, "details": exc.details}
+    else:
+        error_payload = {
+            "code": "MODEL_CALL_FAILED",
+            "message": "模型调用失败或内部处理失败",
+            "details": {"type": type(exc).__name__, "message": str(exc)[:500]},
+        }
+
     async def run(db):
         await fail_job(
             db,
             job_id=uuid.UUID(job_id),
             item_id=uuid.UUID(work_item_id) if work_item_id else None,
-            error_payload={
-                "code": "MODEL_CALL_FAILED",
-                "message": "模型调用失败或内部处理失败",
-                "details": {"type": type(exc).__name__, "message": str(exc)[:500]},
-            },
+            error_payload=error_payload,
         )
 
     await _with_db(run)
