@@ -449,12 +449,72 @@ def create_payload(
     }
 
 
-def artifact_copy_path(config: Config, artifact: dict[str, Any]) -> Path:
-    filename = f"{artifact['key']}.txt"
-    return config.storage_dir / config.output_bucket / config.output_prefix.rstrip("/") / "e2e_downloads" / filename
+def trace_root(config: Config) -> Path:
+    return config.storage_dir / config.output_bucket / config.output_prefix.rstrip("/") / "e2e_trace"
 
 
-def verified_artifact_copy(config: Config, artifact: dict[str, Any]) -> Path:
+def stage_trace_dir(config: Config, stage: StageSpec) -> Path:
+    path = trace_root(config) / stage.name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def write_trace_json(path: Path, payload: Any) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def save_meta_trace(
+    config: Config,
+    *,
+    health_body: dict[str, Any],
+    models_body: dict[str, Any],
+    templates_body: dict[str, Any],
+    model_id: str,
+) -> Path:
+    return write_trace_json(
+        trace_root(config) / "meta.json",
+        {
+            "health": health_body,
+            "models": models_body,
+            "prompt_templates": templates_body,
+            "selected_model_id": model_id,
+        },
+    )
+
+
+def save_stage_request(config: Config, stage: StageSpec, payload: dict[str, Any]) -> Path:
+    return write_trace_json(stage_trace_dir(config, stage) / "request.json", payload)
+
+
+def save_stage_create_response(config: Config, stage: StageSpec, payload: dict[str, Any]) -> Path:
+    return write_trace_json(stage_trace_dir(config, stage) / "create_response.json", payload)
+
+
+def save_stage_final_response(config: Config, stage: StageSpec, payload: dict[str, Any]) -> Path:
+    return write_trace_json(stage_trace_dir(config, stage) / "final_response.json", payload)
+
+
+def save_stage_callback(config: Config, stage: StageSpec, record: CallbackRecord) -> Path:
+    return write_trace_json(
+        stage_trace_dir(config, stage) / "callback.json",
+        {
+            "path": record.path,
+            "headers": record.headers,
+            "body": record.body,
+        },
+    )
+
+
+def stage_artifact_filename(stage: StageSpec, artifact: dict[str, Any]) -> str:
+    key = str(artifact.get("key") or "artifact")
+    if stage.name == "step2_review" and key == "work_note":
+        key = "suggested_work_note"
+    return f"{safe_filename(key)}.txt"
+
+
+def verified_artifact_copy(config: Config, stage: StageSpec, artifact: dict[str, Any]) -> Path:
     content = object_storage.read_text(
         bucket=artifact["oss_bucket"],
         key=artifact["oss_key"],
@@ -462,27 +522,27 @@ def verified_artifact_copy(config: Config, artifact: dict[str, Any]) -> Path:
     )
     if not content.strip():
         raise RuntimeError(f"artifact 文件为空: {artifact['key']}")
-    path = artifact_copy_path(config, artifact)
+    path = stage_trace_dir(config, stage) / stage_artifact_filename(stage, artifact)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
 
 
-def stored_artifact_paths(config: Config, final_body: dict[str, Any]) -> list[Path]:
+def stored_artifact_paths(config: Config, stage: StageSpec, final_body: dict[str, Any]) -> list[Path]:
     result = final_body.get("result") or {}
     paths: list[Path] = []
     for artifact in result.get("artifacts") or []:
         if artifact.get("storage") != "oss_object":
             continue
-        paths.append(verified_artifact_copy(config, artifact))
+        paths.append(verified_artifact_copy(config, stage, artifact))
     return paths
 
 
-def artifact_path_by_key(config: Config, final_body: dict[str, Any], artifact_key: str) -> Path:
+def artifact_path_by_key(config: Config, stage: StageSpec, final_body: dict[str, Any], artifact_key: str) -> Path:
     result = final_body.get("result") or {}
     for artifact in result.get("artifacts") or []:
         if artifact.get("key") == artifact_key and artifact.get("storage") == "oss_object":
-            return verified_artifact_copy(config, artifact)
+            return verified_artifact_copy(config, stage, artifact)
     raise RuntimeError(f"未找到 OSS artifact: {artifact_key}")
 
 
@@ -533,8 +593,7 @@ def safe_filename(value: str) -> str:
 
 def save_inline_artifacts(config: Config, result: StageResult) -> list[dict[str, str]]:
     saved: list[dict[str, str]] = []
-    base_dir = config.storage_dir / config.output_bucket / config.output_prefix.rstrip("/") / "e2e_downloads"
-    base_dir.mkdir(parents=True, exist_ok=True)
+    base_dir = stage_trace_dir(config, result.stage)
     for artifact in artifacts(result.final_body):
         if artifact.get("storage") == "oss_object":
             continue
@@ -542,10 +601,7 @@ def save_inline_artifacts(config: Config, result: StageResult) -> list[dict[str,
         if content is None:
             continue
         key = str(artifact.get("key") or "artifact")
-        filename_key = key
-        if result.stage.name == "step2_review" and key == "work_note":
-            filename_key = "suggested_work_note"
-        path = base_dir / f"{result.stage.name}_{safe_filename(filename_key)}.txt"
+        path = base_dir / stage_artifact_filename(result.stage, artifact)
         path.write_text(str(content), encoding="utf-8")
         saved.append({"key": key, "path": str(path)})
     return saved
@@ -593,7 +649,7 @@ def validate_callback_record(
 
 def validate_stage_result(config: Config, stage: StageSpec, final_body: dict[str, Any]) -> None:
     if stage.name == "step1_localize":
-        artifact_path_by_key(config, final_body, "localized_text")
+        artifact_path_by_key(config, stage, final_body, "localized_text")
         work_note = require_inline_artifact(final_body, "work_note")
         if work_note.get("type") != "work_note" or work_note.get("apply_mode") != "replace":
             raise RuntimeError(f"本地化 work_note artifact 不符合预期: {work_note}")
@@ -620,7 +676,7 @@ def validate_stage_result(config: Config, stage: StageSpec, final_body: dict[str
         return
 
     if stage.name == "step3_translate":
-        artifact_path_by_key(config, final_body, "translated_text")
+        artifact_path_by_key(config, stage, final_body, "translated_text")
         return
 
 
@@ -650,6 +706,7 @@ def submit_stage(
         input_text=input_text,
         callback_url=callback_url,
     )
+    save_stage_request(config, stage, payload)
 
     if config.dry_run:
         print(f"[{stage_label(stage)}] dry_run: 不提交 Job")
@@ -661,6 +718,7 @@ def submit_stage(
         print(f"[{stage_label(stage)}] 错误 {created.status_code}: {created.text}")
         created.raise_for_status()
     created_body = created.json()
+    save_stage_create_response(config, stage, created_body)
     print(f"[{stage_label(stage)}] Job 已创建:", created_body)
 
     status_url = created_body["status_url"]
@@ -677,13 +735,15 @@ def submit_stage(
         )
 
         if status_body["status"] == "succeeded":
-            paths = stored_artifact_paths(config, status_body)
+            save_stage_final_response(config, stage, status_body)
+            paths = stored_artifact_paths(config, stage, status_body)
             if stage.expected_artifact_key:
-                artifact_path_by_key(config, status_body, stage.expected_artifact_key)
+                artifact_path_by_key(config, stage, status_body, stage.expected_artifact_key)
             validate_stage_result(config, stage, status_body)
             if callback_store:
                 record = callback_store.wait_for_job(status_body["job_id"], config.callback_wait_seconds)
                 validate_callback_record(config=config, stage=stage, final_body=status_body, record=record)
+                save_stage_callback(config, stage, record)
             return StageResult(
                 stage=stage,
                 job_id=status_body["job_id"],
@@ -692,9 +752,11 @@ def submit_stage(
                 final_body=status_body,
             )
         if status_body["status"] in {"failed", "canceled"}:
+            save_stage_final_response(config, stage, status_body)
             if callback_store and status_body["status"] == "failed":
                 record = callback_store.wait_for_job(status_body["job_id"], config.callback_wait_seconds)
                 validate_callback_record(config=config, stage=stage, final_body=status_body, record=record)
+                save_stage_callback(config, stage, record)
             raise RuntimeError(
                 f"{stage_label(stage)} 结束状态异常 status={status_body['status']}: {status_body.get('error')}"
             )
@@ -713,7 +775,7 @@ def write_report(
     translated_path: Path | None,
     callback_records: list[CallbackRecord],
 ) -> Path:
-    report_path = config.storage_dir / config.output_bucket / config.output_prefix.rstrip("/") / "e2e_report.json"
+    report_path = trace_root(config) / "e2e_report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report = {
         "input_file": str(config.input_file),
@@ -761,23 +823,32 @@ def call_flow(config: Config, callback_receiver: CallbackReceiver | None) -> tup
     with httpx.Client(base_url=config.base_url, timeout=30) as client:
         health = client.get("/health")
         health.raise_for_status()
-        print("健康检查 health:", health.json())
+        health_body = health.json()
+        print("健康检查 health:", health_body)
 
         models = client.get("/api/v1/novel-localization-ai/models", headers=headers)
         models.raise_for_status()
-        model_id = select_model(models.json(), config.model_id)
+        models_body = models.json()
+        model_id = select_model(models_body, config.model_id)
         print("输入文件 input_file:", config.input_file)
         print("模型 model_id:", model_id)
 
         templates = client.get("/api/v1/novel-localization-ai/prompt-templates", headers=headers)
         templates.raise_for_status()
         templates_body = templates.json()
+        save_meta_trace(
+            config,
+            health_body=health_body,
+            models_body=models_body,
+            templates_body=templates_body,
+            model_id=model_id,
+        )
 
         if config.contract_check:
             validate_meta_contract(
                 client=client,
                 headers=headers,
-                models_body=models.json(),
+                models_body=models_body,
                 templates_body=templates_body,
                 model_id=model_id,
             )
@@ -821,7 +892,7 @@ def call_flow(config: Config, callback_receiver: CallbackReceiver | None) -> tup
             results.append(result)
 
             if stage.name == "step1_localize" and not config.dry_run:
-                localized_path = artifact_path_by_key(config, result.final_body, "localized_text")
+                localized_path = artifact_path_by_key(config, stage, result.final_body, "localized_text")
                 text_by_label["localized"] = localized_path.read_text(encoding="utf-8")
             elif stage.name == "step1_localize" and config.dry_run:
                 text_by_label["localized"] = source_text
@@ -906,8 +977,8 @@ def main() -> int:
         if not config.dry_run and results:
             step1 = next(result for result in results if result.stage.name == "step1_localize")
             step3 = next(result for result in results if result.stage.name == "step3_translate")
-            localized_path = artifact_path_by_key(config, step1.final_body, "localized_text")
-            translated_path = artifact_path_by_key(config, step3.final_body, "translated_text")
+            localized_path = artifact_path_by_key(config, step1.stage, step1.final_body, "localized_text")
+            translated_path = artifact_path_by_key(config, step3.stage, step3.final_body, "translated_text")
         report_path = write_report(
             config,
             model_id=model_id,

@@ -138,7 +138,7 @@ OSS_PUBLIC_ENDPOINT=
 ./scripts/dev.sh stop
 ```
 
-`e2e` 默认会启动本地 callback receiver，并校验 callback body、header、签名与轮询终态一致；如只想跑旧的三阶段主链路，可追加 `--skip-contract-check`；如只想验证 meta 和 `POST /jobs` 错误请求契约、不创建真实模型 Job，可追加 `--contract-only`。完成后会打印本地对象存储中的 `localized.txt`、`translated.txt` 和 `e2e_report.json` 路径，并在 `e2e_downloads/` 保存 inline artifact 副本，例如 `step1_localize_work_note.txt`、`step2_review_review_summary.txt`，便于回溯分析。
+`e2e` 默认会启动本地 callback receiver，并校验 callback body、header、签名与轮询终态一致；如只想跑旧的三阶段主链路，可追加 `--skip-contract-check`；如只想验证 meta 和 `POST /jobs` 错误请求契约、不创建真实模型 Job，可追加 `--contract-only`。完成后会打印本地对象存储中的 `localized.txt`、`translated.txt` 和 `e2e_trace/e2e_report.json` 路径，并在 `e2e_trace/` 下按阶段保存 `request.json`、`create_response.json`、`final_response.json`、`callback.json` 和主要 artifact 文本，便于回溯分析。
 
 验证 Job 内部 workflow 会调用真实模型，可能产生费用：
 
