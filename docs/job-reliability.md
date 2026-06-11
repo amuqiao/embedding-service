@@ -224,8 +224,9 @@ Worker（BRPOP 取出任务）
 | Job 状态 | 已是终态（`succeeded` / `failed`），**不受影响** |
 | Callback 状态 | 所有重试耗尽后记录 `ERROR` 日志，上游不会收到事件推送 |
 | 关键设计 | Callback 是异步通知，在 `mark_succeeded` / `mark_failed` **之后**执行，失败不阻塞 Celery ACK，不导致任务重新消费 |
+| 重试参数 | 重试延迟序列（0/10/30/60s，共 4 次）硬编码于 `services/callbacks.py`；单次连接超时由 `CALLBACK_TIMEOUT_SECONDS`（默认 5s）控制 |
 | 上游影响 | 上游无法通过 Callback 感知终态，需依赖主动轮询 `GET /jobs/{id}` 发现结果 |
-| 防护 | ⚠️ 无自动补偿；上游应结合轮询兜底；错误通过 `ERROR` 级日志可被监控系统捕获 |
+| 防护 | ⚠️ 无自动补偿；上游应结合轮询兜底；`ERROR` 日志应接入告警（如日志系统错误率告警），否则 Callback 静默失败时无人感知 |
 
 ---
 
@@ -260,6 +261,7 @@ Worker（BRPOP 取出任务）
 | `JOB_ORPHAN_TIMEOUT_SECONDS` | `300` | queued 且无 celery_task_id 超过此秒数视为孤儿，触发恢复投递 | 过小会误判正常排队等待消费的 Job |
 | `JOB_STALE_RUNNING_SECONDS` | `2460` | running 超过此秒数视为僵死，触发强制 fail；推荐 ≥ `CELERY_TIME_LIMIT` + 600（1860 + 600 = 2460），为 SIGKILL 后 reject / requeue 留出充分缓冲 | 设置过小会误杀正常耗时较长的任务 |
 | `MAX_ACTIVE_JOBS` | `50` | API 层队列深度软上限，超出返回 503；注意：并发创建时可能短暂超过此值（见下方说明） | 应与 Worker 并发数和预期排队量匹配 |
+| `CALLBACK_TIMEOUT_SECONDS` | `5` | 单次 Callback HTTP 请求超时（秒）；重试延迟序列（0/10/30/60s，4 次）硬编码 | 过小易触发超时重试；调大后 Worker 线程阻塞时间增加 |
 | `REDIS_URL` | — | Broker 和 Result Backend | 生产环境必须指向开启 AOF 的 Redis |
 
 > **MAX_ACTIVE_JOBS 是软限制**：检查队列深度（`count_active_jobs`）和写入新 Job 之间不是原子操作。在极高并发下，多个请求可能同时通过深度检查，导致实际活跃 Job 数短暂超过上限（最多超出并发请求数）。该限制的目的是防止大规模超载，不保证精确的硬上限行为。
@@ -282,6 +284,8 @@ Worker 进程就绪后通过 `worker_ready` 信号触发一次扫描：
 Beat 每 30 分钟触发一次 `jobs.recovery` 任务，逻辑同启动恢复，持续兜底。
 
 > **Beat 部署要求**：Beat 进程必须以单实例运行。多实例 Beat 会重复调度同一任务，造成恢复扫描并发触发；虽然原子性抢占确保逻辑正确，但会产生多余的 Celery 任务和日志噪音。K8s 部署时 Beat 应作为独立 Deployment（`replicas: 1`），不与 Worker Deployment 混部。
+
+> **Beat 故障的降级窗口**：Beat 进程挂掉后，启动恢复扫描（`worker_ready`）仍可覆盖 Worker 重启时的孤儿 Job。对于 Beat 挂掉期间新产生的孤儿 Job 或僵死 running Job，最坏情况下需等到 Beat 恢复后下一个 30 分钟周期才能被清理，即降级窗口最长约 30 分钟。对于 `JOB_STALE_RUNNING_SECONDS=2460s` 的任务，实际暴露时长为 2460s + 最多 1800s = 约 73 分钟。这是 Beat 作为单点的已知 SLA 影响。
 
 ### 终态幂等守卫
 
