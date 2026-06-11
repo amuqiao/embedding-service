@@ -77,6 +77,7 @@ usage() {
   migrate             对本地开发数据库执行 Alembic 迁移。
   test                运行 pytest。
   smoke               对已运行 API 执行真实模型 Job 冒烟验证。
+  mock-smoke          不调用真实模型，用 Mock OpenAI + 本地存储验证完整任务流程（创建→排队→执行→成功）。
   workflow-smoke      使用真实模型和放大输入验证内部自动分块、canvas 和 merge。
   e2e                 从 .data 读取 .txt，使用真实模型验证 meta、jobs、轮询、callback 和三阶段链路。
   check               执行脚本语法检查和 pytest。
@@ -85,6 +86,7 @@ usage() {
 成功标准：
   start 成功 = postgres/redis healthy，迁移成功，api/worker 进程存活，/health 可访问。
   smoke 成功 = 真实模型 localization job 进入 succeeded 状态。
+  mock-smoke 成功 = Mock AI step1_localize job 进入 succeeded 状态，全程不调用真实模型。
   workflow-smoke 成功 = 真实模型长文本触发内部 workflow，localized.txt 和 translated.txt 存在且非空。
   e2e 成功 = meta 契约、错误请求预检、三个 Job、轮询结果、callback 和核心 artifact 均通过校验。
 
@@ -525,6 +527,63 @@ run_workflow_smoke() {
     "${@:1}"
 }
 
+run_mock_smoke() {
+  guard_local_env
+  section "Mock Smoke"
+  require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
+
+  local mock_port=18200
+  local mock_pid_file="${RUN_DIR}/mock_openai.pid"
+  local mock_log="${LOG_DIR}/mock_openai.log"
+  local mock_worker_pid_file="${RUN_DIR}/mock_worker.pid"
+  local mock_worker_log="${LOG_DIR}/mock_worker.log"
+
+  # 清理：无论成功失败都停止 mock 进程并恢复原 worker（用文件路径直接操作，避免 local 作用域问题）
+  trap '
+    p="$(cat "'"$mock_worker_pid_file"'" 2>/dev/null || true)"
+    [[ -n "$p" ]] && kill "$p" 2>/dev/null || true
+    rm -f "'"$mock_worker_pid_file"'"
+    p="$(cat "'"$mock_pid_file"'" 2>/dev/null || true)"
+    [[ -n "$p" ]] && kill "$p" 2>/dev/null || true
+    rm -f "'"$mock_pid_file"'"
+    start_service worker
+  ' EXIT
+
+  # 1. 停止正在跑的 worker
+  stop_service worker 2>/dev/null || true
+
+  # 2. 启动 mock OpenAI server
+  rm -f "$mock_pid_file"
+  nohup "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/mock_openai_server.py" "$mock_port" \
+    > "$mock_log" 2>&1 &
+  echo $! > "$mock_pid_file"
+  sleep 1
+  if ! kill -0 "$(cat "$mock_pid_file")" 2>/dev/null; then
+    die "mock OpenAI server 启动失败; 日志: $mock_log"
+  fi
+  event "STARTED" "mock-openai" "http://127.0.0.1:${mock_port}"
+
+  # 3. 以 mock 环境变量启动 worker（覆盖 STORAGE_BACKEND 和 OPENAI_BASE_URL）
+  rm -f "$mock_worker_pid_file"
+  local worker_cmd
+  worker_cmd="$(service_command worker)"
+  nohup bash -c "
+    export STORAGE_BACKEND=local
+    export OPENAI_BASE_URL=http://127.0.0.1:${mock_port}
+    export OPENAI_API_KEY=mock-key
+    exec ${worker_cmd}
+  " > "$mock_worker_log" 2>&1 &
+  echo $! > "$mock_worker_pid_file"
+  sleep 2
+  if ! kill -0 "$(cat "$mock_worker_pid_file")" 2>/dev/null; then
+    die "mock worker 启动失败; 日志: $mock_worker_log"
+  fi
+  event "STARTED" "mock-worker" "storage=local ai=mock port=${mock_port}"
+
+  # 4. 运行 smoke（使用本地存储写输入文件）
+  STORAGE_BACKEND=local "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/smoke_job.py"
+}
+
 run_check() {
   section "Script"
   bash -n "$ROOT_DIR/scripts/dev.sh"
@@ -614,6 +673,9 @@ case "$command" in
     ;;
   smoke)
     run_smoke
+    ;;
+  mock-smoke)
+    run_mock_smoke
     ;;
   workflow-smoke)
     shift
