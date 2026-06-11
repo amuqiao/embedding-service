@@ -2,6 +2,7 @@ import uuid
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError, NotFoundAppError, ValidationAppError
@@ -139,22 +140,47 @@ def create_job_response(job: AIJob) -> dict[str, Any]:
     }
 
 
+def _fetch_via_url(url: str) -> bytes:
+    try:
+        resp = httpx.get(url, timeout=30, follow_redirects=True)
+    except Exception as exc:
+        raise AppError("OSS_FETCH_FAILED", "OSS 对象读取失败", status_code=422, details={"oss_url": url}) from exc
+    if resp.status_code == 404:
+        raise AppError("OSS_OBJECT_NOT_FOUND", "OSS object not found", status_code=422, details={"oss_url": url})
+    if resp.status_code != 200:
+        raise AppError(
+            "OSS_FETCH_FAILED",
+            "OSS 对象读取失败",
+            status_code=422,
+            details={"oss_url": url, "http_status": resp.status_code},
+        )
+    return resp.content
+
+
 def _load_input_text(job: AIJob) -> str:
     input_payload = job.input_payload
     oss_payload = input_payload.get("oss") or input_payload
+    oss_url = oss_payload.get("oss_url")
 
-    try:
-        text = storage.read_text(
-            bucket=input_payload.get("oss_bucket") or _configured_oss_bucket(),
-            key=oss_payload["oss_key"],
-            region=input_payload.get("oss_region") or _configured_oss_region(),
-        )
-    except AppError:
-        raise
-    except Exception as exc:
-        raise AppError("OSS_FETCH_FAILED", "OSS 对象读取失败", status_code=422) from exc
+    if oss_url:
+        data = _fetch_via_url(oss_url)
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AppError("INVALID_INPUT", "OSS object must be UTF-8 text", status_code=422) from exc
+    else:
+        try:
+            text = storage.read_text(
+                bucket=input_payload.get("oss_bucket") or _configured_oss_bucket(),
+                key=oss_payload["oss_key"],
+                region=input_payload.get("oss_region") or _configured_oss_region(),
+            )
+        except AppError:
+            raise
+        except Exception as exc:
+            raise AppError("OSS_FETCH_FAILED", "OSS 对象读取失败", status_code=422) from exc
+        data = text.encode("utf-8")
 
-    data = text.encode("utf-8")
     if len(data) > settings.OSS_INPUT_MAX_BYTES:
         raise AppError("INPUT_TOO_LARGE", "OSS input exceeds service limit", status_code=422)
     expected_hash = oss_payload.get("content_hash")
