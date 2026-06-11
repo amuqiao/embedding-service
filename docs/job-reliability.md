@@ -127,8 +127,8 @@ Worker（BRPOP 取出任务）
 |---|---|
 | 触发条件 | 极端情况：Worker 进程异常但 Redis 连接未断开，消息既未 ACK 也未 reject |
 | DB 状态 | `status=running`，`started_at` 已超过 `CELERY_TIME_LIMIT` |
-| 结果 | Job 无限期停留在 running |
-| 防护 | **定期僵死 running 扫描**：`started_at` 超过阈值则强制标记 `failed` |
+| 结果 | Job 无限期停留在 running，直到下次 Worker 重启 |
+| 防护 | **Worker 启动扫描**：`worker_ready` 信号触发 stale running 扫描，`started_at` 超过 `JOB_STALE_RUNNING_SECONDS` 则强制标记 `failed`；**清理窗口**：等同于 Worker 下次重启时间，无 Beat 时无自动周期清理 |
 
 ### 场景 K：API 服务完全不可用（重启 / 宕机）
 
@@ -240,7 +240,7 @@ Worker（BRPOP 取出任务）
 | E：软超时 | SoftTimeLimitExceeded 捕获 | `tasks/jobs.py`（已有） |
 | F：软超时 + SIGKILL 循环 | 终态幂等守卫阻断再执行 | `tasks/jobs.py` `_process()` |
 | G：Redis 无持久化 | AOF 持久化 + 启动恢复扫描兜底 | 运维配置 + `tasks/recovery.py` |
-| J：僵死 running | 定期扫描强制 fail | `tasks/recovery.py` + Beat |
+| J：僵死 running | Worker 启动时扫描强制 fail | `tasks/recovery.py` + `worker_ready` 信号 |
 | K：API 完全不可用 | 无状态，重启即恢复；已有 Job 不受影响 | 无需额外代码 |
 | L：Worker 完全不可用 | 队列积压至 MAX_ACTIVE_JOBS 触发 503 保护；重启后扫描恢复 | `MAX_ACTIVE_JOBS` + `worker_ready` 扫描 |
 | M：API + Worker 同时不可用 | 恢复无顺序依赖；关键前提 Redis AOF | 运维配置 + 启动恢复扫描 |
@@ -278,14 +278,6 @@ Worker 进程就绪后通过 `worker_ready` 信号触发一次扫描：
 2. **僵死 running 强制 fail**：`status=running AND started_at < now - JOB_STALE_RUNNING_SECONDS`
 
 **多 Worker 并发扫描的原子性**：多个 Worker 同时启动时，均会扫描到同一批孤儿 Job 并分别调用 `process_job_task.delay()`。为防止同一 Job 被重复投递，扫描后通过原子 `UPDATE WHERE celery_task_id IS NULL` 抢占写入权；未抢到的 Worker 放弃该 Job，已额外投入 Redis 的 Celery 任务若被消费，终态幂等守卫负责安全跳过。
-
-### 定期扫描（需运行 Celery Beat）
-
-Beat 每 30 分钟触发一次 `jobs.recovery` 任务，逻辑同启动恢复，持续兜底。
-
-> **Beat 部署要求**：Beat 进程必须以单实例运行。多实例 Beat 会重复调度同一任务，造成恢复扫描并发触发；虽然原子性抢占确保逻辑正确，但会产生多余的 Celery 任务和日志噪音。K8s 部署时 Beat 应作为独立 Deployment（`replicas: 1`），不与 Worker Deployment 混部。
-
-> **Beat 故障的降级窗口**：Beat 进程挂掉后，启动恢复扫描（`worker_ready`）仍可覆盖 Worker 重启时的孤儿 Job。对于 Beat 挂掉期间新产生的孤儿 Job 或僵死 running Job，最坏情况下需等到 Beat 恢复后下一个 30 分钟周期才能被清理，即降级窗口最长约 30 分钟。**以下数字仅适用于 Beat 故障期间**：对于 `JOB_STALE_RUNNING_SECONDS=2460s` 的任务，stale running 暴露时长为 2460s + 最多 1800s ≈ 73 分钟。这是 Beat 作为单点的已知 SLA 影响，正常运行时不适用。
 
 ### 终态幂等守卫
 

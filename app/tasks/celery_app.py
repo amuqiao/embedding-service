@@ -1,7 +1,6 @@
 import logging
 
 from celery import Celery
-from celery.schedules import crontab
 from celery.signals import worker_ready
 
 from app.infrastructure.config import settings
@@ -30,26 +29,7 @@ celery_app.conf.update(
     task_max_retries=settings.CELERY_MAX_RETRIES,
     task_default_retry_delay=settings.CELERY_RETRY_DELAY,
     result_expires=settings.CELERY_RESULT_EXPIRES,
-    # Celery Beat 定时任务配置
-    beat_schedule={
-        "cleanup-expired-jobs": {
-            "task": "jobs.cleanup_expired",
-            "schedule": crontab(day_of_month=1, hour=2, minute=0),
-            "options": {"expires": 3600},
-        },
-        "recovery-scan": {
-            "task": "jobs.recovery",
-            "schedule": crontab(minute="*/30"),
-            "options": {"expires": 600},
-        },
-    },
 )
-
-
-@celery_app.task(name="jobs.recovery")
-def recovery_task() -> dict:
-    from app.tasks.recovery import run_recovery
-    return run_recovery()
 
 
 @worker_ready.connect
