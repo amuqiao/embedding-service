@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import asyncio
+import logging
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -10,6 +11,8 @@ import httpx
 from app.infrastructure.config import settings
 from app.models.job import AIJob
 from app.services.jobs import _job_to_response
+
+logger = logging.getLogger(__name__)
 
 
 def _sign(timestamp: str, body: bytes) -> str:
@@ -62,7 +65,7 @@ async def deliver_callback(job: AIJob) -> None:
     body = json.dumps(build_callback_body(job), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     delays = [0, 10, 30, 60]
     async with httpx.AsyncClient(timeout=settings.CALLBACK_TIMEOUT_SECONDS) as client:
-        for delay in delays:
+        for attempt, delay in enumerate(delays):
             if delay:
                 await asyncio.sleep(delay)
             timestamp = datetime.now(timezone.utc).isoformat()
@@ -77,5 +80,13 @@ async def deliver_callback(job: AIJob) -> None:
                 response = await client.post(url, content=body, headers=headers)
                 if 200 <= response.status_code < 300:
                     return
-            except httpx.HTTPError:
-                continue
+                logger.warning(
+                    "callback attempt %d failed for job %s: status=%d",
+                    attempt + 1, job.id, response.status_code,
+                )
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "callback attempt %d error for job %s: %s",
+                    attempt + 1, job.id, exc,
+                )
+    logger.error("all callback attempts exhausted for job %s url=%s", job.id, url)

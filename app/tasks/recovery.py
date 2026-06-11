@@ -25,10 +25,13 @@ async def _run_recovery(db) -> dict:
     for job in orphans:
         from app.tasks.jobs import process_job_task  # 延迟导入避免循环依赖
         celery_result = process_job_task.delay(str(job.id))
-        await JobRepo.set_celery_task_id(db, job.id, celery_result.id)
+        claimed = await JobRepo.claim_orphan_for_dispatch(db, job.id, celery_result.id)
         await db.commit()
-        recovered += 1
-        logger.info("recovery: re-dispatched orphaned job %s", job.id)
+        if claimed:
+            recovered += 1
+            logger.info("recovery: re-dispatched orphaned job %s", job.id)
+        else:
+            logger.info("recovery: job %s already claimed by peer worker, skipping", job.id)
 
     stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.JOB_STALE_RUNNING_SECONDS)
     stale = await JobRepo.find_stale_running_jobs(db, stale_cutoff)

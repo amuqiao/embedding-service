@@ -255,6 +255,21 @@ class JobRepo:
         return list(result.scalars().all())
 
     @staticmethod
+    async def claim_orphan_for_dispatch(db: AsyncSession, job_id: uuid.UUID, celery_task_id: str) -> bool:
+        """原子性抢占孤儿 Job 的投递权。仅在 celery_task_id 为 NULL 时成功写入，返回 True。
+        多 Worker 并发时只有一个能成功，防止同一 Job 被重复 dispatch。
+        """
+        result = await db.execute(
+            text(
+                "UPDATE ai_jobs SET celery_task_id = :task_id, updated_at = now() "
+                "WHERE id = :job_id AND celery_task_id IS NULL"
+            ),
+            {"task_id": celery_task_id, "job_id": str(job_id)},
+        )
+        await db.flush()
+        return result.rowcount == 1
+
+    @staticmethod
     async def count_active_jobs(db: AsyncSession) -> int:
         result = await db.execute(
             select(func.count()).select_from(AIJob).where(AIJob.status.in_(["queued", "running"]))
