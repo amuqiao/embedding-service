@@ -9,6 +9,7 @@ __pycache__/
 .ruff_cache/
 .DS_Store
 .data/
+long_text_*.txt
 storage/objects/
 logs/
 *.pid
