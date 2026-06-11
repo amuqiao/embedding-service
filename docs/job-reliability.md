@@ -161,6 +161,49 @@ Worker（BRPOP 取出任务）
 | 结果 | Job 无限期停留在 running |
 | 防护 | **定期僵死 running 扫描**：`started_at` 超过阈值则强制标记 `failed` |
 
+### 场景 N：PostgreSQL 不可用（重启 / 宕机）
+
+**API 侧**
+
+| 项 | 内容 |
+|---|---|
+| 触发条件 | DB 连接失败或超时 |
+| 结果 | `POST /jobs` DB 写入失败 → 返回 500，Job 从未入库，**无孤儿** |
+| 恢复 | DB 恢复后 `pool_pre_ping=True` 自动重连，API 恢复正常 |
+| 防护 | ✅ API 侧干净失败，无需额外处理 |
+
+**Worker 侧**
+
+| 项 | 内容 |
+|---|---|
+| 触发条件 | DB 在任务执行期间不可用 |
+| 处理过程 | `_process()` DB 操作失败 → 进入 `except Exception` → `_fail()` 尝试写 DB → 同样失败 → 任务带异常退出 |
+| 关键风险 | Celery 默认在任务失败时也 ACK（`task_acks_on_failure_or_timeout=True`）→ **消息从 Redis 移除，但 Job 状态未更新**，卡在 `running` 或 `queued` |
+| 恢复 | DB 恢复后，Worker 使用 NullPool 自然重连；stale running 扫描将超时的 `running` Job 强制标记 `failed` |
+| 防护 | ⚠️ 靠 stale running 扫描兜底；DB 故障窗口内的 Job 会在恢复后被强制 fail，不会静默卡住 |
+
+### 场景 O：Redis 不可用（重启 / 宕机）
+
+**API 侧**
+
+| 项 | 内容 |
+|---|---|
+| 触发条件 | `delay()` 调用时 Redis 不可达 |
+| 结果 | Job 已入库（`celery_task_id=NULL`），`delay()` 抛异常，API 返回 500 |
+| 恢复 | 与场景 B 相同，启动恢复扫描重新投递孤儿 Job |
+| 防护 | ✅ 孤儿扫描覆盖 |
+
+**Worker 侧**
+
+| 项 | 内容 |
+|---|---|
+| 触发条件 | Worker 与 Redis 之间连接中断 |
+| 对消费的影响 | Worker 丢失 broker 连接，停止取新任务 |
+| 对进行中任务的影响 | AI 调用继续执行；完成后尝试 ACK 失败，消息保持**未 ACK 状态** |
+| Redis 重启（AOF 开启） | 未 ACK 消息保留；Worker 重连后消息自动回队，继续消费 |
+| Redis 重启（无 AOF） | 队列清空，退化为场景 G；DB 中 `queued`/`running` Job 由恢复扫描处理 |
+| 防护 | ✅ AOF 开启时消息不丢；无 AOF 时靠恢复扫描兜底 |
+
 ---
 
 ## 防护机制汇总
@@ -177,6 +220,8 @@ Worker（BRPOP 取出任务）
 | K：API 完全不可用 | 无状态，重启即恢复；已有 Job 不受影响 | 无需额外代码 |
 | L：Worker 完全不可用 | 队列积压至 MAX_ACTIVE_JOBS 触发 503 保护；重启后扫描恢复 | `MAX_ACTIVE_JOBS` + `worker_ready` 扫描 |
 | M：API + Worker 同时不可用 | 恢复无顺序依赖；关键前提 Redis AOF | 运维配置 + 启动恢复扫描 |
+| N：PostgreSQL 不可用 | API 侧干净 500，无孤儿；Worker 侧任务 ACK 但 DB 未更新，stale running 扫描兜底 | `pool_pre_ping` + stale running 扫描 |
+| O：Redis 不可用 | API 侧孤儿扫描覆盖；Worker 侧未 ACK 消息在 Redis 恢复后回队；无 AOF 退化为场景 G | AOF 持久化 + 孤儿扫描 |
 
 ---
 
