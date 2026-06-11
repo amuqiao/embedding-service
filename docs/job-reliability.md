@@ -279,6 +279,17 @@ Worker 进程就绪后通过 `worker_ready` 信号触发一次扫描：
 
 **多 Worker 并发扫描的原子性**：多个 Worker 同时启动时，均会扫描到同一批孤儿 Job 并分别调用 `process_job_task.delay()`。为防止同一 Job 被重复投递，扫描后通过原子 `UPDATE WHERE celery_task_id IS NULL` 抢占写入权；未抢到的 Worker 放弃该 Job，已额外投入 Redis 的 Celery 任务若被消费，终态幂等守卫负责安全跳过。
 
+### 定期扫描（可选，当前未启用）
+
+如需在 Worker 不重启的情况下持续兜底，可在 `celery_app.py` 中恢复 Beat 配置，每 30 分钟触发一次恢复扫描。
+
+**不启用的权衡**：当前恢复扫描仅在 `worker_ready` 时触发。场景 J（Worker 已死但 Redis 连接未断开导致消息不 reject）的僵死 Job，只能等 Worker 下次重启才被清理；频繁重启（如 K8s 滚动部署）的环境下影响有限，低重启频率的环境则清理窗口不确定。
+
+**若启用 Beat，需注意**：
+- Beat 进程必须单实例运行（K8s `replicas: 1`），不与 Worker 混部，否则重复调度同一任务。
+- 需在 `celery_app.py` 中重新注册 `recovery_task` 和 `beat_schedule`，并在部署侧单独启动 `celery beat` 进程。
+- Beat 自身故障时的降级窗口：最坏等待下一个调度周期（30 分钟）；叠加 `JOB_STALE_RUNNING_SECONDS=2460s`，stale running 总暴露时长最长约 73 分钟（仅 Beat 故障期间适用，正常运行时不适用）。
+
 ### 终态幂等守卫
 
 `_process()` 在执行 `mark_running` 前检查 Job 当前状态，若已是 `succeeded` 或 `failed` 则直接跳过，不再重新执行。
