@@ -24,9 +24,12 @@ RUN uv sync --frozen --no-dev
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
+COPY entrypoint.sh /entrypoint.sh
 
-RUN mkdir -p /app/storage/objects
+RUN mkdir -p /app/storage/objects && chmod +x /entrypoint.sh
 
 EXPOSE 8100
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8100"]
+# APP_ROLE=api (默认) 启动 API；APP_ROLE=worker 启动 Celery Worker
+# WORKER_CONCURRENCY 控制 Worker 并发数，默认 4
+ENTRYPOINT ["/entrypoint.sh"]
