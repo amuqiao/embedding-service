@@ -14,8 +14,9 @@
 AI 能力层用 `apply_mode` 表示这段工作注释候选内容的使用语义：
 
 ```text
-apply_mode=replace  完整工作注释候选内容，典型来源是 step1 本地化后的模型工作注释。
-apply_mode=append   建议追加的工作注释片段，典型来源是 step2 校验失败后的修改建议。
+apply_mode=replace  供调用方直接使用的工作注释候选内容。
+                    step1 返回：本次本地化的完整工作注释。
+                    step2 返回（不通过时）：建议工作注释，供调用方直接作为下一次 step1 的 work_note 传入，不与旧注释合并。
 ```
 
 ## 三个心智模型
@@ -65,7 +66,7 @@ apply_mode=append   建议追加的工作注释片段，典型来源是 step2 �
 
 - 是否重新执行 step1 本地化。
 - 是否把用户修改后的工作注释作为下一次 `work_note`。
-- 是否把 step2 返回的 `work_note(apply_mode=append)` 合并进工作注释。
+- 是否把 step2 返回的 `work_note(apply_mode=replace)` 作为下一次 step1 的 `work_note` 使用。
 - 是否继续校验、跳过校验或进入翻译。
 
 ### AI 能力层视角
@@ -91,7 +92,7 @@ AI 能力层不保存“当前工作注释”，不自动读取历史 Job，也�
 | 阶段 | job_type | 用户理解 | 后端输入 | AI 返回 |
 |---|---|---|---|---|
 | 本地化 | `novel_localization.step1_localize` | 生成本地化稿和工作注释 | 原文 + 当前工作注释 | `localized_text`、`work_note(apply_mode=replace)` |
-| 本地化校验 | `novel_localization.step2_review` | 判断本地化稿是否合格 | 当前本地化稿 + 当前工作注释 | `review_summary`、`passed`；失败时额外返回 `work_note(apply_mode=append)` |
+| 本地化校验 | `novel_localization.step2_review` | 判断本地化稿是否合格 | 当前本地化稿 + 当前工作注释 | `review_summary`、`passed`；失败时额外返回 `work_note(apply_mode=replace)` |
 | 翻译 | `novel_localization.step3_translate` | 生成英文终稿 | 当前确认的本地化稿 + 当前工作注释 | `translated_text` |
 
 三个阶段是三个独立 Job。是否进入下一阶段、是否重跑上一阶段，由业务后端和用户决定。
@@ -106,8 +107,8 @@ step1_localize 返回:
   表示完整工作注释候选内容。
 
 step2_review 校验不通过时返回:
-  work_note(apply_mode=append)
-  表示建议追加的工作注释片段。
+  work_note(apply_mode=replace)
+  表示建议工作注释，供调用方直接作为下一次 step1 的 work_note 传入，不与旧注释合并。
 ```
 
 调用方如果希望下一次 Job 使用某段工作注释，必须在下一次请求中通过 `prompt.blocks[].key=work_note.content` 显式传入。
@@ -167,9 +168,9 @@ step2 校验失败后返回的修改建议也使用 `work_note` artifact，不�
 它和工作注释的关系是：
 
 ```text
-work_note(apply_mode=append) 不是新的 Prompt block
-work_note(apply_mode=append) 不是 AI 能力层自动执行的指令
-work_note(apply_mode=append) 是给用户/后端确认后再合入当前工作注释的建议片段
+work_note(apply_mode=replace) 不是新的 Prompt block
+work_note(apply_mode=replace) 不是 AI 能力层自动执行的指令
+work_note(apply_mode=replace) 是给用户/后端确认后直接作为下一次 step1 的 work_note 使用的建议内容
 ```
 
 调用方处理边界：
@@ -177,14 +178,13 @@ work_note(apply_mode=append) 是给用户/后端确认后再合入当前工作�
 ```text
 step2 校验失败
   ↓
-展示 review_summary 和 work_note(apply_mode=append)
+展示 review_summary 和 work_note(apply_mode=replace)
   ↓
 用户确认、编辑或拒绝建议工作注释
   ↓
 若确认重跑:
-  调用方下一次请求的 work_note.content =
-    当前工作注释
-    + 用户确认后的建议工作注释
+  调用方下一次请求的 work_note.content = 用户确认后的建议工作注释（直接使用，不追加旧注释）
+  source.oss = 本地化稿的 OSS key
   ↓
 创建新的 step1_localize Job
 ```
@@ -207,11 +207,10 @@ step2 校验失败
    调用方用该 localized_text 创建 step2 校验
 
 5. 如果 step2 passed=false
-   AI 返回 review_summary + work_note(apply_mode=append)
+   AI 返回 review_summary + work_note(apply_mode=replace)
 
 6. 用户确认建议后
-   调用方决定是否把建议工作注释合并进下一次请求的 work_note.content
-   调用方用原文 + 新 调用方下一次请求的 work_note.content 再创建 step1
+   调用方用本地化稿 + work_note(建议内容，直接使用) 创建新的 step1
 
 7. 重复 4-6，直到:
    - step2 passed=true
@@ -238,11 +237,11 @@ AI 能力层执行时只使用本次请求传入的最终 `prompt.blocks`。
 | 阶段 | source.oss 应传什么 | work_note 应传什么 |
 |---|---|---|
 | step1 初次本地化 | 原文 | 空，或项目已有约束 |
-| step1 重跑本地化 | 原文 | 用户确认后的工作注释，可能包含校验建议 |
+| step1 重跑本地化 | **本地化稿**（上一次 step1 输出的 `localized_text`） | step2 返回的建议工作注释，或用户编辑后的工作注释 |
 | step2 本地化校验 | 当前确认的本地化稿 | 当前确认的工作注释 |
 | step3 翻译 | 当前确认且可进入翻译的本地化稿 | 当前确认的术语、风格、项目记忆 |
 
-注意：step2 校验失败后重跑 step1，输入应回到原文，而不是把有问题的本地化稿作为 step1 输入。校验建议应进入 `work_note`，不是替代原文。
+注意：step2 校验失败后重跑 step1，`source` 应传本地化稿（`localized_text` 的 OSS key），而不是原文。校验建议作为 `work_note` 传入，step1 提示词约束"对于无明显问题的文字保持不变"确保模型只修正问题处，不重写整篇。设计依据见 [`接口层/step1-rerun-design.md`](接口层/step1-rerun-design.md)。
 
 ## 与后端对接接口文档的关系
 
@@ -293,7 +292,7 @@ AI 能力层不做：
 ```text
 接口输入: prompt.blocks.work_note.content
 接口输出: artifacts[].key = work_note
-合并策略: artifacts[].apply_mode = replace | append
+合并策略: artifacts[].apply_mode = replace（step1 和 step2 均使用 replace）
 调用方状态: 由调用方自定义
 ```
 

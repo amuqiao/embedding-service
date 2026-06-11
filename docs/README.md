@@ -9,6 +9,7 @@
 | `接口层/README.md` | 接口层快速入口 |
 | `接口层/小说本地化AI能力层_后端对接接口文档.md` | 后端对接主文档，包含创建 Job、轮询、callback、artifact 契约 |
 | `接口层/小说本地化AI能力层接口文档.md` | 较完整的接口参考文档 |
+| `接口层/step1-rerun-design.md` | step2 不通过后重跑 step1 的正确方式与设计依据 |
 
 ## Prompt 与工作注释
 
