@@ -233,6 +233,28 @@ class JobRepo:
             await db.flush()
 
     @staticmethod
+    async def find_orphaned_queued_jobs(db: AsyncSession, created_before: datetime) -> list[AIJob]:
+        result = await db.execute(
+            select(AIJob).where(
+                AIJob.status == "queued",
+                AIJob.celery_task_id.is_(None),
+                AIJob.created_at < created_before,
+            )
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def find_stale_running_jobs(db: AsyncSession, started_before: datetime) -> list[AIJob]:
+        result = await db.execute(
+            select(AIJob).where(
+                AIJob.status == "running",
+                AIJob.started_at.is_not(None),
+                AIJob.started_at < started_before,
+            )
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
     async def count_active_jobs(db: AsyncSession) -> int:
         result = await db.execute(
             select(func.count()).select_from(AIJob).where(AIJob.status.in_(["queued", "running"]))

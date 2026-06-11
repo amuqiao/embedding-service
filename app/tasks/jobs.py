@@ -51,6 +51,9 @@ async def _process(job_id: str) -> dict[str, Any]:
 
     async def run(db):
         job = await get_job_or_404(db, job_uuid)
+        if job.status in ("succeeded", "failed"):
+            logger.warning("job %s already in terminal state %s, skipping", job_id, job.status)
+            return {"job_id": job_id, "status": "skipped"}
         await JobRepo.mark_running(db, job.id)
         await db.commit()
 
