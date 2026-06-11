@@ -119,6 +119,39 @@ Worker（BRPOP 取出任务）
 | 结果 | 同场景 D，消息回队列，新 Worker 重新消费 |
 | 防护 | **终态幂等守卫**（同场景 D） |
 
+### 场景 K：API 服务完全不可用（重启 / 宕机）
+
+| 项 | 内容 |
+|---|---|
+| 触发条件 | API Pod 重启、OOM、部署更新导致短暂不可用 |
+| 对已有 Job 的影响 | **无**。Worker 继续消费 Redis 队列，进行中的任务正常完成 |
+| 对新请求的影响 | 上游收到 502/503，无法提交新 Job |
+| 恢复流程 | API 无状态，重启后直接重连 DB 和 Redis，恢复接受请求 |
+| 防护 | ✅ 无需额外处理。API 挂掉不影响已有 Job 的生命周期 |
+
+### 场景 L：Worker 服务完全不可用（重启 / 宕机）
+
+| 项 | 内容 |
+|---|---|
+| 触发条件 | Worker Pod 重启、OOM、部署更新 |
+| 对已有 Job 的影响 | 正在执行的任务：消息因 `task_reject_on_worker_lost` 回到 Redis 队列，`status` 保持 `running` |
+| 对新请求的影响 | API 正常接受，Job 入库并推入 Redis，队列持续积压 |
+| 积压副作用 | `status=queued` 的 Job 累积，`count_active_jobs` 持续增长，达到 `MAX_ACTIVE_JOBS` 后 API 开始返回 503。**这是符合预期的保护行为**，防止无限堆积 |
+| 恢复流程 | Worker 重启 → `worker_ready` 信号触发恢复扫描 → 孤儿 Job 重投递、僵死 running 强制 fail → 正常消费恢复 |
+| 防护 | ✅ 消息不丢（Redis AOF）；启动恢复扫描处理异常状态 |
+
+### 场景 M：API 与 Worker 同时不可用
+
+| 项 | 内容 |
+|---|---|
+| 触发条件 | 全量部署、基础设施故障、Redis / DB 故障导致两个服务同时崩溃 |
+| 期间状态 | DB 保留所有 Job 记录；Redis 队列在 AOF 开启时完整保留 |
+| 恢复顺序 | **无强依赖**。先起 API 还是先起 Worker 均可正常恢复 |
+| Worker 先起 | 恢复扫描运行，孤儿 Job 重投递到 Redis；API 起来后继续接受新请求 |
+| API 先起 | 接受新请求，Job 正常入库推 Redis；Worker 起来后消费积压队列并触发扫描 |
+| 两者同时起 | Worker 扫描与 API 接受新请求并发进行，无冲突 |
+| 防护 | ✅ 整体可恢复；关键前提：Redis 必须开启 AOF，否则重启期间推入 Redis 的任务丢失（退化为场景 G） |
+
 ### 场景 J：长时间卡在 running，Worker 已死且未触发 reject
 
 | 项 | 内容 |
@@ -141,6 +174,9 @@ Worker（BRPOP 取出任务）
 | F：SIGKILL 循环 | 终态幂等守卫阻断 | `tasks/jobs.py` `_process()` |
 | G：Redis 无持久化 | AOF 持久化 + 启动恢复扫描兜底 | 运维配置 + `tasks/recovery.py` |
 | J：僵死 running | 定期扫描强制 fail | `tasks/recovery.py` + Beat |
+| K：API 完全不可用 | 无状态，重启即恢复；已有 Job 不受影响 | 无需额外代码 |
+| L：Worker 完全不可用 | 队列积压至 MAX_ACTIVE_JOBS 触发 503 保护；重启后扫描恢复 | `MAX_ACTIVE_JOBS` + `worker_ready` 扫描 |
+| M：API + Worker 同时不可用 | 恢复无顺序依赖；关键前提 Redis AOF | 运维配置 + 启动恢复扫描 |
 
 ---
 
