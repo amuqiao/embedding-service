@@ -52,29 +52,29 @@ class AliyunOSSClient:
         return normalize_object_key(self.config.normalized_project_root, key)
 
     def get_object(self, key: str) -> bytes:
-        _, body, _ = self._request("GET", key)
+        _, body, _ = self._request("GET", key.strip().strip("/"))
         return body
 
     def put_object(self, key: str, data: bytes, *, content_type: str = "application/octet-stream") -> dict[str, str]:
-        _, _, headers = self._request("PUT", key, data=data, content_type=content_type)
+        _, _, headers = self._request("PUT", self.object_key(key), data=data, content_type=content_type)
         return headers
 
     def head_object(self, key: str) -> dict[str, str]:
-        _, _, headers = self._request("HEAD", key)
+        _, _, headers = self._request("HEAD", self.object_key(key))
         return headers
 
     def delete_object(self, key: str) -> None:
-        self._request("DELETE", key)
+        self._request("DELETE", self.object_key(key))
 
     def _request(
         self,
         method: str,
-        key: str,
+        object_key: str,
         *,
         data: bytes | None = None,
         content_type: str = "",
     ) -> tuple[int, bytes, dict[str, str]]:
-        object_key = self.object_key(key)
+
         content_md5 = ""
         if data is not None:
             content_md5 = base64.b64encode(hashlib.md5(data).digest()).decode("ascii")
