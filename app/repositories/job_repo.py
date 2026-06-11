@@ -233,6 +233,13 @@ class JobRepo:
             await db.flush()
 
     @staticmethod
+    async def count_active_jobs(db: AsyncSession) -> int:
+        result = await db.execute(
+            select(func.count()).select_from(AIJob).where(AIJob.status.in_(["queued", "running"]))
+        )
+        return result.scalar_one()
+
+    @staticmethod
     async def cleanup_expired_jobs(db: AsyncSession) -> int:
         """删除所有过期的 Job 记录（expires_at <= now）"""
         stmt = delete(AIJob).where(AIJob.expires_at <= func.now())

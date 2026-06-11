@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     PROMPT_CONFIG_PATH: str = "app/infrastructure/novel_loc/prompts.yaml"
 
     OSS_INPUT_MAX_BYTES: int = 5_242_880
+    MAX_ACTIVE_JOBS: int = 50
     JOB_QUEUE_TIMEOUT_SECONDS: int = 600
     JOB_EXECUTION_TIMEOUT_SECONDS: int = 1800
     CELERY_SOFT_TIME_LIMIT: int = 1800
