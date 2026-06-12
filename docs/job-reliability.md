@@ -228,6 +228,50 @@ Worker（BRPOP 取出任务）
 | 上游影响 | 上游无法通过 Callback 感知终态，需依赖主动轮询 `GET /jobs/{id}` 发现结果 |
 | 防护 | ⚠️ 无自动补偿；上游应结合轮询兜底；`ERROR` 日志应接入告警（如日志系统错误率告警），否则 Callback 静默失败时无人感知 |
 
+### 场景 Q：AI 调用超时（模型响应时间过长）
+
+#### 背景：调用链路与 timeout 的真实行为
+
+```
+asyncio.wait_for(timeout=MODEL_CALL_TIMEOUT_SECONDS)      ← 主动截断层（可靠）
+  └─ litellm.acompletion(timeout=MODEL_CALL_TIMEOUT_SECONDS)
+       └─ loop.run_in_executor(None, litellm.completion)  ← 跑在独立线程
+            └─ AsyncOpenAI(timeout=resolved)
+                 └─ httpx read_timeout                    ← 对 chunked 响应无效
+                      └─ POST api.openai.com
+```
+
+`litellm.acompletion` **不是原生 async**，底层是把同步 `litellm.completion` 丢进 `run_in_executor` 线程池执行。
+
+**为什么 `litellm.completion(timeout=600)` 对大模型长响应无效：**
+
+OpenAI 非流式 API 使用 chunked transfer encoding，服务端生成时持续发送小块数据。httpx 的 `read_timeout` 是单次 `socket.recv()` 的等待时长，不是总时长。只要每隔几秒有一个 chunk 到达，600s read_timeout 就永远不会触发，导致任务实际跑完整个 30 分钟软超时才被 Celery 中断。
+
+| 项 | 内容 |
+|---|---|
+| 触发条件 | 输入文本较长，模型 chunked 响应持续输出，总耗时超过 `MODEL_CALL_TIMEOUT_SECONDS` |
+| 根本原因 | httpx `read_timeout` 是单次 socket read 超时，对持续吐 chunk 的 LLM 响应无效 |
+| **修复方案** | `asyncio.wait_for(litellm.acompletion(), timeout=MODEL_CALL_TIMEOUT_SECONDS)` 是唯一可靠的总时长截断 |
+| Thread leakage | `asyncio.wait_for` 取消的是 coroutine/Future，不是线程；线程继续运行，但有界：litellm 自身 timeout（600s）+ Celery SIGALRM（1800s）兜底。线程不持有 DB 连接，泄漏代价低 |
+| 超时后行为 | `asyncio.TimeoutError` → `process_job_task` 捕获 → `_mark_timeout()` → `status=failed`（`JOB_TIMEOUT`）→ 发 Callback |
+| 防护 | ✅ `asyncio.wait_for` 可靠截断；Celery SIGALRM 兜底线程泄漏；SIGKILL 最终兜底 |
+
+#### 超时层级与生效顺序（正常路径）
+
+| 层级 | 机制 | 时长 | 截断对象 | 可靠性 |
+|------|------|------|----------|--------|
+| L1 | `asyncio.wait_for` | `MODEL_CALL_TIMEOUT_SECONDS`（600s） | coroutine/Future | ✅ 可靠，与 chunked 无关 |
+| L2 | `litellm.acompletion(timeout=N)` → httpx | 600s | 线程内 HTTP 读取 | ⚠️ 对 chunked 响应无效 |
+| L3 | Celery SIGALRM（软超时） | `CELERY_SOFT_TIME_LIMIT`（1800s） | 进程内所有线程的阻塞 I/O | ✅ 可靠（Unix signal） |
+| L4 | Celery SIGKILL（硬超时） | `CELERY_TIME_LIMIT`（1860s） | 进程强杀 | ✅ 绝对可靠 |
+| L5 | stale running 扫描 | `JOB_STALE_RUNNING_SECONDS`（2460s） | DB 中僵死 running job | ✅ Worker 重启后触发 |
+
+正常情况：L1（600s）触发 → job 进入 `failed` 终态并发 Callback → Worker 继续接新任务。
+
+L3 是 L1 失效时的兜底（如 litellm 内部 bug 或网络异常导致 asyncio.wait_for 未能触发）。
+
+> **配置约束**：`MODEL_CALL_TIMEOUT_SECONDS` < `CELERY_SOFT_TIME_LIMIT` < `CELERY_TIME_LIMIT` < `JOB_STALE_RUNNING_SECONDS`。当前值 600 < 1800 < 1860 < 2460，满足约束。
+
 ---
 
 ## 防护机制汇总
@@ -247,6 +291,7 @@ Worker（BRPOP 取出任务）
 | N：PostgreSQL 不可用 | API 侧干净 500，无孤儿；Worker 侧 ACK 但 DB 未更新，stale running 扫描兜底 | `pool_pre_ping` + stale running 扫描 |
 | O：Redis 不可用 | API 侧孤儿扫描覆盖；Worker 侧未 ACK 消息在 Redis 恢复后回队；无 AOF 退化为场景 G | AOF 持久化 + 孤儿扫描 |
 | P：Callback 发送失败 | 日志记录 ERROR；不影响 Job 终态；上游应结合轮询兜底 | `services/callbacks.py` |
+| Q：AI 调用超时 | `asyncio.wait_for` 硬截断 + `asyncio.TimeoutError` 捕获 → `_mark_timeout()`；Celery 软超时兜底 | `infrastructure/ai_gateway.py` + `tasks/jobs.py` |
 
 ---
 

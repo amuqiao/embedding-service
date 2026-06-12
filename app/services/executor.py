@@ -121,8 +121,8 @@ def _parse_step3_output(text: str) -> str:
     return translated
 
 
-def run_ai_job(job_type: str, model_id: str, prompt_payload: dict, input_text: str) -> JobResult:
-    result = generate_text(model_id, _prompt_messages(prompt_payload, input_text, job_type))
+async def run_ai_job(job_type: str, model_id: str, prompt_payload: dict, input_text: str) -> JobResult:
+    result = await generate_text(model_id, _prompt_messages(prompt_payload, input_text, job_type))
     text = result.text.strip()
     if _is_model_refusal(text):
         raise _model_output_invalid(f"{job_type} 模型拒绝执行请求")

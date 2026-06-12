@@ -42,6 +42,9 @@ def process_job_task(self, job_id: str):
             asyncio.run(_mark_timeout(job_id))
             raise
         raise self.retry(exc=exc, countdown=settings.CELERY_RETRY_DELAY, max_retries=settings.CELERY_MAX_RETRIES)
+    except asyncio.TimeoutError:
+        asyncio.run(_mark_timeout(job_id))
+        raise
     except Exception as exc:
         asyncio.run(_fail(job_id, None, exc))
         raise
@@ -61,7 +64,7 @@ async def _process(job_id: str) -> dict[str, Any]:
         await db.commit()
 
         input_text = _load_input_text(job)
-        result = run_ai_job(job.job_type, job.model_id, job.prompt_payload, input_text)
+        result = await run_ai_job(job.job_type, job.model_id, job.prompt_payload, input_text)
         result_data = _persist_large_artifacts(job, result)
 
         await JobRepo.mark_succeeded(db, job.id, result_data)

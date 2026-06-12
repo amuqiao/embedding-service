@@ -1,3 +1,4 @@
+import asyncio
 import os
 from dataclasses import dataclass
 
@@ -19,17 +20,22 @@ class TextGenerationResult:
     completion_tokens: int = 0
 
 
-def generate_text(model_id: str, messages: list[dict[str, str]]) -> TextGenerationResult:
+async def generate_text(model_id: str, messages: list[dict[str, str]]) -> TextGenerationResult:
     model = get_enabled_model(model_id)
     if not model:
         raise KeyError(model_id)
-    response = litellm.completion(
-        model=model.litellm_model,
-        messages=messages,
-        temperature=0.7,
+    # asyncio.wait_for 是唯一可靠的总时长截断（httpx read_timeout 对 chunked LLM 响应无效）；
+    # litellm.acompletion 同时传入相同 timeout 以控制泄漏线程的退出上限。
+    response = await asyncio.wait_for(
+        litellm.acompletion(
+            model=model.litellm_model,
+            messages=messages,
+            temperature=0.7,
+            timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
+            num_retries=settings.MODEL_CALL_MAX_RETRIES,
+            drop_params=True,
+        ),
         timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
-        num_retries=settings.MODEL_CALL_MAX_RETRIES,
-        drop_params=True,
     )
     choice = response.choices[0]
     text = (choice.message.content or "").strip()

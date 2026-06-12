@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -67,6 +67,21 @@ class Settings(BaseSettings):
         if value not in {"local", "aliyun_oss"}:
             raise ValueError("STORAGE_BACKEND must be local or aliyun_oss")
         return value
+
+    @model_validator(mode="after")
+    def validate_timeout_chain(self) -> "Settings":
+        if self.MODEL_CALL_TIMEOUT_SECONDS >= self.CELERY_SOFT_TIME_LIMIT:
+            raise ValueError(
+                f"MODEL_CALL_TIMEOUT_SECONDS ({self.MODEL_CALL_TIMEOUT_SECONDS}s) "
+                f"must be less than CELERY_SOFT_TIME_LIMIT ({self.CELERY_SOFT_TIME_LIMIT}s). "
+                f"Recommended margin: at least 300s."
+            )
+        if self.CELERY_SOFT_TIME_LIMIT >= self.CELERY_TIME_LIMIT:
+            raise ValueError(
+                f"CELERY_SOFT_TIME_LIMIT ({self.CELERY_SOFT_TIME_LIMIT}s) "
+                f"must be less than CELERY_TIME_LIMIT ({self.CELERY_TIME_LIMIT}s)."
+            )
+        return self
 
     @property
     def oss_endpoint(self) -> str:

@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 
 import pytest
@@ -26,18 +27,22 @@ def _artifact_keys(result) -> list[str]:
     return [artifact.key for artifact in result.artifacts]
 
 
+def _mock_generate(text: str):
+    async def _generate(model_id, messages):
+        return TextGenerationResult(text=text)
+    return _generate
+
+
 def test_step1_returns_work_note_artifact(monkeypatch):
     monkeypatch.setattr(
         "app.services.executor.generate_text",
-        lambda model_id, messages: TextGenerationResult(
-            text=(
-                "===本地化正文开始===\n本地化正文\n===本地化正文结束===\n"
-                "===工作注释开始===\n称谓已本地化\n===工作注释结束==="
-            )
+        _mock_generate(
+            "===本地化正文开始===\n本地化正文\n===本地化正文结束===\n"
+            "===工作注释开始===\n称谓已本地化\n===工作注释结束==="
         ),
     )
 
-    result = run_ai_job("novel_localization.step1_localize", "gpt-4.1", _prompt_payload(), "原文")
+    result = asyncio.run(run_ai_job("novel_localization.step1_localize", "gpt-4.1", _prompt_payload(), "原文"))
     work_note = _artifact(result, "work_note")
 
     assert work_note.type == "work_note"
@@ -48,12 +53,10 @@ def test_step1_returns_work_note_artifact(monkeypatch):
 def test_step2_returns_work_note_suggestion_artifact(monkeypatch):
     monkeypatch.setattr(
         "app.services.executor.generate_text",
-        lambda model_id, messages: TextGenerationResult(
-            text="【校验结论】不通过\n【问题说明】称呼不一致\n【建议工作注释】请统一角色称呼。"
-        ),
+        _mock_generate("【校验结论】不通过\n【问题说明】称呼不一致\n【建议工作注释】请统一角色称呼。"),
     )
 
-    result = run_ai_job("novel_localization.step2_review", "gpt-4.1", _prompt_payload(), "本地化稿")
+    result = asyncio.run(run_ai_job("novel_localization.step2_review", "gpt-4.1", _prompt_payload(), "本地化稿"))
     work_note = _artifact(result, "work_note")
 
     assert result.signals["passed"] is False
@@ -65,10 +68,10 @@ def test_step2_returns_work_note_suggestion_artifact(monkeypatch):
 def test_step2_passed_does_not_return_empty_work_note(monkeypatch):
     monkeypatch.setattr(
         "app.services.executor.generate_text",
-        lambda model_id, messages: TextGenerationResult(text="【校验结论】通过"),
+        _mock_generate("【校验结论】通过"),
     )
 
-    result = run_ai_job("novel_localization.step2_review", "gpt-4.1", _prompt_payload(), "本地化稿")
+    result = asyncio.run(run_ai_job("novel_localization.step2_review", "gpt-4.1", _prompt_payload(), "本地化稿"))
 
     assert result.signals["passed"] is True
     assert _artifact_keys(result) == ["review_summary"]
@@ -77,13 +80,11 @@ def test_step2_passed_does_not_return_empty_work_note(monkeypatch):
 def test_step1_rejects_missing_work_note_marker(monkeypatch):
     monkeypatch.setattr(
         "app.services.executor.generate_text",
-        lambda model_id, messages: TextGenerationResult(
-            text="===本地化正文开始===\n本地化正文\n===本地化正文结束==="
-        ),
+        _mock_generate("===本地化正文开始===\n本地化正文\n===本地化正文结束==="),
     )
 
     with pytest.raises(AppError) as exc_info:
-        run_ai_job("novel_localization.step1_localize", "gpt-4.1", _prompt_payload(), "原文")
+        asyncio.run(run_ai_job("novel_localization.step1_localize", "gpt-4.1", _prompt_payload(), "原文"))
 
     assert exc_info.value.code == "MODEL_OUTPUT_INVALID"
 
@@ -96,16 +97,14 @@ def test_step1_rejects_english_translation_output(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.executor.generate_text",
-        lambda model_id, messages: TextGenerationResult(
-            text=(
-                f"===本地化正文开始===\n{english_text}\n===本地化正文结束===\n"
-                "===工作注释开始===\n误输出英文\n===工作注释结束==="
-            )
+        _mock_generate(
+            f"===本地化正文开始===\n{english_text}\n===本地化正文结束===\n"
+            "===工作注释开始===\n误输出英文\n===工作注释结束==="
         ),
     )
 
     with pytest.raises(AppError) as exc_info:
-        run_ai_job("novel_localization.step1_localize", "gpt-4.1", _prompt_payload(), "原文")
+        asyncio.run(run_ai_job("novel_localization.step1_localize", "gpt-4.1", _prompt_payload(), "原文"))
 
     assert exc_info.value.code == "MODEL_OUTPUT_INVALID"
     assert "中文本地化稿" in exc_info.value.message
@@ -114,11 +113,11 @@ def test_step1_rejects_english_translation_output(monkeypatch):
 def test_step2_rejects_missing_suggested_work_note(monkeypatch):
     monkeypatch.setattr(
         "app.services.executor.generate_text",
-        lambda model_id, messages: TextGenerationResult(text="【校验结论】不通过\n【问题说明】称呼不一致"),
+        _mock_generate("【校验结论】不通过\n【问题说明】称呼不一致"),
     )
 
     with pytest.raises(AppError) as exc_info:
-        run_ai_job("novel_localization.step2_review", "gpt-4.1", _prompt_payload(), "本地化稿")
+        asyncio.run(run_ai_job("novel_localization.step2_review", "gpt-4.1", _prompt_payload(), "本地化稿"))
 
     assert exc_info.value.code == "MODEL_OUTPUT_INVALID"
 
