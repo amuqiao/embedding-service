@@ -10,7 +10,8 @@ class Base(DeclarativeBase):
     pass
 
 
-engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+_connect_args = {} if settings.DB_SSL else {"ssl": False}
+engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True, connect_args=_connect_args)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 

@@ -13,3 +13,4 @@ long_text_*.txt
 storage/objects/
 logs/
 *.pid
+env_test/

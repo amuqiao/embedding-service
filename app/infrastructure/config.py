@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     )
 
     DATABASE_URL: str
+    DB_SSL: bool = True
     SERVICE_API_KEY: str
 
     REDIS_URL: str = "redis://127.0.0.1:26379/0"
