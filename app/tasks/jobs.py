@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 import uuid
 from typing import Any
 
@@ -48,12 +49,14 @@ def process_job_task(self, job_id: str):
 
 async def _process(job_id: str) -> dict[str, Any]:
     job_uuid = uuid.UUID(job_id)
+    started = time.monotonic()
 
     async def run(db):
         job = await get_job_or_404(db, job_uuid)
         if job.status in ("succeeded", "failed"):
-            logger.warning("job %s already in terminal state %s, skipping", job_id, job.status)
-            return {"job_id": job_id, "status": "skipped"}
+            logger.warning("job_skipped job_id=%s status=%s", job_id, job.status)
+            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
+        logger.info("job_started job_id=%s job_type=%s model_id=%s", job_id, job.job_type, job.model_id)
         await JobRepo.mark_running(db, job.id)
         await db.commit()
 
@@ -66,15 +69,24 @@ async def _process(job_id: str) -> dict[str, Any]:
 
         job = await JobRepo.get(db, job.id)
         await deliver_callback(job)
-        return {"job_id": job_id, "status": "succeeded"}
+        return {"job_id": job_id, "status": "succeeded", "job_type": job.job_type}
 
-    return await _with_db(run)
+    result = await _with_db(run)
+    if result.get("status") == "succeeded":
+        duration_ms = int((time.monotonic() - started) * 1000)
+        logger.info(
+            "job_completed job_id=%s job_type=%s duration_ms=%d",
+            job_id, result.get("job_type", "unknown"), duration_ms,
+        )
+    return result
 
 
 async def _fail(job_id: str, _work_item_id: str | None, exc: Exception) -> None:
     if isinstance(exc, AppError):
+        logger.error("job_failed job_id=%s error_code=%s", job_id, exc.code)
         error_payload = {"code": exc.code, "message": exc.message, "details": exc.details}
     else:
+        logger.error("job_failed job_id=%s error_type=%s", job_id, type(exc).__name__, exc_info=True)
         error_payload = {
             "code": "MODEL_CALL_FAILED",
             "message": "模型调用失败或内部处理失败",
@@ -92,6 +104,8 @@ async def _fail(job_id: str, _work_item_id: str | None, exc: Exception) -> None:
 
 
 async def _mark_timeout(job_id: str) -> None:
+    logger.error("job_timeout job_id=%s", job_id)
+
     async def run(db):
         job_uuid = uuid.UUID(job_id)
         error_payload = {"code": "JOB_TIMEOUT", "message": "任务执行超时", "details": {}}

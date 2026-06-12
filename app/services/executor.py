@@ -79,10 +79,10 @@ def _parse_step1_output(text: str) -> tuple[str, str]:
     notes = _extract_between(text, "===工作注释开始===", "===工作注释结束===")
     localized = _extract_between(text, "===本地化正文开始===", "===本地化正文结束===")
     if notes is None:
-        logger.error("step1_localize 输出缺少工作注释标记，模型输出片段: %s", text[:2000])
+        logger.error("step1_localize 输出缺少工作注释标记 output_len=%d", len(text))
         raise _model_output_invalid("step1_localize 模型输出缺少工作注释标记")
     if not localized:
-        logger.error("step1_localize 输出缺少本地化正文标记，模型输出片段: %s", text[:2000])
+        logger.error("step1_localize 输出缺少本地化正文标记 output_len=%d", len(text))
         raise _model_output_invalid("step1_localize 模型输出缺少本地化正文标记或正文为空")
     if _looks_like_english_translation(localized):
         raise _model_output_invalid("step1_localize 本地化正文疑似英文译文；step1 必须输出中文本地化稿")

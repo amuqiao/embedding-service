@@ -1,3 +1,4 @@
+import logging
 import time
 import uuid
 
@@ -10,10 +11,13 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.routes import health, jobs, meta
 from app.core.exceptions import AppError
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, set_request_id
 from app.infrastructure.config import settings
 
 configure_logging()
+
+logger = logging.getLogger(__name__)
+logger.info("app_start service=novel-localization-ai version=0.1.0")
 
 app = FastAPI(title="Novel Localization AI Service", version="0.1.0")
 
@@ -26,15 +30,32 @@ app.add_middleware(
 )
 
 
+_HEALTH_PATHS = {"/health", "/healthz"}
+
+
 class RequestIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
         request.state.request_id = request_id
+        set_request_id(request_id)
         started = time.monotonic()
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = request_id
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            logger.exception(
+                "request_failed method=%s path=%s duration_ms=%d",
+                request.method, request.url.path, duration_ms,
+            )
+            raise
         duration_ms = int((time.monotonic() - started) * 1000)
+        response.headers["X-Request-ID"] = request_id
         response.headers["X-Response-Time-Ms"] = str(duration_ms)
+        if request.url.path not in _HEALTH_PATHS:
+            logger.info(
+                "request_completed method=%s path=%s status=%d duration_ms=%d",
+                request.method, request.url.path, response.status_code, duration_ms,
+            )
         return response
 
 
