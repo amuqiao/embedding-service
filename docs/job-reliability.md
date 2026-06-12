@@ -75,14 +75,14 @@ Worker（BRPOP 取出任务）
 
 > **场景 D 与 F 的区别**：D 是正常重投递（Job 仍在 `running` 或已被超时标记 `failed`），重新消费后守卫判断终态跳过；F 专门描述软超时 + SIGKILL 的组合导致的无限循环风险及其阻断机制。
 
-### 场景 E：SoftTimeLimitExceeded（30 分钟软超时）
+### 场景 E：SoftTimeLimitExceeded（Celery 软超时）
 
 | 项 | 内容 |
 |---|---|
 | 触发条件 | 任务执行超过 `CELERY_SOFT_TIME_LIMIT`（默认 1800s） |
-| 处理过程 | 收到 SIGALRM → 代码捕获 → `_mark_timeout()` → DB 标记 `status=failed`（JOB_TIMEOUT）→ 发 Callback → 抛出异常 |
-| 结果 | Job 正确进入 failed 终态，Celery ACK 任务 |
-| 防护 | ✅ 已有防护 |
+| 处理过程 | 收到 SIGALRM → 代码捕获 → 若 `CELERY_MAX_RETRIES > 0` 且未耗尽重试次数，进入重试流程（见场景 Q 重试机制）；否则 `_mark_timeout()` → DB 标记 `status=failed`（JOB_TIMEOUT）→ 发 Callback |
+| 结果 | 重试耗尽后 Job 进入 failed 终态，Celery ACK 任务 |
+| 防护 | ✅ 与场景 Q（asyncio.TimeoutError）共用统一重试策略 |
 
 ### 场景 F：SoftTimeLimitExceeded + SIGKILL 循环风险
 
@@ -251,26 +251,55 @@ OpenAI 非流式 API 使用 chunked transfer encoding，服务端生成时持续
 |---|---|
 | 触发条件 | 输入文本较长，模型 chunked 响应持续输出，总耗时超过 `MODEL_CALL_TIMEOUT_SECONDS` |
 | 根本原因 | httpx `read_timeout` 是单次 socket read 超时，对持续吐 chunk 的 LLM 响应无效 |
-| **修复方案** | `asyncio.wait_for(litellm.acompletion(), timeout=MODEL_CALL_TIMEOUT_SECONDS)` 是唯一可靠的总时长截断 |
-| Thread leakage | `asyncio.wait_for` 取消的是 coroutine/Future，不是线程；线程继续运行，但有界：litellm 自身 timeout（600s）+ Celery SIGALRM（1800s）兜底。线程不持有 DB 连接，泄漏代价低 |
-| 超时后行为 | `asyncio.TimeoutError` → `process_job_task` 捕获 → `_mark_timeout()` → `status=failed`（`JOB_TIMEOUT`）→ 发 Callback |
-| 防护 | ✅ `asyncio.wait_for` 可靠截断；Celery SIGALRM 兜底线程泄漏；SIGKILL 最终兜底 |
+| **截断方案** | `asyncio.wait_for(litellm.acompletion(), timeout=MODEL_CALL_TIMEOUT_SECONDS)` 是唯一可靠的总时长截断 |
+| Thread leakage | `asyncio.wait_for` 取消的是 coroutine/Future，不是线程；线程继续运行，但有界：litellm 自身 timeout + Celery SIGALRM 兜底。线程不持有 DB 连接，泄漏代价低 |
+| 超时后行为 | `asyncio.TimeoutError` → `process_job_task` 捕获 → 进入统一重试策略（见下方） |
+| 防护 | ✅ `asyncio.wait_for` 可靠截断；重试策略统一管理终态转换；Celery SIGALRM 兜底线程泄漏 |
 
-#### 超时层级与生效顺序（正常路径）
+#### 重试机制
+
+`asyncio.TimeoutError`（L1）和 `SoftTimeLimitExceeded`（L3）统一使用相同的重试策略，由 `CELERY_MAX_RETRIES` 和 `CELERY_RETRY_DELAY` 控制：
+
+```
+超时触发
+  → retries < CELERY_MAX_RETRIES？
+      是 → 记录警告日志 → self.retry(countdown=CELERY_RETRY_DELAY)
+             → 新 Celery task 启动，asyncio.wait_for 和 CELERY_SOFT_TIME_LIMIT 均从 0 重新计时
+             → Job 保持 running 状态，started_at 刷新
+      否 → _mark_timeout() → status=failed(JOB_TIMEOUT) → 发 Callback
+```
+
+**关键约束：**
+
+- `CELERY_MAX_RETRIES=0`（默认）：超时直接进入 failed，不重试
+- 每次重试是独立的完整执行周期，超时计时重置
+- Callback 只在所有重试耗尽后发出一次，调用方不会收到重复通知
+- 调用方总等待上限：`(MODEL_CALL_TIMEOUT_SECONDS + CELERY_RETRY_DELAY) × (CELERY_MAX_RETRIES + 1)`
+
+**配置示例（1 次重试）：**
+
+| 变量 | 值 | 说明 |
+|------|-----|------|
+| `MODEL_CALL_TIMEOUT_SECONDS` | 600 | 单次执行超时 |
+| `CELERY_RETRY_DELAY` | 60 | 重试等待间隔 |
+| `CELERY_MAX_RETRIES` | 1 | 最多重试 1 次 |
+| 调用方最长等待 | 1320s | (600 + 60) × 2 |
+
+#### 超时层级与生效顺序
 
 | 层级 | 机制 | 时长 | 截断对象 | 可靠性 |
 |------|------|------|----------|--------|
 | L1 | `asyncio.wait_for` | `MODEL_CALL_TIMEOUT_SECONDS`（600s） | coroutine/Future | ✅ 可靠，与 chunked 无关 |
-| L2 | `litellm.acompletion(timeout=N)` → httpx | 600s | 线程内 HTTP 读取 | ⚠️ 对 chunked 响应无效 |
+| L2 | `litellm.acompletion(timeout=N)` → httpx | 600s | 线程内 HTTP 读取 | ⚠️ 对 chunked 响应无效，作为线程泄漏退出上限 |
 | L3 | Celery SIGALRM（软超时） | `CELERY_SOFT_TIME_LIMIT`（1800s） | 进程内所有线程的阻塞 I/O | ✅ 可靠（Unix signal） |
 | L4 | Celery SIGKILL（硬超时） | `CELERY_TIME_LIMIT`（1860s） | 进程强杀 | ✅ 绝对可靠 |
 | L5 | stale running 扫描 | `JOB_STALE_RUNNING_SECONDS`（2460s） | DB 中僵死 running job | ✅ Worker 重启后触发 |
 
-正常情况：L1（600s）触发 → job 进入 `failed` 终态并发 Callback → Worker 继续接新任务。
+正常情况（`CELERY_MAX_RETRIES=0`）：L1 触发 → mark_failed → Callback → Worker 继续接新任务。
 
-L3 是 L1 失效时的兜底（如 litellm 内部 bug 或网络异常导致 asyncio.wait_for 未能触发）。
+L3 是 L1 失效时的兜底；L3 触发后同样进入统一重试策略，行为与 L1 一致。
 
-> **配置约束**：`MODEL_CALL_TIMEOUT_SECONDS` < `CELERY_SOFT_TIME_LIMIT` < `CELERY_TIME_LIMIT` < `JOB_STALE_RUNNING_SECONDS`。当前值 600 < 1800 < 1860 < 2460，满足约束。
+> **配置约束**：`MODEL_CALL_TIMEOUT_SECONDS` < `CELERY_SOFT_TIME_LIMIT` < `CELERY_TIME_LIMIT` < `JOB_STALE_RUNNING_SECONDS`。启用重试时，还需确认调用方能接受 `(MODEL_CALL_TIMEOUT_SECONDS + CELERY_RETRY_DELAY) × (CELERY_MAX_RETRIES + 1)` 的总等待时长。
 
 ---
 
@@ -302,7 +331,7 @@ L3 是 L1 失效时的兜底（如 litellm 内部 bug 或网络异常导致 asyn
 | `CELERY_SOFT_TIME_LIMIT` | `1800` | 软超时（秒），触发 JOB_TIMEOUT | 必须小于 `CELERY_TIME_LIMIT` |
 | `CELERY_TIME_LIMIT` | `1860` | 硬超时（秒），触发 SIGKILL | 与软超时差值建议 ≥ 60s |
 | `MODEL_CALL_TIMEOUT_SECONDS` | `300` | 单次 AI 调用超时 | 应远小于 `CELERY_SOFT_TIME_LIMIT` |
-| `CELERY_MAX_RETRIES` | `0` | 任务重试次数 | 设为 0 时软超时后不重试 |
+| `CELERY_MAX_RETRIES` | `0` | 超时重试次数；同时控制 L1（asyncio.TimeoutError）和 L3（SoftTimeLimitExceeded）；0 表示不重试，直接进入 failed；调用方总等待上限为 `(MODEL_CALL_TIMEOUT_SECONDS + CELERY_RETRY_DELAY) × (重试次数 + 1)` | 设置过大会显著延长调用方等待时间；输入过长导致的超时重试无效 |
 | `JOB_ORPHAN_TIMEOUT_SECONDS` | `300` | queued 且无 celery_task_id 超过此秒数视为孤儿，触发恢复投递 | 过小会误判正常排队等待消费的 Job |
 | `JOB_STALE_RUNNING_SECONDS` | `2460` | running 超过此秒数视为僵死，触发强制 fail；推荐 ≥ `CELERY_TIME_LIMIT` + 600（1860 + 600 = 2460），为 SIGKILL 后 reject / requeue 留出充分缓冲 | 设置过小会误杀正常耗时较长的任务 |
 | `MAX_ACTIVE_JOBS` | `50` | API 层队列深度软上限，超出返回 503；注意：并发创建时可能短暂超过此值（见下方说明） | 应与 Worker 并发数和预期排队量匹配 |

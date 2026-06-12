@@ -37,14 +37,25 @@ async def _with_db(coro):
 def process_job_task(self, job_id: str):
     try:
         return asyncio.run(_process(job_id))
-    except SoftTimeLimitExceeded as exc:
+    except (SoftTimeLimitExceeded, asyncio.TimeoutError) as exc:
+        # 两类超时（asyncio.wait_for L1 / Celery SIGALRM L2）统一重试策略。
+        # 每次 self.retry() 启动全新 Celery task，asyncio.wait_for 和 CELERY_SOFT_TIME_LIMIT
+        # 均从 0 重新计时；CELERY_MAX_RETRIES=0（默认）表示不重试，直接进入终态。
         if self.request.retries >= settings.CELERY_MAX_RETRIES:
             asyncio.run(_mark_timeout(job_id))
             raise
-        raise self.retry(exc=exc, countdown=settings.CELERY_RETRY_DELAY, max_retries=settings.CELERY_MAX_RETRIES)
-    except asyncio.TimeoutError:
-        asyncio.run(_mark_timeout(job_id))
-        raise
+        logger.warning(
+            "job_timeout_retry job_id=%s attempt=%d/%d exc=%s",
+            job_id,
+            self.request.retries + 1,
+            settings.CELERY_MAX_RETRIES,
+            type(exc).__name__,
+        )
+        raise self.retry(
+            exc=exc,
+            countdown=settings.CELERY_RETRY_DELAY,
+            max_retries=settings.CELERY_MAX_RETRIES,
+        )
     except Exception as exc:
         asyncio.run(_fail(job_id, None, exc))
         raise
