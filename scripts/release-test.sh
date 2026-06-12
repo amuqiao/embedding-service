@@ -383,8 +383,16 @@ prepare_release_copy() {
   run mkdir -p "$release_parent"
   log "复制主项目到 tmp 发布目录。该目录可删除重建，不影响主项目。"
   run rsync -a --delete --delete-excluded \
+    --include ".env.example" \
+    --exclude ".env" \
+    --exclude ".env.*" \
     --exclude ".venv/" \
     --exclude ".agents/" \
+    --exclude ".data/" \
+    --exclude "env_test/" \
+    --exclude "storage/objects/" \
+    --exclude "logs/" \
+    --exclude "*.pid" \
     --exclude "__pycache__/" \
     --exclude ".pytest_cache/" \
     --exclude ".mypy_cache/" \
