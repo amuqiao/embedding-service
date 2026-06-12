@@ -42,6 +42,25 @@ def _model_output_invalid(message: str) -> AppError:
     return AppError("MODEL_OUTPUT_INVALID", message, status_code=502)
 
 
+_REFUSAL_PREFIXES = (
+    "i'm sorry",
+    "i am sorry",
+    "i cannot",
+    "i can't",
+    "i'm unable",
+    "i am unable",
+    "i apologize",
+    "sorry, i",
+)
+
+
+def _is_model_refusal(text: str) -> bool:
+    if len(text) > 400:
+        return False
+    lower = text.lower().lstrip()
+    return any(lower.startswith(prefix) for prefix in _REFUSAL_PREFIXES)
+
+
 def _looks_like_english_translation(text: str) -> bool:
     cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
     latin_count = len(re.findall(r"[A-Za-z]", text))
@@ -97,12 +116,16 @@ def _parse_step3_output(text: str) -> str:
     translated = text.strip()
     if not translated:
         raise _model_output_invalid("step3_translate 模型输出为空")
+    if _is_model_refusal(translated):
+        raise _model_output_invalid("step3_translate 模型拒绝执行请求")
     return translated
 
 
 def run_ai_job(job_type: str, model_id: str, prompt_payload: dict, input_text: str) -> JobResult:
     result = generate_text(model_id, _prompt_messages(prompt_payload, input_text, job_type))
     text = result.text.strip()
+    if _is_model_refusal(text):
+        raise _model_output_invalid(f"{job_type} 模型拒绝执行请求")
 
     if job_type == "novel_localization.step1_localize":
         localized_text, notes = _parse_step1_output(text)
