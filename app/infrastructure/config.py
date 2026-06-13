@@ -70,6 +70,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_timeout_chain(self) -> "Settings":
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+
         if self.MODEL_CALL_TIMEOUT_SECONDS >= self.CELERY_SOFT_TIME_LIMIT:
             raise ValueError(
                 f"MODEL_CALL_TIMEOUT_SECONDS ({self.MODEL_CALL_TIMEOUT_SECONDS}s) "
@@ -79,7 +82,8 @@ class Settings(BaseSettings):
         if self.CELERY_SOFT_TIME_LIMIT >= self.CELERY_TIME_LIMIT:
             raise ValueError(
                 f"CELERY_SOFT_TIME_LIMIT ({self.CELERY_SOFT_TIME_LIMIT}s) "
-                f"must be less than CELERY_TIME_LIMIT ({self.CELERY_TIME_LIMIT}s)."
+                f"must be less than CELERY_TIME_LIMIT ({self.CELERY_TIME_LIMIT}s). "
+                f"Recommended margin: at least 60s."
             )
         if self.CELERY_TIME_LIMIT >= self.JOB_STALE_RUNNING_SECONDS:
             raise ValueError(
@@ -87,9 +91,31 @@ class Settings(BaseSettings):
                 f"must be less than JOB_STALE_RUNNING_SECONDS ({self.JOB_STALE_RUNNING_SECONDS}s). "
                 f"Recommended margin: at least 600s."
             )
-        import logging as _logging
+
+        margin1 = self.CELERY_SOFT_TIME_LIMIT - self.MODEL_CALL_TIMEOUT_SECONDS
+        if margin1 < 300:
+            _log.warning(
+                "CELERY_SOFT_TIME_LIMIT - MODEL_CALL_TIMEOUT_SECONDS = %ds (recommend ≥ 300s). "
+                "L3 may fire before L1 cleanup completes.",
+                margin1,
+            )
+        margin2 = self.CELERY_TIME_LIMIT - self.CELERY_SOFT_TIME_LIMIT
+        if margin2 < 60:
+            _log.warning(
+                "CELERY_TIME_LIMIT - CELERY_SOFT_TIME_LIMIT = %ds (recommend ≥ 60s). "
+                "SIGKILL may arrive before soft-limit handler finishes.",
+                margin2,
+            )
+        margin3 = self.JOB_STALE_RUNNING_SECONDS - self.CELERY_TIME_LIMIT
+        if margin3 < 600:
+            _log.warning(
+                "JOB_STALE_RUNNING_SECONDS - CELERY_TIME_LIMIT = %ds (recommend ≥ 600s). "
+                "Stale scan may mis-classify recently killed jobs.",
+                margin3,
+            )
+
         if not self.CALLBACK_SIGNING_SECRET:
-            _logging.getLogger(__name__).warning(
+            _log.warning(
                 "CALLBACK_SIGNING_SECRET is not configured — callback HMAC signatures will be invalid"
             )
         return self

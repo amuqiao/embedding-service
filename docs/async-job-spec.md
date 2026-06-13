@@ -541,7 +541,16 @@ async def _process(job_id: str):
         # 终态幂等守卫
         if job.status in ("succeeded", "failed"):
             return  # 已是终态，跳过执行
-        await mark_running(db, job)
+
+        # mark_running 有两条路径：
+        #   queued  → CAS（UPDATE WHERE status='queued'），只有一个 Worker 能成功；
+        #   running → 直接更新，此为 Path A（Worker 崩溃后消息回队，正常重执行）。
+        if job.status == "queued":
+            claimed = await mark_running_if_queued(db, job.id)  # UPDATE WHERE status='queued'
+            if not claimed:
+                return  # 被其他 Worker 抢占，跳过
+        else:
+            await mark_running(db, job.id)  # Path A 恢复重执行
 
         # L1 主截断
         result = await asyncio.wait_for(
@@ -784,6 +793,15 @@ Header: X-AI-Service-Signature: sha256=<HMAC-SHA256>
 ```
 
 接收方从 `X-AI-Service-Timestamp` Header 取 timestamp，与 request_body 拼接后重新计算 HMAC-SHA256，与 `X-AI-Service-Signature` 比对。同时校验 timestamp 与当前时间差不超过 300 秒（防重放窗口，可按需调整）。
+
+实现额外发送两个信息性 Header（不参与签名计算）：
+
+```
+Header: X-AI-Service-Job-Id: <job_id>
+Header: X-AI-Service-Event: <event>    # 例如 job.succeeded / job.failed
+```
+
+接收方可用这两个 Header 做快速路由，无需解析 body。
 
 ### 8.3 重试策略
 
