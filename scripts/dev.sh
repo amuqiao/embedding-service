@@ -128,10 +128,10 @@ service_url() {
 service_command() {
   case "$1" in
     api)
-      printf "%q " "$ROOT_DIR/.venv/bin/uvicorn" app.main:app --host "$API_HOST" --port "$API_PORT"
+      printf "API_HOST=%q API_PORT=%q %q " "$API_HOST" "$API_PORT" "$ROOT_DIR/start-api.sh"
       ;;
     worker)
-      printf "%q " "$ROOT_DIR/.venv/bin/celery" -A app.tasks.celery_app.celery_app worker --loglevel=info --pool=solo --concurrency=1
+      printf "%q " "$ROOT_DIR/start-worker.sh"
       ;;
     *)
       die "unknown service: $1" 2
@@ -339,8 +339,8 @@ start_service() {
 
   require_app_service "$service"
   require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
-  [[ "$service" == "api" ]] && require_executable "$ROOT_DIR/.venv/bin/uvicorn" "run: ./scripts/dev.sh bootstrap"
-  [[ "$service" == "worker" ]] && require_executable "$ROOT_DIR/.venv/bin/celery" "run: ./scripts/dev.sh bootstrap"
+  [[ "$service" == "api" ]] && require_executable "$ROOT_DIR/start-api.sh" "missing start-api.sh"
+  [[ "$service" == "worker" ]] && require_executable "$ROOT_DIR/start-worker.sh" "missing start-worker.sh"
 
   pid_file="$(service_pid_file "$service")"
   log_file="$(service_log_file "$service")"

@@ -48,10 +48,13 @@ services:
       context: .
     env_file:
       - ${ENV_FILE:-.env}
+    command: ["/app/start-api.sh"]
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/novel_localize
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
+      API_HOST: 0.0.0.0
+      API_PORT: "8100"
     ports:
       - "8100:8100"
     volumes:
@@ -86,8 +89,6 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/novel_localize
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
-      WORKER_POOL: solo
-      WORKER_CONCURRENCY: "1"
     volumes:
       - object_storage:/app/storage/objects
     depends_on:

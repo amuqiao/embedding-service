@@ -88,6 +88,10 @@ check_deploy() {
   event "OK" "compose" "present"
   require_file ".env.example"
   event "OK" ".env.example" "present"
+  require_file "start-api.sh"
+  event "OK" "start-api.sh" "present"
+  require_file "start-worker.sh"
+  event "OK" "start-worker.sh" "present"
 
   section "Compose Config"
   ENV_FILE=.env.example compose config --quiet
@@ -100,6 +104,10 @@ check_deploy() {
   event "OK" "dev.sh" "syntax"
   bash -n "$ROOT_DIR/scripts/deploy.sh"
   event "OK" "deploy.sh" "syntax"
+  sh -n "$ROOT_DIR/start-api.sh"
+  event "OK" "start-api.sh" "syntax"
+  sh -n "$ROOT_DIR/start-worker.sh"
+  event "OK" "start-worker.sh" "syntax"
 }
 
 up_deps() {

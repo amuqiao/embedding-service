@@ -1,8 +1,17 @@
 #!/bin/sh
 set -e
 
+ROOT_DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 WORKER_LOGLEVEL="${WORKER_LOGLEVEL:-info}"
 WORKER_POOL="${WORKER_POOL:-solo}"
+
+if [ -x "$ROOT_DIR/.venv/bin/celery" ]; then
+  CELERY="$ROOT_DIR/.venv/bin/celery"
+else
+  CELERY="celery"
+fi
+
+cd "$ROOT_DIR"
 
 set -- -A app.tasks.celery_app.celery_app worker \
   --loglevel="$WORKER_LOGLEVEL" \
@@ -17,4 +26,4 @@ if [ -n "${WORKER_MAX_TASKS_PER_CHILD:-}" ]; then
   set -- "$@" --max-tasks-per-child="$WORKER_MAX_TASKS_PER_CHILD"
 fi
 
-exec celery "$@"
+exec "$CELERY" "$@"

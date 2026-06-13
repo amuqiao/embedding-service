@@ -24,9 +24,10 @@ RUN uv sync --frozen --no-dev
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
+COPY start-api.sh start-worker.sh ./
 
 RUN mkdir -p /app/storage/objects
 
 EXPOSE 8100
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8100"]
+CMD ["/app/start-api.sh"]
