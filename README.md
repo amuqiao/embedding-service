@@ -53,7 +53,7 @@
 - `POST /api/v1/novel-localization-ai/jobs`
 - `GET /api/v1/novel-localization-ai/jobs/{job_id}`
 
-Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/infrastructure/novel_loc/prompts.yaml`。该 YAML 是运行时 Prompt 的唯一默认配置源，定义各 `job_type` 的 `system/user/work_note` 默认值和运行时输出契约；`docs/prompt` 仅作为原始提示词素材留档，不参与运行时加载。
+Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/infrastructure/novel_loc/prompts.yaml`。该 YAML 是运行时 Prompt 的唯一默认配置源，定义各 `job_type` 的 `system/user/work_note` 默认值和运行时输出契约。
 
 除 `/health` 和 `/healthz` 外，请求必须携带：
 
@@ -150,5 +150,6 @@ OSS_PUBLIC_ENDPOINT=
 
 ## 说明文档
 
+- [架构总览](docs/架构/架构总览.md)
 - [部署与发布手册](docs/部署与发布手册.md)
 - [独立服务抽取与流程说明](docs/独立服务抽取与流程说明.md)
