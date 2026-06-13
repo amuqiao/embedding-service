@@ -1,9 +1,10 @@
 # AI 异步 Job 系统设计规范
 
-**版本**：v1.0 · 最后更新：2026-06-13
+**版本**：v1.1 · 最后更新：2026-06-13
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.1 | 2026-06-13 | 补充 API 创建三步流程（4.4）、水平扩展约束与参考配置（4.5）、MAX_ACTIVE_JOBS 软限制声明、孤儿扫描双层防线说明、Checklist 扩容项 |
 | v1.0 | 2026-06-13 | 初始版本，基于内部项目实践提炼 |
 
 本规范定义在 FastAPI + Celery + PostgreSQL + Redis 栈上构建可靠 AI 异步 Job 系统的核心模式，解决 LLM 调用超时、任务幂等、消息可靠性和服务恢复问题。
@@ -28,6 +29,70 @@
 - 流式/SSE 响应（本规范聚焦非流式 Job）
 
 **参考实现**：本规范已在内部项目中完整落地验证。接口契约由各项目自行定义，不在本规范范围内。
+
+---
+
+## 零、系统全景图
+
+一图理解系统全貌，再按章节深入。
+
+### 数据流与组件关系
+
+```
+                         调用方
+               ┌─────────────────────────────────┐
+               │  POST /jobs → 202               │
+               │  GET  /jobs/{id}                │
+               │  ← Callback（终态推送）           │
+               └─────────────────────────────────┘
+                           ↕ HTTP
+     ┌──────────────────────────────────────────────────────────────┐
+     │  API 服务（无状态，可水平扩展）                                 │
+     │                                                               │
+     │  创建守卫：count(queued+running) ≥ MAX_ACTIVE_JOBS → 503      │
+     │  DB 写入 AIJob(status=queued, celery_task_id=NULL)           │
+     │  Redis LPUSH → Celery 队列                                    │
+     └──────────────────────────────────────────────────────────────┘
+                     ↓ LPUSH                  ↑ DB 读写
+         ┌───────────────────────┐   ┌────────────────────┐
+         │      Redis 队列        │   │    PostgreSQL       │
+         │  （消息投递通道）        │   │  （状态权威，非 Redis）│
+         └───────────────────────┘   └────────────────────┘
+                     ↓ BRPOP (prefetch=1)          ↑ 状态读写
+     ┌──────────────────────────────────────────────────────────────┐
+     │  Worker（Pod 数 × CELERY_WORKER_CONCURRENCY = 总并行槽数）     │
+     │                                                               │
+     │  ① 终态幂等守卫（succeeded/failed → 跳过）                     │
+     │  ② mark_running                                               │
+     │  ③ asyncio.wait_for(call_llm, L1) ← MODEL_CALL_TIMEOUT       │
+     │         └─→ LLM API（chunked transfer，SDK timeout 无效）      │
+     │  ④ mark_succeeded / mark_failed                               │
+     │  ⑤ deliver_callback                                           │
+     │  ⑥ ACK ← 消息此时才从 Redis 移除                               │
+     │                                                               │
+     │  超时保险（不依赖 LLM 侧 timeout）                              │
+     │  L3 SIGALRM → CELERY_SOFT_TIME_LIMIT → 重试或 mark_failed     │
+     │  L4 SIGKILL → CELERY_TIME_LIMIT      → 进程强杀，消息回队      │
+     │  L5 stale 扫描 → JOB_STALE_RUNNING_SECONDS → 强制 failed      │
+     └──────────────────────────────────────────────────────────────┘
+
+恢复扫描（Worker 启动触发 + 可选定期扫描）
+  孤儿 queued（celery_task_id IS NULL，超过 JOB_ORPHAN_TIMEOUT）→ 重投递
+  僵死 running（started_at 超过 JOB_STALE_RUNNING_SECONDS）      → 强制 failed
+```
+
+### 关键配置速查
+
+| 参数 | 控制位置 | 控制内容 | 约束关系 |
+|------|---------|---------|---------|
+| `MAX_ACTIVE_JOBS` | API 创建守卫 | queued+running 总积压上限，超出返回 503；0=禁用 | 建议 ≥ 总并行槽数 × 2 |
+| `CELERY_WORKER_CONCURRENCY` | 每个 Worker Pod | 单 Pod 同时执行的任务数 | AI 任务建议 2~4 |
+| Worker Pod 数 | K8s Deployment | 水平扩展执行容量 | 总槽数 = Pod 数 × CONCURRENCY |
+| `MODEL_CALL_TIMEOUT_SECONDS` | Worker asyncio.wait_for | L1 主截断，AI 调用总时长 | < SOFT_TIME_LIMIT，差值 ≥ 300s |
+| `CELERY_SOFT_TIME_LIMIT` | Celery SIGALRM | L3 进程级超时 | < TIME_LIMIT，差值 ≥ 60s |
+| `CELERY_TIME_LIMIT` | Celery SIGKILL | L4 进程强杀 | < STALE_RUNNING，差值 ≥ 600s |
+| `JOB_STALE_RUNNING_SECONDS` | 恢复扫描 | L5 僵死任务清理阈值 | ≥ TIME_LIMIT + 600s |
+| `CELERY_MAX_RETRIES` | Worker 超时处理 | L1/L3 超时重试次数，0=不重试 | — |
 
 ---
 
@@ -221,19 +286,163 @@ engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
 
 Celery 用 fork 创建 Worker 子进程，SQLAlchemy 连接池不跨进程安全。NullPool 让每次 task 执行时独立建连、完成后立即关闭，无跨进程连接复用问题。
 
-### 4.3 Worker 并发度
+### 4.3 吞吐控制：三个旋钮
 
-`CELERY_WORKER_CONCURRENCY` 决定每个 Worker 进程同时处理的任务数，直接影响系统吞吐上限。
+控制 AI Job 系统的并发能力，需要分清三个独立旋钮，它们的作用层次不同。
 
-**AI 任务的特殊性**：LLM 调用是 I/O 密集型，等待模型响应时 CPU 接近空闲。Celery 默认值（CPU 核数）会导致线程过多、内存压力大，建议显式设置为 2~4。
+**旋钮 A — 执行槽数**（同时能执行多少任务）
 
 ```
 总并行槽数 = Worker Pod 数 × CELERY_WORKER_CONCURRENCY
 
-示例：3 个 Pod，每个 concurrency=4 → 最多同时处理 12 个 Job
+示例：3 Pod × 4 concurrency = 12 个任务可同时执行
 ```
 
-`MAX_ACTIVE_JOBS` 建议设为总并行槽数的 2~3 倍，为排队任务预留缓冲空间，避免峰值时调用方立即收到 503。
+两个子旋钮的分工：
+- **CELERY_WORKER_CONCURRENCY**：单 Pod 同时跑几个任务。AI 任务是 I/O 密集型，进程 99% 的时间在等 LLM API 响应，CPU 接近空闲——因此这个值**不受 CPU 核数约束**，4 核机器设为 8 是完全合法的配置（CPU 密集型任务才需要对齐核数）。真正的约束是：①每个 worker 进程约 150~300 MB 内存，开 8 需要 Pod 有足够的内存限制；②NullPool 每任务独立建连，Concurrency × Pod 数不能超过 DB 连接预算（见 4.5 节）；③有效并发不超过 LLM API 配额。建议从 2~4 起步，确认内存和连接预算后再按需调高；**扩容优先靠加 Pod，单 Pod 调高 Concurrency 是次选**。
+- **Worker Pod 数**：水平扩展总槽数的主要手段，通过 K8s HPA 按队列长度动态伸缩（见 11.3）。
+
+**旋钮 B — 入口守卫**（是否接受新 Job 创建）
+
+`MAX_ACTIVE_JOBS` 是 API 层的**背压机制**，在 `POST /jobs` 时检查 DB 中 `status IN (queued, running)` 的总数，超过上限返回 503，告诉调用方"队列已满，稍后重试"。它控制的是**接单**，不控制**执行速度**。
+
+同时执行的任务数永远由 Worker 槽位（旋钮 A）物理约束。无论 MAX_ACTIVE_JOBS 设为多少——哪怕设为 0（禁用）——执行中的任务也不会超过 `Pod 数 × CELERY_WORKER_CONCURRENCY`。
+
+关键区别：
+- 总并行槽数 = 同时在**执行**的任务数（执行容量，由 Worker 物理决定）
+- MAX_ACTIVE_JOBS = API 接单门槛（排队中 + 执行中 超过此值时拒绝新创建）
+
+```
+MAX_ACTIVE_JOBS 必须 ≥ 总并行槽数。
+
+反例：总槽数 = 12，MAX_ACTIVE_JOBS = 10
+→ 即便 queued=0，running=10 时新 Job 创建也会触发 503
+→ 系统还有 2 个空闲槽，却拒绝了新任务
+```
+
+建议 `MAX_ACTIVE_JOBS` = 总并行槽数 × 2~3，为排队任务预留缓冲，避免峰值时调用方立即收到 503。
+
+**多 API Pod 时的软限制特性**：`MAX_ACTIVE_JOBS` 是 best-effort 软限制，不是精确上限。多 API Pod 并发时，count() 检查和 INSERT 之间没有全局锁，高峰期实际积压数可能短暂超出设定值。这是预期行为——背压机制不需要精确，短暂超出不影响系统正确性。如需精确限制，应在 DB 层使用 `SELECT ... FOR UPDATE` 或 Redis 原子计数器，但 AI Job 场景通常没有必要。
+
+**取消队列深度上限**（内部系统、或有外部限速层时）：
+
+```python
+MAX_ACTIVE_JOBS = 0  # 0 或不配置 → 禁用创建守卫，队列可无限积压
+```
+
+**旋钮 C — 单任务时长**（一次 AI 调用允许跑多久）
+
+`MODEL_CALL_TIMEOUT_SECONDS` 控制 L1 主截断时长。调大时必须同步提高 `CELERY_SOFT_TIME_LIMIT`，约束关系见 5.5 节。
+
+### 4.4 API 创建 Job 的三步流程与可靠性
+
+API 收到 `POST /jobs` 后，内部执行三步，不是原子操作：
+
+```
+① DB write  : INSERT AIJob(status=queued, celery_task_id=NULL)
+② Redis LPUSH: apply_async() → 拿到 celery_task_id
+③ DB update : UPDATE AIJob SET celery_task_id=<id>
+```
+
+**celery_task_id 的设置职责**：由 API 在 `apply_async()` 返回后立即执行 ③，不由 Worker 设置。`celery_task_id IS NULL` 是孤儿检测的唯一信号——若改为由 Worker 在 `mark_running` 时设置，孤儿检测窗口会扩大到整个任务等待期，误判风险大幅上升。
+
+**各步失败命运**：
+
+| 崩溃点 | DB 状态 | Redis 有无消息 | 恢复路径 |
+|--------|---------|--------------|---------|
+| ① 后崩溃（未 LPUSH） | queued, celery_task_id=NULL | 无 | 孤儿扫描超时后重投递（正常路径） |
+| ② 后崩溃（LPUSH 成功，③ 未完成） | queued, celery_task_id=NULL | 有 | Worker 正常消费原始消息；孤儿扫描超时后再次投递 → 双重投递，终态守卫兜底 |
+| ③ 完成 | queued, celery_task_id=<id> | 有 | 正常路径 |
+
+**双重投递场景（② 后崩溃）**：`JOB_ORPHAN_TIMEOUT_SECONDS` 到期后，孤儿扫描认为 LPUSH 未发生而再次投递，此时 Redis 中可能存在同一 Job 的两条消息。Worker 先消费任一条执行完毕并写入终态后，后消费的 Worker 在执行入口看到终态直接跳过（终态幂等守卫），不会重复执行。
+
+**结论**：三步中任意一步失败均可恢复，不会有 Job 永久丢失，也不会有重复执行。`JOB_ORPHAN_TIMEOUT_SECONDS` 不应低于 60s（需为 ③ 的写入留出足够时间）；默认 300s 已远超安全阈值。
+
+### 4.5 水平扩展约束与参考配置
+
+在约束范围内，**API Pod 和 Worker Pod 的水平扩缩容是纯运维操作，不需要修改任何应用代码**——调整 K8s Deployment `replicas` 或 HPA 配置即可。本节说明约束来源、有效上限公式和参考配置值。
+
+#### API Pod 扩展约束
+
+API Pod 无状态，理论上可无限水平扩展，实际受 PostgreSQL 连接数约束：
+
+```
+API Pod 有效上限 = floor(PG 可用连接数 × 40% / pool_size_per_pod)
+（建议预留 50% 给 Worker，10% 给 Beat / 管理工具 / 监控）
+```
+
+典型值（`pool_size_per_pod = 5`）：
+
+| PG max_connections | API Pod 有效上限 |
+|-------------------|----------------|
+| 100（默认） | ~8 |
+| 200 | ~16 |
+| 500 | ~40 |
+
+Redis 连接数通常不是瓶颈（Redis 默认上限 10,000）。
+
+#### Worker Pod 扩展约束
+
+Worker 使用 NullPool，每个并发任务独占一条 DB 连接，约束更严：
+
+```
+Worker Pod 有效上限 = min(
+    floor(PG 可用连接数 × 50% / CELERY_WORKER_CONCURRENCY),
+    floor(LLM API 并发上限 / CELERY_WORKER_CONCURRENCY)
+)
+```
+
+**LLM API 并发上限是多数场景下真正的瓶颈**，超出后模型返回 429 限速错误，任务失败而非加速。例如：
+
+| LLM 账号等级 | RPM 上限 | 单任务平均耗时 | 有效并发约 | 有效 Worker 槽 | Pod 上限（Concurrency=4） |
+|------------|---------|------------|---------|-------------|------------------------|
+| OpenAI Tier 1 | 500 | 2 min | ~16 | 16 | 4 |
+| OpenAI Tier 2 | 5,000 | 2 min | ~166 | 166 | 41 |
+| OpenAI Tier 3+ | 10,000+ | 2 min | ~333 | 333 | 83 |
+
+#### 参考部署场景
+
+以下以 `CELERY_WORKER_CONCURRENCY=4`、`API pool_size=5` 为基准（需结合实际 LLM 账号上限，取两者较小值）：
+
+| 场景 | PG max_conn | API Pod | Worker Pod | 总并行槽 | 峰值 DB 连接 | MAX_ACTIVE_JOBS 建议 |
+|------|-------------|---------|-----------|---------|------------|-------------------|
+| 开发 / 测试 | 100 | 1 | 1 | 4 | ~9 | 10~20 |
+| 小型生产 | 200 | 2 | 4 | 16 | ~26 | 30~50 |
+| 中型生产（推荐起点） | 500 | 4 | 8 | 32 | ~52 | 60~100 |
+| 大型生产 | 1,000 | 8 | 20 | 80 | ~120 | 150~250 |
+| 超大型（需 PgBouncer） | 不受 Pod 限制 | 按需 | 按 LLM 上限 | 由 LLM 限速决定 | PgBouncer 管理 | LLM 并发 × 3 |
+
+#### 为什么不能随意设置大 Pod 数
+
+以 `Worker Pod = 100`、`CELERY_WORKER_CONCURRENCY = 4`（总槽 400）为例：
+
+- 峰值需要 400 条 DB 并发连接，PostgreSQL 默认 `max_connections=100` → DB 连接立即耗尽，所有任务报错
+- LLM 账号有效并发 = 30（Tier 1）→ 400 槽中 370 槽空转，实际吞吐等于 30 个槽
+- 每个多余 Pod 消耗 100~300 MB 内存（Celery worker 进程），集群资源浪费
+
+**结论：有效并行上限 = min(DB 连接上限, LLM API 并发上限) / CELERY_WORKER_CONCURRENCY。超出此值增加 Pod 不增加吞吐，只增加资源消耗和故障风险。**
+
+#### 突破 DB 连接上限：引入 PgBouncer
+
+当 Worker Pod 数 × Concurrency 超过 PG 连接上限时，引入 PgBouncer（transaction pooling 模式）而不是修改应用代码：
+
+```
+API / Worker → PgBouncer（transaction pooling）→ PostgreSQL
+（大量应用连接复用为少量真实 PG 连接）
+```
+
+引入 PgBouncer 后，DB 连接约束解除，Worker 扩容上限由 LLM API 并发限制决定。
+
+#### HPA maxReplicas 必须设置上限
+
+HPA 不设上限时，队列突增可能触发扩出超限数量的 Pod，导致 DB 连接耗尽。`maxReplicas` 必须配置：
+
+```
+HPA maxReplicas ≤ min(
+    floor(PG 可用连接数 × 50% / CELERY_WORKER_CONCURRENCY),
+    floor(LLM API 并发上限 / CELERY_WORKER_CONCURRENCY)
+)
+```
 
 ---
 
@@ -441,7 +650,10 @@ def run_recovery():
     #    status=running AND started_at < now - JOB_STALE_RUNNING_SECONDS
 ```
 
-**多 Worker 并发扫描的原子性**：多个 Worker 同时启动时均会扫到同一批孤儿 Job。用原子 CAS（`UPDATE WHERE celery_task_id IS NULL`）抢占投递权，未抢到的 Worker 跳过该 Job。被额外投入队列的消息若被消费，终态守卫负责跳过。
+**多 Worker 并发扫描的双层防线**：多个 Worker 同时启动时均会扫到同一批孤儿 Job，两层保障确保安全：
+
+- **第一层（CAS 主动防御）**：`UPDATE AIJob SET celery_task_id=<new_id> WHERE id=? AND celery_task_id IS NULL`，只有一个 Worker 能更新成功，其余 Worker 因 CAS 失败直接跳过，不重复投递。
+- **第二层（终态守卫兜底）**：若同一 Job 因 CAS 竞态或 4.4 节 Scenario ②（LPUSH 成功但 celery_task_id 未写回）被多次投入队列，Worker 在执行入口检查终态（succeeded/failed），已是终态则直接跳过，不重复执行。
 
 ### 7.2 running 任务的两条恢复路径
 
@@ -649,10 +861,18 @@ class AIJob(Base):
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `CELERY_WORKER_CONCURRENCY` | CPU 核数 | 每个 Worker 进程同时处理的任务数；AI 任务建议 2~4 |
-| `MAX_ACTIVE_JOBS` | 50 | 队列深度软上限（queued+running），超出返回 503；建议 ≥ 总并行槽数 × 2 |
+| `CELERY_WORKER_CONCURRENCY` | CPU 核数 | 单 Pod 同时执行的任务数；AI 任务建议 2~4，扩容靠加 Pod 而非调高此值 |
+| `MAX_ACTIVE_JOBS` | 50 | queued+running 总积压上限，超出返回 503；设为 0 则禁用检查（无上限） |
 
-总并行槽数 = Worker Pod 数 × `CELERY_WORKER_CONCURRENCY`
+关系说明：
+
+```
+总并行槽数  = Worker Pod 数 × CELERY_WORKER_CONCURRENCY  （执行容量）
+MAX_ACTIVE_JOBS                                          （积压上限，含排队+执行）
+
+MAX_ACTIVE_JOBS 必须 ≥ 总并行槽数，否则执行槽有空余时仍会触发 503
+建议 MAX_ACTIVE_JOBS = 总并行槽数 × 2~3（预留排队缓冲）
+```
 
 ### 超时链路
 
@@ -678,7 +898,7 @@ class AIJob(Base):
 
 | 现象 | 排查方向 | 调整旋钮 |
 |------|---------|---------|
-| 调用方频繁收到 503 | count_active_jobs 是否达到上限 | 扩 Worker Pod 数，或临时提高 `MAX_ACTIVE_JOBS` |
+| 调用方频繁收到 503 | count_active_jobs 是否达到上限 | 扩 Worker Pod 数，或临时提高 `MAX_ACTIVE_JOBS`；内部系统可设为 0 禁用 |
 | Worker 不空闲但任务仍积压 | 并发度是否过低 | 提高 `CELERY_WORKER_CONCURRENCY` 或扩 Pod |
 | running 任务长期不结束 | Worker 是否还活着，消息是否在队列 | 重启 Worker Pod 触发启动扫描；或临时降低 `JOB_STALE_RUNNING_SECONDS` |
 | 滚动部署时任务频繁重跑 | `terminationGracePeriodSeconds` 是否小于 `CELERY_TIME_LIMIT` | 见第十一章 |
@@ -704,6 +924,8 @@ class AIJob(Base):
 **Beat 的特殊约束**：Beat 是单例调度器，`replicas` 必须固定为 `1`。多实例运行会导致任务重复投递。Beat 不可用期间，由 Worker 启动扫描（7.1 节）作为保障。
 
 **总并行槽数**：Worker Pod 数 × `CELERY_WORKER_CONCURRENCY`，是系统吞吐上限的核心参数。
+
+**扩缩容操作说明**：在第 4.5 节约束范围内，API Pod 和 Worker Pod 的水平扩缩容是纯运维操作，不需要修改任何代码。HPA `maxReplicas` 必须 ≤ Worker Pod 有效上限，防止自动扩出超出 DB 连接或 LLM 并发限制的 Pod 数量（见 4.5 节）。
 
 ### 11.2 terminationGracePeriodSeconds
 
@@ -747,6 +969,7 @@ AI 任务等待模型响应期间 CPU 接近空闲，**不适合用 CPU 利用�
 - [ ] Worker 启动时触发恢复扫描（7.1）：孤儿 queued Job 重投递 + 僵死 running Job 强制 fail
 - [ ] Callback 签名密钥已配置，接收方已实现签名校验（8.2）
 - [ ] K8s Worker Deployment 的 `terminationGracePeriodSeconds` ≥ `CELERY_TIME_LIMIT` + 60s（11.2）
+- [ ] HPA `maxReplicas` 已按 4.5 节有效上限公式设置，防止自动扩容超出 DB 连接或 LLM 并发上限
 
 ### 推荐项
 
@@ -754,3 +977,5 @@ AI 任务等待模型响应期间 CPU 接近空闲，**不适合用 CPU 利用�
 - [ ] HPA 已配置为使用 Redis 队列长度作为扩缩容指标（11.3）
 - [ ] `MAX_ACTIVE_JOBS` 已按实际并行槽数调整（4.3）：建议 ≥ 总并行槽数 × 2
 - [ ] 如使用 Beat，已确认其作为独立 Deployment 单实例运行（`replicas: 1`，11.1）
+- [ ] 已按 4.5 节参考场景评估当前 PG `max_connections` 和 LLM API 并发上限，确认有效 Worker Pod 上限
+- [ ] 大规模部署（Worker Pod ≥ 20）已评估是否需要引入 PgBouncer（见 4.5 节）
