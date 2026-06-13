@@ -1,4 +1,5 @@
 import logging
+import secrets
 
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -19,7 +20,7 @@ async def require_service_auth(
     if not settings.SERVICE_API_KEY:
         logger.warning("auth_failed reason=service_key_not_configured")
         raise UnauthorizedError()
-    if credentials.credentials != settings.SERVICE_API_KEY:
+    if not secrets.compare_digest(credentials.credentials, settings.SERVICE_API_KEY):
         logger.warning("auth_failed reason=invalid_api_key")
         raise UnauthorizedError()
     return "default"

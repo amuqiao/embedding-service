@@ -24,8 +24,8 @@ async def create_ai_job(
     await db.commit()
     if created:
         celery_result = process_job_task.delay(str(job.id))
-        async with db.begin():
-            await JobRepo.set_celery_task_id(db, job.id, celery_result.id)
+        await JobRepo.set_celery_task_id(db, job.id, celery_result.id)
+        await db.commit()
         await db.refresh(job)
     response.status_code = status.HTTP_202_ACCEPTED
     return create_job_response(job)

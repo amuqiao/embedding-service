@@ -172,13 +172,17 @@ def test_openapi_declares_bearer_auth_for_protected_routes():
     assert {"HTTPBearer": []} in prompt_templates["security"]
 
 
-def test_healthz_matches_health():
+def test_health_endpoints():
     from fastapi.testclient import TestClient
 
     client = TestClient(app)
     health = client.get("/health")
     healthz = client.get("/healthz")
 
+    # /health 是 liveness probe，始终返回 200
     assert health.status_code == 200
-    assert healthz.status_code == 200
-    assert healthz.json() == health.json()
+    assert health.json()["status"] == "ok"
+
+    # /healthz 是 readiness probe，检查 DB/Redis；测试环境无真实依赖，返回状态可为 200 或 503
+    assert healthz.status_code in (200, 503)
+    assert "status" in healthz.json()

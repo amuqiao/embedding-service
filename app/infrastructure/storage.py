@@ -23,7 +23,11 @@ class LocalObjectStorage:
 
     def _path(self, bucket: str, key: str) -> Path:
         clean_key = key.lstrip("/")
-        return self.root / bucket / clean_key
+        resolved = (self.root / bucket / clean_key).resolve()
+        root_resolved = self.root.resolve()
+        if not str(resolved).startswith(str(root_resolved)):
+            raise AppError("INVALID_INPUT", "OSS key contains illegal path traversal", status_code=422)
+        return resolved
 
     def read_text(self, *, bucket: str, key: str, region: str) -> str:
         path = self._path(bucket, key)

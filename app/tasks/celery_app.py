@@ -33,7 +33,7 @@ celery_app.conf.update(
     beat_schedule={
         "cleanup-expired-jobs": {
             "task": "jobs.cleanup_expired",
-            "schedule": crontab(hour=2, minute=0, day_of_month=1),
+            "schedule": crontab(hour=2, minute=0),
         }
     },
 )

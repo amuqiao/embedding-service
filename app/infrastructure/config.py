@@ -87,6 +87,11 @@ class Settings(BaseSettings):
                 f"must be less than JOB_STALE_RUNNING_SECONDS ({self.JOB_STALE_RUNNING_SECONDS}s). "
                 f"Recommended margin: at least 600s."
             )
+        import logging as _logging
+        if not self.CALLBACK_SIGNING_SECRET:
+            _logging.getLogger(__name__).warning(
+                "CALLBACK_SIGNING_SECRET is not configured — callback HMAC signatures will be invalid"
+            )
         return self
 
     @property

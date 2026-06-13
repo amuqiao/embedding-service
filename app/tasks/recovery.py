@@ -7,6 +7,8 @@ from sqlalchemy.pool import NullPool
 
 from app.infrastructure.config import settings
 from app.repositories.job_repo import JobRepo
+from app.services.callbacks import deliver_callback
+from app.services.jobs import get_job_or_404
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +40,23 @@ async def _run_recovery(db) -> dict:
     stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.JOB_STALE_RUNNING_SECONDS)
     stale = await JobRepo.find_stale_running_jobs(db, stale_cutoff)
     for job in stale:
-        await JobRepo.mark_failed(db, job.id, {
+        error_payload = {
             "code": "JOB_TIMEOUT",
             "message": "任务长时间未完成，已强制终止",
             "details": {"started_at": job.started_at.isoformat() if job.started_at else None},
-        })
+        }
+        claimed = await JobRepo.mark_failed_if_running(db, job.id, error_payload)
         await db.commit()
-        failed += 1
-        logger.warning("recovery: force-failed stale running job %s", job.id)
+        if claimed:
+            failed += 1
+            logger.warning("recovery: force-failed stale running job %s", job.id)
+            try:
+                refreshed = await get_job_or_404(db, job.id)
+                await deliver_callback(refreshed)
+            except Exception:
+                logger.exception("recovery: callback delivery failed for stale job %s", job.id)
+        else:
+            logger.info("recovery: stale job %s already handled by peer worker, skipping", job.id)
 
     return {"recovered": recovered, "failed": failed}
 

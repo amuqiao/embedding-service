@@ -1,9 +1,10 @@
 # AI 异步 Job 系统设计规范
 
-**版本**：v1.1 · 最后更新：2026-06-13
+**版本**：v1.2 · 最后更新：2026-06-13
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.2 | 2026-06-13 | 补充 7.1 节：僵死 Job 强制 fail 的 CAS 保护要求（SELECT FOR UPDATE SKIP LOCKED）及 deliver_callback 强制要求；Checklist 同步更新 |
 | v1.1 | 2026-06-13 | 补充 API 创建三步流程（4.4）、水平扩展约束与参考配置（4.5）、MAX_ACTIVE_JOBS 软限制声明、孤儿扫描双层防线说明、Checklist 扩容项 |
 | v1.0 | 2026-06-13 | 初始版本，基于内部项目实践提炼 |
 
@@ -650,10 +651,17 @@ def run_recovery():
     #    status=running AND started_at < now - JOB_STALE_RUNNING_SECONDS
 ```
 
-**多 Worker 并发扫描的双层防线**：多个 Worker 同时启动时均会扫到同一批孤儿 Job，两层保障确保安全：
+**多 Worker 并发扫描——两类 Job 各有 CAS 保护**：
+
+**孤儿 queued Job（重投递）**：多个 Worker 同时启动时均会扫到同一批孤儿 Job，两层保障确保安全：
 
 - **第一层（CAS 主动防御）**：`UPDATE AIJob SET celery_task_id=<new_id> WHERE id=? AND celery_task_id IS NULL`，只有一个 Worker 能更新成功，其余 Worker 因 CAS 失败直接跳过，不重复投递。
 - **第二层（终态守卫兜底）**：若同一 Job 因 CAS 竞态或 4.4 节 Scenario ②（LPUSH 成功但 celery_task_id 未写回）被多次投入队列，Worker 在执行入口检查终态（succeeded/failed），已是终态则直接跳过，不重复执行。
+
+**僵死 running Job（强制 fail）**：同样需要 CAS 保护，防止多 Worker 并发启动时重复 mark_failed 并重复发送 Callback：
+
+- 使用 `SELECT ... FOR UPDATE SKIP LOCKED WHERE status='running'`，只有成功获取行锁的 Worker 才执行 mark_failed + deliver_callback；行已被锁定（另一 Worker 正在处理）则跳过。
+- mark_failed 完成后**必须**调用 deliver_callback，调用方否则永远不会收到该 Job 的终态通知。Callback 失败只记录日志，不中断循环（Callback 失败不改变 Job 终态）。
 
 ### 7.2 running 任务的两条恢复路径
 
@@ -966,7 +974,7 @@ AI 任务等待模型响应期间 CPU 接近空闲，**不适合用 CPU 利用�
 - [ ] Worker 数据库连接使用 NullPool（4.2）
 - [ ] 超时三项约束关系已通过启动时校验（5.5）：`MODEL_CALL_TIMEOUT_SECONDS < SOFT_TIME_LIMIT < TIME_LIMIT < STALE_RUNNING_SECONDS`
 - [ ] 消费入口已实现终态幂等守卫（6.2）：`status in (succeeded, failed)` 时直接跳过
-- [ ] Worker 启动时触发恢复扫描（7.1）：孤儿 queued Job 重投递 + 僵死 running Job 强制 fail
+- [ ] Worker 启动时触发恢复扫描（7.1）：孤儿 queued Job CAS 重投递 + 僵死 running Job CAS 强制 fail + 强制 fail 后必须 deliver_callback
 - [ ] Callback 签名密钥已配置，接收方已实现签名校验（8.2）
 - [ ] K8s Worker Deployment 的 `terminationGracePeriodSeconds` ≥ `CELERY_TIME_LIMIT` + 60s（11.2）
 - [ ] HPA `maxReplicas` 已按 4.5 节有效上限公式设置，防止自动扩容超出 DB 连接或 LLM 并发上限

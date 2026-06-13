@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.exceptions import AppError
+from app.core.logging import set_request_id
 from app.infrastructure.config import settings
 from app.repositories.job_repo import JobRepo
 from app.services.callbacks import deliver_callback
@@ -35,6 +36,7 @@ async def _with_db(coro):
 
 @celery_app.task(name="jobs.process", bind=True, acks_late=True)
 def process_job_task(self, job_id: str):
+    set_request_id(job_id)
     try:
         return asyncio.run(_process(job_id))
     except (SoftTimeLimitExceeded, asyncio.TimeoutError) as exc:
@@ -42,7 +44,10 @@ def process_job_task(self, job_id: str):
         # 每次 self.retry() 启动全新 Celery task，asyncio.wait_for 和 CELERY_SOFT_TIME_LIMIT
         # 均从 0 重新计时；CELERY_MAX_RETRIES=0（默认）表示不重试，直接进入终态。
         if self.request.retries >= settings.CELERY_MAX_RETRIES:
-            asyncio.run(_mark_timeout(job_id))
+            try:
+                asyncio.run(_mark_timeout(job_id))
+            except Exception:
+                logger.exception("job_timeout_cleanup_error job_id=%s", job_id)
             raise
         logger.warning(
             "job_timeout_retry job_id=%s attempt=%d/%d exc=%s",
@@ -57,7 +62,10 @@ def process_job_task(self, job_id: str):
             max_retries=settings.CELERY_MAX_RETRIES,
         )
     except Exception as exc:
-        asyncio.run(_fail(job_id, None, exc))
+        try:
+            asyncio.run(_fail(job_id, None, exc))
+        except Exception:
+            logger.exception("job_fail_cleanup_error job_id=%s", job_id)
         raise
 
 
@@ -71,7 +79,14 @@ async def _process(job_id: str) -> dict[str, Any]:
             logger.warning("job_skipped job_id=%s status=%s", job_id, job.status)
             return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
         logger.info("job_started job_id=%s job_type=%s model_id=%s", job_id, job.job_type, job.model_id)
-        await JobRepo.mark_running(db, job.id)
+        if job.status == "queued":
+            claimed = await JobRepo.mark_running_if_queued(db, job.id)
+            if not claimed:
+                logger.warning("job_claim_failed job_id=%s status=%s", job_id, job.status)
+                return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
+        else:
+            # status == 'running'：Path A 恢复重执行（Worker 崩溃后消息回队）
+            await JobRepo.mark_running(db, job.id)
         await db.commit()
 
         input_text = _load_input_text(job)
@@ -136,35 +151,13 @@ async def _mark_timeout(job_id: str) -> None:
 
 @celery_app.task(name="jobs.cleanup_expired")
 def cleanup_expired_jobs_task() -> dict[str, Any]:
-    """定期清理过期的 Job 记录（expires_at <= now()）
-
-    此任务由 Celery Beat 定时调度，默认每月执行一次（第一天凌晨 2 点）。
-
-    Returns:
-        dict: 包含清理结果统计
-            - deleted_count: 删除的 Job 记录数
-            - status: 执行状态（'success' 或 'error'）
-            - message: 执行信息
-    """
+    """定期清理过期的 Job 记录（expires_at <= now()），由 Celery Beat 每天凌晨 2 点调度。"""
     async def run(db):
         deleted_count = await JobRepo.cleanup_expired_jobs(db)
+        await db.commit()
         return {"deleted_count": deleted_count}
 
-    try:
-        result = asyncio.run(_with_db(run))
-        deleted_count = result.get("deleted_count", 0)
-        message = f"Successfully cleaned up {deleted_count} expired jobs"
-        logger.info(message)
-        return {
-            "deleted_count": deleted_count,
-            "status": "success",
-            "message": message,
-        }
-    except Exception as exc:
-        error_message = f"Failed to cleanup expired jobs: {str(exc)}"
-        logger.error(error_message, exc_info=True)
-        return {
-            "deleted_count": 0,
-            "status": "error",
-            "message": error_message,
-        }
+    result = asyncio.run(_with_db(run))
+    deleted_count = result.get("deleted_count", 0)
+    logger.info("cleanup_expired_jobs_completed deleted_count=%d", deleted_count)
+    return {"deleted_count": deleted_count, "status": "success"}

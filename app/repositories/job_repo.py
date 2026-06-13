@@ -96,6 +96,23 @@ class JobRepo:
             await db.flush()
 
     @staticmethod
+    async def mark_running_if_queued(db: AsyncSession, job_id: uuid.UUID, progress_text: str = "正在处理文本") -> bool:
+        """CAS 原子转移：仅在 status='queued' 时标记 running，防止多 Worker 并发双执行。"""
+        result = await db.execute(
+            text(
+                "UPDATE ai_jobs "
+                "SET status='running', "
+                "progress_percent=GREATEST(COALESCE(progress_percent, 0), 5), "
+                "progress_text=:progress_text, "
+                "started_at=now(), updated_at=now() "
+                "WHERE id=:job_id AND status='queued'"
+            ),
+            {"job_id": str(job_id), "progress_text": progress_text},
+        )
+        await db.flush()
+        return result.rowcount == 1
+
+    @staticmethod
     async def mark_running(db: AsyncSession, job_id: uuid.UUID, progress_text: str = "正在处理文本") -> None:
         job = await JobRepo.get(db, job_id)
         if job:
@@ -146,6 +163,26 @@ class JobRepo:
             job.finished_at = now
             job.updated_at = now
             await db.flush()
+
+    @staticmethod
+    async def mark_failed_if_running(db: AsyncSession, job_id: uuid.UUID, error_payload: dict[str, Any]) -> bool:
+        """CAS 原子转移：仅在 status='running' 时标记 failed，防止并发 recovery 重复处理。"""
+        result = await db.execute(
+            select(AIJob)
+            .where(AIJob.id == job_id, AIJob.status == "running")
+            .with_for_update(skip_locked=True)
+        )
+        job = result.scalar_one_or_none()
+        if not job:
+            return False
+        now = datetime.now(timezone.utc)
+        job.status = "failed"
+        job.progress_text = "处理失败"
+        job.error_payload = error_payload
+        job.finished_at = now
+        job.updated_at = now
+        await db.flush()
+        return True
 
     @staticmethod
     async def create_work_item(
@@ -281,7 +318,7 @@ class JobRepo:
         """删除所有过期的 Job 记录（expires_at <= now）"""
         stmt = delete(AIJob).where(AIJob.expires_at <= func.now())
         result = await db.execute(stmt)
-        await db.commit()
+        await db.flush()
         return result.rowcount
 
     @staticmethod
