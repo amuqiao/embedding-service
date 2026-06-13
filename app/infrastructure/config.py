@@ -81,6 +81,12 @@ class Settings(BaseSettings):
                 f"CELERY_SOFT_TIME_LIMIT ({self.CELERY_SOFT_TIME_LIMIT}s) "
                 f"must be less than CELERY_TIME_LIMIT ({self.CELERY_TIME_LIMIT}s)."
             )
+        if self.CELERY_TIME_LIMIT >= self.JOB_STALE_RUNNING_SECONDS:
+            raise ValueError(
+                f"CELERY_TIME_LIMIT ({self.CELERY_TIME_LIMIT}s) "
+                f"must be less than JOB_STALE_RUNNING_SECONDS ({self.JOB_STALE_RUNNING_SECONDS}s). "
+                f"Recommended margin: at least 600s."
+            )
         return self
 
     @property
