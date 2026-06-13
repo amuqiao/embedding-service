@@ -38,7 +38,7 @@ def process_job_task(self, job_id: str):
     try:
         return asyncio.run(_process(job_id))
     except (SoftTimeLimitExceeded, asyncio.TimeoutError) as exc:
-        # 两类超时（asyncio.wait_for L1 / Celery SIGALRM L2）统一重试策略。
+        # 两类超时（asyncio.wait_for L1 / Celery SIGALRM L3）统一重试策略。
         # 每次 self.retry() 启动全新 Celery task，asyncio.wait_for 和 CELERY_SOFT_TIME_LIMIT
         # 均从 0 重新计时；CELERY_MAX_RETRIES=0（默认）表示不重试，直接进入终态。
         if self.request.retries >= settings.CELERY_MAX_RETRIES:
@@ -75,7 +75,10 @@ async def _process(job_id: str) -> dict[str, Any]:
         await db.commit()
 
         input_text = _load_input_text(job)
-        result = await run_ai_job(job.job_type, job.model_id, job.prompt_payload, input_text)
+        result = await asyncio.wait_for(
+                    run_ai_job(job.job_type, job.model_id, job.prompt_payload, input_text),
+                    timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
+                )
         result_data = _persist_large_artifacts(job, result)
 
         await JobRepo.mark_succeeded(db, job.id, result_data)

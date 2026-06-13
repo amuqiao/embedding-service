@@ -103,14 +103,15 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
         if existing:
             return existing, False
 
-    active = await JobRepo.count_active_jobs(db)
-    if active >= settings.MAX_ACTIVE_JOBS:
-        raise AppError(
-            "QUEUE_FULL",
-            "服务当前繁忙，请稍后重试",
-            status_code=503,
-            details={"active_jobs": active, "limit": settings.MAX_ACTIVE_JOBS},
-        )
+    if settings.MAX_ACTIVE_JOBS > 0:
+        active = await JobRepo.count_active_jobs(db)
+        if active >= settings.MAX_ACTIVE_JOBS:
+            raise AppError(
+                "QUEUE_FULL",
+                "服务当前繁忙，请稍后重试",
+                status_code=503,
+                details={"active_jobs": active, "limit": settings.MAX_ACTIVE_JOBS},
+            )
 
     job = await JobRepo.create(
         db,

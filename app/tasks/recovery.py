@@ -24,10 +24,12 @@ async def _run_recovery(db) -> dict:
     orphans = await JobRepo.find_orphaned_queued_jobs(db, orphan_cutoff)
     for job in orphans:
         from app.tasks.jobs import process_job_task  # 延迟导入避免循环依赖
-        celery_result = process_job_task.delay(str(job.id))
-        claimed = await JobRepo.claim_orphan_for_dispatch(db, job.id, celery_result.id)
+        import uuid as _uuid
+        new_task_id = str(_uuid.uuid4())
+        claimed = await JobRepo.claim_orphan_for_dispatch(db, job.id, new_task_id)
         await db.commit()
         if claimed:
+            process_job_task.apply_async(args=[str(job.id)], task_id=new_task_id)
             recovered += 1
             logger.info("recovery: re-dispatched orphaned job %s", job.id)
         else:
@@ -37,7 +39,7 @@ async def _run_recovery(db) -> dict:
     stale = await JobRepo.find_stale_running_jobs(db, stale_cutoff)
     for job in stale:
         await JobRepo.mark_failed(db, job.id, {
-            "code": "JOB_STALE_RUNNING",
+            "code": "JOB_TIMEOUT",
             "message": "任务长时间未完成，已强制终止",
             "details": {"started_at": job.started_at.isoformat() if job.started_at else None},
         })
