@@ -3,6 +3,7 @@ import uuid
 from typing import Any
 from urllib.parse import urlparse
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError, NotFoundAppError, ValidationAppError
@@ -115,7 +116,11 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
             return existing, False
 
     if settings.MAX_ACTIVE_JOBS > 0:
-        active = await JobRepo.count_active_jobs(db)
+        await db.execute(text("SELECT pg_advisory_lock(hashtext('max_active_jobs_gate'))"))
+        try:
+            active = await JobRepo.count_active_jobs(db)
+        finally:
+            await db.execute(text("SELECT pg_advisory_unlock(hashtext('max_active_jobs_gate'))"))
         if active >= settings.MAX_ACTIVE_JOBS:
             raise AppError(
                 "QUEUE_FULL",

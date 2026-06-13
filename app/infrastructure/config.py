@@ -16,6 +16,11 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str
     DB_SSL: bool = True
+    # API 侧连接池：pool_size × max_overflow × pods 数需 ≤ PG max_connections(默认 100)
+    # 估算：3 API pods × (5+10) = 45 + 30 Worker 并发 = 75，留余量
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_RECYCLE: int = 1800
     SERVICE_API_KEY: str
 
     REDIS_URL: str = "redis://127.0.0.1:26379/0"

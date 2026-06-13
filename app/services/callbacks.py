@@ -15,7 +15,9 @@ from app.services.jobs import _job_to_response
 logger = logging.getLogger(__name__)
 
 
-def _sign(timestamp: str, body: bytes) -> str:
+def _sign(timestamp: str, body: bytes) -> str | None:
+    if not settings.CALLBACK_SIGNING_SECRET:
+        return None
     digest = hmac.new(
         settings.CALLBACK_SIGNING_SECRET.encode("utf-8"),
         timestamp.encode("utf-8") + b"." + body,
@@ -54,7 +56,8 @@ async def deliver_callback(job: AIJob) -> None:
         return
     try:
         _validate_callback_url(url)
-    except ValueError:
+    except ValueError as e:
+        logger.warning("callback_url_invalid job_id=%s url=%s reason=%s", job.id, url, e)
         return
 
     event = "job.succeeded" if job.status == "succeeded" else "job.failed"
@@ -74,8 +77,10 @@ async def deliver_callback(job: AIJob) -> None:
                 "X-AI-Service-Job-Id": str(job.id),
                 "X-AI-Service-Event": event,
                 "X-AI-Service-Timestamp": timestamp,
-                "X-AI-Service-Signature": _sign(timestamp, body),
             }
+            signature = _sign(timestamp, body)
+            if signature:
+                headers["X-AI-Service-Signature"] = signature
             try:
                 response = await client.post(url, content=body, headers=headers)
                 if 200 <= response.status_code < 300:

@@ -21,12 +21,13 @@ async def create_ai_job(
     caller_id: str = Depends(require_service_auth),
 ):
     job, created = await create_job(db, payload, caller_id)
+    task_id = str(uuid.uuid4()) if created else None
+    if task_id:
+        await JobRepo.set_celery_task_id(db, job.id, task_id)
     await db.commit()
-    if created:
-        celery_result = process_job_task.delay(str(job.id))
-        await JobRepo.set_celery_task_id(db, job.id, celery_result.id)
-        await db.commit()
+    if task_id:
         await db.refresh(job)
+        process_job_task.apply_async(args=[str(job.id)], task_id=task_id)
     response.status_code = status.HTTP_202_ACCEPTED
     return create_job_response(job)
 

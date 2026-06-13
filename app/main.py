@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 import uuid
 
@@ -31,11 +32,14 @@ app.add_middleware(
 
 
 _HEALTH_PATHS = {"/health", "/healthz"}
+# 只允许 ASCII 字母、数字、连字符、下划线，最长 128 字符
+_REQUEST_ID_RE = re.compile(r'^[a-zA-Z0-9\-_]{1,128}$')
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        raw_id = request.headers.get("X-Request-ID", "")
+        request_id = raw_id if (raw_id and _REQUEST_ID_RE.match(raw_id)) else str(uuid.uuid4())
         request.state.request_id = request_id
         set_request_id(request_id)
         started = time.monotonic()

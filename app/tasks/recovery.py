@@ -37,6 +37,24 @@ async def _run_recovery(db) -> dict:
         else:
             logger.info("recovery: job %s already claimed by peer worker, skipping", job.id)
 
+    # stuck-dispatched: queued + celery_task_id 非 NULL（commit 后 dispatch 前 crash）
+    # 使用 2x orphan timeout 避免误判刚分配 task_id 但尚未 dispatch 的正常 job。
+    # mark_running_if_queued CAS 保证即使原 task 仍在 Redis，也不会双执行。
+    stuck_cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.JOB_ORPHAN_TIMEOUT_SECONDS * 2)
+    stuck = await JobRepo.find_stuck_dispatched_jobs(db, stuck_cutoff)
+    for job in stuck:
+        from app.tasks.jobs import process_job_task  # 延迟导入避免循环依赖
+        import uuid as _uuid
+        new_task_id = str(_uuid.uuid4())
+        claimed = await JobRepo.claim_stuck_for_dispatch(db, job.id, job.celery_task_id, new_task_id)
+        await db.commit()
+        if claimed:
+            process_job_task.apply_async(args=[str(job.id)], task_id=new_task_id)
+            recovered += 1
+            logger.info("recovery: re-dispatched stuck-dispatched job %s", job.id)
+        else:
+            logger.info("recovery: stuck job %s already re-claimed by peer, skipping", job.id)
+
     stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.JOB_STALE_RUNNING_SECONDS)
     stale = await JobRepo.find_stale_running_jobs(db, stale_cutoff)
     for job in stale:

@@ -270,6 +270,33 @@ class JobRepo:
             await db.flush()
 
     @staticmethod
+    async def find_stuck_dispatched_jobs(db: AsyncSession, created_before: datetime) -> list[AIJob]:
+        """查找 celery_task_id 已设但长时间未执行的 queued Job（dispatch 前 crash 导致 task 未入队）。"""
+        result = await db.execute(
+            select(AIJob).where(
+                AIJob.status == "queued",
+                AIJob.celery_task_id.is_not(None),
+                AIJob.created_at < created_before,
+            )
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def claim_stuck_for_dispatch(
+        db: AsyncSession, job_id: uuid.UUID, old_task_id: str, new_task_id: str
+    ) -> bool:
+        """CAS 替换 celery_task_id：仅在 status='queued' 且 celery_task_id 匹配时成功，防止并发重投。"""
+        result = await db.execute(
+            text(
+                "UPDATE ai_jobs SET celery_task_id = :new_task_id, updated_at = now() "
+                "WHERE id = :job_id AND status = 'queued' AND celery_task_id = :old_task_id"
+            ),
+            {"new_task_id": new_task_id, "job_id": str(job_id), "old_task_id": old_task_id},
+        )
+        await db.flush()
+        return result.rowcount == 1
+
+    @staticmethod
     async def find_orphaned_queued_jobs(db: AsyncSession, created_before: datetime) -> list[AIJob]:
         result = await db.execute(
             select(AIJob).where(
