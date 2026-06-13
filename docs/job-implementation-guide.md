@@ -2,7 +2,7 @@
 
 本文是 `async-job-spec.md` 通用规范在本项目的落地说明。规范中有大量可选项和分支，本文只记录**本项目实际启用的内容**，以及每处选择的依据，方便开发和运维直接对照。
 
-**适用场景**：本地开发排障、生产运维配置、新成员了解 Job 系统。  
+**适用场景**：本地开发排障、生产运维配置、新成员了解 Job 系统。
 **不适用**：通用架构决策、跨项目迁移（查 `async-job-spec.md`）。
 
 ---
@@ -151,7 +151,7 @@ Beat 必须单实例部署（K8s `replicas: 1`），不可与 Worker Deployment 
 
 ### 5.3 进程内定期扫描（未启用）
 
-`async-job-spec.md` §7.3 描述的进程内定期扫描**本项目未配置**。  
+`async-job-spec.md` §7.3 描述的进程内定期扫描**本项目未配置**。
 在 K8s 滚动重启频率正常的情况下，Worker 启动扫描（§5.1）已足够兜底。
 
 ---
@@ -176,7 +176,7 @@ MAX_ACTIVE_JOBS = 50       → 默认，queued+running 总数 ≥ 50 时返回 5
 | 本地开发 | `local` | 读写 `LOCAL_OBJECT_STORAGE_PATH`（默认 `storage/objects/`） |
 | 生产 | `aliyun_oss` | 读写阿里云 OSS，bucket/region/AK 由 env 配置 |
 
-**输入对象**：调用方只传 `oss_key`，AI 能力层用自身配置的 bucket+凭证读取。  
+**输入对象**：调用方只传 `oss_key`，AI 能力层用自身配置的 bucket+凭证读取。
 **输出对象**：AI 能力层按 `OSS_OUTPUT_PREFIX/{job_id}/` 前缀写入，`localized_text` → `localized.txt`，`translated_text` → `translated.txt`。
 
 ---
