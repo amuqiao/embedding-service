@@ -23,6 +23,13 @@
 
 运行时 Prompt 默认配置不直接读取 `docs/prompt`，而是读取 `PROMPT_CONFIG_PATH` 指向的 YAML，默认文件为 `app/infrastructure/novel_loc/prompts.yaml`。
 
+## Job 系统
+
+| 文档 | 用途 |
+|---|---|
+| `job-implementation-guide.md` | **本项目** Job 系统实施说明：执行模式、超时链、恢复机制、错误码、运维速查 |
+| `async-job-spec.md` | 通用 AI 异步 Job 系统设计规范（含所有可选项，本项目实施以上文为准） |
+
 ## 运维与流程
 
 | 文档 | 用途 |
