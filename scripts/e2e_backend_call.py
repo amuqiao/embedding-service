@@ -34,7 +34,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from app.infrastructure.storage import storage as object_storage
+from app.integrations.storage import storage as object_storage
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8100"
 DEFAULT_DATA_DIR = ROOT_DIR / ".data"

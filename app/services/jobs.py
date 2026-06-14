@@ -7,10 +7,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError, NotFoundAppError, ValidationAppError
-from app.infrastructure.config import settings
-from app.infrastructure.model_registry import get_enabled_model
-from app.infrastructure.prompt_templates import get_template
-from app.infrastructure.storage import sha256_digest, storage
+from app.core.config import settings
+from app.core.model_registry import get_enabled_model
+from app.core.prompt_templates import get_template
+from app.integrations.storage import sha256_digest, storage
 from app.models.job import AIJob
 from app.repositories.job_repo import JobRepo
 from app.schemas.jobs import CreateJobRequest, JobResult, JobStatusResponse

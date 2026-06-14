@@ -2,7 +2,7 @@ import json
 import re
 from typing import Any
 
-from app.infrastructure.ai_gateway import TextGenerationResult
+from app.integrations.ai_gateway import TextGenerationResult
 from app.models.job import AIJob
 
 

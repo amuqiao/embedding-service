@@ -2,8 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.infrastructure.config import Settings
-from app.infrastructure import ai_gateway, model_registry
+from app.core.config import Settings
+from app.core import model_registry
+from app.integrations import ai_gateway
 
 
 def _settings_kwargs(**overrides):

@@ -5,7 +5,7 @@ import time
 from celery import Celery
 from celery.signals import worker_ready
 
-from app.infrastructure.config import settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 _recovery_loop_started = False

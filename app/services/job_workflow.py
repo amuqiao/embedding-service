@@ -8,7 +8,7 @@ from app.core.exceptions import AppError
 from app.models.job import AIJob, AIJobWorkItem
 from app.repositories.job_repo import JobRepo
 from app.schemas.jobs import JobResult
-from app.infrastructure.ai_gateway import generate_text
+from app.integrations.ai_gateway import generate_text
 from app.services.job_context import (
     append_context_to_prompt,
     build_chunk_context,

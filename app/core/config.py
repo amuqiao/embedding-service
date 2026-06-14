@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = ""
     DEFAULT_MODEL_ID: str = "gpt-4.1"
-    MODEL_CONFIG_PATH: str = "app/infrastructure/models.yaml"
+    MODEL_CONFIG_PATH: str = "app/core/models.yaml"
     # L1 anchor: asyncio.wait_for hard cut on AI call; L3–L5 are derived automatically.
     MODEL_CALL_TIMEOUT_SECONDS: int = 300
 
@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     NOVEL_LOCALIZATION_CHUNKING_ENABLED: bool = False
     NOVEL_LOCALIZATION_SINGLE_MAX_CHARS: int = 20000
     NOVEL_LOCALIZATION_CHUNK_SIZE: int = 3000  # internal chunk target, rarely changed
-    PROMPT_CONFIG_PATH: str = "app/infrastructure/novel_loc/prompts.yaml"
+    PROMPT_CONFIG_PATH: str = "app/core/novel_loc/prompts.yaml"
 
     LOG_LEVEL: str = Field(default="INFO")
 

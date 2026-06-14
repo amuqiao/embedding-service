@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import require_service_auth
-from app.infrastructure.database import get_db
+from app.core.database import get_db
 from app.repositories.job_repo import JobRepo
 from app.schemas.jobs import CreateJobRequest, CreateJobResponse, JobStatusResponse
 from app.services.jobs import create_job, create_job_response, get_job_response

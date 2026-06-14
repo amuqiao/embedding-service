@@ -4,8 +4,8 @@ import re
 from app.core.exceptions import AppError
 
 logger = logging.getLogger(__name__)
-from app.infrastructure.ai_gateway import generate_text
-from app.infrastructure.prompt_templates import get_output_contract, get_system_prompt
+from app.integrations.ai_gateway import generate_text
+from app.core.prompt_templates import get_output_contract, get_system_prompt
 from app.schemas.jobs import JobResult
 
 

@@ -4,7 +4,7 @@ import uuid
 import pytest
 
 from app.core.exceptions import AppError
-from app.infrastructure.ai_gateway import TextGenerationResult
+from app.integrations.ai_gateway import TextGenerationResult
 from app.models.job import AIJob, AIJobWorkItem
 from app.services.executor import run_ai_job
 from app.services.job_workflow import merge_work_items

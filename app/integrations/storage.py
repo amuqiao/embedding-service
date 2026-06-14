@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Protocol
 
 from app.core.exceptions import AppError
-from app.infrastructure.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
-from app.infrastructure.config import settings
+from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
+from app.core.config import settings
 
 
 def sha256_digest(data: bytes) -> str:

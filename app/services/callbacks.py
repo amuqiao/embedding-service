@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel
 
-from app.infrastructure.config import settings
+from app.core.config import settings
 from app.models.job import AIJob
 from app.services.jobs import _job_to_response
 

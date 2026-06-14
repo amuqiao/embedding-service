@@ -4,7 +4,7 @@ from typing import Any
 
 import yaml
 
-from app.infrastructure.config import settings
+from app.core.config import settings
 from app.schemas.meta import ModelOut, ModelsResponse
 
 

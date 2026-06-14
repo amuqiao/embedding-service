@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
 
-from app.infrastructure.aliyun_oss import AliyunOSSClient, AliyunOSSConfig
+from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig
 
 DEFAULT_TEST_CONTENT = "cms-novel-localize aliyun oss connectivity check\n"
 

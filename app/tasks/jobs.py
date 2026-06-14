@@ -11,7 +11,7 @@ from sqlalchemy.pool import NullPool
 
 from app.core.exceptions import AppError
 from app.core.logging import set_request_id
-from app.infrastructure.config import settings
+from app.core.config import settings
 from app.repositories.job_repo import JobRepo
 from app.services.callbacks import deliver_callback
 from app.services.executor import run_ai_job

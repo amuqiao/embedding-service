@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.infrastructure.config import (
+from app.core.config import (
     Settings,
     _CALLBACK_DELIVERY_WINDOW_BUFFER,
     _CELERY_HARD_TIMEOUT_BUFFER,

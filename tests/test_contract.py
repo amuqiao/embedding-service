@@ -1,7 +1,7 @@
 import yaml
 
-from app.infrastructure.config import settings
-from app.infrastructure.prompt_templates import get_template
+from app.core.config import settings
+from app.core.prompt_templates import get_template
 from app.main import app
 from app.schemas.jobs import CreateJobRequest, JobResult
 from app.services.executor import _prompt_messages

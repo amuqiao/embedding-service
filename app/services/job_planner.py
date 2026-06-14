@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.infrastructure.config import settings
+from app.core.config import settings
 
 
 ExecutionMode = Literal["single", "chunked"]

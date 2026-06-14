@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.infrastructure.config import settings
+from app.core.config import settings
 from app.repositories.job_repo import JobRepo
 
 logger = logging.getLogger(__name__)

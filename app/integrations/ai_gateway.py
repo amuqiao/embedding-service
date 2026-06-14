@@ -4,8 +4,8 @@ from dataclasses import dataclass
 
 import litellm
 
-from app.infrastructure.config import settings
-from app.infrastructure.model_registry import get_enabled_model
+from app.core.config import settings
+from app.core.model_registry import get_enabled_model
 
 if settings.OPENAI_BASE_URL:
     litellm.api_base = settings.OPENAI_BASE_URL
