@@ -1,9 +1,9 @@
 # cms-novel-localize Job 系统实施说明
 
-本文是 `async-job-spec.md` 通用规范在本项目的落地说明。规范中有大量可选项和分支，本文只记录**本项目实际启用的内容**，以及每处选择的依据，方便开发和运维直接对照。
+本文是 [`archive/async-job-spec.md`](archive/async-job-spec.md) 通用规范在本项目的落地说明。规范中有大量可选项和分支，本文只记录**本项目实际启用的内容**，以及每处选择的依据，方便开发和运维直接对照。
 
 **适用场景**：本地开发排障、生产运维配置、新成员了解 Job 系统。
-**不适用**：通用架构决策、跨项目迁移（查 `async-job-spec.md`）。
+**不适用**：通用架构决策、跨项目迁移（查 [`archive/async-job-spec.md`](archive/async-job-spec.md)）。
 
 ---
 
