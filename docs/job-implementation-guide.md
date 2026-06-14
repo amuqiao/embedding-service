@@ -1,4 +1,4 @@
-# cms-novel-localize Job 系统实施说明
+# FastAPI AI Job Template Job 系统实施说明
 
 本文是 [`archive/async-job-spec.md`](archive/async-job-spec.md) 通用规范在本项目的落地说明。规范中有大量可选项和分支，本文只记录**本项目实际启用的内容**，以及每处选择的依据，方便开发和运维直接对照。
 
@@ -24,7 +24,7 @@
 
 ## 二、Job 类型
 
-本项目固定支持三个 job_type，由 `app/infrastructure/novel_loc/prompts.yaml` 定义。
+本项目通过 `WorkflowHandler` 注册表支持多个 `job_type`；内置 `novel_localization` 示例由 `app/workflows/novel_localization/prompts.yaml` 定义。
 
 ### 2.1 novel_localization.step1_localize（本地化）
 
@@ -71,25 +71,28 @@
 
 ## 三、执行模式
 
-### 3.1 Single 模式（当前默认）
+### 3.1 Single 模式
 
 ```
-process_job_task(job_id)
+dispatch_job_task(job_id)
   → mark_running
+  → plan_job 创建 whole work item
+  → execute_work_item_task(whole)
   → load_input_text (OSS 读取)
   → asyncio.wait_for(run_ai_job(), timeout=MODEL_CALL_TIMEOUT_SECONDS)  ← L1
+  → finalize_job_task
   → persist_large_artifacts (OSS 写入 localized.txt / translated.txt)
   → mark_succeeded
   → deliver_callback
 ```
 
-控制开关：`NOVEL_LOCALIZATION_CHUNKING_ENABLED=false`（默认）。
+控制开关：对应 `WorkflowHandler.chunking_enabled=False`（默认）。
 
-### 3.2 Chunked 模式（可选，已实现但默认关闭）
+### 3.2 Chunked 模式
 
-当 `NOVEL_LOCALIZATION_CHUNKING_ENABLED=true` 且输入字符数 > `NOVEL_LOCALIZATION_SINGLE_MAX_CHARS` 时触发：
+当 `WorkflowHandler.chunking_enabled=True` 且输入字符数 > `WorkflowHandler.max_single_chars` 时触发：
 
-- 按 `NOVEL_LOCALIZATION_CHUNK_SIZE` 字符切分
+- 按 `WorkflowHandler.chunk_size` 字符切分
 - step1 额外生成 memory WorkItem（人物/地名/术语一致性）
 - step3 额外生成 scan WorkItem（最终合并扫描）
 - WorkItem 结果汇总后进入 finalize，对外仍返回单一 Job 状态
@@ -245,9 +248,9 @@ T0+24h 后        → Worker recovery loop 删除 expires_at <= now() 的记录
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `NOVEL_LOCALIZATION_CHUNKING_ENABLED` | false | 是否启用分块模式 |
-| `NOVEL_LOCALIZATION_SINGLE_MAX_CHARS` | 20000 | Single 模式字符上限 |
-| `NOVEL_LOCALIZATION_CHUNK_SIZE` | 3000 | 分块目标字符数 |
+| `WorkflowHandler.chunking_enabled` | false | 是否启用分块模式 |
+| `WorkflowHandler.max_single_chars` | 20000 | Single 模式字符上限 |
+| `WorkflowHandler.chunk_size` | 3000 | 分块目标字符数 |
 
 ---
 

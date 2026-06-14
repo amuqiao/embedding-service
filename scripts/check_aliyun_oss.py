@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig
 
-DEFAULT_TEST_CONTENT = "cms-novel-localize aliyun oss connectivity check\n"
+DEFAULT_TEST_CONTENT = "fastapi-ai-job-template aliyun oss connectivity check\n"
 
 
 def load_dotenv(path: Path) -> None:

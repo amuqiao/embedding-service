@@ -35,6 +35,72 @@ async def _with_db(coro):
         await engine.dispose()
 
 
+@celery_app.task(name="jobs.dispatch", bind=True, acks_late=True)
+def dispatch_job_task(self, job_id: str) -> dict[str, Any]:
+    """Plan a job and dispatch its workflow canvas."""
+    set_request_id(job_id)
+    try:
+        return asyncio.run(_dispatch(job_id, self.request.id))
+    except Exception as exc:
+        try:
+            asyncio.run(_fail(job_id, None, exc, self.request.id))
+        except Exception:
+            logger.exception("job_dispatch_fail_cleanup_error job_id=%s", job_id)
+        raise
+
+
+async def _dispatch(job_id: str, celery_task_id: str) -> dict[str, Any]:
+    job_uuid = uuid.UUID(job_id)
+
+    async def run(db):
+        from app.services.job_workflow import build_canvas, plan_job
+
+        job = await get_job_or_404(db, job_uuid)
+        if job.status in ("succeeded", "failed"):
+            logger.warning("job_dispatch_skipped job_id=%s status=%s", job_id, job.status)
+            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
+        if job.celery_task_id != celery_task_id:
+            logger.warning(
+                "job_dispatch_task_id_mismatch job_id=%s message_task_id=%s db_task_id=%s status=%s",
+                job_id, celery_task_id, job.celery_task_id, job.status,
+            )
+            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
+        if job.status == "queued":
+            claimed = await JobRepo.mark_running_if_queued(
+                db,
+                job.id,
+                celery_task_id=celery_task_id,
+                progress_text="正在规划执行策略",
+            )
+            if not claimed:
+                logger.warning("job_dispatch_claim_failed job_id=%s status=%s", job_id, job.status)
+                return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
+            await db.commit()
+        elif job.status != "running":
+            logger.warning("job_dispatch_unexpected_status job_id=%s status=%s", job_id, job.status)
+            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
+
+        job, plan, item_ids = await plan_job(db, job_uuid)
+        canvas = build_canvas(job.id, job.job_type, plan, item_ids)
+        canvas.apply_async()
+        logger.info(
+            "job_workflow_dispatched job_id=%s job_type=%s execution_mode=%s chunk_count=%d",
+            job_id,
+            job.job_type,
+            plan.execution_mode,
+            plan.chunk_count,
+        )
+        return {
+            "job_id": job_id,
+            "status": "dispatched",
+            "job_type": job.job_type,
+            "execution_mode": plan.execution_mode,
+            "chunk_count": plan.chunk_count,
+        }
+
+    return await _with_db(run)
+
+
 @celery_app.task(name="jobs.process", bind=True, acks_late=True)
 def process_job_task(self, job_id: str):
     set_request_id(job_id)
@@ -247,13 +313,16 @@ def execute_work_item_task(self, job_id: str, item_id: str) -> dict:
 
 
 @celery_app.task(name="jobs.fanout_after_mapping", acks_late=True)
-def fanout_after_mapping_task(memory_result: dict, job_id: str, chunk_item_ids: list[str]) -> None:
-    """After memory mapping completes, dispatch all chunk tasks in parallel."""
+def fanout_after_mapping_task(memory_result: dict, job_id: str, chunk_item_ids: list[str]) -> dict[str, Any]:
+    """After memory mapping completes, dispatch chunks and finalize when all chunks finish."""
+    from celery import chord as celery_chord
     from celery import group as celery_group
-    celery_group([
+
+    celery_chord(celery_group([
         execute_work_item_task.s(job_id, item_id)
         for item_id in chunk_item_ids
-    ]).apply_async()
+    ]), finalize_job_task.s(job_id)).apply_async()
+    return {"job_id": job_id, "dispatched_chunks": len(chunk_item_ids)}
 
 
 @celery_app.task(name="jobs.finalize_job", acks_late=True)

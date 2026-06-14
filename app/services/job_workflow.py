@@ -14,7 +14,7 @@ from app.services.job_context import (
     project_memory_from_job,
 )
 from app.services.executor import run_ai_job
-from app.services.job_planner import JobPlan, build_job_plan
+from app.services.job_planner import JobPlan, build_job_plan, job_plan_from_payload
 from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404
 
 
@@ -58,6 +58,23 @@ async def plan_job(db: AsyncSession, job_id: uuid.UUID) -> tuple[AIJob, JobPlan,
     job = await get_job_or_404(db, job_id)
     if job.celery_task_id:
         await JobRepo.mark_running(db, job_id, celery_task_id=job.celery_task_id, progress_text="正在规划执行策略")
+    existing_items = await JobRepo.list_work_items(db, job_id)
+    if job.execution_plan and existing_items:
+        plan = job_plan_from_payload(job.execution_plan)
+        item_ids = {f"{item.kind}:{item.chunk_index}": item.id for item in existing_items}
+        expected_keys = {f"{item.kind}:{item.chunk_index}" for item in plan.work_items}
+        missing_keys = sorted(expected_keys - set(item_ids))
+        if missing_keys:
+            raise RuntimeError(f"execution plan missing work items: {missing_keys}")
+        await JobRepo.update_progress(
+            db,
+            job_id,
+            progress_percent=max(job.progress_percent or 0, 10),
+            progress_text=f"复用 {plan.execution_mode} 执行计划",
+        )
+        await db.commit()
+        await db.refresh(job)
+        return job, plan, item_ids
     input_text = _load_input_text(job)
     plan = build_job_plan(job.job_type, input_text)
     item_ids = await create_work_items(db, job, plan)
@@ -89,7 +106,14 @@ async def execute_work_item(
     item = await JobRepo.get_work_item(db, item_id)
     if not item:
         raise RuntimeError(f"work item not found: {item_id}")
-    await JobRepo.mark_work_item_running(db, item_id, celery_task_id=celery_task_id)
+    claimed = await JobRepo.claim_work_item_for_execution(db, item_id, celery_task_id=celery_task_id)
+    if not claimed:
+        return {
+            "work_item_id": str(item_id),
+            "kind": item.kind,
+            "chunk_index": item.chunk_index,
+            "status": "skipped",
+        }
     await JobRepo.update_progress(db, job_id, progress_percent=30, progress_text=f"正在执行 {item.kind}")
     await db.commit()
 
@@ -102,8 +126,13 @@ async def execute_work_item(
         prompt_payload = job.prompt_payload
         if item.kind == "chunk":
             memory = project_memory_from_job(job)
-            if job.job_type == "novel_localization.step1_localize":
-                memory = _first_result_value(await JobRepo.list_work_items(db, job_id), "memory", "project_memory")
+            from app.core import workflow_registry
+            handler = workflow_registry.get(job.job_type)
+            if handler.canvas_pattern == "memory_fanout":
+                memory = (
+                    _first_result_value(await JobRepo.list_work_items(db, job_id), "memory", "project_memory")
+                    or memory
+                )
             context_text = build_chunk_context(
                 memory=memory,
                 chunk_index=item.chunk_index,
@@ -129,11 +158,25 @@ async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
             status_code=500,
             details={"failed_items": [str(item.id) for item in failed]},
         )
+    pending = [item for item in items if item.kind != "merge" and item.status != "succeeded"]
+    if pending:
+        await JobRepo.update_progress(
+            db,
+            job_id,
+            progress_percent=max(job.progress_percent or 0, 80),
+            progress_text="等待分片执行完成",
+        )
+        await db.commit()
+        return {
+            "job_id": str(job_id),
+            "status": "waiting",
+            "pending_items": [str(item.id) for item in pending],
+        }
 
     result = merge_work_items(job, items)
     result_payload = _persist_large_artifacts(job, result)
     for item in items:
-        if item.kind == "merge" and item.status == "queued":
+        if item.kind == "merge" and item.status in ("queued", "running"):
             await JobRepo.mark_work_item_succeeded(
                 db,
                 item.id,

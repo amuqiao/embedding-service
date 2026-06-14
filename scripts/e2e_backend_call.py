@@ -45,6 +45,7 @@ PREFERRED_OPENAI_MODELS = ("gpt-4o-mini", "gpt-4o", "gpt-4.1")
 @dataclass(frozen=True)
 class Config:
     base_url: str
+    api_prefix: str
     service_api_key: str
     input_file: Path
     model_id: str | None
@@ -61,6 +62,10 @@ class Config:
     callback_port: int
     callback_wait_seconds: int
     callback_signing_secret: str
+
+
+def api_path(config: Config, suffix: str) -> str:
+    return f"{config.api_prefix}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -296,6 +301,7 @@ def require_error(response: httpx.Response, *, status_code: int, code: str, labe
 
 def validate_meta_contract(
     *,
+    config: Config,
     client: httpx.Client,
     headers: dict[str, str],
     models_body: dict[str, Any],
@@ -305,7 +311,7 @@ def validate_meta_contract(
     healthz = client.get("/healthz")
     healthz.raise_for_status()
 
-    unauthorized = client.get("/api/v1/novel-localization-ai/models")
+    unauthorized = client.get(api_path(config, "/models"))
     require_error(unauthorized, status_code=401, code="UNAUTHORIZED", label="未鉴权 models 已拒绝")
 
     model_ids = {item.get("id") for item in models_body.get("models") or []}
@@ -351,7 +357,7 @@ def run_create_job_contract_checks(
         write_source=False,
     )
     require_error(
-        client.post("/api/v1/novel-localization-ai/jobs", headers=headers, json=payload),
+        client.post(api_path(config, "/jobs"), headers=headers, json=payload),
         status_code=422,
         code="MODEL_NOT_AVAILABLE",
         label="非法 model_id 已拒绝",
@@ -368,7 +374,7 @@ def run_create_job_contract_checks(
     )
     payload["job_type"] = "novel_localization.unknown"
     require_error(
-        client.post("/api/v1/novel-localization-ai/jobs", headers=headers, json=payload),
+        client.post(api_path(config, "/jobs"), headers=headers, json=payload),
         status_code=422,
         code="INVALID_JOB_TYPE",
         label="非法 job_type 已拒绝",
@@ -384,7 +390,7 @@ def run_create_job_contract_checks(
         write_source=False,
     )
     require_error(
-        client.post("/api/v1/novel-localization-ai/jobs", headers=headers, json=payload),
+        client.post(api_path(config, "/jobs"), headers=headers, json=payload),
         status_code=422,
         code="INVALID_INPUT",
         label="缺失 prompt block 已拒绝",
@@ -401,7 +407,7 @@ def run_create_job_contract_checks(
         write_source=False,
     )
     require_error(
-        client.post("/api/v1/novel-localization-ai/jobs", headers=headers, json=payload),
+        client.post(api_path(config, "/jobs"), headers=headers, json=payload),
         status_code=422,
         code="INVALID_INPUT",
         label="重复 prompt block 已拒绝",
@@ -418,7 +424,7 @@ def run_create_job_contract_checks(
     )
     payload["source"]["oss"]["content_type"] = "application/json"
     require_error(
-        client.post("/api/v1/novel-localization-ai/jobs", headers=headers, json=payload),
+        client.post(api_path(config, "/jobs"), headers=headers, json=payload),
         status_code=422,
         code="INVALID_INPUT",
         label="非法 content_type 已拒绝",
@@ -713,7 +719,7 @@ def submit_stage(
         print(f"[{stage_label(stage)}] client_request_id:", payload["client_request_id"])
         return StageResult(stage=stage, job_id="", status="dry_run", output_paths=[], final_body={})
 
-    created = client.post("/api/v1/novel-localization-ai/jobs", headers=headers, json=payload)
+    created = client.post(api_path(config, "/jobs"), headers=headers, json=payload)
     if created.status_code != 202:
         print(f"[{stage_label(stage)}] 错误 {created.status_code}: {created.text}")
         created.raise_for_status()
@@ -826,14 +832,14 @@ def call_flow(config: Config, callback_receiver: CallbackReceiver | None) -> tup
         health_body = health.json()
         print("健康检查 health:", health_body)
 
-        models = client.get("/api/v1/novel-localization-ai/models", headers=headers)
+        models = client.get(api_path(config, "/models"), headers=headers)
         models.raise_for_status()
         models_body = models.json()
         model_id = select_model(models_body, config.model_id)
         print("输入文件 input_file:", config.input_file)
         print("模型 model_id:", model_id)
 
-        templates = client.get("/api/v1/novel-localization-ai/prompt-templates", headers=headers)
+        templates = client.get(api_path(config, "/prompt-templates"), headers=headers)
         templates.raise_for_status()
         templates_body = templates.json()
         save_meta_trace(
@@ -846,6 +852,7 @@ def call_flow(config: Config, callback_receiver: CallbackReceiver | None) -> tup
 
         if config.contract_check:
             validate_meta_contract(
+                config=config,
                 client=client,
                 headers=headers,
                 models_body=models_body,
@@ -903,6 +910,10 @@ def call_flow(config: Config, callback_receiver: CallbackReceiver | None) -> tup
 def parse_args() -> Config:
     parser = argparse.ArgumentParser(description="模拟后端调用，验证小说本地化服务完整多阶段链路。")
     parser.add_argument("--base-url", default=os.getenv("BASE_URL", DEFAULT_BASE_URL))
+    parser.add_argument(
+        "--api-prefix",
+        default=os.getenv("SERVICE_API_PREFIX") or load_dotenv_value("SERVICE_API_PREFIX") or "/api/v1/ai-jobs",
+    )
     parser.add_argument("--service-api-key", default=default_service_api_key())
     parser.add_argument("--input-file", type=Path, default=None)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
@@ -942,6 +953,7 @@ def parse_args() -> Config:
 
     return Config(
         base_url=args.base_url,
+        api_prefix=args.api_prefix.rstrip("/"),
         service_api_key=args.service_api_key,
         input_file=input_file,
         model_id=args.model_id,

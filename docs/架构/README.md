@@ -1,8 +1,8 @@
 # 架构文档
 
-本目录记录 `cms-novel-localize` 的稳定架构说明。当前入口是：
+本目录记录 FastAPI AI Job Template 的稳定架构说明。当前入口是：
 
-- [架构总览](架构总览.md)：服务定位、边界、API、Job 生命周期、异步执行、Callback、恢复机制、数据模型和扩展边界。
+- [架构总览](架构总览.md)：服务定位、边界、API、Job 生命周期、异步执行、Callback、恢复机制、数据模型和扩展边界；当前仍包含内置 `novel_localization` 示例细节，后续应继续抽离通用机制与示例业务。
 - [生产就绪性评审](production-readiness-review.md)：基于当前代码区分已具备能力、生产前置条件和仍缺失的验证证据。
 
 ## 阅读顺序

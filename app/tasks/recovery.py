@@ -39,13 +39,13 @@ async def _run_recovery(db) -> dict:
             limit=settings.JOB_RECOVERY_BATCH_SIZE,
         )
         for job in orphans:
-            from app.tasks.jobs import process_job_task  # 延迟导入避免循环依赖
+            from app.tasks.jobs import dispatch_job_task  # 延迟导入避免循环依赖
             import uuid as _uuid
             new_task_id = str(_uuid.uuid4())
             claimed = await JobRepo.claim_orphan_for_dispatch(db, job.id, new_task_id)
             await db.commit()
             if claimed:
-                process_job_task.apply_async(args=[str(job.id)], task_id=new_task_id)
+                dispatch_job_task.apply_async(args=[str(job.id)], task_id=new_task_id)
                 await JobRepo.mark_celery_published(db, job.id, new_task_id)
                 await db.commit()
                 recovered += 1
@@ -60,13 +60,13 @@ async def _run_recovery(db) -> dict:
             limit=settings.JOB_RECOVERY_BATCH_SIZE,
         )
         for job in unpublished:
-            from app.tasks.jobs import process_job_task  # 延迟导入避免循环依赖
+            from app.tasks.jobs import dispatch_job_task  # 延迟导入避免循环依赖
             import uuid as _uuid
             new_task_id = str(_uuid.uuid4())
             claimed = await JobRepo.claim_unpublished_for_dispatch(db, job.id, job.celery_task_id, new_task_id)
             await db.commit()
             if claimed:
-                process_job_task.apply_async(args=[str(job.id)], task_id=new_task_id)
+                dispatch_job_task.apply_async(args=[str(job.id)], task_id=new_task_id)
                 await JobRepo.mark_celery_published(db, job.id, new_task_id)
                 await db.commit()
                 recovered += 1

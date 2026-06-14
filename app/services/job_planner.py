@@ -37,6 +37,23 @@ class JobPlan:
         }
 
 
+def job_plan_from_payload(payload: dict[str, Any]) -> JobPlan:
+    return JobPlan(
+        execution_mode=payload["execution_mode"],
+        chunk_count=payload["chunk_count"],
+        chunk_registry=list(payload["chunk_registry"]),
+        work_items=[
+            PlannedWorkItem(
+                name=item["name"],
+                kind=item["kind"],
+                chunk_index=item["chunk_index"],
+                input_payload=item.get("input_payload"),
+            )
+            for item in payload["work_items"]
+        ],
+    )
+
+
 def _count_chars(text: str) -> int:
     return sum(1 for char in text if not char.isspace())
 

@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.repositories.job_repo import JobRepo
 from app.schemas.jobs import CreateJobRequest, CreateJobResponse, JobStatusResponse
 from app.services.jobs import create_job, create_job_response, get_job_response
-from app.tasks.jobs import process_job_task
+from app.tasks.jobs import dispatch_job_task
 
 router = APIRouter(tags=["jobs"])
 
@@ -27,7 +27,7 @@ async def create_ai_job(
     await db.commit()
     if task_id:
         await db.refresh(job)
-        process_job_task.apply_async(args=[str(job.id)], task_id=task_id)
+        dispatch_job_task.apply_async(args=[str(job.id)], task_id=task_id)
         await JobRepo.mark_celery_published(db, job.id, task_id)
         await db.commit()
     response.status_code = status.HTTP_202_ACCEPTED

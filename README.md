@@ -1,6 +1,6 @@
-# cms-novel-localize
+# FastAPI AI Job Template
 
-AI Job 执行后端通用模板服务。服务只负责模型执行、异步 Job、产物写入对象存储、状态查询和 Callback，不承担用户系统、项目管理、前端页面状态或业务步骤编排。新的 Job 类型通过插件机制接入：在 `app/core/workflow_registry.py` 中定义的 `WorkflowHandler` 基类派生子类，并在启动时通过 `workflow_registry.register()` 注册；小说本地化作为内置示例 workflow，实现在 `app/workflows/novel_localization/handler.py`。
+FastAPI AI Job 执行后端模板。服务只负责模型执行、异步 Job、产物写入对象存储、状态查询和 Callback，不承担用户系统、项目管理、前端页面状态或业务步骤编排。新的 Job 类型通过 `WorkflowHandler` 接入，并在 `app/workflows/register.py` 的统一入口注册；`novel_localization` 是内置示例 workflow，实现在 `app/workflows/novel_localization/handler.py`。
 
 ## 本地启动
 
@@ -55,7 +55,7 @@ AI Job 执行后端通用模板服务。服务只负责模型执行、异步 Job
 
 API 前缀由 `SERVICE_API_PREFIX` 配置，默认是 `/api/v1/ai-jobs`。
 
-Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/workflows/novel_localization/prompts.yaml`。该 YAML 是运行时 Prompt 的唯一默认配置源，定义各 `job_type` 的 `system/user/work_note` 默认值和运行时输出契约。
+Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是内置示例 `app/workflows/novel_localization/prompts.yaml`。该 YAML 是运行时 Prompt 的默认配置源，定义各 `job_type` 的 `system/user/work_note` 默认值和运行时输出契约。
 
 模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML，配置项包括对外 `model_id`、LiteLLM model id、上下文窗口、所需环境变量和模型调用参数。
 
@@ -127,7 +127,7 @@ OSS_PUBLIC_ENDPOINT=
 - `test`：运行本地 pytest。
 - `smoke`：对已运行 API 执行真实模型短链路验证。
 - `workflow-smoke`：使用真实模型和放大输入验证服务内部自动分块、Celery canvas 和 merge。
-- `e2e`：从 `.data` 读取 `.txt`，使用真实模型模拟调用方请求，枚举 `health`、`models`、`prompt-templates`、`jobs`、轮询和 callback，并依次验证本地化、校验、翻译三个 Job 的 artifact 契约。
+- `e2e`：从 `.data` 读取 `.txt`，使用真实模型模拟调用方请求，枚举 `health`、`models`、`prompt-templates`、`jobs`、轮询和 callback，并用内置 `novel_localization` 示例 workflow 验证 artifact 契约。
 - `check`：运行脚本语法检查和 pytest。
 
 脚本只面向本地开发环境，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
@@ -142,7 +142,7 @@ OSS_PUBLIC_ENDPOINT=
 ./scripts/dev.sh stop
 ```
 
-`e2e` 默认会启动本地 callback receiver，并校验 callback body、header、签名与轮询终态一致；如只想跑旧的三阶段主链路，可追加 `--skip-contract-check`；如只想验证 meta 和 `POST /jobs` 错误请求契约、不创建真实模型 Job，可追加 `--contract-only`。完成后会打印本地对象存储中的 `localized.txt`、`translated.txt` 和 `e2e_trace/e2e_report.json` 路径，并在 `e2e_trace/` 下按阶段保存 `request.json`、`create_response.json`、`final_response.json`、`callback.json` 和主要 artifact 文本，便于回溯分析。
+`e2e` 默认会启动本地 callback receiver，并校验 callback body、header、签名与轮询终态一致；如只想跑示例 workflow 主链路，可追加 `--skip-contract-check`；如只想验证 meta 和 `POST /jobs` 错误请求契约、不创建真实模型 Job，可追加 `--contract-only`。完成后会打印本地对象存储中的示例 artifact 和 `e2e_trace/e2e_report.json` 路径，并在 `e2e_trace/` 下按阶段保存 `request.json`、`create_response.json`、`final_response.json`、`callback.json` 和主要 artifact 文本，便于回溯分析。
 
 验证 Job 内部 workflow 会调用真实模型，可能产生费用：
 
@@ -154,6 +154,7 @@ OSS_PUBLIC_ENDPOINT=
 
 ## 说明文档
 
+- [模板使用指南](docs/template-usage.md)
+- [文档导航](docs/README.md)
 - [架构总览](docs/架构/架构总览.md)
 - [部署与发布手册](docs/部署与发布手册.md)
-- [独立服务抽取与流程说明](docs/独立服务抽取与流程说明.md)

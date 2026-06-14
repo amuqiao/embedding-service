@@ -26,7 +26,7 @@
 ```text
 调用方
   │
-  │ POST /api/v1/novel-localization-ai/jobs
+  │ POST /api/v1/ai-jobs/jobs
   ▼
 FastAPI API
   ├─ Bearer token 鉴权
@@ -35,13 +35,14 @@ FastAPI API
   ├─ MAX_ACTIVE_JOBS 入口软背压
   ├─ 创建 ai_jobs(status=queued)
   ├─ 写入 celery_task_id 并提交 DB
-  └─ apply_async 投递 jobs.process，成功后记录 celery_published_at
+  └─ apply_async 投递 jobs.dispatch，成功后记录 celery_published_at
         │
         ▼
 Celery Worker
-  ├─ 按 job_id + celery_task_id claim queued/running Job
-  ├─ 读取 OSS 输入
-  ├─ 调用模型
+  ├─ 按 job_id + celery_task_id claim queued Job
+  ├─ 规划或复用 execution_plan / work items
+  ├─ 按 canvas pattern 投递 work item
+  ├─ 执行模型调用
   ├─ 写回大文本 artifact
   ├─ CAS 标记 succeeded / failed
   └─ 投递终态 Callback
@@ -232,7 +233,7 @@ celery_time_limit
 | `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` | `300` | L3 软超时相对 L1 的缓冲。 | 派生 `celery_soft_time_limit`，推荐不少于 300 秒。 |
 | `CELERY_HARD_TIMEOUT_BUFFER_SECONDS` | `60` | L4 硬超时相对 L3 的缓冲。 | 派生 `celery_time_limit`，推荐不少于 60 秒。 |
 | `JOB_STALE_RUNNING_BUFFER_SECONDS` | `600` | L5 stale 扫描相对 L4 的缓冲。 | 派生 `job_stale_running_seconds`，推荐不少于 600 秒。 |
-| `app/infrastructure/models.yaml` 的 `generation.num_retries` | `0` | 模型 SDK 内部重试次数。 | 默认保持 0，避免单次 Job 因 SDK 自动重试增加费用和耗时。 |
+| `app/core/models.yaml` 的 `generation.num_retries` | `0` | 模型 SDK 内部重试次数。 | 默认保持 0，避免单次 Job 因 SDK 自动重试增加费用和耗时。 |
 | `CELERY_MAX_RETRIES` | `0` | Celery 超时重试次数。 | 模型费用敏感时保持 0。 |
 | `CELERY_RETRY_DELAY` | `60` | Celery 重试间隔。 | 仅 `CELERY_MAX_RETRIES > 0` 时有意义。 |
 
@@ -351,7 +352,7 @@ MAX_ACTIVE_JOBS=50  # 灰度放量；生产排队目标可单独提高
 | 极端 broker 丢消息自动恢复 | 增加 `celery_published_at IS NOT NULL` 且长期 queued 的补偿扫描。 |
 | 长时间深队列 | 调整 TTL 和清理策略，只清理终态 Job。 |
 | Callback 域名安全策略 | 增加 callback domain allowlist 或 DNS 解析后私网拦截。 |
-| 分块 workflow 上生产 | 将 `NOVEL_LOCALIZATION_CHUNKING_ENABLED=true` 作为独立上线项做恢复、成本和回归验证。 |
+| 分块 workflow 上生产 | 将对应 `WorkflowHandler.chunking_enabled=true` 作为独立上线项做恢复、成本和回归验证。 |
 | 30+ 并发承诺 | 建立目标环境压测脚本、容量模型、成功率和 P95/P99 报告。 |
 
 ## 十、验证入口

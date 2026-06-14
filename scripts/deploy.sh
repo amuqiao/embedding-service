@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy.sh - cms-novel-localize 部署形态入口
+# deploy.sh - FastAPI AI Job Template 部署形态入口
 #
 # 维护的 3 种模式：
 #   local         宿主机运行 api/worker，docker compose 只提供 postgres/redis；入口是 scripts/dev.sh。
@@ -10,7 +10,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-.env}"
-PROJECT_NAME="${COMPOSE_PROJECT_NAME:-cms-novel-localize}"
+PROJECT_NAME="${COMPOSE_PROJECT_NAME:-fastapi-ai-job-template}"
 
 cd "$ROOT_DIR"
 

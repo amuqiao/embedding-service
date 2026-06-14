@@ -73,7 +73,7 @@ runtime_prompt_blocks
 ```json
 {
   "status": "ok",
-  "service": "novel-localization-ai",
+  "service": "ai-job-service",
   "version": "1.0.0"
 }
 ```
@@ -285,7 +285,7 @@ AI 能力层运行时会按 job_type 追加输出格式契约，确保模型输�
 {
   "job_id": "uuid",
   "status": "queued",
-  "status_url": "/api/v1/novel-localization-ai/jobs/uuid",
+  "status_url": "/api/v1/ai-jobs/jobs/uuid",
   "created_at": "datetime"
 }
 ```

@@ -295,6 +295,36 @@ class JobRepo:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def claim_work_item_for_execution(
+        db: AsyncSession,
+        item_id: uuid.UUID,
+        *,
+        celery_task_id: str | None,
+    ) -> bool:
+        result = await db.execute(
+            select(AIJobWorkItem)
+            .where(AIJobWorkItem.id == item_id)
+            .with_for_update(skip_locked=True)
+        )
+        item = result.scalar_one_or_none()
+        if not item:
+            return False
+        if item.status == "running" and item.celery_task_id == celery_task_id:
+            item.updated_at = datetime.now(timezone.utc)
+            await db.flush()
+            return True
+        if item.status != "queued":
+            return False
+        now = datetime.now(timezone.utc)
+        item.status = "running"
+        item.started_at = now
+        item.updated_at = now
+        if celery_task_id:
+            item.celery_task_id = celery_task_id
+        await db.flush()
+        return True
+
+    @staticmethod
     async def mark_work_item_running(
         db: AsyncSession,
         item_id: uuid.UUID,

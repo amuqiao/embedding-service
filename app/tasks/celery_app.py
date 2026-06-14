@@ -37,8 +37,8 @@ celery_app.conf.update(
 
 # Register workflow handlers at module load time so both the API and worker
 # processes have them available before any task executes.
-from app.workflows.novel_localization.handler import register_all as _register_novel_localization
-_register_novel_localization()
+from app.workflows.register import register_all_workflows
+register_all_workflows()
 
 
 def _run_recovery_once() -> None:

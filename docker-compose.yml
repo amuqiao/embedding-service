@@ -4,13 +4,13 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: novel_localize
+      POSTGRES_DB: ai_jobs
     ports:
       - "25432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d novel_localize"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_jobs"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -32,7 +32,7 @@ services:
     env_file:
       - ${ENV_FILE:-.env}
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/novel_localize
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_jobs
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
     command: ["alembic", "upgrade", "head"]
@@ -50,7 +50,7 @@ services:
       - ${ENV_FILE:-.env}
     command: ["/app/start-api.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/novel_localize
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_jobs
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
       API_HOST: 0.0.0.0
@@ -86,7 +86,7 @@ services:
       - ${ENV_FILE:-.env}
     command: ["/app/start-worker.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/novel_localize
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_jobs
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
     volumes:

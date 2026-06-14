@@ -12,7 +12,7 @@ from app.core.config import (
 
 def _settings_kwargs(**overrides):
     values = {
-        "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/novel_localize",
+        "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/ai_jobs",
         "SERVICE_API_KEY": "test-token",
     }
     values.update(overrides)

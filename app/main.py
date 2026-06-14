@@ -14,9 +14,9 @@ from app.api.routes import health, jobs, meta
 from app.core.exceptions import AppError
 from app.core.logging import configure_logging, set_request_id
 from app.core.config import settings
-from app.workflows.novel_localization.handler import register_all as _register_novel_localization
+from app.workflows.register import register_all_workflows
 
-_register_novel_localization()
+register_all_workflows()
 
 configure_logging()
 

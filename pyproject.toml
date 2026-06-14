@@ -1,7 +1,7 @@
 [project]
-name = "cms-novel-localize"
+name = "fastapi-ai-job-template"
 version = "0.1.0"
-description = "Novel localization AI capability service"
+description = "FastAPI AI job execution backend template"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.111.0",

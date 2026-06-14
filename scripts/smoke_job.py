@@ -27,6 +27,11 @@ def load_dotenv_value(key: str) -> str | None:
 
 
 SERVICE_API_KEY = os.getenv("SERVICE_API_KEY") or load_dotenv_value("SERVICE_API_KEY") or "dev-service-key"
+SERVICE_API_PREFIX = (
+    os.getenv("SERVICE_API_PREFIX")
+    or load_dotenv_value("SERVICE_API_PREFIX")
+    or "/api/v1/ai-jobs"
+).rstrip("/")
 OUTPUT_BUCKET = os.getenv("OSS_BUCKET") or load_dotenv_value("OSS_BUCKET") or "local-dev"
 OUTPUT_REGION = os.getenv("OSS_REGION") or load_dotenv_value("OSS_REGION") or "local"
 
@@ -64,12 +69,12 @@ def main() -> int:
         health.raise_for_status()
         print("health:", health.json())
 
-        models = client.get("/api/v1/novel-localization-ai/models", headers=headers)
+        models = client.get(f"{SERVICE_API_PREFIX}/models", headers=headers)
         models.raise_for_status()
         default_model_id = models.json()["default_model_id"]
         print("default_model_id:", default_model_id)
 
-        templates = client.get("/api/v1/novel-localization-ai/prompt-templates", headers=headers)
+        templates = client.get(f"{SERVICE_API_PREFIX}/prompt-templates", headers=headers)
         templates.raise_for_status()
         step1 = next(
             item for item in templates.json()["job_types"]
@@ -89,7 +94,7 @@ def main() -> int:
             "callback": {"url": "http://127.0.0.1:9/callback", "events": ["job.succeeded", "job.failed"]},
             "prompt": {"blocks": blocks},
         }
-        created = client.post("/api/v1/novel-localization-ai/jobs", headers=headers, json=payload)
+        created = client.post(f"{SERVICE_API_PREFIX}/jobs", headers=headers, json=payload)
         created.raise_for_status()
         job = created.json()
         print("created:", job)

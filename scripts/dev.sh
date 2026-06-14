@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dev.sh - cms-novel-localize 本地开发入口脚本
+# dev.sh - FastAPI AI Job Template 本地开发入口脚本
 #
 # 用法：./scripts/dev.sh <command> [service]
 # 命令：bootstrap, start, stop, restart, status, logs, migrate, test, smoke, workflow-smoke, e2e, check, help
@@ -64,7 +64,7 @@ usage() {
 
 服务：
   api       FastAPI 服务，URL: ${API_URL}，文档: ${API_DOCS_URL}，OpenAPI: ${API_OPENAPI_URL}，健康检查: ${API_HEALTH_URL}
-  worker    Celery worker，处理 jobs.process 异步任务
+  worker    Celery worker，处理 jobs.dispatch 及 work item 异步任务
             本地使用 solo pool，避免 macOS/Python 3.13 下 prefork 调用 OpenAI 时崩溃。
 
 命令：
