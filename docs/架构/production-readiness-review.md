@@ -232,7 +232,7 @@ celery_time_limit
 | `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` | `300` | L3 软超时相对 L1 的缓冲。 | 派生 `celery_soft_time_limit`，推荐不少于 300 秒。 |
 | `CELERY_HARD_TIMEOUT_BUFFER_SECONDS` | `60` | L4 硬超时相对 L3 的缓冲。 | 派生 `celery_time_limit`，推荐不少于 60 秒。 |
 | `JOB_STALE_RUNNING_BUFFER_SECONDS` | `600` | L5 stale 扫描相对 L4 的缓冲。 | 派生 `job_stale_running_seconds`，推荐不少于 600 秒。 |
-| `MODEL_CALL_MAX_RETRIES` | `0` | 模型 SDK 内部重试次数。 | 默认保持 0，避免单次 Job 因 SDK 自动重试增加费用和耗时。 |
+| `app/infrastructure/models.yaml` 的 `generation.num_retries` | `0` | 模型 SDK 内部重试次数。 | 默认保持 0，避免单次 Job 因 SDK 自动重试增加费用和耗时。 |
 | `CELERY_MAX_RETRIES` | `0` | Celery 超时重试次数。 | 模型费用敏感时保持 0。 |
 | `CELERY_RETRY_DELAY` | `60` | Celery 重试间隔。 | 仅 `CELERY_MAX_RETRIES > 0` 时有意义。 |
 
@@ -263,7 +263,6 @@ WORKER_CONCURRENCY=2
 MAX_ACTIVE_JOBS=20
 
 MODEL_CALL_TIMEOUT_SECONDS=600
-MODEL_CALL_MAX_RETRIES=0
 CELERY_SOFT_TIMEOUT_BUFFER_SECONDS=300
 CELERY_HARD_TIMEOUT_BUFFER_SECONDS=60
 JOB_STALE_RUNNING_BUFFER_SECONDS=600

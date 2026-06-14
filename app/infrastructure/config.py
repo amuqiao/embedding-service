@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = ""
     DEFAULT_MODEL_ID: str = "gpt-4.1"
+    MODEL_CONFIG_PATH: str = "app/infrastructure/models.yaml"
     # L1 anchor: asyncio.wait_for hard cut on AI call; L3–L5 are derived automatically.
     MODEL_CALL_TIMEOUT_SECONDS: int = 300
 
@@ -203,6 +204,13 @@ class Settings(BaseSettings):
     @property
     def prompt_config_path(self) -> Path:
         path = Path(self.PROMPT_CONFIG_PATH)
+        if not path.is_absolute():
+            path = ROOT_DIR / path
+        return path
+
+    @property
+    def model_config_path(self) -> Path:
+        path = Path(self.MODEL_CONFIG_PATH)
         if not path.is_absolute():
             path = ROOT_DIR / path
         return path

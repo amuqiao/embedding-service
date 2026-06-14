@@ -30,10 +30,10 @@ async def generate_text(model_id: str, messages: list[dict[str, str]]) -> TextGe
         litellm.acompletion(
             model=model.litellm_model,
             messages=messages,
-            temperature=0.7,
+            temperature=model.temperature,
             timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
-            num_retries=0,
-            drop_params=True,
+            num_retries=model.num_retries,
+            drop_params=model.drop_params,
         ),
         timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
     )

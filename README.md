@@ -55,6 +55,8 @@
 
 Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/infrastructure/novel_loc/prompts.yaml`。该 YAML 是运行时 Prompt 的唯一默认配置源，定义各 `job_type` 的 `system/user/work_note` 默认值和运行时输出契约。
 
+模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/infrastructure/models.yaml`。新增或停用模型时优先修改该 YAML，配置项包括对外 `model_id`、LiteLLM model id、上下文窗口、所需环境变量和模型调用参数。
+
 除 `/health` 和 `/healthz` 外，请求必须携带：
 
 ```http
