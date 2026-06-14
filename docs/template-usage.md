@@ -71,6 +71,11 @@ class MyJobHandler(WorkflowHandler):
         # 在这里使用本 job_type 的 Pydantic/JSON Schema 校验并返回规范化参数。
         return job_params
 
+    def runtime_job_fields(self, job_params: dict) -> dict:
+        # 只有需要当前 LLM 执行器的 workflow 才返回 model_id / prompt_payload。
+        # 非 LLM workflow 可以返回空 dict，并在自己的执行器扩展中处理。
+        return {}
+
     def parse_output(self, text: str) -> JobResult:
         return JobResult(
             artifacts=[{"key": "result", "type": "text", "label": "Result", "content": text}],
@@ -221,7 +226,7 @@ def normalize_job_params(self, job_params: dict) -> dict:
     return params.model_dump()
 ```
 
-`job_params` 会存入 `AIJob.input_payload["job_params"]`。当前内置 `novel_localization` 为了复用现有 LLM 执行器，会把 `job_params.model_id` 和 `job_params.prompt` 同步写入运行时字段。
+`job_params` 会存入 `AIJob.input_payload["job_params"]`。当前内置 `novel_localization` 为了复用现有 LLM 执行器，会通过 `runtime_job_fields()` 把 `job_params.model_id` 和 `job_params.prompt` 映射为运行时字段；这不是通用 Job 创建层的要求。
 
 ## 新实例配置
 

@@ -75,8 +75,12 @@ async def plan_job(db: AsyncSession, job_id: uuid.UUID) -> tuple[AIJob, JobPlan,
         await db.commit()
         await db.refresh(job)
         return job, plan, item_ids
-    input_text = _load_input_text(job)
-    plan = build_job_plan(job.job_type, input_text)
+    from app.core import workflow_registry
+    handler = workflow_registry.get(job.job_type)
+    plan = handler.build_execution_plan(job)
+    if plan is None:
+        input_text = _load_input_text(job)
+        plan = build_job_plan(job.job_type, input_text)
     item_ids = await create_work_items(db, job, plan)
     await JobRepo.set_execution_plan(
         db,
@@ -118,16 +122,27 @@ async def execute_work_item(
     await db.commit()
 
     input_text = (item.input_payload or {}).get("text") or ""
+    from app.core import workflow_registry
+    handler = workflow_registry.get(job.job_type)
     if item.kind in ("memory", "scan"):
-        from app.core import workflow_registry
-        handler = workflow_registry.get(job.job_type)
         result_payload = await handler.execute_special_item(item, job, db)
     else:
+        custom_result = await handler.execute_standard_item(item, job, db)
+        if custom_result is not None:
+            result_payload = custom_result
+            await JobRepo.mark_work_item_succeeded(db, item_id, result_payload)
+            await db.commit()
+            return {"work_item_id": str(item_id), "kind": item.kind, "chunk_index": item.chunk_index}
+        if not job.model_id:
+            raise AppError(
+                "JOB_RUNTIME_NOT_SUPPORTED",
+                "job_type 未配置可执行运行时",
+                status_code=500,
+                details={"job_type": job.job_type},
+            )
         prompt_payload = job.prompt_payload
         if item.kind == "chunk":
             memory = project_memory_from_job(job)
-            from app.core import workflow_registry
-            handler = workflow_registry.get(job.job_type)
             if handler.canvas_pattern == "memory_fanout":
                 memory = (
                     _first_result_value(await JobRepo.list_work_items(db, job_id), "memory", "project_memory")

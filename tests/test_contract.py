@@ -8,6 +8,7 @@ from app.core.security import require_service_auth
 from app.main import app
 from app.schemas.jobs import CreateJobRequest, JobResult, NovelLocalizationJobParams
 from app.services.executor import _prompt_messages
+from app.services.jobs import _validate_create_request
 
 
 def _valid_payload() -> dict:
@@ -147,6 +148,36 @@ def test_create_job_request_rejects_execution_mode():
         assert "execution_mode" in str(exc)
     else:
         raise AssertionError("execution_mode should be rejected")
+
+
+def test_create_job_validation_allows_non_model_runtime(monkeypatch):
+    class GenericHandler:
+        def normalize_job_params(self, job_params):
+            return job_params
+
+        def runtime_job_fields(self, job_params):
+            return {}
+
+        def validate_extra(self, extra):
+            pass
+
+    payload = CreateJobRequest.model_validate(
+        {
+            "job_type": "generic.no_model",
+            "job_params": {"input": {"value": 1}},
+        }
+    )
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda job_type: GenericHandler())
+    monkeypatch.setattr("app.services.jobs.get_template", lambda job_type: None)
+    monkeypatch.setattr(
+        "app.services.jobs.get_enabled_model",
+        lambda model_id: (_ for _ in ()).throw(AssertionError("model registry should not be called")),
+    )
+
+    _handler, job_params, runtime_fields = _validate_create_request(payload)
+
+    assert job_params == {"input": {"value": 1}}
+    assert runtime_fields == {}
 
 
 @pytest.mark.asyncio

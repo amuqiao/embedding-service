@@ -6,6 +6,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from app.models.job import AIJob, AIJobWorkItem
     from app.schemas.jobs import JobResult
+    from app.services.job_planner import JobPlan
 
 CanvasPattern = str  # "single" | "memory_fanout" | "plain_chord" | "scan_chord"
 
@@ -50,6 +51,18 @@ class WorkflowHandler:
             f"{self.__class__.__name__} has no special item handler for kind={item.kind!r}"
         )
 
+    async def execute_standard_item(
+        self,
+        item: AIJobWorkItem,
+        job: AIJob,
+        db: AsyncSession,
+    ) -> dict[str, Any] | None:
+        """Execute non-LLM standard items for custom runtimes.
+
+        Return None to use the built-in LLM text runtime.
+        """
+        return None
+
     def validate_extra(self, extra: dict[str, Any] | None) -> None:
         """Validate legacy job-type-specific extra params. Prefer normalize_job_params()."""
 
@@ -60,6 +73,10 @@ class WorkflowHandler:
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         """Return fields required by the current executor/storage runtime."""
         raise NotImplementedError(f"{self.__class__.__name__}.runtime_job_fields() not implemented")
+
+    def build_execution_plan(self, job: AIJob) -> JobPlan | None:
+        """Build a custom execution plan. Return None to use text chunk planning."""
+        return None
 
 
 _registry: dict[str, WorkflowHandler] = {}

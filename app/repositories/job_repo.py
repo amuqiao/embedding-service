@@ -43,7 +43,7 @@ class JobRepo:
         caller_id: str,
         client_request_id: str | None,
         job_type: str,
-        model_id: str,
+        model_id: str | None,
         input_payload: dict[str, Any],
         output_payload: dict[str, Any],
         callback_payload: dict[str, Any],

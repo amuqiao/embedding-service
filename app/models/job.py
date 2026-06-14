@@ -15,7 +15,7 @@ class AIJob(Base):
     caller_id: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
     client_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     job_type: Mapped[str] = mapped_column(String(96), nullable=False)
-    model_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    model_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", index=True)
     progress_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     progress_text: Mapped[str | None] = mapped_column(String(255), nullable=True)

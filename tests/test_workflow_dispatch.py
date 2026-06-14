@@ -3,8 +3,8 @@ import pytest
 import uuid
 
 from app.models.job import AIJob, AIJobWorkItem
-from app.services.job_planner import build_job_plan
-from app.services.job_workflow import finalize_job, plan_job
+from app.services.job_planner import JobPlan, PlannedWorkItem, build_job_plan
+from app.services.job_workflow import execute_work_item, finalize_job, plan_job
 from app.tasks.jobs import fanout_after_mapping_task
 from scripts.e2e_backend_call import Config, api_path
 
@@ -132,6 +132,84 @@ async def test_plan_job_reuses_existing_execution_plan(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_plan_job_allows_custom_plan_without_text_source(monkeypatch):
+    job_id = uuid.uuid4()
+    job = AIJob(
+        id=job_id,
+        job_type="generic.custom",
+        model_id=None,
+        status="running",
+        progress_percent=5,
+        celery_task_id="root-task",
+        input_payload={"job_params": {"input": {"value": 1}}},
+        output_payload={},
+        callback_payload={},
+        prompt_payload={},
+    )
+    plan = JobPlan(
+        execution_mode="single",
+        chunk_count=1,
+        chunk_registry=[{"chunk_index": 1, "input": {"value": 1}}],
+        work_items=[
+            PlannedWorkItem(
+                name="generic.custom.whole",
+                kind="whole",
+                chunk_index=0,
+                input_payload={"value": 1},
+            )
+        ],
+    )
+    created_item = AIJobWorkItem(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        name="generic.custom.whole",
+        kind="whole",
+        chunk_index=0,
+        input_payload={"value": 1},
+    )
+
+    class CustomHandler:
+        def build_execution_plan(self, received_job):
+            assert received_job.id == job_id
+            return plan
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_mark_running(*_args, **_kwargs):
+        return True
+
+    async def fake_list_work_items(_db, _job_id):
+        return []
+
+    async def fake_create_work_item(*_args, **_kwargs):
+        return created_item
+
+    async def fake_set_execution_plan(*_args, **_kwargs):
+        pass
+
+    async def fake_update_progress(*_args, **_kwargs):
+        pass
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_running", fake_mark_running)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.list_work_items", fake_list_work_items)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.create_work_item", fake_create_work_item)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.set_execution_plan", fake_set_execution_plan)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.update_progress", fake_update_progress)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda job_type: CustomHandler())
+    monkeypatch.setattr(
+        "app.services.job_workflow._load_input_text",
+        lambda _job: (_ for _ in ()).throw(AssertionError("custom plan should not load text")),
+    )
+
+    _job, planned, item_ids = await plan_job(FakeDB(), job_id)
+
+    assert planned == plan
+    assert item_ids == {"whole:0": created_item.id}
+
+
+@pytest.mark.asyncio
 async def test_finalize_waits_for_pending_work_items(monkeypatch):
     job_id = uuid.uuid4()
     job = AIJob(
@@ -185,3 +263,70 @@ async def test_finalize_waits_for_pending_work_items(monkeypatch):
 
     assert result["status"] == "waiting"
     assert result["pending_items"] == [str(chunk.id)]
+
+
+@pytest.mark.asyncio
+async def test_execute_work_item_allows_custom_runtime_without_model(monkeypatch):
+    job_id = uuid.uuid4()
+    item_id = uuid.uuid4()
+    job = AIJob(
+        id=job_id,
+        job_type="generic.custom",
+        model_id=None,
+        status="running",
+        progress_percent=10,
+        celery_task_id="root-task",
+        input_payload={"job_params": {"value": 1}},
+        output_payload={},
+        callback_payload={},
+        prompt_payload={},
+    )
+    item = AIJobWorkItem(
+        id=item_id,
+        job_id=job_id,
+        name="whole",
+        kind="whole",
+        chunk_index=0,
+        status="queued",
+        input_payload={"value": 1},
+    )
+    succeeded = {}
+
+    class CustomHandler:
+        canvas_pattern = "single"
+
+        async def execute_standard_item(self, received_item, received_job, _db):
+            assert received_item.id == item_id
+            assert received_job.id == job_id
+            return {"artifacts": [], "signals": {"custom": True}}
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_get_work_item(_db, _item_id):
+        return item
+
+    async def fake_claim(*_args, **_kwargs):
+        return True
+
+    async def fake_update_progress(*_args, **_kwargs):
+        pass
+
+    async def fake_mark_succeeded(_db, _item_id, result_payload):
+        succeeded["payload"] = result_payload
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.get_work_item", fake_get_work_item)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.claim_work_item_for_execution", fake_claim)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.update_progress", fake_update_progress)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_work_item_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda job_type: CustomHandler())
+    monkeypatch.setattr(
+        "app.services.job_workflow.run_ai_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("LLM runtime should not be called")),
+    )
+
+    result = await execute_work_item(FakeDB(), job_id=job_id, item_id=item_id, celery_task_id="task-1")
+
+    assert result == {"work_item_id": str(item_id), "kind": "whole", "chunk_index": 0}
+    assert succeeded["payload"] == {"artifacts": [], "signals": {"custom": True}}

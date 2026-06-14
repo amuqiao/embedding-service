@@ -169,6 +169,13 @@ async def _process(job_id: str, celery_task_id: str) -> dict[str, Any]:
         await db.commit()
 
         input_text = _load_input_text(job)
+        if not job.model_id:
+            raise AppError(
+                "JOB_RUNTIME_NOT_SUPPORTED",
+                "job_type 未配置可执行运行时",
+                status_code=500,
+                details={"job_type": job.job_type},
+            )
         result = await asyncio.wait_for(
                     run_ai_job(job.job_type, job.model_id, job.prompt_payload, input_text),
                     timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
@@ -294,17 +301,21 @@ def execute_work_item_task(self, job_id: str, item_id: str) -> dict:
         return asyncio.run(_with_db(run))
     except Exception as exc:
         try:
+            if isinstance(exc, AppError):
+                error_payload = {"code": exc.code, "message": exc.message, "details": exc.details}
+            else:
+                error_payload = {
+                    "code": "WORK_ITEM_FAILED",
+                    "message": str(exc)[:500],
+                    "details": {"type": type(exc).__name__},
+                }
             async def fail(db):
                 from app.services.job_workflow import fail_job
                 await fail_job(
                     db,
                     job_id=uuid.UUID(job_id),
                     item_id=uuid.UUID(item_id),
-                    error_payload={
-                        "code": "WORK_ITEM_FAILED",
-                        "message": str(exc)[:500],
-                        "details": {"type": type(exc).__name__},
-                    },
+                    error_payload=error_payload,
                 )
             asyncio.run(_with_db(fail))
         except Exception:

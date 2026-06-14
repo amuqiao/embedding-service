@@ -155,9 +155,7 @@ def _validate_create_request(payload: CreateJobRequest) -> tuple[Any, dict[str, 
             f"job_type 缺少运行时适配: {payload.job_type}",
         ) from exc
     model_id = runtime_fields.get("model_id")
-    if not model_id:
-        raise ValidationAppError("INVALID_INPUT", "job_type runtime fields must include model_id")
-    if not get_enabled_model(model_id):
+    if model_id and not get_enabled_model(model_id):
         raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不可用: {model_id}")
     # Validate prompt blocks against YAML template if available
     template = get_template(payload.job_type)
@@ -214,7 +212,7 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
         caller_id=caller_id,
         client_request_id=payload.client_request_id,
         job_type=payload.job_type,
-        model_id=runtime_fields["model_id"],
+        model_id=runtime_fields.get("model_id"),
         input_payload=input_payload_data,
         output_payload=_job_output_payload(uuid.uuid4()),
         callback_payload=payload.callback.model_dump() if payload.callback else {},
