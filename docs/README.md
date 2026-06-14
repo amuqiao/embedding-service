@@ -8,7 +8,7 @@
 |---|---|
 | `架构/README.md` | 架构目录入口 |
 | `架构/架构总览.md` | 服务定位、边界、API、Job 生命周期、异步执行、Callback、恢复机制、数据模型和扩展边界 |
-| `架构/production-readiness-review.md` | 生产就绪性评审、风险清单和修复状态 |
+| `架构/production-readiness-review.md` | 生产就绪性评审报告：上线决策口径、生产前置条件和缺失验证证据 |
 | `job-implementation-guide.md` | Job 系统实施说明：执行模式、超时链、恢复机制、错误码、运维速查 |
 | `job-env-vars-quick-reference.md` | Job 关键环境变量速查：区分 `.env`、`.env.dev`、`.env.test`，辅助排障、吞吐控制和横向扩容 |
 | `async-job-spec.md` | 通用 AI 异步 Job 系统设计规范，本项目实施以 `job-implementation-guide.md` 和代码为准 |
