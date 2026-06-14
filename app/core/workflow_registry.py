@@ -17,9 +17,10 @@ class WorkflowHandler:
 
     Steps:
     1. Subclass WorkflowHandler, set job_type, canvas_pattern, and chunking config
-    2. Implement parse_output(), merge_chunks(), and execute_special_item() if needed
-    3. Call workflow_registry.register(MyHandler()) in your module's register_all()
-    4. Call register_all() in app/main.py startup
+    2. Implement parse_output() for LLM text runtime, or execute_standard_item() for custom runtime
+    3. Implement merge_chunks() / execute_special_item() when the chosen canvas needs them
+    4. Call workflow_registry.register(MyHandler()) in your module's register_all()
+    5. Call register_all() in app/main.py startup
     """
 
     job_type: str = ""
@@ -32,7 +33,7 @@ class WorkflowHandler:
     large_artifact_keys: frozenset[str] = frozenset()
 
     def parse_output(self, text: str) -> JobResult:
-        """Parse raw LLM output into JobResult. Required for all handlers."""
+        """Parse raw LLM output into JobResult. Required for handlers using the built-in LLM runtime."""
         raise NotImplementedError(f"{self.__class__.__name__}.parse_output() not implemented")
 
     def merge_chunks(self, items: list[AIJobWorkItem]) -> JobResult:

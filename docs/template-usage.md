@@ -73,8 +73,14 @@ class MyJobHandler(WorkflowHandler):
 
     def runtime_job_fields(self, job_params: dict) -> dict:
         # 只有需要当前 LLM 执行器的 workflow 才返回 model_id / prompt_payload。
-        # 非 LLM workflow 可以返回空 dict，并在自己的执行器扩展中处理。
+        # 非 LLM workflow 可以返回空 dict，但必须同时实现 build_execution_plan()
+        # 和 execute_standard_item()，避免默认文本分块计划读取 source。
         return {}
+
+    def build_execution_plan(self, job):
+        # 非 LLM / 非文本 source workflow 在这里基于 job.input_payload["job_params"]
+        # 创建自己的 work_items。返回 None 会回到默认文本 source 分块计划。
+        return None
 
     def parse_output(self, text: str) -> JobResult:
         return JobResult(
@@ -113,7 +119,23 @@ API、worker 和 pytest 都通过这个统一入口注册 workflow。新增 work
 
 ### 4. 调用 API 验证
 
-`POST /jobs` 的顶层字段保持通用；文本、图片、Prompt、模型等具体任务参数都放在 `job_params` 中。以内置小说本地化示例为例，开发阶段可以使用 inline source，不需要先写 OSS 输入对象：
+`POST /jobs` 的顶层字段保持通用；文本、图片、Prompt、模型等具体任务参数都放在 `job_params` 中。内置 `generic.echo` 用来质检通用骨架，不调用模型，不需要 `source` / `prompt` / `model_id`：
+
+```bash
+curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
+  -H "Authorization: Bearer $SERVICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_type": "generic.echo",
+    "job_params": {
+      "value": {"hello": "world"},
+      "label": "Echo"
+    },
+    "metadata": {"caller_task_id": "echo-1"}
+  }'
+```
+
+以内置小说本地化示例为例，开发阶段也可以使用 inline source，不需要先写 OSS 输入对象：
 
 ```bash
 curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
