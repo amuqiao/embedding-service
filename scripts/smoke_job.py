@@ -89,10 +89,12 @@ def main() -> int:
         payload = {
             "client_request_id": f"smoke-{int(time.time())}",
             "job_type": "novel_localization.step1_localize",
-            "model_id": default_model_id,
-            "source": write_source_object(text),
+            "job_params": {
+                "model_id": default_model_id,
+                "source": write_source_object(text),
+                "prompt": {"blocks": blocks},
+            },
             "callback": {"url": "http://127.0.0.1:9/callback", "events": ["job.succeeded", "job.failed"]},
-            "prompt": {"blocks": blocks},
         }
         created = client.post(f"{SERVICE_API_PREFIX}/jobs", headers=headers, json=payload)
         created.raise_for_status()
@@ -104,7 +106,7 @@ def main() -> int:
             status_resp = client.get(status_url, headers=headers)
             status_resp.raise_for_status()
             status_body = status_resp.json()
-            print("status:", status_body["status"], status_body.get("progress_percent"))
+            print("status:", status_body["status"], status_body.get("progress", {}).get("percent"))
             if status_body["status"] in {"succeeded", "failed", "canceled"}:
                 print("final:", status_body)
                 return 0 if status_body["status"] == "succeeded" else 1

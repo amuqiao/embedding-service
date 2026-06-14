@@ -3,6 +3,7 @@ import hmac
 import json
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -44,15 +45,13 @@ def _validate_callback_url(url: str) -> None:
 
 def build_callback_body(job: AIJob) -> dict:
     event = "job.succeeded" if job.status == "succeeded" else "job.failed"
-    response = _job_to_response(job).model_dump(mode="json")
+    sent_at = datetime.now(timezone.utc)
     return {
         "event": event,
-        "job_id": response["job_id"],
-        "job_type": response["job_type"],
-        "status": response["status"],
-        "result": response["result"],
-        "error": response["error"],
-        "finished_at": response["finished_at"] or datetime.now(timezone.utc).isoformat(),
+        "event_id": str(uuid.uuid4()),
+        "attempt": (job.callback_attempts or 0) + 1,
+        "sent_at": sent_at.isoformat(),
+        "job": _job_to_response(job).model_dump(mode="json"),
     }
 
 

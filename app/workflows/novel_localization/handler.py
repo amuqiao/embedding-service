@@ -12,6 +12,7 @@ import re
 from typing import Any, TYPE_CHECKING
 
 from app.core.workflow_registry import WorkflowHandler, register
+from app.schemas.jobs import NovelLocalizationJobParams
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -133,7 +134,18 @@ def _merge_review(items: list[AIJobWorkItem]) -> JobResult:
 
 # ── Step1 handler ─────────────────────────────────────────────────────────────
 
-class Step1LocalizeHandler(WorkflowHandler):
+class NovelLocalizationHandler(WorkflowHandler):
+    def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        return NovelLocalizationJobParams.model_validate(job_params).model_dump()
+
+    def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "model_id": job_params["model_id"],
+            "prompt_payload": job_params["prompt"],
+        }
+
+
+class Step1LocalizeHandler(NovelLocalizationHandler):
     job_type = "novel_localization.step1_localize"
     canvas_pattern = "memory_fanout"
     chunking_enabled = True
@@ -199,7 +211,7 @@ class Step1LocalizeHandler(WorkflowHandler):
 
 # ── Step2 handler ─────────────────────────────────────────────────────────────
 
-class Step2ReviewHandler(WorkflowHandler):
+class Step2ReviewHandler(NovelLocalizationHandler):
     job_type = "novel_localization.step2_review"
     canvas_pattern = "plain_chord"
     chunking_enabled = True
@@ -225,7 +237,7 @@ class Step2ReviewHandler(WorkflowHandler):
 
 # ── Step3 handler ─────────────────────────────────────────────────────────────
 
-class Step3TranslateHandler(WorkflowHandler):
+class Step3TranslateHandler(NovelLocalizationHandler):
     job_type = "novel_localization.step3_translate"
     canvas_pattern = "scan_chord"
     chunking_enabled = True

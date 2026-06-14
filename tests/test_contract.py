@@ -1,9 +1,12 @@
 import yaml
+import pytest
+from fastapi.security import HTTPAuthorizationCredentials
 
 from app.core.config import settings
 from app.core.prompt_templates import get_template
+from app.core.security import require_service_auth
 from app.main import app
-from app.schemas.jobs import CreateJobRequest, JobResult
+from app.schemas.jobs import CreateJobRequest, JobResult, NovelLocalizationJobParams
 from app.services.executor import _prompt_messages
 
 
@@ -12,29 +15,39 @@ def _valid_payload() -> dict:
     assert template is not None
     return {
         "job_type": "novel_localization.step1_localize",
-        "model_id": "gpt-4.1",
-        "source": {
-            "oss": {
-                "oss_key": "jobs/test/input.txt",
-                "oss_url": "https://example.com/jobs/test/input.txt",
-                "content_type": "text/plain; charset=utf-8",
+        "job_params": {
+            "model_id": "gpt-4.1",
+            "source": {
+                "oss": {
+                    "oss_key": "jobs/test/input.txt",
+                    "oss_url": "https://example.com/jobs/test/input.txt",
+                    "content_type": "text/plain; charset=utf-8",
+                },
+            },
+            "prompt": {
+                "blocks": [
+                    {"key": block.key, "role": block.role, "content": block.default_content}
+                    for block in template.prompt_blocks
+                ]
             },
         },
         "callback": {"url": "https://example.com/callback"},
-        "prompt": {
-            "blocks": [
-                {"key": block.key, "role": block.role, "content": block.default_content}
-                for block in template.prompt_blocks
-            ]
-        },
+        "metadata": {"caller_task_id": "task-1"},
+        "options": {"priority": "normal", "timeout_seconds": 300},
     }
 
 
 def test_create_job_request_accepts_valid_payload():
     payload = CreateJobRequest.model_validate(_valid_payload())
     assert payload.job_type == "novel_localization.step1_localize"
-    assert payload.source.oss.oss_key == "jobs/test/input.txt"
-    assert payload.source.oss.content_type == "text/plain; charset=utf-8"
+    assert payload.job_params["source"]["oss"]["oss_key"] == "jobs/test/input.txt"
+    assert payload.metadata == {"caller_task_id": "task-1"}
+
+
+def test_novel_localization_job_params_accept_valid_payload():
+    params = NovelLocalizationJobParams.model_validate(_valid_payload()["job_params"])
+    assert params.source.oss.oss_key == "jobs/test/input.txt"
+    assert params.source.oss.content_type == "text/plain; charset=utf-8"
 
 
 def test_step1_prompt_requires_chinese_localized_output():
@@ -102,26 +115,27 @@ def test_runtime_prompt_skips_empty_work_note_input():
 
 
 def test_create_job_request_rejects_non_text_content_type():
-    payload = _valid_payload()
-    payload["source"]["oss"]["content_type"] = "application/json"
+    params = _valid_payload()["job_params"]
+    params["source"]["oss"]["content_type"] = "application/json"
     try:
-        CreateJobRequest.model_validate(payload)
+        NovelLocalizationJobParams.model_validate(params)
     except Exception as exc:
         assert "content_type" in str(exc)
     else:
         raise AssertionError("non-text content_type should be rejected")
 
 
-def test_create_job_request_rejects_legacy_input_output():
+def test_create_job_request_rejects_legacy_job_contract_fields():
     payload = _valid_payload()
-    payload["input"] = {"type": "text", "content": "hello"}
-    payload["output"] = {"type": "oss_prefix", "oss_bucket": "bucket", "oss_prefix": "jobs/test/", "oss_region": "local"}
+    payload["model_id"] = "gpt-4.1"
+    payload["source"] = {"inline": {"text": "hello"}}
+    payload["prompt"] = {"blocks": []}
     try:
         CreateJobRequest.model_validate(payload)
     except Exception as exc:
-        assert "input" in str(exc) or "output" in str(exc)
+        assert "model_id" in str(exc) and "source" in str(exc) and "prompt" in str(exc)
     else:
-        raise AssertionError("legacy input/output fields should be rejected")
+        raise AssertionError("legacy job contract fields should be rejected")
 
 
 def test_create_job_request_rejects_execution_mode():
@@ -133,6 +147,16 @@ def test_create_job_request_rejects_execution_mode():
         assert "execution_mode" in str(exc)
     else:
         raise AssertionError("execution_mode should be rejected")
+
+
+@pytest.mark.asyncio
+async def test_service_auth_uses_caller_id_header(monkeypatch):
+    monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="test-token")
+
+    caller_id = await require_service_auth(credentials=credentials, caller_id="caller-1")
+
+    assert caller_id == "caller-1"
 
 
 def test_job_result_rejects_legacy_artifact_target():

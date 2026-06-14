@@ -2,6 +2,8 @@
 
 FastAPI AI Job 执行后端模板。服务只负责模型执行、异步 Job、产物写入对象存储、状态查询和 Callback，不承担用户系统、项目管理、前端页面状态或业务步骤编排。新的 Job 类型通过 `WorkflowHandler` 接入，并在 `app/workflows/register.py` 的统一入口注册；`novel_localization` 是内置示例 workflow，实现在 `app/workflows/novel_localization/handler.py`。
 
+外部 Job 合同采用稳定骨架：`POST /jobs` 顶层只包含 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata` 和 `options`；具体任务入参由 `job_type` 的 `job_params` schema 定义。`GET /jobs/{job_id}` 返回统一 JobView，终态 `result` / `error` 与 Callback envelope 中的 `job` 字段复用同一结构。
+
 ## 本地启动
 
 ```bash

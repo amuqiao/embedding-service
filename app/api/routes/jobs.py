@@ -40,4 +40,4 @@ async def get_ai_job(
     db: AsyncSession = Depends(get_db),
     caller_id: str = Depends(require_service_auth),
 ):
-    return await get_job_response(db, job_id)
+    return await get_job_response(db, job_id, caller_id)

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.models.job import AIJob
-from app.services.callbacks import deliver_callback
+from app.services.callbacks import build_callback_body, deliver_callback
 
 
 def _job(callback_payload: dict) -> AIJob:
@@ -15,7 +15,7 @@ def _job(callback_payload: dict) -> AIJob:
         model_id="gpt-4.1",
         status="succeeded",
         progress_percent=100,
-        input_payload={},
+        input_payload={"metadata": {"caller_task_id": "task-1"}},
         output_payload={},
         callback_payload=callback_payload,
         prompt_payload={},
@@ -23,6 +23,21 @@ def _job(callback_payload: dict) -> AIJob:
         created_at=now,
         finished_at=now,
     )
+
+
+def test_build_callback_body_wraps_job_view():
+    job = _job({"url": "https://example.com/callback"})
+    body = build_callback_body(job)
+
+    assert body["event"] == "job.succeeded"
+    assert body["attempt"] == 1
+    assert body["event_id"]
+    assert body["sent_at"]
+    assert body["job"]["job_id"] == str(job.id)
+    assert body["job"]["job_type"] == "novel_localization.step1_localize"
+    assert body["job"]["progress"] == {"percent": 100, "message": None, "stage": None}
+    assert body["job"]["result"] == {"artifacts": [], "signals": {}}
+    assert body["job"]["metadata"] == {"caller_task_id": "task-1"}
 
 
 @pytest.mark.asyncio

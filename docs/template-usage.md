@@ -2,9 +2,9 @@
 
 本文说明如何把本仓库作为新的 AI Job 后端模板使用，以及如何接入新的 workflow。
 
-本模板提供的是通用执行层：FastAPI API、Celery 异步任务、对象存储 artifact、状态查询、Callback、模型配置和 workflow 注册机制。它不负责用户系统、项目管理、前端状态、业务流程编排或生产部署。
+本模板提供的是通用 Job 执行层：FastAPI API、Celery 异步任务、对象存储产物、状态轮询、Callback、模型配置和 workflow 注册机制。它不负责用户系统、项目管理、前端状态、业务流程编排或生产部署。
 
-`novel_localization` 是内置示例 workflow，用来展示多 job type、分块、merge、artifact 解析和 Prompt YAML 的接入方式。新项目可以先保留它作为参考，也可以在替换完成后删除。
+Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata` 和 `options`。具体任务入参由 `job_type` 自己的 `job_params` schema 定义；具体任务出参由 `job_type` 自己的 `result` schema 定义。`novel_localization` 是内置示例 workflow，用来展示如何把文本 LLM 任务适配到这套通用 Job 骨架。
 
 ## 新项目替换清单
 
@@ -40,7 +40,7 @@
 
 ## 接入新 Workflow
 
-一个 workflow 表示一组共享同一业务主题的 job type，例如 `document_translation` 或 `audio_transcription`。接入新 workflow 的最小路径是：写 handler、注册 handler、按需补 Prompt YAML、用 API 创建 Job 验证。
+一个 workflow 表示一组共享同一业务主题的 job type，例如 `document_translation` 或 `audio_transcription`。接入新 workflow 的最小路径是：写 handler、注册 handler、为 `job_params` 提供 schema 归一化、按需补 Prompt YAML、用 API 创建 Job 验证。
 
 ### 1. 创建 Handler 文件
 
@@ -66,6 +66,10 @@ class MyJobHandler(WorkflowHandler):
     chunking_enabled = False            # True 表示大文本会进入分块流程
     max_single_chars = 20000            # 超过该字符数后触发分块；chunking_enabled=False 时忽略
     chunk_size = 3000                   # 每个 chunk 的目标字符数
+
+    def normalize_job_params(self, job_params: dict) -> dict:
+        # 在这里使用本 job_type 的 Pydantic/JSON Schema 校验并返回规范化参数。
+        return job_params
 
     def parse_output(self, text: str) -> JobResult:
         return JobResult(
@@ -104,7 +108,7 @@ API、worker 和 pytest 都通过这个统一入口注册 workflow。新增 work
 
 ### 4. 调用 API 验证
 
-开发阶段可以使用 inline source，不需要先写 OSS 输入对象：
+`POST /jobs` 的顶层字段保持通用；文本、图片、Prompt、模型等具体任务参数都放在 `job_params` 中。以内置小说本地化示例为例，开发阶段可以使用 inline source，不需要先写 OSS 输入对象：
 
 ```bash
 curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
@@ -112,11 +116,70 @@ curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
   -H "Content-Type: application/json" \
   -d '{
     "job_type": "your_workflow.my_job",
-    "model_id": "gpt-4.1",
-    "source": {"inline": {"text": "Hello world"}},
     "callback": {"url": "http://localhost:9999/callback"},
-    "prompt": {"blocks": [{"key": "user", "role": "user", "content": "Process this text."}]}
+    "metadata": {"caller_task_id": "task-1"},
+    "options": {"priority": "normal", "timeout_seconds": 300},
+    "job_params": {
+      "model_id": "gpt-4.1",
+      "source": {"inline": {"text": "Hello world"}},
+      "prompt": {"blocks": [{"key": "user", "role": "user", "content": "Process this text."}]}
+    }
   }'
+```
+
+创建成功只表示 Job 已进入队列：
+
+```json
+{
+  "job_id": "uuid",
+  "client_request_id": "optional-idempotency-key",
+  "job_type": "your_workflow.my_job",
+  "status": "queued",
+  "status_url": "/api/v1/ai-jobs/jobs/uuid",
+  "created_at": "2026-06-15T10:00:00Z"
+}
+```
+
+`GET /jobs/{job_id}` 返回统一 JobView。`queued` / `running` 时 `result` 和 `error` 都为 `null`；`succeeded` 时 `result` 由 job_type 的结果 schema 定义；`failed` 时 `error` 使用统一错误结构。
+
+```json
+{
+  "job_id": "uuid",
+  "client_request_id": "optional-idempotency-key",
+  "job_type": "your_workflow.my_job",
+  "status": "running",
+  "progress": {"percent": 30, "message": "processing", "stage": null},
+  "result": null,
+  "error": null,
+  "metadata": {"caller_task_id": "task-1"},
+  "created_at": "2026-06-15T10:00:00Z",
+  "started_at": "2026-06-15T10:00:03Z",
+  "finished_at": null
+}
+```
+
+Callback 只在终态事件触发，body 是事件 envelope，内部 `job` 字段复用同一份 JobView：
+
+```json
+{
+  "event": "job.succeeded",
+  "event_id": "uuid",
+  "attempt": 1,
+  "sent_at": "2026-06-15T10:01:00Z",
+  "job": {
+    "job_id": "uuid",
+    "client_request_id": "optional-idempotency-key",
+    "job_type": "your_workflow.my_job",
+    "status": "succeeded",
+    "progress": {"percent": 100, "message": "已完成", "stage": null},
+    "result": {},
+    "error": null,
+    "metadata": {"caller_task_id": "task-1"},
+    "created_at": "2026-06-15T10:00:00Z",
+    "started_at": "2026-06-15T10:00:03Z",
+    "finished_at": "2026-06-15T10:01:00Z"
+  }
+}
 ```
 
 ## Canvas Pattern
@@ -136,28 +199,29 @@ curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
 - `merge_chunks()` 能把多个 chunk 的 `result_payload` 合并成最终 `JobResult`。
 - 大文本 artifact 应通过 handler 的 `large_artifact_keys` 写入对象存储，避免把正文直接塞进 JSON 响应。
 
-## extra 参数
+## job_params 参数
 
-当某个 job type 需要额外业务参数，但这些参数不适合放进 `prompt.blocks` 时，使用 `CreateJobRequest.extra`。
-
-请求示例：
+当某个 job type 需要业务参数时，统一放入 `CreateJobRequest.job_params`，并由对应 handler 的 `normalize_job_params()` 校验。Job 公共层不会解释这些字段。
 
 ```json
 {
   "job_type": "your_workflow.my_job",
-  "extra": {"target_language": "fr", "style": "formal"}
+  "job_params": {
+    "target_language": "fr",
+    "style": "formal"
+  }
 }
 ```
 
-在 handler 中校验：
+在 handler 中校验并规范化：
 
 ```python
-def validate_extra(self, extra: dict | None) -> None:
-    if extra and "target_language" not in extra:
-        raise ValidationAppError("INVALID_INPUT", "extra.target_language is required")
+def normalize_job_params(self, job_params: dict) -> dict:
+    params = MyJobParams.model_validate(job_params)
+    return params.model_dump()
 ```
 
-`extra` 会存入 `AIJob.input_payload["extra"]`，handler 中可以通过 `(job.input_payload or {}).get("extra")` 读取。
+`job_params` 会存入 `AIJob.input_payload["job_params"]`。当前内置 `novel_localization` 为了复用现有 LLM 执行器，会把 `job_params.model_id` 和 `job_params.prompt` 同步写入运行时字段。
 
 ## 新实例配置
 

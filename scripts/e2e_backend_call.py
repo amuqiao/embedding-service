@@ -144,7 +144,7 @@ class CallbackStore:
         with self._condition:
             while True:
                 for record in self._records:
-                    if str(record.body.get("job_id")) == job_id:
+                    if str((record.body.get("job") or {}).get("job_id")) == job_id:
                         return record
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -422,7 +422,7 @@ def run_create_job_contract_checks(
         callback_url=callback_url,
         write_source=False,
     )
-    payload["source"]["oss"]["content_type"] = "application/json"
+    payload["job_params"]["source"]["oss"]["content_type"] = "application/json"
     require_error(
         client.post(api_path(config, "/jobs"), headers=headers, json=payload),
         status_code=422,
@@ -445,13 +445,15 @@ def create_payload(
     return {
         "client_request_id": f"e2e-{request_suffix}-{stage.name}",
         "job_type": stage.job_type,
-        "model_id": model_id,
-        "source": source_object_ref(config, stage, input_text, write_object=write_source),
+        "job_params": {
+            "model_id": model_id,
+            "source": source_object_ref(config, stage, input_text, write_object=write_source),
+            "prompt": {"blocks": prompt_blocks},
+        },
         "callback": {
             "url": callback_url or "http://127.0.0.1:9/callback",
             "events": ["job.succeeded", "job.failed"],
         },
-        "prompt": {"blocks": prompt_blocks},
     }
 
 
@@ -633,13 +635,14 @@ def validate_callback_record(
         raise RuntimeError(f"callback header 中的 job_id 不一致: {headers}")
     if headers.get("x-ai-service-event") != expected_event:
         raise RuntimeError(f"callback header 中的 event 不一致: {headers}")
-    if body.get("event") != expected_event or body.get("status") != final_body["status"]:
+    job_body = body.get("job") or {}
+    if body.get("event") != expected_event or job_body.get("status") != final_body["status"]:
         raise RuntimeError(f"callback body 中的 status 不一致: {body}")
-    if body.get("job_id") != final_body["job_id"] or body.get("job_type") != stage.job_type:
+    if job_body.get("job_id") != final_body["job_id"] or job_body.get("job_type") != stage.job_type:
         raise RuntimeError(f"callback body 中的 job 信息不一致: {body}")
-    if body.get("result") != final_body.get("result"):
+    if job_body.get("result") != final_body.get("result"):
         raise RuntimeError(f"{stage_label(stage)} callback result 与轮询 result 不一致")
-    if body.get("error") != final_body.get("error"):
+    if job_body.get("error") != final_body.get("error"):
         raise RuntimeError(f"{stage_label(stage)} callback error 与轮询 error 不一致")
 
     timestamp = headers.get("x-ai-service-timestamp")
@@ -650,7 +653,7 @@ def validate_callback_record(
     if not hmac.compare_digest(signature, expected_signature):
         raise RuntimeError(f"{stage_label(stage)} callback 签名无效")
 
-    print(f"[{stage_label(stage)}] callback 已收到:", body.get("event"), body.get("job_id"))
+    print(f"[{stage_label(stage)}] callback 已收到:", body.get("event"), job_body.get("job_id"))
 
 
 def validate_stage_result(config: Config, stage: StageSpec, final_body: dict[str, Any]) -> None:
@@ -736,8 +739,8 @@ def submit_stage(
         print(
             f"[{stage_label(stage)}] 状态:",
             status_body["status"],
-            status_body.get("progress_percent"),
-            status_body.get("progress_text"),
+            (status_body.get("progress") or {}).get("percent"),
+            (status_body.get("progress") or {}).get("message"),
         )
 
         if status_body["status"] == "succeeded":
@@ -795,9 +798,9 @@ def write_report(
         "callbacks": [
             {
                 "path": record.path,
-                "job_id": record.body.get("job_id"),
+                "job_id": (record.body.get("job") or {}).get("job_id"),
                 "event": record.body.get("event"),
-                "status": record.body.get("status"),
+                "status": (record.body.get("job") or {}).get("status"),
                 "header_event": record.headers.get("X-AI-Service-Event"),
             }
             for record in callback_records

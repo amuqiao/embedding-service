@@ -51,7 +51,15 @@ class WorkflowHandler:
         )
 
     def validate_extra(self, extra: dict[str, Any] | None) -> None:
-        """Validate job-type-specific extra params from CreateJobRequest.extra. Override as needed."""
+        """Validate legacy job-type-specific extra params. Prefer normalize_job_params()."""
+
+    def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        """Validate and normalize CreateJobRequest.job_params for this job_type."""
+        return job_params
+
+    def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        """Return fields required by the current executor/storage runtime."""
+        raise NotImplementedError(f"{self.__class__.__name__}.runtime_job_fields() not implemented")
 
 
 _registry: dict[str, WorkflowHandler] = {}

@@ -1,5 +1,7 @@
 # 小说本地化 AI 能力层后端对接接口文档
 
+> Legacy note：本文保留小说本地化早期对接细节和历史样例，不再作为通用 AI Job 模板的公共合同来源。通用 Job 骨架以 `docs/template-usage.md` 为准：`POST /jobs` 顶层使用 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata`、`options`；`GET /jobs/{job_id}` 返回统一 JobView；Callback body 使用 `{event, event_id, attempt, sent_at, job}` envelope，并复用 JobView。
+
 本文档面向业务后端开发，定义首版对接小说本地化 AI 能力层需要实现的接口调用、字段校验、错误处理和轮询规则。
 
 ## 1. 对接边界

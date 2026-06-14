@@ -73,6 +73,11 @@ class JobRepo:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_for_caller(db: AsyncSession, job_id: uuid.UUID, caller_id: str) -> AIJob | None:
+        result = await db.execute(select(AIJob).where(AIJob.id == job_id, AIJob.caller_id == caller_id))
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def set_celery_task_id(db: AsyncSession, job_id: uuid.UUID, celery_task_id: str) -> None:
         job = await JobRepo.get(db, job_id)
         if job:
