@@ -61,7 +61,7 @@
          └───────────────────────┘   └────────────────────┘
                      ↓ BRPOP (prefetch=1)          ↑ 状态读写
      ┌──────────────────────────────────────────────────────────────┐
-     │  Worker（Pod 数 × CELERY_WORKER_CONCURRENCY = 总并行槽数）     │
+     │  Worker（Pod 数 × WORKER_CONCURRENCY = 总并行槽数）     │
      │                                                               │
      │  ① 终态幂等守卫（succeeded/failed → 跳过）                     │
      │  ② mark_running                                               │
@@ -72,14 +72,14 @@
      │  ⑥ ACK ← 消息此时才从 Redis 移除                               │
      │                                                               │
      │  超时保险（不依赖 LLM 侧 timeout）                              │
-     │  L3 SIGALRM → CELERY_SOFT_TIME_LIMIT → 重试或 mark_failed     │
-     │  L4 SIGKILL → CELERY_TIME_LIMIT      → 进程强杀，消息回队      │
-     │  L5 stale 扫描 → JOB_STALE_RUNNING_SECONDS → 强制 failed      │
+     │  L3 SIGALRM → celery_soft_time_limit → 重试或 mark_failed     │
+     │  L4 SIGKILL → celery_time_limit      → 进程强杀，消息回队      │
+     │  L5 stale 扫描 → job_stale_running_seconds → 强制 failed      │
      └──────────────────────────────────────────────────────────────┘
 
 恢复扫描（Worker 启动触发 + 可选定期扫描）
   孤儿 queued（celery_task_id IS NULL，超过 JOB_ORPHAN_TIMEOUT）→ 重投递
-  僵死 running（started_at 超过 JOB_STALE_RUNNING_SECONDS）      → 强制 failed
+  僵死 running（started_at 超过 job_stale_running_seconds）      → 强制 failed
 ```
 
 ### 关键配置速查
@@ -87,12 +87,12 @@
 | 参数 | 控制位置 | 控制内容 | 约束关系 |
 |------|---------|---------|---------|
 | `MAX_ACTIVE_JOBS` | API 创建守卫 | queued+running 总积压上限，超出返回 503；0=禁用 | 建议 ≥ 总并行槽数 × 2 |
-| `CELERY_WORKER_CONCURRENCY` | 每个 Worker Pod | 单 Pod 同时执行的任务数 | AI 任务建议 2~4 |
+| `WORKER_CONCURRENCY` | 每个 Worker Pod | 单 Pod 同时执行的任务数 | AI 任务建议 2~4 |
 | Worker Pod 数 | K8s Deployment | 水平扩展执行容量 | 总槽数 = Pod 数 × CONCURRENCY |
-| `MODEL_CALL_TIMEOUT_SECONDS` | Worker asyncio.wait_for | L1 主截断，AI 调用总时长 | < SOFT_TIME_LIMIT，差值 ≥ 300s |
-| `CELERY_SOFT_TIME_LIMIT` | Celery SIGALRM | L3 进程级超时 | < TIME_LIMIT，差值 ≥ 60s |
-| `CELERY_TIME_LIMIT` | Celery SIGKILL | L4 进程强杀 | < STALE_RUNNING，差值 ≥ 600s |
-| `JOB_STALE_RUNNING_SECONDS` | 恢复扫描 | L5 僵死任务清理阈值 | ≥ TIME_LIMIT + 600s |
+| `MODEL_CALL_TIMEOUT_SECONDS` | Worker asyncio.wait_for | L1 主截断，AI 调用总时长 | 调大后派生 L3/L4/L5 自动跟随 |
+| `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` | Celery SIGALRM buffer | L3 进程级超时缓冲 | 推荐 ≥ 300s |
+| `CELERY_HARD_TIMEOUT_BUFFER_SECONDS` | Celery SIGKILL buffer | L4 进程强杀缓冲 | 推荐 ≥ 60s |
+| `JOB_STALE_RUNNING_BUFFER_SECONDS` | 恢复扫描 buffer | L5 僵死任务清理缓冲 | 推荐 ≥ 600s |
 | `CELERY_MAX_RETRIES` | Worker 超时处理 | L1/L3 超时重试次数，0=不重试 | — |
 
 ---
@@ -294,20 +294,20 @@ Celery 用 fork 创建 Worker 子进程，SQLAlchemy 连接池不跨进程安全
 **旋钮 A — 执行槽数**（同时能执行多少任务）
 
 ```
-总并行槽数 = Worker Pod 数 × CELERY_WORKER_CONCURRENCY
+总并行槽数 = Worker Pod 数 × WORKER_CONCURRENCY
 
 示例：3 Pod × 4 concurrency = 12 个任务可同时执行
 ```
 
 两个子旋钮的分工：
-- **CELERY_WORKER_CONCURRENCY**：单 Pod 同时跑几个任务。AI 任务是 I/O 密集型，进程 99% 的时间在等 LLM API 响应，CPU 接近空闲——因此这个值**不受 CPU 核数约束**，4 核机器设为 8 是完全合法的配置（CPU 密集型任务才需要对齐核数）。真正的约束是：①每个 worker 进程约 150~300 MB 内存，开 8 需要 Pod 有足够的内存限制；②NullPool 每任务独立建连，Concurrency × Pod 数不能超过 DB 连接预算（见 4.5 节）；③有效并发不超过 LLM API 配额。建议从 2~4 起步，确认内存和连接预算后再按需调高；**扩容优先靠加 Pod，单 Pod 调高 Concurrency 是次选**。
+- **WORKER_CONCURRENCY**：单 Pod 同时跑几个任务。AI 任务是 I/O 密集型，进程 99% 的时间在等 LLM API 响应，CPU 接近空闲——因此这个值**不受 CPU 核数约束**，4 核机器设为 8 是完全合法的配置（CPU 密集型任务才需要对齐核数）。真正的约束是：①每个 worker 进程约 150~300 MB 内存，开 8 需要 Pod 有足够的内存限制；②NullPool 每任务独立建连，Concurrency × Pod 数不能超过 DB 连接预算（见 4.5 节）；③有效并发不超过 LLM API 配额。建议从 2~4 起步，确认内存和连接预算后再按需调高；**扩容优先靠加 Pod，单 Pod 调高 Concurrency 是次选**。
 - **Worker Pod 数**：水平扩展总槽数的主要手段，通过 K8s HPA 按队列长度动态伸缩（见 11.3）。
 
 **旋钮 B — 入口守卫**（是否接受新 Job 创建）
 
 `MAX_ACTIVE_JOBS` 是 API 层的**背压机制**，在 `POST /jobs` 时检查 DB 中 `status IN (queued, running)` 的总数，超过上限返回 503，告诉调用方"队列已满，稍后重试"。它控制的是**接单**，不控制**执行速度**。
 
-同时执行的任务数永远由 Worker 槽位（旋钮 A）物理约束。无论 MAX_ACTIVE_JOBS 设为多少——哪怕设为 0（禁用）——执行中的任务也不会超过 `Pod 数 × CELERY_WORKER_CONCURRENCY`。
+同时执行的任务数永远由 Worker 槽位（旋钮 A）物理约束。无论 MAX_ACTIVE_JOBS 设为多少——哪怕设为 0（禁用）——执行中的任务也不会超过 `Pod 数 × WORKER_CONCURRENCY`。
 
 关键区别：
 - 总并行槽数 = 同时在**执行**的任务数（执行容量，由 Worker 物理决定）
@@ -333,7 +333,7 @@ MAX_ACTIVE_JOBS = 0  # 0 或不配置 → 禁用创建守卫，队列可无限�
 
 **旋钮 C — 单任务时长**（一次 AI 调用允许跑多久）
 
-`MODEL_CALL_TIMEOUT_SECONDS` 控制 L1 主截断时长。调大时必须同步提高 `CELERY_SOFT_TIME_LIMIT`，约束关系见 5.5 节。
+`MODEL_CALL_TIMEOUT_SECONDS` 控制 L1 主截断时长。调大时，L3/L4/L5 会按 buffer 自动派生；通常只需要确认 buffer 是否仍满足 5.5 节推荐值。
 
 ### 4.4 API 创建 Job 的三步流程与可靠性
 
@@ -388,8 +388,8 @@ Worker 使用 NullPool，每个并发任务独占一条 DB 连接，约束更严
 
 ```
 Worker Pod 有效上限 = min(
-    floor(PG 可用连接数 × 50% / CELERY_WORKER_CONCURRENCY),
-    floor(LLM API 并发上限 / CELERY_WORKER_CONCURRENCY)
+    floor(PG 可用连接数 × 50% / WORKER_CONCURRENCY),
+    floor(LLM API 并发上限 / WORKER_CONCURRENCY)
 )
 ```
 
@@ -403,7 +403,7 @@ Worker Pod 有效上限 = min(
 
 #### 参考部署场景
 
-以下以 `CELERY_WORKER_CONCURRENCY=4`、`API pool_size=5` 为基准（需结合实际 LLM 账号上限，取两者较小值）：
+以下以 `WORKER_CONCURRENCY=4`、`API pool_size=5` 为基准（需结合实际 LLM 账号上限，取两者较小值）：
 
 | 场景 | PG max_conn | API Pod | Worker Pod | 总并行槽 | 峰值 DB 连接 | MAX_ACTIVE_JOBS 建议 |
 |------|-------------|---------|-----------|---------|------------|-------------------|
@@ -415,13 +415,13 @@ Worker Pod 有效上限 = min(
 
 #### 为什么不能随意设置大 Pod 数
 
-以 `Worker Pod = 100`、`CELERY_WORKER_CONCURRENCY = 4`（总槽 400）为例：
+以 `Worker Pod = 100`、`WORKER_CONCURRENCY = 4`（总槽 400）为例：
 
 - 峰值需要 400 条 DB 并发连接，PostgreSQL 默认 `max_connections=100` → DB 连接立即耗尽，所有任务报错
 - LLM 账号有效并发 = 30（Tier 1）→ 400 槽中 370 槽空转，实际吞吐等于 30 个槽
 - 每个多余 Pod 消耗 100~300 MB 内存（Celery worker 进程），集群资源浪费
 
-**结论：有效并行上限 = min(DB 连接上限, LLM API 并发上限) / CELERY_WORKER_CONCURRENCY。超出此值增加 Pod 不增加吞吐，只增加资源消耗和故障风险。**
+**结论：有效并行上限 = min(DB 连接上限, LLM API 并发上限) / WORKER_CONCURRENCY。超出此值增加 Pod 不增加吞吐，只增加资源消耗和故障风险。**
 
 #### 突破 DB 连接上限：引入 PgBouncer
 
@@ -440,8 +440,8 @@ HPA 不设上限时，队列突增可能触发扩出超限数量的 Pod，导致
 
 ```
 HPA maxReplicas ≤ min(
-    floor(PG 可用连接数 × 50% / CELERY_WORKER_CONCURRENCY),
-    floor(LLM API 并发上限 / CELERY_WORKER_CONCURRENCY)
+    floor(PG 可用连接数 × 50% / WORKER_CONCURRENCY),
+    floor(LLM API 并发上限 / WORKER_CONCURRENCY)
 )
 ```
 
@@ -488,9 +488,9 @@ asyncio.wait_for(litellm.acompletion(), timeout=T)      ← L1 主截断（可�
 |----|------|---------|---------|--------|
 | L1 | `asyncio.wait_for` | `MODEL_CALL_TIMEOUT_SECONDS` | coroutine/Future 取消 | 可靠 |
 | L2 | litellm `timeout=` → httpx | 同 L1 | 线程内 HTTP 读取 | 对 chunked 无效，仅作线程退出上限 |
-| L3 | Celery SIGALRM（软超时） | `CELERY_SOFT_TIME_LIMIT` | 进程内所有阻塞 I/O | 可靠（Unix 信号） |
-| L4 | Celery SIGKILL（硬超时） | `CELERY_TIME_LIMIT` | 进程强杀 | 绝对可靠 |
-| L5 | stale running 扫描 | `JOB_STALE_RUNNING_SECONDS` | DB 中僵死 running job | 可靠（Worker 重启或定期扫描触发） |
+| L3 | Celery SIGALRM（软超时） | `celery_soft_time_limit` | 进程内所有阻塞 I/O | 可靠（Unix 信号） |
+| L4 | Celery SIGKILL（硬超时） | `celery_time_limit` | 进程强杀 | 绝对可靠 |
+| L5 | stale running 扫描 | `job_stale_running_seconds` | DB 中僵死 running job | 可靠（Worker 重启或定期扫描触发） |
 
 **关于线程泄漏**：L1 触发后，`asyncio.wait_for` 取消的是协程/Future，**无法终止已运行的线程**。线程继续存在，但有界退出：L2（litellm timeout 作为线程内上限）+ L3（SIGALRM 中断线程阻塞 I/O）。线程不持有 DB 连接（NullPool 保证），资源消耗有界，属于可接受范围。
 
@@ -566,23 +566,31 @@ async def _process(job_id: str):
 
 ### 5.5 配置约束
 
-以下约束关系必须在启动时校验，违反则拒绝启动：
+L3/L4/L5 不再由用户直接配置绝对值，而是由一个锚点和三个 buffer 派生：
 
 ```
-MODEL_CALL_TIMEOUT_SECONDS < CELERY_SOFT_TIME_LIMIT     （差值建议 ≥ 300s）
-CELERY_SOFT_TIME_LIMIT     < CELERY_TIME_LIMIT           （差值建议 ≥ 60s）
-CELERY_TIME_LIMIT          < JOB_STALE_RUNNING_SECONDS   （差值建议 ≥ 600s）
+MODEL_CALL_TIMEOUT_SECONDS
+  + CELERY_SOFT_TIMEOUT_BUFFER_SECONDS
+  = celery_soft_time_limit
+
+celery_soft_time_limit
+  + CELERY_HARD_TIMEOUT_BUFFER_SECONDS
+  = celery_time_limit
+
+celery_time_limit
+  + JOB_STALE_RUNNING_BUFFER_SECONDS
+  = job_stale_running_seconds
 ```
 
-用 pydantic `model_validator` 实现：配置错误在进程启动时立即抛 `ValidationError`，不会带着错误配置上线。
+buffer 必须大于 0；低于推荐值时启动记录 warning。这样用户调大 L1 后，后续兜底边界自动跟随，不需要同时维护多个绝对值。
 
 **三个典型场景的参考配置：**
 
-| 场景 | MODEL_CALL_TIMEOUT_SECONDS | CELERY_SOFT_TIME_LIMIT | CELERY_TIME_LIMIT | JOB_STALE_RUNNING_SECONDS |
-|------|---------------------------|----------------------|-----------------|--------------------------|
-| 短文本（< 5000 字） | 300 | 900 | 960 | 1800 |
-| 标准场景（默认） | 600 | 1800 | 1860 | 2460 |
-| 超长文本 / 慢代理 | 1200 | 2400 | 2460 | 3600 |
+| 场景 | MODEL_CALL_TIMEOUT_SECONDS | CELERY_SOFT_TIMEOUT_BUFFER_SECONDS | CELERY_HARD_TIMEOUT_BUFFER_SECONDS | JOB_STALE_RUNNING_BUFFER_SECONDS |
+|------|---------------------------|------------------------------------|-----------------------------------|----------------------------------|
+| 短文本（< 5000 字） | 300 | 300 | 60 | 600 |
+| 标准场景（默认） | 600 | 300 | 60 | 600 |
+| 超长文本 / 慢代理 | 1200 | 300 | 60 | 600 |
 
 **重试配置说明**：`CELERY_MAX_RETRIES=0`（默认不重试）。超时触发后若有剩余重试次数，启动全新 Celery task，所有超时计时从 0 重置。调用方总等待上限 = `(MODEL_CALL_TIMEOUT_SECONDS + CELERY_RETRY_DELAY) × (CELERY_MAX_RETRIES + 1)`。注意：重试适合模型临时过载，不适合输入过长导致的超时（重试仍会超时）。
 
@@ -592,7 +600,7 @@ CELERY_TIME_LIMIT          < JOB_STALE_RUNNING_SECONDS   （差值建议 ≥ 600
 
 对 chunked 响应无效（见 5.1）。真正的总时长截断只有 `asyncio.wait_for`（L1）。无论使用 litellm 还是原生 SDK，这条规则都成立。
 
-**误区 2：以为 CELERY_SOFT_TIME_LIMIT 是主超时**
+**误区 2：以为 celery_soft_time_limit 是主超时**
 
 L3 是后备保障，正常路径由 L1 负责。两者都会触发，但 L1 先触发（例如 600s vs 1800s）。L3 只在 L1 因极端情况未能触发时才介入。
 
@@ -600,9 +608,9 @@ L3 是后备保障，正常路径由 L1 负责。两者都会触发，但 L1 先
 
 `CELERY_MAX_RETRIES` 同时控制 L1（asyncio.TimeoutError）和 L3（SoftTimeLimitExceeded）。两类超时统一进入同一重试策略。
 
-**误区 4：CELERY_SOFT_TIME_LIMIT 设得和 MODEL_CALL_TIMEOUT_SECONDS 一样**
+**误区 4：把 Celery soft timeout buffer 设得过小**
 
-例如都设 600s：L1 触发后进入重试/终态逻辑的 DB 写入和 Callback 发送需要时间，此时 SIGALRM 也触发，两个超时叠加会导致状态写入不完整。`CELERY_SOFT_TIME_LIMIT` 至少要比 `MODEL_CALL_TIMEOUT_SECONDS` 大 300s（即 5.5 节的配置约束）。
+L1 触发后进入重试/终态逻辑的 DB 写入和 Callback 发送需要时间。如果 `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` 太小，SIGALRM 可能在收尾期间触发，两个超时叠加会导致状态写入不完整。该 buffer 推荐至少 300s。
 
 ---
 
@@ -657,7 +665,7 @@ def run_recovery():
     # 1. 孤儿 queued Job 重投递
     #    status=queued AND celery_task_id IS NULL AND created_at < now - JOB_ORPHAN_TIMEOUT_SECONDS
     # 2. 僵死 running Job 强制 fail
-    #    status=running AND started_at < now - JOB_STALE_RUNNING_SECONDS
+    #    status=running AND started_at < now - settings.job_stale_running_seconds
 ```
 
 **多 Worker 并发扫描——两类 Job 各有 CAS 保护**：
@@ -701,7 +709,7 @@ DB 中 status = running，Redis 中无对应消息
   → 任务既不执行，也不失败，永久卡住
   ↓
 stale running 扫描介入
-  → started_at 超过 JOB_STALE_RUNNING_SECONDS
+  → started_at 超过 job_stale_running_seconds
   → 强制标记 failed，发送 Callback
 ```
 
@@ -887,13 +895,13 @@ class AIJob(Base):
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `CELERY_WORKER_CONCURRENCY` | CPU 核数 | 单 Pod 同时执行的任务数；AI 任务建议 2~4，扩容靠加 Pod 而非调高此值 |
+| `WORKER_CONCURRENCY` | CPU 核数 | 单 Pod 同时执行的任务数；AI 任务建议 2~4，扩容靠加 Pod 而非调高此值 |
 | `MAX_ACTIVE_JOBS` | 50 | queued+running 总积压上限，超出返回 503；设为 0 则禁用检查（无上限） |
 
 关系说明：
 
 ```
-总并行槽数  = Worker Pod 数 × CELERY_WORKER_CONCURRENCY  （执行容量）
+总并行槽数  = Worker Pod 数 × WORKER_CONCURRENCY  （执行容量）
 MAX_ACTIVE_JOBS                                          （积压上限，含排队+执行）
 
 MAX_ACTIVE_JOBS 必须 ≥ 总并行槽数，否则执行槽有空余时仍会触发 503
@@ -905,8 +913,8 @@ MAX_ACTIVE_JOBS 必须 ≥ 总并行槽数，否则执行槽有空余时仍会�
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `MODEL_CALL_TIMEOUT_SECONDS` | 300 | L1 主截断 + L2 线程退出上限 |
-| `CELERY_SOFT_TIME_LIMIT` | 1800 | L3 Celery SIGALRM；必须 > MODEL_CALL_TIMEOUT_SECONDS，差值 ≥ 300s |
-| `CELERY_TIME_LIMIT` | 1860 | L4 Celery SIGKILL；必须 > CELERY_SOFT_TIME_LIMIT，差值 ≥ 60s |
+| `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` | 300 | L3 Celery SIGALRM 相对 L1 的 buffer；派生 `celery_soft_time_limit` |
+| `CELERY_HARD_TIMEOUT_BUFFER_SECONDS` | 60 | L4 Celery SIGKILL 相对 L3 的 buffer；派生 `celery_time_limit` |
 | `CELERY_MAX_RETRIES` | 0 | 超时重试次数；0 = 不重试，直接 failed；同时控制 L1 和 L3 |
 | `CELERY_RETRY_DELAY` | 60 | 重试等待秒数，仅 MAX_RETRIES > 0 时有意义 |
 
@@ -914,7 +922,7 @@ MAX_ACTIVE_JOBS 必须 ≥ 总并行槽数，否则执行槽有空余时仍会�
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `JOB_STALE_RUNNING_SECONDS` | 2460 | L5 扫描阈值；推荐 ≥ CELERY_TIME_LIMIT + 600s |
+| `JOB_STALE_RUNNING_BUFFER_SECONDS` | 600 | L5 扫描阈值相对 L4 的 buffer；派生 `job_stale_running_seconds` |
 | `JOB_ORPHAN_TIMEOUT_SECONDS` | 300 | queued + celery_task_id IS NULL 超过此秒视为孤儿 |
 | `CALLBACK_TIMEOUT_SECONDS` | 5 | 单次 Callback HTTP 请求超时 |
 | `CALLBACK_SIGNING_SECRET` | — | HMAC 签名密钥，不得为空 |
@@ -925,11 +933,11 @@ MAX_ACTIVE_JOBS 必须 ≥ 总并行槽数，否则执行槽有空余时仍会�
 | 现象 | 排查方向 | 调整旋钮 |
 |------|---------|---------|
 | 调用方频繁收到 503 | count_active_jobs 是否达到上限 | 扩 Worker Pod 数，或临时提高 `MAX_ACTIVE_JOBS`；内部系统可设为 0 禁用 |
-| Worker 不空闲但任务仍积压 | 并发度是否过低 | 提高 `CELERY_WORKER_CONCURRENCY` 或扩 Pod |
-| running 任务长期不结束 | Worker 是否还活着，消息是否在队列 | 重启 Worker Pod 触发启动扫描；或临时降低 `JOB_STALE_RUNNING_SECONDS` |
-| 滚动部署时任务频繁重跑 | `terminationGracePeriodSeconds` 是否小于 `CELERY_TIME_LIMIT` | 见第十一章 |
-| AI 调用超时频繁 | 输入是否过长，或模型响应慢 | 提高 `MODEL_CALL_TIMEOUT_SECONDS`，同步提高 `CELERY_SOFT_TIME_LIMIT` |
-| 超时恢复扫描误杀正常任务 | `JOB_STALE_RUNNING_SECONDS` 是否过小 | 提高 `JOB_STALE_RUNNING_SECONDS`（不能低于 CELERY_TIME_LIMIT + 600s） |
+| Worker 不空闲但任务仍积压 | 并发度是否过低 | 提高 `WORKER_CONCURRENCY` 或扩 Pod |
+| running 任务长期不结束 | Worker 是否还活着，消息是否在队列 | 重启 Worker Pod 触发启动扫描；或临时降低 `JOB_STALE_RUNNING_BUFFER_SECONDS` |
+| 滚动部署时任务频繁重跑 | `terminationGracePeriodSeconds` 是否小于派生的 `celery_time_limit` | 见第十一章 |
+| AI 调用超时频繁 | 输入是否过长，或模型响应慢 | 提高 `MODEL_CALL_TIMEOUT_SECONDS`，派生 L3/L4/L5 会自动跟随 |
+| 超时恢复扫描误杀正常任务 | `JOB_STALE_RUNNING_BUFFER_SECONDS` 是否过小 | 提高 `JOB_STALE_RUNNING_BUFFER_SECONDS` |
 
 **环境变量修改后必须重启才生效**：Settings 在进程启动时通过 `@lru_cache` 加载并缓存，运行期间修改不会自动重新读取。修改任意参数后需重启 API 和 Worker 两个进程。
 
@@ -949,7 +957,7 @@ MAX_ACTIVE_JOBS 必须 ≥ 总并行槽数，否则执行槽有空余时仍会�
 
 **Beat 的特殊约束**：Beat 是单例调度器，`replicas` 必须固定为 `1`。多实例运行会导致任务重复投递。Beat 不可用期间，由 Worker 启动扫描（7.1 节）作为保障。
 
-**总并行槽数**：Worker Pod 数 × `CELERY_WORKER_CONCURRENCY`，是系统吞吐上限的核心参数。
+**总并行槽数**：Worker Pod 数 × `WORKER_CONCURRENCY`，是系统吞吐上限的核心参数。
 
 **扩缩容操作说明**：在第 4.5 节约束范围内，API Pod 和 Worker Pod 的水平扩缩容是纯运维操作，不需要修改任何代码。HPA `maxReplicas` 必须 ≤ Worker Pod 有效上限，防止自动扩出超出 DB 连接或 LLM 并发限制的 Pod 数量（见 4.5 节）。
 
@@ -960,12 +968,12 @@ K8s 发送 SIGTERM 后，等待 `terminationGracePeriodSeconds` 秒未退出则�
 约束：
 
 ```
-terminationGracePeriodSeconds ≥ CELERY_TIME_LIMIT + 60s（buffer）
+terminationGracePeriodSeconds ≥ celery_time_limit + 60s（buffer）
 ```
 
 违反此约束时：Pod 被 SIGKILL，任务通过路径 A（第七章 7.2）回队重新执行。不会丢失数据，但任务重跑会浪费 AI API 调用，并增加调用方的整体等待时间。
 
-示例：`CELERY_TIME_LIMIT=1860` 时，建议配置 `terminationGracePeriodSeconds: 1920`。
+示例：派生的 `celery_time_limit=960` 时，建议配置 `terminationGracePeriodSeconds: 1020`。
 
 ### 11.3 HPA 指标建议
 
@@ -974,7 +982,7 @@ AI 任务等待模型响应期间 CPU 接近空闲，**不适合用 CPU 利用�
 推荐指标：Redis 队列长度（`LLEN celery`）
 
 ```
-触发扩容：队列长度 > Worker Pod 数 × CELERY_WORKER_CONCURRENCY × 1.5
+触发扩容：队列长度 > Worker Pod 数 × WORKER_CONCURRENCY × 1.5
 触发缩容：队列持续为 0 超过 N 分钟（缩容时需等待当前任务完成）
 ```
 
@@ -990,11 +998,11 @@ AI 任务等待模型响应期间 CPU 接近空闲，**不适合用 CPU 利用�
 
 - [ ] Celery 五项必须配置已设置（4.1）：`task_acks_late`、`task_reject_on_worker_lost`、`worker_prefetch_multiplier`、`task_serializer`、`accept_content`
 - [ ] Worker 数据库连接使用 NullPool（4.2）
-- [ ] 超时三项约束关系已通过启动时校验（5.5）：`MODEL_CALL_TIMEOUT_SECONDS < SOFT_TIME_LIMIT < TIME_LIMIT < STALE_RUNNING_SECONDS`
+- [ ] 超时 buffer 已通过启动时校验（5.5）：L3/L4/L5 由 `MODEL_CALL_TIMEOUT_SECONDS` 和三个 buffer 派生
 - [ ] 消费入口已实现终态幂等守卫（6.2）：`status in (succeeded, failed)` 时直接跳过
 - [ ] Worker 启动时触发恢复扫描（7.1）：孤儿 queued Job CAS 重投递 + 僵死 running Job CAS 强制 fail + 强制 fail 后必须 deliver_callback
 - [ ] Callback 签名密钥已配置，接收方已实现签名校验（8.2）
-- [ ] K8s Worker Deployment 的 `terminationGracePeriodSeconds` ≥ `CELERY_TIME_LIMIT` + 60s（11.2）
+- [ ] K8s Worker Deployment 的 `terminationGracePeriodSeconds` ≥ 派生的 `celery_time_limit` + 60s（11.2）
 - [ ] HPA `maxReplicas` 已按 4.5 节有效上限公式设置，防止自动扩容超出 DB 连接或 LLM 并发上限
 
 ### 推荐项

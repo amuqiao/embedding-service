@@ -100,12 +100,13 @@ process_job_task(job_id)
 
 ## 四、超时链
 
-约束关系（启动时校验，违反则拒绝启动）：
+超时链由一个锚点和三个 buffer 派生。用户不直接配置 L3/L4/L5 绝对值：
 
 ```
-L1  MODEL_CALL_TIMEOUT_SECONDS  < L3  CELERY_SOFT_TIME_LIMIT
-L3  CELERY_SOFT_TIME_LIMIT      < L4  CELERY_TIME_LIMIT
-L4  CELERY_TIME_LIMIT           < L5  JOB_STALE_RUNNING_SECONDS
+L1  MODEL_CALL_TIMEOUT_SECONDS
+L3  celery_soft_time_limit      = L1 + CELERY_SOFT_TIMEOUT_BUFFER_SECONDS
+L4  celery_time_limit           = L3 + CELERY_HARD_TIMEOUT_BUFFER_SECONDS
+L5  job_stale_running_seconds   = L4 + JOB_STALE_RUNNING_BUFFER_SECONDS
 ```
 
 本项目默认值：
@@ -113,9 +114,9 @@ L4  CELERY_TIME_LIMIT           < L5  JOB_STALE_RUNNING_SECONDS
 | 层 | 变量 | 默认值 | 作用 |
 |---|---|---|---|
 | L1 | `MODEL_CALL_TIMEOUT_SECONDS` | 600s | `asyncio.wait_for` 截断 LLM 调用，超时 → `JOB_TIMEOUT` |
-| L3 | `CELERY_SOFT_TIME_LIMIT` | 1800s | Celery SIGALRM，L1 极端未触发时的进程级兜底 |
-| L4 | `CELERY_TIME_LIMIT` | 1860s | Celery SIGKILL 强杀，L3 处理超时后的最终保障 |
-| L5 | `JOB_STALE_RUNNING_SECONDS` | 2460s | 恢复扫描阈值，Worker 重启时强制终止僵死 running Job |
+| L3 buffer | `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` | 300s | 派生 Celery soft time limit |
+| L4 buffer | `CELERY_HARD_TIMEOUT_BUFFER_SECONDS` | 60s | 派生 Celery hard time limit |
+| L5 buffer | `JOB_STALE_RUNNING_BUFFER_SECONDS` | 600s | 派生 recovery stale running 阈值 |
 
 L1/L3 超时均触发 `JOB_TIMEOUT` 错误码，由 `CELERY_MAX_RETRIES` 统一控制重试次数（默认 0 不重试）。
 
@@ -136,7 +137,7 @@ pre-generate task_id
 → 失败：跳过（另一 Worker 已抢占）
 ```
 
-**僵死 running Job 强制失败**（`started_at < now - JOB_STALE_RUNNING_SECONDS`）：
+**僵死 running Job 强制失败**（`started_at < now - settings.job_stale_running_seconds`）：
 
 ```
 → mark_failed(code=JOB_TIMEOUT)
@@ -223,14 +224,14 @@ T0+24h 后        → Worker recovery loop 删除 expires_at <= now() 的记录
 | `CALLBACK_SIGNING_SECRET` | Callback HMAC-SHA256 签名密钥 |
 | `OPENAI_API_KEY` | 模型调用密钥 |
 
-### 超时链（四项约束必须满足 L1 < L3 < L4 < L5）
+### 超时链（L3/L4/L5 由 buffer 派生）
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `MODEL_CALL_TIMEOUT_SECONDS` | 600 | L1 asyncio.wait_for 截断 |
-| `CELERY_SOFT_TIME_LIMIT` | 1800 | L3 Celery SIGALRM |
-| `CELERY_TIME_LIMIT` | 1860 | L4 Celery SIGKILL |
-| `JOB_STALE_RUNNING_SECONDS` | 2460 | L5 僵死扫描阈值 |
+| `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` | 300 | L3 相对 L1 的 buffer |
+| `CELERY_HARD_TIMEOUT_BUFFER_SECONDS` | 60 | L4 相对 L3 的 buffer |
+| `JOB_STALE_RUNNING_BUFFER_SECONDS` | 600 | L5 相对 L4 的 buffer |
 
 ### 积压与恢复
 
@@ -256,9 +257,9 @@ T0+24h 后        → Worker recovery loop 删除 expires_at <= now() 的记录
 |---|---|
 | `POST /jobs` 返回 503 | 检查 `queued+running` 总数是否达到 `MAX_ACTIVE_JOBS`；扩 Worker Pod 或临时调高限制 |
 | Job 长期停留在 queued | 检查 Worker 是否存活；Redis 队列是否有消息（`LLEN celery`）；查 `.run/worker.pid` 和 `logs/worker.log` |
-| Job 长期停留在 running | 检查 Worker 日志；`JOB_STALE_RUNNING_SECONDS` 到期后恢复扫描会强制 failed |
+| Job 长期停留在 running | 检查 Worker 日志；派生的 `job_stale_running_seconds` 到期后恢复扫描会强制 failed |
 | 收不到 Callback | 检查 `CALLBACK_SIGNING_SECRET` 和 `ALLOW_INSECURE_CALLBACKS`；查 worker 日志中的 callback 重试记录 |
 | 模型输出 `MODEL_OUTPUT_INVALID` | 检查 `prompts.yaml` 的 output_contract 标记是否与 `executor.py` 解析规则一致 |
 | OSS 写入失败 | 检查 `OSS_BUCKET`、`OSS_ACCESS_KEY_ID/SECRET`、endpoint 配置；确认 bucket 权限 |
-| Worker 重启后任务重跑 | 正常行为（路径 A，`acks_late` + `reject_on_worker_lost`）；检查 `terminationGracePeriodSeconds` ≥ `CELERY_TIME_LIMIT` + 60s |
+| Worker 重启后任务重跑 | 正常行为（路径 A，`acks_late` + `reject_on_worker_lost`）；检查 `terminationGracePeriodSeconds` ≥ 派生的 `celery_time_limit` + 60s |
 | 测试验证 | `./scripts/dev.sh check`（语法+pytest）；完整链路：`./scripts/dev.sh mock-smoke` |

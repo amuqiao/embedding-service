@@ -55,7 +55,7 @@ Job 吞吐由三层共同决定：
 ```text
 接单上限：MAX_ACTIVE_JOBS
 执行槽位：Worker 实例数 × WORKER_CONCURRENCY
-单 Job 时长：模型响应时间、超时链、分块配置、重试次数
+单 Job 时长：模型响应时间、派生超时链、分块配置、重试次数
 ```
 
 ### 接单上限
@@ -105,29 +105,36 @@ Worker 侧每个任务使用 `NullPool` 创建短连接，不长期持有连接�
 
 ## 超时与重试
 
-超时链必须满足：
+超时链由一个锚点和三个 buffer 派生：
 
 ```text
 MODEL_CALL_TIMEOUT_SECONDS
-  < CELERY_SOFT_TIME_LIMIT
-  < CELERY_TIME_LIMIT
-  < JOB_STALE_RUNNING_SECONDS
+  + CELERY_SOFT_TIMEOUT_BUFFER_SECONDS
+  = celery_soft_time_limit
+
+celery_soft_time_limit
+  + CELERY_HARD_TIMEOUT_BUFFER_SECONDS
+  = celery_time_limit
+
+celery_time_limit
+  + JOB_STALE_RUNNING_BUFFER_SECONDS
+  = job_stale_running_seconds
 ```
 
-建议安全间隔：
+推荐 buffer：
 
 ```text
-CELERY_SOFT_TIME_LIMIT - MODEL_CALL_TIMEOUT_SECONDS >= 300
-CELERY_TIME_LIMIT - CELERY_SOFT_TIME_LIMIT >= 60
-JOB_STALE_RUNNING_SECONDS - CELERY_TIME_LIMIT >= 600
+CELERY_SOFT_TIMEOUT_BUFFER_SECONDS >= 300
+CELERY_HARD_TIMEOUT_BUFFER_SECONDS >= 60
+JOB_STALE_RUNNING_BUFFER_SECONDS >= 600
 ```
 
 | 变量 | 默认 | 作用 | 排障方向 |
 |---|---:|---|---|
 | `MODEL_CALL_TIMEOUT_SECONDS` | `300` 或 env 中覆盖 | L1 主超时，`asyncio.wait_for` 截断模型调用 | 模型慢、长文本超时时优先调它 |
-| `CELERY_SOFT_TIME_LIMIT` | `1800` | L3 进程级软超时 | 必须比 L1 留出状态写入和 callback 时间 |
-| `CELERY_TIME_LIMIT` | `1860` | L4 硬超时 | 必须大于软超时 |
-| `JOB_STALE_RUNNING_SECONDS` | `2460` | L5 僵死 running 扫描阈值 | 过小会误杀正常长任务 |
+| `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` | `300` | L3 软超时相对 L1 的 buffer | 低于推荐值可能影响 L1 后状态写入和 callback |
+| `CELERY_HARD_TIMEOUT_BUFFER_SECONDS` | `60` | L4 硬超时相对 L3 的 buffer | 低于推荐值可能导致 soft-limit 来不及收尾 |
+| `JOB_STALE_RUNNING_BUFFER_SECONDS` | `600` | L5 stale 扫描相对 L4 的 buffer | 过小会误杀刚被 SIGKILL 的任务 |
 | `CELERY_MAX_RETRIES` | `0` | L1/L3 超时后的 Celery 重试次数 | 模型临时过载可设大；输入过长不建议靠重试解决 |
 | `CELERY_RETRY_DELAY` | `60` | 重试等待秒数 | 仅 `CELERY_MAX_RETRIES > 0` 有意义 |
 | `CELERY_RESULT_EXPIRES` | `86400` | Celery result backend 保留时间 | 通常无需按吞吐调大 |
@@ -163,6 +170,7 @@ JOB_STALE_RUNNING_SECONDS - CELERY_TIME_LIMIT >= 600
 | `CALLBACK_SIGNING_SECRET` | Callback HMAC 签名密钥 | 调用方验签失败时优先核对 |
 | `ALLOW_INSECURE_CALLBACKS` | 是否允许本地 HTTP callback | 非本地环境应关闭 |
 | `CALLBACK_TIMEOUT_SECONDS` | 单次 callback HTTP 超时 | Callback 接收端慢时调大 |
+| `CALLBACK_DELIVERY_WINDOW_BUFFER_SECONDS` | Callback 领取窗口 buffer | 代码派生 `callback_delivery_timeout_seconds`，避免和单次超时冲突 |
 | `OPENAI_API_KEY` | 模型调用密钥 | 不提交；不同 env 文件使用各自账号或项目 key |
 | `OPENAI_BASE_URL` | OpenAI 兼容网关地址 | 代理或私有网关排障时重点核对 |
 | `DEFAULT_MODEL_ID` | 默认模型 ID | 必须在 `/models` 启用列表中 |
@@ -175,7 +183,7 @@ JOB_STALE_RUNNING_SECONDS - CELERY_TIME_LIMIT >= 600
 3. 确认 Redis 连接数、内存、持久化策略和队列堆积监控。
 4. 选择 Worker 实例数和 `WORKER_CONCURRENCY`，得到总执行槽位。
 5. 设置 `MAX_ACTIVE_JOBS >= 总执行槽位 × 2`；内部系统能承受无限排队时才设为 `0`。
-6. 长文本场景同步调整 `MODEL_CALL_TIMEOUT_SECONDS`、`CELERY_SOFT_TIME_LIMIT`、`CELERY_TIME_LIMIT`、`JOB_STALE_RUNNING_SECONDS`。
+6. 长文本场景优先调整 `MODEL_CALL_TIMEOUT_SECONDS`；如需更大收尾窗口，再调整 `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS`、`CELERY_HARD_TIMEOUT_BUFFER_SECONDS`、`JOB_STALE_RUNNING_BUFFER_SECONDS`。
 7. 如果启用 `CELERY_MAX_RETRIES`，同步评估调用方等待时间和模型费用。
 8. 确认 `JOB_ORPHAN_TIMEOUT_SECONDS` 不会在长队列或慢投递场景下过早触发恢复扫描。
 9. compose-full 下确认 `docker-compose.yml environment` 是否覆盖了目标 env 文件中的 worker 并发配置。
@@ -187,7 +195,7 @@ JOB_STALE_RUNNING_SECONDS - CELERY_TIME_LIMIT >= 600
 |---|---|
 | `POST /jobs` 返回 503 / `QUEUE_FULL` | `MAX_ACTIVE_JOBS`、queued+running 数量、Worker 是否有足够槽位 |
 | Job 长期 queued | Worker 是否运行、Redis 是否可达、`WORKER_POOL` / `WORKER_CONCURRENCY` 是否符合预期 |
-| Job 长期 running | Worker 日志、模型调用耗时、超时链、`JOB_STALE_RUNNING_SECONDS` |
+| Job 长期 running | Worker 日志、模型调用耗时、派生超时链、`JOB_STALE_RUNNING_BUFFER_SECONDS` |
 | 改了 `.env.test` 并发但 compose 无变化 | 是否通过 `ENV_FILE=.env.test` 启动；`WORKER_POOL` 是否仍为 `solo` |
 | 模型频繁超时 | 输入长度、`MODEL_CALL_TIMEOUT_SECONDS`、分块配置、模型网关延迟 |
 | 重试后费用明显增加 | `CELERY_MAX_RETRIES`、`MODEL_CALL_MAX_RETRIES`、输入是否必然超时 |

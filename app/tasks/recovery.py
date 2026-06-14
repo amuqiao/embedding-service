@@ -74,7 +74,7 @@ async def _run_recovery(db) -> dict:
             else:
                 logger.info("recovery: unpublished job %s already re-claimed by peer, skipping", job.id)
 
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.JOB_STALE_RUNNING_SECONDS)
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.job_stale_running_seconds)
         stale = await JobRepo.find_stale_running_jobs(
             db,
             stale_cutoff,

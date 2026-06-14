@@ -42,7 +42,7 @@ def process_job_task(self, job_id: str):
         return asyncio.run(_process(job_id, self.request.id))
     except (SoftTimeLimitExceeded, asyncio.TimeoutError) as exc:
         # 两类超时（asyncio.wait_for L1 / Celery SIGALRM L3）统一重试策略。
-        # 每次 self.retry() 启动全新 Celery task，asyncio.wait_for 和 CELERY_SOFT_TIME_LIMIT
+        # 每次 self.retry() 启动全新 Celery task，asyncio.wait_for 和 celery_soft_time_limit
         # 均从 0 重新计时；CELERY_MAX_RETRIES=0（默认）表示不重试，直接进入终态。
         if self.request.retries >= settings.CELERY_MAX_RETRIES:
             try:
@@ -178,7 +178,7 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
         if job.callback_attempts >= settings.CALLBACK_MAX_DELIVERY_ATTEMPTS:
             return False
         now = datetime.now(timezone.utc)
-        delivery_deadline = now + timedelta(seconds=settings.CALLBACK_DELIVERY_TIMEOUT_SECONDS)
+        delivery_deadline = now + timedelta(seconds=settings.callback_delivery_timeout_seconds)
         claimed = await JobRepo.mark_callback_delivering(
             db,
             job.id,

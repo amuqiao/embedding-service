@@ -1,252 +1,376 @@
-# 生产就绪性评审报告
+# MVP Job 流程生产就绪性评审与调参指南
 
-本文基于当前代码、部署脚本和验证入口，给出面向上线决策的证据口径、前置条件和剩余风险。
+本文评审当前服务作为 MVP 上生产时，异步 Job 生命周期是否稳定、健壮、可恢复、可横向扩展，并说明上线后如何通过环境变量控制吞吐量和超时边界。
 
 评审日期：2026-06-14
 
 ## 文档职责
 
-本文回答三个问题：
+本文聚焦一个问题：**这个 AI Job 服务能否以最小但可控的方式上生产**。
 
-- 当前代码是否具备生产运行的基础控制。
-- 哪些结论已有代码或脚本证据，哪些仍只是配置推演。
-- 上线前必须补齐哪些环境、验证、安全和容量证据。
+本文负责：
 
-本文不替代生产发布方案、K8s 配置、云平台 Secret 管理、压测报告或事故预案。仓库当前维护边界仍是本地开发、compose 运行形态和 AI 能力层服务本身。
+- 评审 API Pod、Celery Worker Pod 横向扩展和重启时，Job 生命周期是否稳定。
+- 说明哪些环境变量控制吞吐量、积压、超时、恢复和 Callback 重试。
+- 给出 MVP 推荐参数和常见调参方式，确保上线后优先通过“改 env + 重启服务”处理运行问题。
+- 区分当前 MVP 必须具备的 Job 骨架能力，以及后续可按需增强的能力。
+
+本文不追求完整生产平台清单，不把多租户、严格队列配额、全量告警平台、callback 域名 allowlist、分块 workflow 生产化、30+ 并发压测等能力作为当前 MVP 的前置阻塞项。
 
 ## 一、核心结论
 
-**结论：当前服务达到“有条件生产就绪”，不应表述为“已完成生产验证”。**
+**结论：当前服务具备“有条件 MVP 生产就绪”的 Job 流程骨架。**
 
-代码层面已经具备异步 Job、幂等创建、Celery 投递补偿、Worker 多实例竞争保护、终态 Callback、DB/Redis readiness、对象存储抽象和本地/compose 验证入口。若生产环境满足本文列出的前置条件，可以进入测试环境或灰度发布。
-
-但以下能力尚未被仓库内证据证明：
-
-- 30 并发真实压测通过。
-- 无限队列在目标资源容量下可长期稳定运行。
-- K8s Deployment、Probe、Secret、滚动发布和回滚链路已接入。
-- 目标环境真实模型、OSS、Callback 接收方验签和出站网络策略已端到端验证。
-
-### 上线判断
-
-| 维度 | 结论 | 说明 |
-| --- | --- | --- |
-| API 横向扩展 | 有条件支持 | API 无内存态；多 Pod 依赖共享 PostgreSQL、Redis 和对象存储。生产必须使用 `STORAGE_BACKEND=aliyun_oss` 或等价共享存储。 |
-| Worker 横向扩展 | 有条件支持 | Job claim、终态写入、recovery 有 CAS / advisory lock 保护；仍需按 DB 连接数、模型并发额度和 Celery 参数做容量核算。 |
-| 30 并发 Job | 可配置，不等于已验证 | `WORKER_POOL=threads` + `WORKER_CONCURRENCY` + 多 Worker Pod 可达到并发配置；仓库无压测脚本或结果。 |
-| 无限队列 | 不建议这样表述 | `MAX_ACTIVE_JOBS=0` 只是关闭入口软限制；Redis、DB、Job TTL、对象存储和模型额度仍是硬约束。 |
-| 安全基线 | 部分就绪 | Bearer token、常量时间比较、HTTPS callback、HMAC callback、request id 白名单已有；多调用方授权、callback hostname SSRF、生产 Secret 和网络策略仍需确认。 |
-| 发布验证 | 本地和 compose 较完整 | `check`、`smoke`、`workflow-smoke`、`e2e`、`deploy check` 可覆盖本地/compose；缺目标环境 e2e、K8s 和压测证据。 |
-
-## 二、系统运行模型
-
-本服务是小说本地化 AI 能力层，不是业务流程系统。调用方提交单个 Job，本服务异步执行模型任务、写入对象存储产物，并通过查询和 Callback 交付终态。
+当前代码已经形成稳定的异步 Job 生命周期闭环：
 
 ```text
-业务后端 / BFF
+调用方
   │
   │ POST /api/v1/novel-localization-ai/jobs
   ▼
 FastAPI API
   ├─ Bearer token 鉴权
-  ├─ Prompt / model / callback / OSS 输入校验
+  ├─ 校验 job_type / model_id / prompt / source / callback
   ├─ client_request_id 幂等保护
-  ├─ MAX_ACTIVE_JOBS 入口门控
+  ├─ MAX_ACTIVE_JOBS 入口软背压
   ├─ 创建 ai_jobs(status=queued)
-  ├─ 预生成 celery_task_id 并提交
-  └─ apply_async 投递 jobs.process
+  ├─ 写入 celery_task_id 并提交 DB
+  └─ apply_async 投递 jobs.process，成功后记录 celery_published_at
         │
         ▼
 Celery Worker
-  ├─ 按 celery_task_id claim queued Job
-  ├─ 读取对象存储输入
-  ├─ 调用 LiteLLM / OpenAI 兼容模型
-  ├─ 写回大文本 artifacts
-  ├─ 标记 succeeded / failed
-  └─ 补偿投递 Callback
+  ├─ 按 job_id + celery_task_id claim queued/running Job
+  ├─ 读取 OSS 输入
+  ├─ 调用模型
+  ├─ 写回大文本 artifact
+  ├─ CAS 标记 succeeded / failed
+  └─ 投递终态 Callback
 
 Worker recovery loop
-  ├─ queued + celery_task_id IS NULL：重新分配 task_id 并投递
-  ├─ queued + celery_task_id 非空 + celery_published_at IS NULL：替换 task_id 并投递
-  ├─ stale running：CAS 标记 failed 并补发 callback
-  ├─ due callbacks：补偿投递 callback
+  ├─ queued + celery_task_id IS NULL：补 task_id 并重投递
+  ├─ queued + celery_task_id 非空 + celery_published_at IS NULL：替换 task_id 并重投递
+  ├─ stale running：标记 failed(JOB_TIMEOUT) 并补 Callback
+  ├─ due callback：重试终态 Callback
   └─ expired jobs：清理过期记录
 ```
 
-关键约束：
+MVP 上线前必须确认的边界：
 
-```text
-MODEL_CALL_TIMEOUT_SECONDS < CELERY_SOFT_TIME_LIMIT < CELERY_TIME_LIMIT < JOB_STALE_RUNNING_SECONDS
-```
+- 当前只服务单调用方 / 单信任域。
+- API Pod 和 Worker Pod 共享同一组 PostgreSQL、Redis 和 OSS。
+- 生产使用共享对象存储，例如 `STORAGE_BACKEND=aliyun_oss`。
+- Worker 吞吐通过 `Worker Pod 数 × WORKER_CONCURRENCY` 控制。
+- API 接单上限通过 `MAX_ACTIVE_JOBS` 控制。
+- 模型、Celery、stale running 和 Callback 超时链按本文约束配置。
+- 目标环境完成一次主链路 smoke/e2e、OSS 读写、Callback 验签、Worker 重启恢复验证。
 
-该超时链已在配置加载阶段校验，配置错误会启动失败。
+不应在当前 MVP 承诺：
 
-## 三、已具备的生产控制
+- 无限队列。
+- 已验证 30+ 并发。
+- 多调用方 / 多租户隔离。
+- 分块 workflow 已生产化。
+- Redis 已发布消息极端丢失后自动恢复。
+- 完整生产平台成熟度。
 
-| 控制项 | 当前证据 | 评审结论 |
+## 二、Job 骨架健壮性评审
+
+| 生命周期环节 | 当前机制 | MVP 结论 |
 | --- | --- | --- |
-| Job 幂等 | `JobRepo.advisory_lock_for_client_request()` 对 `caller_id + client_request_id` 加事务级 advisory lock；24 小时内返回已有 Job。 | 单调用方场景可用。多调用方场景需先改造 `caller_id` 来源。 |
-| 投递一致性 | `POST /jobs` 先写入 `celery_task_id` 并提交，再 `apply_async`，成功后记录 `celery_published_at`；recovery 覆盖未发布窗口。 | 能覆盖 API commit 后、publish 前崩溃等常见窗口。 |
-| Worker 双执行保护 | `mark_running_if_queued()` 使用 `WHERE status='queued' AND celery_task_id=:task_id` 抢占；终态写入也校验 running + task_id。 | 支持多 Worker 并发竞争下避免同一 task_id 双终态。 |
-| stale running 处理 | recovery 使用 `mark_failed_if_running()` 后再补发 Callback。 | 可避免多 Worker recovery 重复终态通知。 |
-| Callback 补偿 | `callback_status`、`callback_attempts`、`callback_next_retry_at` 和 recovery due callback 扫描已建模。 | 具备失败重试与补偿框架。 |
-| 健康检查 | `/health` 返回基础存活；`/healthz` 实际检查 DB `SELECT 1` 和 Redis `ping`，失败返回 503。 | 生产 readiness 应接 `/healthz`，liveness 可接 `/health`。 |
-| DB 连接池 | API 侧有 `DB_POOL_SIZE`、`DB_MAX_OVERFLOW`、`DB_POOL_RECYCLE`；Worker 侧使用 `NullPool`。 | 可估算横向扩容连接数，但需要目标 PG 配额确认。 |
-| Worker 扩展入口 | `docker-compose.yml` 使用 `/app/start-worker.sh`；脚本支持 `WORKER_POOL`、`WORKER_CONCURRENCY`、`WORKER_MAX_TASKS_PER_CHILD`。 | 扩展参数已从硬编码中释放。 |
-| 对象存储 | `local` 和 `aliyun_oss` 后端已抽象；Aliyun OSS 模式校验 bucket / region。 | 多节点生产必须使用共享对象存储。 |
-| 安全基线 | Bearer token 使用 `secrets.compare_digest()`；Callback 支持 HMAC；API `X-Request-ID` 有长度和格式白名单。 | 基线可用，但仍有生产前置安全项。 |
+| 建单幂等 | `caller_id + client_request_id` 使用 PostgreSQL advisory lock；24 小时内返回已有 Job。 | 单调用方 MVP 可用。 |
+| 入口背压 | `MAX_ACTIVE_JOBS` 检查 queued + running 总数，达到上限返回 `QUEUE_FULL`。 | 可控，但不是严格配额。 |
+| 投递一致性 | API 先写 `celery_task_id` 并提交 DB，再投递 Celery，投递成功后写 `celery_published_at`。 | 覆盖“DB 已提交、Celery 未投递”的常见窗口。 |
+| Worker 抢占 | Worker 校验 DB 中 `celery_task_id`，并用 `status='queued' AND celery_task_id=:task_id` 抢占。 | 支持多 Worker Pod 并发竞争。 |
+| 终态写入 | succeeded / failed 写入要求 Job 仍为 running 且 task_id 匹配。 | 避免旧 task 或重复 task 覆盖终态。 |
+| 模型超时 | `MODEL_CALL_TIMEOUT_SECONDS` 截断模型调用，Celery soft/hard time limit 兜底。 | 可通过 env 控制。 |
+| Worker 崩溃 | Celery `acks_late` + `task_reject_on_worker_lost` 配合 running claim；stale running 由 recovery 收敛。 | 可恢复到明确终态。 |
+| API 崩溃 | 已落库但未投递、未确认发布的 queued Job 由 recovery 重投递。 | 可恢复。 |
+| Callback 失败 | 终态后立即尝试；失败后通过 `callback_next_retry_at` 和 recovery loop 补偿。 | 可控重试。 |
+| 过期清理 | recovery loop 清理 `expires_at <= now()` 的 Job。 | MVP 可用，但必须保证排队 + 执行 + Callback 收敛小于 24 小时 TTL。 |
 
-## 四、生产前置条件
+结论：Job 主流程骨架是稳定的。当前最大约束不是代码结构，而是上线时必须正确配置吞吐、超时、共享存储和目标环境容量。
 
-上线前必须把以下事项作为发布准入条件，而不是上线后的观察项。
+## 三、横向扩展与重启稳定性
 
-### 1. 明确调用方信任边界
+### API Pod
 
-当前 `require_service_auth()` 验证单个 `SERVICE_API_KEY` 后返回固定 `caller_id="default"`。`GET /jobs/{job_id}` 按 UUID 查询，不按真实租户或调用方隔离。
+API Pod 不持有内存态，横向扩展的前提是共享 PostgreSQL、Redis 和对象存储。
 
-因此只能按 **单调用方、单信任域、服务端到服务端** 模式上线。若未来多个业务方、多个租户或多个环境共用同一服务，必须先改造鉴权和 `caller_id` 派生规则，并在查询路径加入调用方隔离。
+API Pod 重启影响：
 
-### 2. 生产必须使用共享对象存储
+- 已提交 DB 的 Job 不会丢。
+- API 在 commit 前崩溃，调用方应重试；如果带 `client_request_id`，重复提交会命中幂等。
+- API 在 commit 后、Celery publish 前崩溃，recovery 会扫描 queued orphan / unpublished Job 并重投递。
 
-`local` 存储只适合本地或单机 compose。API Pod 和 Worker Pod 横向扩展时，输入和输出产物必须位于共享对象存储。
-
-生产配置至少需要确认：
+API 侧主要调参：
 
 ```bash
-STORAGE_BACKEND=aliyun_oss
-OSS_BUCKET=<目标 bucket>
-OSS_REGION=<目标 region>
-OSS_PROJECT_ROOT=<服务隔离前缀>
-OSS_OUTPUT_PREFIX=novel-localization/jobs
+DB_POOL_SIZE=5
+DB_MAX_OVERFLOW=10
+DB_POOL_RECYCLE=1800
+MAX_ACTIVE_JOBS=200
 ```
 
-若任何生产形态仍使用 `STORAGE_BACKEND=local`，不应判定为多节点生产就绪。
+### Worker Pod
 
-### 3. Callback 安全必须由配置和平台共同闭环
-
-代码已要求生产 callback 默认使用 HTTPS，且会拒绝字面量私网、环回、链路本地和 unspecified IP；但 hostname 会在运行时解析，当前代码没有对解析后的 IP 做私网判断，也没有域名 allowlist。
-
-上线前需要完成：
-
-- `CALLBACK_SIGNING_SECRET` 必须非空。
-- Callback 接收方必须强制验签，不只记录签名头。
-- `ALLOW_INSECURE_CALLBACKS=false`。
-- 平台出站网络策略阻断 metadata 地址、私网地址和不允许的域名。
-- 若 callback 域名集合固定，优先增加 allowlist。
-
-### 4. K8s / 运行平台探针必须实际接入
-
-仓库提供 `/healthz` 和 `check-worker-health.sh`，但这不是平台接入证据。
-
-生产平台应至少接入：
+Worker Pod 是实际吞吐来源。总执行槽位为：
 
 ```text
-API livenessProbe  -> GET /health
-API readinessProbe -> GET /healthz
-Worker livenessProbe.exec -> /app/check-worker-health.sh
+总执行槽位 = Worker Pod 数 × WORKER_CONCURRENCY
 ```
 
-当前 `docker-compose.yml` 的 API healthcheck 仍访问 `/health`，只能证明进程存活，不能证明 DB/Redis readiness。
+Worker Pod 重启影响：
 
-### 5. 容量必须按目标环境核算
+- 正在执行的任务可能被中断。
+- Celery 会根据 `acks_late` / `task_reject_on_worker_lost` 让消息回队。
+- 如果消息未能正常回队，DB 中长期 running 的 Job 会被派生值 `job_stale_running_seconds` 扫描为 failed，并补 Callback。
+- Worker 启动后会立即跑一次 recovery，并启动周期 recovery loop。
 
-30 并发不能只看 Worker 数量，还必须同时核算：
-
-```text
-API pods × (DB_POOL_SIZE + DB_MAX_OVERFLOW)
-+ Worker pods × WORKER_CONCURRENCY
-≤ PostgreSQL max_connections - 运维预留连接
-```
-
-还需要确认：
-
-- Redis broker 内存和持久化策略。
-- 模型服务并发额度、速率限制和超时配置。
-- OSS 吞吐、对象大小和生命周期规则。
-- Callback 接收方吞吐和重试承受能力。
-
-## 五、剩余风险清单
-
-| 优先级 | 风险 | 影响 | 建议 |
-| --- | --- | --- | --- |
-| P0 | 多调用方 / 多租户场景下只有共享 Bearer token 和固定 `caller_id`。 | 可能跨调用方查询 Job，幂等空间也会共享。 | 单调用方上线可接受；多调用方上线前必须改造鉴权和查询隔离。 |
-| P0 | Callback hostname SSRF 未在代码内闭环。 | 持有 API key 的调用方可提交 HTTPS 域名，由 Worker 出站访问。 | 增加 allowlist 或运行时 DNS 解析后私网拦截，并配合平台 egress policy。 |
-| P0 | 目标环境 e2e、K8s 探针、Secret 注入和压测证据缺失。 | 无法证明生产发布链路和 30 并发真实可用。 | 灰度前补齐目标环境验证附件。 |
-| P1 | `MAX_ACTIVE_JOBS` 门控只锁住 count，未覆盖后续 insert。 | 高并发建单时可能轻微超过软限制。 | 若该限制用于严格容量保护，应把 count + create 放在同一锁范围，或使用数据库约束/配额表。 |
-| P1 | `MAX_ACTIVE_JOBS=0` 不是无限队列能力。 | 长队列会受到 Redis 内存、DB TTL、清理任务、模型额度影响。 | 文档和配置中避免使用“无限队列”承诺，改为容量规划后的有限队列。 |
-| P1 | `cleanup_expired_jobs()` 删除所有过期 Job，不区分 queued / running。 | 排队超过 24 小时的 Job 可能被清理。 | 长队列场景需调整 TTL 或只清理终态 Job。 |
-| P1 | `queued + celery_task_id 非空 + celery_published_at 非空` 且 Redis 消息丢失时无扫描恢复。 | 极端 broker 丢消息可能导致 Job 长期 queued。 | 增加 published queued 超时扫描，或启用更强 broker 持久化与监控告警。 |
-| P1 | 本地存储路径校验使用字符串前缀判断。 | `local` 生产形态下仍需复核路径逃逸边界。 | 改为 `Path.is_relative_to()`；生产禁用 `local` 后端。 |
-| P2 | recovery 日志未统一绑定 request id。 | 补偿路径排障关联性较弱。 | 在 recovery 循环中按 job_id 设置日志上下文。 |
-| P2 | `workflow-smoke` 能验证长文本链路，但分块 workflow 不应视作已生产化开关。 | 打开 `NOVEL_LOCALIZATION_CHUNKING_ENABLED` 可能遇到未覆盖路径。 | 分块/merge 作为独立上线项补设计和回归。 |
-
-## 六、30 并发配置口径
-
-如果目标是 30 个同时运行的 Job，可以采用以下配置作为起点：
+Worker 侧主要调参：
 
 ```bash
 WORKER_POOL=threads
-WORKER_CONCURRENCY=10
-# 部署 3 个 Worker Pod，理论执行并发为 3 × 10 = 30
+WORKER_CONCURRENCY=4
+WORKER_MAX_TASKS_PER_CHILD=100
 ```
 
-但报告只能把它写成 **可配置到 30 并发**，不能写成 **已验证支持 30 并发**。要把结论升级为已验证，需要至少补齐：
-
-- 30 并发压测脚本和结果。
-- 目标环境 PG 连接数、Redis 内存、OSS 吞吐、模型 API 配额记录。
-- 任务成功率、P95/P99 耗时、失败重试、Callback 成功率。
-- Worker 重启、API 重启、Redis/DB 短暂不可用等扰动下的恢复结果。
-
-## 七、队列容量口径
-
-`MAX_ACTIVE_JOBS=0` 表示关闭入口 active Job 软限制，不表示无限队列。
-
-生产建议使用明确容量目标，例如：
+生产滚动重启建议：
 
 ```text
-最大排队深度：N 个 queued Job
-最大执行并发：M 个 running Job
-最长排队时间：T 小时
-Job TTL：大于最长排队时间 + 最长执行时间 + 查询保留时间
-Redis 内存：可容纳峰值 Celery 消息和 result backend 数据
+terminationGracePeriodSeconds >= celery_time_limit + 60
 ```
 
-在没有压测和容量模型前，建议保留 `MAX_ACTIVE_JOBS`，并按业务可接受的排队时间设置，而不是直接设为 `0`。
+如果派生后的 `celery_time_limit=960`，建议 `terminationGracePeriodSeconds >= 1020`。否则 Pod 被强杀太早，可能增加任务重跑和 stale running 的概率。
 
-## 八、可执行验证入口
+## 四、吞吐量控制模型
 
-本节列出仓库内已经维护的验证入口。它们能证明本地或 compose 形态的代码和链路表现，但不能替代目标环境发布证据。
+吞吐量由三个旋钮共同决定：
 
-### 本地基线
+| 旋钮 | 环境变量 / 动作 | 控制对象 | 说明 |
+| --- | --- | --- | --- |
+| 执行槽位 | `Worker Pod 数 × WORKER_CONCURRENCY` | 同时执行的 Job 数 | 真正决定模型调用并发。 |
+| 接单上限 | `MAX_ACTIVE_JOBS` | queued + running 总积压 | 达到上限后 API 返回 503。 |
+| 上游容量 | DB 连接、Redis、模型额度、OSS 吞吐 | 实际可承载上限 | 扩 Worker 前必须核算。 |
+
+连接数估算：
+
+```text
+峰值 DB 连接数
+≈ API Pod 数 × (DB_POOL_SIZE + DB_MAX_OVERFLOW)
+  + Worker Pod 数 × WORKER_CONCURRENCY
+```
+
+`MAX_ACTIVE_JOBS` 建议：
+
+```text
+MAX_ACTIVE_JOBS >= 总执行槽位 × 2
+```
+
+示例：
+
+```text
+API Pod = 2
+Worker Pod = 3
+WORKER_CONCURRENCY = 4
+总执行槽位 = 12
+建议 MAX_ACTIVE_JOBS = 24 ~ 60
+峰值 DB 连接 ≈ 2 × (5 + 10) + 3 × 4 = 42
+```
+
+## 五、关键环境变量
+
+### 吞吐与积压
+
+| 变量 | 推荐 MVP 初始值 | 作用 | 调整方式 |
+| --- | --- | --- | --- |
+| `WORKER_POOL` | `threads` | 开启单 Worker 多并发。 | 生产不要用 `solo`。 |
+| `WORKER_CONCURRENCY` | `2~4` | 单 Worker Pod 同时执行 Job 数。 | 提高吞吐时调大；优先先加 Worker Pod。 |
+| `MAX_ACTIVE_JOBS` | `总执行槽位 × 2~5` | queued + running 上限。 | 队列太容易满时调大；系统压力大时调小。 |
+| `JOB_RECOVERY_INTERVAL_SECONDS` | `60` | recovery loop 周期。 | 恢复要更快可调小，但会增加 DB 扫描频率。 |
+| `JOB_RECOVERY_BATCH_SIZE` | `100` | 每轮恢复 orphan / stale 的批量。 | 积压大时可调大。 |
+| `JOB_RECOVERY_CALLBACK_BATCH_SIZE` | `50` | 每轮 Callback 补偿批量。 | Callback 积压时可调大。 |
+
+### API 与数据库
+
+| 变量 | 推荐 MVP 初始值 | 作用 | 注意 |
+| --- | --- | --- | --- |
+| `DB_POOL_SIZE` | `5` | API Pod 常驻连接池大小。 | API Pod 增多时要核算总连接数。 |
+| `DB_MAX_OVERFLOW` | `10` | API Pod 连接池突增余量。 | 太大会放大 DB 压力。 |
+| `DB_POOL_RECYCLE` | `1800` | 空闲连接回收秒数。 | 保留默认即可。 |
+| `DATABASE_URL` | 目标 PostgreSQL | Job 状态源。 | API / Worker / migrate 必须指向同一库。 |
+| `REDIS_URL` | 目标 Redis | Celery broker / result backend。 | API / Worker 必须共享。 |
+
+### 超时链
+
+当前真正接入执行路径的超时链由一个锚点和三个 buffer 派生：
+
+```text
+MODEL_CALL_TIMEOUT_SECONDS
+  + CELERY_SOFT_TIMEOUT_BUFFER_SECONDS
+  = celery_soft_time_limit
+
+celery_soft_time_limit
+  + CELERY_HARD_TIMEOUT_BUFFER_SECONDS
+  = celery_time_limit
+
+celery_time_limit
+  + JOB_STALE_RUNNING_BUFFER_SECONDS
+  = job_stale_running_seconds
+```
+
+用户只配置锚点和 buffer，代码自动计算 Celery 和 recovery 使用的派生值。buffer 必须大于 0；低于推荐值时启动记录 warning。
+
+| 变量 | 推荐 MVP 初始值 | 作用 | 联动要求 |
+| --- | --- | --- | --- |
+| `MODEL_CALL_TIMEOUT_SECONDS` | `600` | L1，模型调用主超时。 | 调大它后，后续派生值会自动跟随；只需确认 buffer 是否足够。 |
+| `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` | `300` | L3 软超时相对 L1 的缓冲。 | 派生 `celery_soft_time_limit`，推荐不少于 300 秒。 |
+| `CELERY_HARD_TIMEOUT_BUFFER_SECONDS` | `60` | L4 硬超时相对 L3 的缓冲。 | 派生 `celery_time_limit`，推荐不少于 60 秒。 |
+| `JOB_STALE_RUNNING_BUFFER_SECONDS` | `600` | L5 stale 扫描相对 L4 的缓冲。 | 派生 `job_stale_running_seconds`，推荐不少于 600 秒。 |
+| `CELERY_MAX_RETRIES` | `0` | Celery 超时重试次数。 | 模型费用敏感时保持 0。 |
+| `CELERY_RETRY_DELAY` | `60` | Celery 重试间隔。 | 仅 `CELERY_MAX_RETRIES > 0` 时有意义。 |
+
+当前不暴露 queued 自动超时和全局 Job SLA 配置；相关能力如需上线，应先接入代码机制后再开放配置。
+
+### Callback
+
+| 变量 | 推荐 MVP 初始值 | 作用 | 联动要求 |
+| --- | --- | --- | --- |
+| `CALLBACK_SIGNING_SECRET` | 非空随机密钥 | HMAC 签名。 | 接收方必须验签。 |
+| `ALLOW_INSECURE_CALLBACKS` | `false` | 是否允许本地 HTTP callback。 | 非本地环境必须关闭。 |
+| `CALLBACK_TIMEOUT_SECONDS` | `5` | 单次 HTTP 请求超时。 | Callback 领取窗口的锚点。 |
+| `CALLBACK_DELIVERY_WINDOW_BUFFER_SECONDS` | `175` | 领取窗口相对单次请求超时的缓冲。 | 派生 `callback_delivery_timeout_seconds`。 |
+| `CALLBACK_RETRY_DELAY_SECONDS` | `300` | 失败后的补偿重试间隔。 | 接收方不稳定时调大。 |
+| `CALLBACK_MAX_DELIVERY_ATTEMPTS` | `12` | 最大投递次数。 | 调大表示更长时间补偿。 |
+
+代码按 `CALLBACK_TIMEOUT_SECONDS + CALLBACK_DELIVERY_WINDOW_BUFFER_SECONDS` 派生 `callback_delivery_timeout_seconds`，避免用户直接配置两个互相冲突的绝对值。
+
+## 六、推荐 MVP 参数
+
+### 小流量稳态
+
+适合初次上线、人工观察和低并发业务。
+
+```bash
+WORKER_POOL=threads
+WORKER_CONCURRENCY=2
+MAX_ACTIVE_JOBS=20
+
+MODEL_CALL_TIMEOUT_SECONDS=600
+CELERY_SOFT_TIMEOUT_BUFFER_SECONDS=300
+CELERY_HARD_TIMEOUT_BUFFER_SECONDS=60
+JOB_STALE_RUNNING_BUFFER_SECONDS=600
+
+JOB_RECOVERY_INTERVAL_SECONDS=60
+JOB_RECOVERY_BATCH_SIZE=100
+JOB_RECOVERY_CALLBACK_BATCH_SIZE=50
+
+CALLBACK_TIMEOUT_SECONDS=5
+CALLBACK_DELIVERY_WINDOW_BUFFER_SECONDS=175
+CALLBACK_RETRY_DELAY_SECONDS=300
+CALLBACK_MAX_DELIVERY_ATTEMPTS=12
+```
+
+如果部署 2 个 Worker Pod：
+
+```text
+总执行槽位 = 2 × 2 = 4
+建议 MAX_ACTIVE_JOBS = 20
+```
+
+### 中等吞吐
+
+适合业务确认稳定后放量。
+
+```bash
+WORKER_POOL=threads
+WORKER_CONCURRENCY=4
+MAX_ACTIVE_JOBS=50
+```
+
+如果部署 3 个 Worker Pod：
+
+```text
+总执行槽位 = 3 × 4 = 12
+建议 MAX_ACTIVE_JOBS = 50
+```
+
+继续扩容前先确认：
+
+- PostgreSQL 连接数够。
+- Redis 内存和 broker 稳定。
+- 模型 API 并发额度够。
+- OSS 读写吞吐够。
+- Callback 接收方能承受终态通知。
+
+## 七、常见调参场景
+
+| 场景 | 优先动作 | 说明 |
+| --- | --- | --- |
+| 想提高吞吐 | 增加 Worker Pod 数。 | 优先横向扩展，比盲目调大单 Pod 并发更稳。 |
+| Worker Pod 已够但仍慢 | 提高 `WORKER_CONCURRENCY`。 | 从 2 到 4 起步；同步核算 DB、模型额度和内存。 |
+| API 返回 `QUEUE_FULL` | 提高 `MAX_ACTIVE_JOBS` 或增加 Worker 执行槽位。 | `MAX_ACTIVE_JOBS` 只控制接单，不提高执行速度。 |
+| 队列太深，想保护系统 | 降低 `MAX_ACTIVE_JOBS`。 | 让上游更早收到 503，避免无限积压。 |
+| 模型经常超时 | 提高 `MODEL_CALL_TIMEOUT_SECONDS`。 | L3/L4/L5 会按 buffer 自动派生；无需直接调底层值。 |
+| Worker 被误判 stale | 提高 `JOB_STALE_RUNNING_BUFFER_SECONDS`。 | 增大 L5 相对 L4 的缓冲，避免误杀正常长任务。 |
+| Callback 接收端慢 | 提高 `CALLBACK_TIMEOUT_SECONDS`，必要时提高 `CALLBACK_DELIVERY_WINDOW_BUFFER_SECONDS`。 | 代码会自动派生领取窗口，避免两个绝对值冲突。 |
+| Callback 接收端不稳定 | 提高 `CALLBACK_RETRY_DELAY_SECONDS` 或 `CALLBACK_MAX_DELIVERY_ATTEMPTS`。 | 降低对接收方的瞬时压力。 |
+| Worker 重启后有 running 卡住 | 等待派生的 `job_stale_running_seconds` 后 recovery 收敛，或临时调小 `JOB_STALE_RUNNING_BUFFER_SECONDS` 后重启 Worker。 | 调小前确认不会误杀正常长任务。 |
+| 需要暂停放量 | 降低 Worker Pod 数或 `WORKER_CONCURRENCY`，同时降低 `MAX_ACTIVE_JOBS`。 | 让系统进入低吞吐保护模式。 |
+
+## 八、上线前最小检查
+
+| 检查项 | 要求 |
+| --- | --- |
+| 单调用方边界 | 当前 MVP 只允许一个调用方 / 信任域；多业务方共享服务前必须改鉴权和 `caller_id`。 |
+| 共享存储 | 生产必须使用 `STORAGE_BACKEND=aliyun_oss` 或等价共享存储。 |
+| OSS 连通性 | 目标环境完成 OSS `PUT` / `GET` / `HEAD` 或等价读写校验。 |
+| DB / Redis | API、Worker、migrate 指向同一 PostgreSQL / Redis；连接数预算通过。 |
+| 超时链 | L1 锚点和 L3/L4/L5 buffer 配置有效，派生后的 L1 < L3 < L4 < L5。 |
+| Callback | `CALLBACK_SIGNING_SECRET` 非空，接收方验签；非本地环境 `ALLOW_INSECURE_CALLBACKS=false`。 |
+| 探针 | API readiness 使用 `/healthz`；API liveness 使用 `/health`；Worker 使用 `check-worker-health.sh` 或等价命令。 |
+| 重启验证 | 至少验证一次 Worker Pod 重启后 Job 能进入终态或由 recovery 收敛。 |
+| TTL 边界 | 最长排队 + 最长执行 + Callback 收敛显著小于 24 小时 Job TTL。 |
+
+## 九、当前 MVP 不做但可按需扩展
+
+以下能力不阻塞当前 MVP Job 流程上线，触发对应业务场景时再单独立项：
+
+| 场景 | 后续扩展 |
+| --- | --- |
+| 多业务方 / 多租户 | 多 token、真实 `caller_id`、查询隔离、审计日志。 |
+| 严格容量配额 | 将 `MAX_ACTIVE_JOBS` 从软限制改为 DB 行锁、配额表或 Redis 原子计数。 |
+| 极端 broker 丢消息自动恢复 | 增加 `celery_published_at IS NOT NULL` 且长期 queued 的补偿扫描。 |
+| 长时间深队列 | 调整 TTL 和清理策略，只清理终态 Job。 |
+| Callback 域名安全策略 | 增加 callback domain allowlist 或 DNS 解析后私网拦截。 |
+| 分块 workflow 上生产 | 将 `NOVEL_LOCALIZATION_CHUNKING_ENABLED=true` 作为独立上线项做恢复、成本和回归验证。 |
+| 30+ 并发承诺 | 建立目标环境压测脚本、容量模型、成功率和 P95/P99 报告。 |
+
+## 十、验证入口
+
+### 基线检查
 
 ```bash
 ./scripts/dev.sh check
 ```
 
-### 本地运行链路
+### 本地主链路
 
 ```bash
 ./scripts/dev.sh start
 curl -fsS http://127.0.0.1:8100/health
 curl -fsS http://127.0.0.1:8100/healthz
 ./scripts/dev.sh smoke
-./scripts/dev.sh workflow-smoke
-./scripts/dev.sh e2e --input-file .data/test_novel.txt
 ./scripts/dev.sh stop
 ```
 
-### compose 运行形态
+### 本地真实模型和 Callback 自测
+
+该入口会启动 `http://127.0.0.1:<port>` callback receiver，只适合本地开发或明确设置 `ALLOW_INSECURE_CALLBACKS=true` 的 dev 环境，不能替代目标环境 HTTPS Callback 验签。
 
 ```bash
-./scripts/deploy.sh check
-ENV_FILE=.env.dev ./scripts/deploy.sh up compose-full
-curl -fsS http://127.0.0.1:8100/health
-curl -fsS http://127.0.0.1:8100/healthz
-BASE_URL=http://127.0.0.1:8100 ./.venv/bin/python scripts/e2e_backend_call.py \
-  --input-file .data/test_novel.txt \
-  --service-api-key '<目标 env 的 key>' \
-  --callback-signing-secret '<目标 env 的 secret>'
-./scripts/deploy.sh down compose-full
+./scripts/dev.sh start
+./scripts/dev.sh e2e --input-file .data/test_novel.txt
+./scripts/dev.sh stop
 ```
 
 ### OSS 连通性
@@ -254,36 +378,3 @@ BASE_URL=http://127.0.0.1:8100 ./.venv/bin/python scripts/e2e_backend_call.py \
 ```bash
 ./.venv/bin/python scripts/check_aliyun_oss.py --env-file .env.dev
 ```
-
-## 九、目标环境准入证据
-
-目标环境发布前应归档：
-
-- `e2e_backend_call.py` 生成的 `e2e_report.json`。
-- 目标环境 Job ID、artifact OSS 路径、Callback 接收日志和验签结果。
-- API `/healthz` readiness 截图或日志。
-- Worker `check-worker-health.sh` 探针接入证据。
-- 30 并发压测报告或明确“不按 30 并发承诺上线”的发布说明。
-- Secret 注入、`ALLOW_INSECURE_CALLBACKS=false`、`STORAGE_BACKEND=aliyun_oss` 的配置截图或审计记录。
-
-## 十、评审口径
-
-本文不把修复状态、配置能力和目标环境验证混为同一类结论。
-
-本报告采用以下口径：
-
-- “可上生产”表述为“有条件生产就绪”。
-- “30 并发支持”表述为“可配置到 30 并发，尚缺压测证据”。
-- “无限队列支持”表述为“关闭软限制不等于无限队列，需要容量模型”。
-- “安全已修复”表述为“代码基线可用，仍需多调用方授权、callback egress 和生产 Secret 闭环”。
-- “健康检查已完成”表述为“代码有 `/healthz`，平台必须实际接入 readiness”。
-
-## 十一、最终建议
-
-建议按以下路径推进上线：
-
-1. 先以单调用方、单信任域、`aliyun_oss` 存储、HTTPS + HMAC Callback 的方式进入测试环境。
-2. 在测试环境补齐真实模型 e2e、OSS artifact、Callback 验签、`/healthz` readiness 和 Worker liveness 证据。
-3. 在目标并发下做压测；未完成压测前，不对外承诺 30 并发和无限队列。
-4. 若要服务多个调用方或租户，先改造鉴权、`caller_id` 和查询隔离，再重新评审。
-5. 灰度上线时保留 `MAX_ACTIVE_JOBS`，按容量模型逐步放量。
