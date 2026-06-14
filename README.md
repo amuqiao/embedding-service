@@ -1,6 +1,6 @@
 # cms-novel-localize
 
-小说本地化 AI 能力层独立服务。服务只负责模型执行、异步 Job、产物写入对象存储、状态查询和 Callback，不承担用户系统、项目管理、前端页面状态或业务步骤编排。
+AI Job 执行后端通用模板服务。服务只负责模型执行、异步 Job、产物写入对象存储、状态查询和 Callback，不承担用户系统、项目管理、前端页面状态或业务步骤编排。新的 Job 类型通过插件机制接入：在 `app/core/workflow_registry.py` 中定义的 `WorkflowHandler` 基类派生子类，并在启动时通过 `workflow_registry.register()` 注册；小说本地化作为内置示例 workflow，实现在 `app/workflows/novel_localization/handler.py`。
 
 ## 本地启动
 
@@ -48,14 +48,16 @@
 
 - `GET /health`
 - `GET /healthz`，兼容部署平台健康检查
-- `GET /api/v1/novel-localization-ai/models`
-- `GET /api/v1/novel-localization-ai/prompt-templates`
-- `POST /api/v1/novel-localization-ai/jobs`
-- `GET /api/v1/novel-localization-ai/jobs/{job_id}`
+- `GET /api/v1/ai-jobs/models`
+- `GET /api/v1/ai-jobs/prompt-templates`
+- `POST /api/v1/ai-jobs/jobs`
+- `GET /api/v1/ai-jobs/jobs/{job_id}`
 
-Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/infrastructure/novel_loc/prompts.yaml`。该 YAML 是运行时 Prompt 的唯一默认配置源，定义各 `job_type` 的 `system/user/work_note` 默认值和运行时输出契约。
+API 前缀由 `SERVICE_API_PREFIX` 配置，默认是 `/api/v1/ai-jobs`。
 
-模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/infrastructure/models.yaml`。新增或停用模型时优先修改该 YAML，配置项包括对外 `model_id`、LiteLLM model id、上下文窗口、所需环境变量和模型调用参数。
+Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/workflows/novel_localization/prompts.yaml`。该 YAML 是运行时 Prompt 的唯一默认配置源，定义各 `job_type` 的 `system/user/work_note` 默认值和运行时输出契约。
+
+模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML，配置项包括对外 `model_id`、LiteLLM model id、上下文窗口、所需环境变量和模型调用参数。
 
 除 `/health` 和 `/healthz` 外，请求必须携带：
 

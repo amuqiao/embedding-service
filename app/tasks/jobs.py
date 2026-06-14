@@ -212,6 +212,64 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
         return False
 
 
+@celery_app.task(name="jobs.execute_work_item", bind=True, acks_late=True)
+def execute_work_item_task(self, job_id: str, item_id: str) -> dict:
+    """Execute a single work item (chunk, memory, scan, or whole)."""
+    set_request_id(f"{job_id}:{item_id}")
+    try:
+        async def run(db):
+            from app.services.job_workflow import execute_work_item
+            return await execute_work_item(
+                db,
+                job_id=uuid.UUID(job_id),
+                item_id=uuid.UUID(item_id),
+                celery_task_id=self.request.id,
+            )
+        return asyncio.run(_with_db(run))
+    except Exception as exc:
+        try:
+            async def fail(db):
+                from app.services.job_workflow import fail_job
+                await fail_job(
+                    db,
+                    job_id=uuid.UUID(job_id),
+                    item_id=uuid.UUID(item_id),
+                    error_payload={
+                        "code": "WORK_ITEM_FAILED",
+                        "message": str(exc)[:500],
+                        "details": {"type": type(exc).__name__},
+                    },
+                )
+            asyncio.run(_with_db(fail))
+        except Exception:
+            logger.exception("work_item_fail_cleanup_error job_id=%s item_id=%s", job_id, item_id)
+        raise
+
+
+@celery_app.task(name="jobs.fanout_after_mapping", acks_late=True)
+def fanout_after_mapping_task(memory_result: dict, job_id: str, chunk_item_ids: list[str]) -> None:
+    """After memory mapping completes, dispatch all chunk tasks in parallel."""
+    from celery import group as celery_group
+    celery_group([
+        execute_work_item_task.s(job_id, item_id)
+        for item_id in chunk_item_ids
+    ]).apply_async()
+
+
+@celery_app.task(name="jobs.finalize_job", acks_late=True)
+def finalize_job_task(prev_result, job_id: str) -> dict:
+    """Finalize a job after all work items complete."""
+    set_request_id(job_id)
+    async def run(db):
+        from app.services.job_workflow import finalize_job
+        return await finalize_job(db, uuid.UUID(job_id))
+    try:
+        return asyncio.run(_with_db(run))
+    except Exception as exc:
+        logger.exception("finalize_job_error job_id=%s", job_id)
+        raise
+
+
 @celery_app.task(name="jobs.cleanup_expired")
 def cleanup_expired_jobs_task() -> dict[str, Any]:
     """清理过期 Job 记录；worker recovery loop 会周期调用同一 repo 方法。"""

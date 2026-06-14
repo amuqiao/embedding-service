@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "service": "novel-localization-ai", "version": "1.0.0"}
+    return {"status": "ok", "service": settings.SERVICE_NAME, "version": "1.0.0"}
 
 
 @router.get("/healthz", include_in_schema=False)

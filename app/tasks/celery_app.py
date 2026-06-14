@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 _recovery_loop_started = False
 
 celery_app = Celery(
-    "cms_novel_localize",
+    settings.SERVICE_NAME.replace("-", "_"),
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
     include=["app.tasks.jobs"],
@@ -33,6 +33,12 @@ celery_app.conf.update(
     task_default_retry_delay=settings.CELERY_RETRY_DELAY,
     result_expires=settings.CELERY_RESULT_EXPIRES,
 )
+
+
+# Register workflow handlers at module load time so both the API and worker
+# processes have them available before any task executes.
+from app.workflows.novel_localization.handler import register_all as _register_novel_localization
+_register_novel_localization()
 
 
 def _run_recovery_once() -> None:

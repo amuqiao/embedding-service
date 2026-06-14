@@ -36,8 +36,21 @@ class OSSReference(StrictBaseModel):
         return "text/plain; charset=utf-8"
 
 
+class JobSourceInline(StrictBaseModel):
+    text: str = Field(min_length=1)
+
+
 class JobSource(StrictBaseModel):
-    oss: OSSReference
+    oss: OSSReference | None = None
+    inline: JobSourceInline | None = None
+
+    @model_validator(mode="after")
+    def validate_source(self):
+        if self.oss is None and self.inline is None:
+            raise ValueError("JobSource must have either 'oss' or 'inline'")
+        if self.oss is not None and self.inline is not None:
+            raise ValueError("JobSource cannot have both 'oss' and 'inline'")
+        return self
 
 
 class CallbackConfig(StrictBaseModel):
@@ -68,6 +81,7 @@ class CreateJobRequest(StrictBaseModel):
     source: JobSource
     callback: CallbackConfig
     prompt: PromptConfig
+    extra: dict[str, Any] | None = None  # job-type-specific params; validated by handler
 
 
 class CreateJobResponse(StrictBaseModel):

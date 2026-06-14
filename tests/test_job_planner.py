@@ -1,3 +1,4 @@
+from app.core import workflow_registry
 from app.services.job_planner import build_job_plan, split_text_with_registry
 
 
@@ -8,8 +9,9 @@ def test_job_planner_uses_single_for_short_text():
 
 
 def test_job_planner_uses_single_when_chunking_disabled(monkeypatch):
-    monkeypatch.setattr("app.core.config.settings.NOVEL_LOCALIZATION_CHUNKING_ENABLED", False)
-    monkeypatch.setattr("app.core.config.settings.NOVEL_LOCALIZATION_SINGLE_MAX_CHARS", 1)
+    handler = workflow_registry.get("novel_localization.step1_localize")
+    monkeypatch.setattr(handler, "chunking_enabled", False)
+    monkeypatch.setattr(handler, "max_single_chars", 1)
 
     plan = build_job_plan("novel_localization.step1_localize", "第一段很长很长\n\n第二段也很长很长")
 
@@ -18,9 +20,10 @@ def test_job_planner_uses_single_when_chunking_disabled(monkeypatch):
 
 
 def test_job_planner_uses_chunked_for_long_step1_text(monkeypatch):
-    monkeypatch.setattr("app.core.config.settings.NOVEL_LOCALIZATION_CHUNKING_ENABLED", True)
-    monkeypatch.setattr("app.core.config.settings.NOVEL_LOCALIZATION_SINGLE_MAX_CHARS", 10)
-    monkeypatch.setattr("app.core.config.settings.NOVEL_LOCALIZATION_CHUNK_SIZE", 8)
+    handler = workflow_registry.get("novel_localization.step1_localize")
+    monkeypatch.setattr(handler, "chunking_enabled", True)
+    monkeypatch.setattr(handler, "max_single_chars", 10)
+    monkeypatch.setattr(handler, "chunk_size", 8)
 
     plan = build_job_plan("novel_localization.step1_localize", "第一段很长很长\n\n第二段也很长很长")
 
@@ -31,9 +34,10 @@ def test_job_planner_uses_chunked_for_long_step1_text(monkeypatch):
 
 
 def test_job_planner_uses_chunked_for_long_step3_with_scan(monkeypatch):
-    monkeypatch.setattr("app.core.config.settings.NOVEL_LOCALIZATION_CHUNKING_ENABLED", True)
-    monkeypatch.setattr("app.core.config.settings.NOVEL_LOCALIZATION_SINGLE_MAX_CHARS", 10)
-    monkeypatch.setattr("app.core.config.settings.NOVEL_LOCALIZATION_CHUNK_SIZE", 8)
+    handler = workflow_registry.get("novel_localization.step3_translate")
+    monkeypatch.setattr(handler, "chunking_enabled", True)
+    monkeypatch.setattr(handler, "max_single_chars", 10)
+    monkeypatch.setattr(handler, "chunk_size", 8)
 
     plan = build_job_plan("novel_localization.step3_translate", "第一段很长很长\n\n第二段也很长很长")
 

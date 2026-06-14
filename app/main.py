@@ -14,13 +14,16 @@ from app.api.routes import health, jobs, meta
 from app.core.exceptions import AppError
 from app.core.logging import configure_logging, set_request_id
 from app.core.config import settings
+from app.workflows.novel_localization.handler import register_all as _register_novel_localization
+
+_register_novel_localization()
 
 configure_logging()
 
 logger = logging.getLogger(__name__)
-logger.info("app_start service=novel-localization-ai version=0.1.0")
+logger.info("app_start service=%s version=0.1.0", settings.SERVICE_NAME)
 
-app = FastAPI(title="Novel Localization AI Service", version="0.1.0")
+app = FastAPI(title=settings.SERVICE_TITLE, version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -88,7 +91,7 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     )
 
 
-API_PREFIX = "/api/v1/novel-localization-ai"
+API_PREFIX = settings.SERVICE_API_PREFIX
 app.include_router(health.router)
 app.include_router(meta.router, prefix=API_PREFIX)
 app.include_router(jobs.router, prefix=API_PREFIX)

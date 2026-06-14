@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     )
 
     # ── Infrastructure credentials ────────────────────────────────────────────
+    SERVICE_NAME: str = "ai-job-service"
+    SERVICE_TITLE: str = "AI Job Service"
+    SERVICE_API_PREFIX: str = "/api/v1/ai-jobs"
+
     DATABASE_URL: str
     DB_SSL: bool = True
     DB_POOL_SIZE: int = 5
@@ -45,7 +49,7 @@ class Settings(BaseSettings):
     OSS_ACCESS_KEY_ID: str = ""
     OSS_ACCESS_KEY_SECRET: str = ""
     OSS_PROJECT_ROOT: str = ""
-    OSS_OUTPUT_PREFIX: str = "novel-localization/jobs"
+    OSS_OUTPUT_PREFIX: str = "ai-jobs"
     # Optional endpoint overrides — derived from OSS_REGION when empty
     OSS_ENDPOINT: str = ""
     OSS_PUBLIC_ENDPOINT: str = ""
@@ -82,11 +86,7 @@ class Settings(BaseSettings):
     CELERY_RETRY_DELAY: int = 60
     CELERY_RESULT_EXPIRES: int = 86400
 
-    # ── Novel localization ────────────────────────────────────────────────────
-    NOVEL_LOCALIZATION_CHUNKING_ENABLED: bool = False
-    NOVEL_LOCALIZATION_SINGLE_MAX_CHARS: int = 20000
-    NOVEL_LOCALIZATION_CHUNK_SIZE: int = 3000  # internal chunk target, rarely changed
-    PROMPT_CONFIG_PATH: str = "app/core/novel_loc/prompts.yaml"
+    PROMPT_CONFIG_PATH: str = "app/workflows/novel_localization/prompts.yaml"
 
     LOG_LEVEL: str = Field(default="INFO")
 
@@ -118,8 +118,6 @@ class Settings(BaseSettings):
             "JOB_RECOVERY_CALLBACK_BATCH_SIZE": self.JOB_RECOVERY_CALLBACK_BATCH_SIZE,
             "CELERY_RETRY_DELAY": self.CELERY_RETRY_DELAY,
             "CELERY_RESULT_EXPIRES": self.CELERY_RESULT_EXPIRES,
-            "NOVEL_LOCALIZATION_SINGLE_MAX_CHARS": self.NOVEL_LOCALIZATION_SINGLE_MAX_CHARS,
-            "NOVEL_LOCALIZATION_CHUNK_SIZE": self.NOVEL_LOCALIZATION_CHUNK_SIZE,
         }
         for name, value in positive_fields.items():
             if value <= 0:

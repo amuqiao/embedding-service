@@ -1,12 +1,11 @@
 import logging
-import re
 
 from app.core.exceptions import AppError
-
-logger = logging.getLogger(__name__)
 from app.integrations.ai_gateway import generate_text
 from app.core.prompt_templates import get_output_contract, get_system_prompt
 from app.schemas.jobs import JobResult
+
+logger = logging.getLogger(__name__)
 
 
 def _append_output_contract(content: str, job_type: str) -> str:
@@ -21,10 +20,8 @@ def _prompt_messages(prompt_payload: dict, input_text: str, job_type: str) -> li
     messages: list[dict[str, str]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
-
     for block in prompt_payload["blocks"]:
         if block["key"] == "system":
-            # system is now server-managed via YAML; skip any legacy block in stored payload
             continue
         content = block["content"].strip()
         if block["key"] == "user":
@@ -38,19 +35,9 @@ def _prompt_messages(prompt_payload: dict, input_text: str, job_type: str) -> li
     return messages
 
 
-def _model_output_invalid(message: str) -> AppError:
-    return AppError("MODEL_OUTPUT_INVALID", message, status_code=502)
-
-
 _REFUSAL_PREFIXES = (
-    "i'm sorry",
-    "i am sorry",
-    "i cannot",
-    "i can't",
-    "i'm unable",
-    "i am unable",
-    "i apologize",
-    "sorry, i",
+    "i'm sorry", "i am sorry", "i cannot", "i can't",
+    "i'm unable", "i am unable", "i apologize", "sorry, i",
 )
 
 
@@ -61,130 +48,15 @@ def _is_model_refusal(text: str) -> bool:
     return any(lower.startswith(prefix) for prefix in _REFUSAL_PREFIXES)
 
 
-def _looks_like_english_translation(text: str) -> bool:
-    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
-    latin_count = len(re.findall(r"[A-Za-z]", text))
-    if latin_count < 200:
-        return False
-    return cjk_count < 20 or latin_count > cjk_count * 3
-
-
-def _extract_between(text: str, start_marker: str, end_marker: str) -> str | None:
-    pattern = re.escape(start_marker) + r"\s*(.*?)\s*" + re.escape(end_marker)
-    match = re.search(pattern, text, re.DOTALL)
-    return match.group(1).strip() if match else None
-
-
-def _parse_step1_output(text: str) -> tuple[str, str]:
-    notes = _extract_between(text, "===工作注释开始===", "===工作注释结束===")
-    localized = _extract_between(text, "===本地化正文开始===", "===本地化正文结束===")
-    if notes is None:
-        logger.error("step1_localize 输出缺少工作注释标记 output_len=%d", len(text))
-        raise _model_output_invalid("step1_localize 模型输出缺少工作注释标记")
-    if not localized:
-        logger.error("step1_localize 输出缺少本地化正文标记 output_len=%d", len(text))
-        raise _model_output_invalid("step1_localize 模型输出缺少本地化正文标记或正文为空")
-    if _looks_like_english_translation(localized):
-        raise _model_output_invalid("step1_localize 本地化正文疑似英文译文；step1 必须输出中文本地化稿")
-    return localized, notes
-
-
-def _parse_step2_output(text: str) -> tuple[bool, str, str]:
-    conclusion_match = re.search(r"【校验结论】\s*(通过|不通过)\s*(?=\n|$)", text)
-    if not conclusion_match:
-        raise _model_output_invalid("step2_review 模型输出缺少明确的【校验结论】通过/不通过")
-
-    passed = conclusion_match.group(1) == "通过"
-    if not passed:
-        problem_match = re.search(r"【问题说明】\s*(.*?)(?=【|$)", text, re.DOTALL)
-        if not problem_match or not problem_match.group(1).strip():
-            raise _model_output_invalid("step2_review 校验不通过时缺少【问题说明】")
-        review_summary = problem_match.group(1).strip()
-
-        suggestion_match = re.search(r"【建议工作注释】\s*(.*?)(?=【|$)", text, re.DOTALL)
-        if not suggestion_match or not suggestion_match.group(1).strip():
-            raise _model_output_invalid("step2_review 校验不通过时缺少【建议工作注释】")
-        suggested_work_note = suggestion_match.group(1).strip()
-    else:
-        review_summary = "已满足"
-        suggested_work_note = ""
-
-    return passed, review_summary, suggested_work_note
-
-
-def _parse_step3_output(text: str) -> str:
-    translated = text.strip()
-    if not translated:
-        raise _model_output_invalid("step3_translate 模型输出为空")
-    if _is_model_refusal(translated):
-        raise _model_output_invalid("step3_translate 模型拒绝执行请求")
-    return translated
+def _model_output_invalid(message: str) -> AppError:
+    return AppError("MODEL_OUTPUT_INVALID", message, status_code=502)
 
 
 async def run_ai_job(job_type: str, model_id: str, prompt_payload: dict, input_text: str) -> JobResult:
+    from app.core import workflow_registry
+    handler = workflow_registry.get(job_type)
     result = await generate_text(model_id, _prompt_messages(prompt_payload, input_text, job_type))
     text = result.text.strip()
     if _is_model_refusal(text):
         raise _model_output_invalid(f"{job_type} 模型拒绝执行请求")
-
-    if job_type == "novel_localization.step1_localize":
-        localized_text, notes = _parse_step1_output(text)
-        return JobResult(
-            artifacts=[
-                {
-                    "key": "localized_text",
-                    "type": "text",
-                    "label": "本地化正文",
-                    "content": localized_text,
-                },
-                {
-                    "key": "work_note",
-                    "type": "work_note",
-                    "label": "工作注释",
-                    "apply_mode": "replace",
-                    "content": notes,
-                },
-            ],
-            signals={},
-        )
-
-    if job_type == "novel_localization.step2_review":
-        passed, review_summary, suggested_work_note = _parse_step2_output(text)
-        artifacts = [
-            {
-                "key": "review_summary",
-                "type": "text",
-                "label": "校验结果",
-                "content": review_summary,
-            }
-        ]
-        if not passed:
-            artifacts.append(
-                {
-                    "key": "work_note",
-                    "type": "work_note",
-                    "label": "建议工作注释",
-                    "apply_mode": "replace",
-                    "content": suggested_work_note,
-                }
-            )
-        return JobResult(
-            artifacts=artifacts,
-            signals={"passed": passed},
-        )
-
-    if job_type == "novel_localization.step3_translate":
-        translated_text = _parse_step3_output(text)
-        return JobResult(
-            artifacts=[
-                {
-                    "key": "translated_text",
-                    "type": "text",
-                    "label": "英文终稿",
-                    "content": translated_text,
-                }
-            ],
-            signals={},
-        )
-
-    raise KeyError(job_type)
+    return handler.parse_output(text)

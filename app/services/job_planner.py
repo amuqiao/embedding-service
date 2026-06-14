@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.core.config import settings
-
 
 ExecutionMode = Literal["single", "chunked"]
 
@@ -111,7 +109,7 @@ def split_text(text: str, max_chars: int | None = None) -> list[str]:
 
 
 def split_text_with_registry(text: str, max_chars: int | None = None) -> list[dict[str, Any]]:
-    limit = max_chars or settings.NOVEL_LOCALIZATION_CHUNK_SIZE
+    limit = max_chars or 3000
     paragraphs = [
         part
         for item in text.split("\n\n")
@@ -148,18 +146,15 @@ def split_text_with_registry(text: str, max_chars: int | None = None) -> list[di
 
 
 def build_job_plan(job_type: str, input_text: str) -> JobPlan:
+    from app.core.workflow_registry import get as get_handler
+    handler = get_handler(job_type)
+
     char_count = _count_chars(input_text)
-    if not settings.NOVEL_LOCALIZATION_CHUNKING_ENABLED or char_count <= settings.NOVEL_LOCALIZATION_SINGLE_MAX_CHARS:
+    if not handler.chunking_enabled or char_count <= handler.max_single_chars:
         return JobPlan(
             execution_mode="single",
             chunk_count=1,
-            chunk_registry=[
-                {
-                    "chunk_index": 1,
-                    "text": input_text,
-                    "char_count": char_count,
-                }
-            ],
+            chunk_registry=[{"chunk_index": 1, "text": input_text, "char_count": char_count}],
             work_items=[
                 PlannedWorkItem(
                     name=f"{job_type}.whole",
@@ -170,9 +165,10 @@ def build_job_plan(job_type: str, input_text: str) -> JobPlan:
             ],
         )
 
-    chunk_registry = split_text_with_registry(input_text)
+    chunk_registry = split_text_with_registry(input_text, max_chars=handler.chunk_size)
     work_items: list[PlannedWorkItem] = []
-    if job_type == "novel_localization.step1_localize":
+
+    if handler.canvas_pattern == "memory_fanout":
         work_items.append(
             PlannedWorkItem(
                 name=f"{job_type}.memory",
@@ -200,7 +196,8 @@ def build_job_plan(job_type: str, input_text: str) -> JobPlan:
             input_payload={"chunk_count": len(chunk_registry)},
         )
     )
-    if job_type == "novel_localization.step3_translate":
+
+    if handler.canvas_pattern == "scan_chord":
         work_items.append(
             PlannedWorkItem(
                 name=f"{job_type}.scan",
@@ -209,6 +206,7 @@ def build_job_plan(job_type: str, input_text: str) -> JobPlan:
                 input_payload={"chunk_count": len(chunk_registry)},
             )
         )
+
     return JobPlan(
         execution_mode="chunked",
         chunk_count=len(chunk_registry),

@@ -8,32 +8,15 @@ from app.core.exceptions import AppError
 from app.models.job import AIJob, AIJobWorkItem
 from app.repositories.job_repo import JobRepo
 from app.schemas.jobs import JobResult
-from app.integrations.ai_gateway import generate_text
 from app.services.job_context import (
     append_context_to_prompt,
     build_chunk_context,
-    format_project_memory,
-    project_memory_from_generation,
     project_memory_from_job,
 )
 from app.services.executor import run_ai_job
 from app.services.job_planner import JobPlan, build_job_plan
 from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404
 
-
-def _artifact_content(result_payload: dict[str, Any], key: str) -> str:
-    for artifact in result_payload.get("artifacts") or []:
-        if artifact.get("key") == key:
-            return str(artifact.get("content") or "")
-    return ""
-
-
-def _merge_texts(items: list[AIJobWorkItem], artifact_key: str) -> str:
-    parts = [
-        _artifact_content(item.result_payload or {}, artifact_key).strip()
-        for item in sorted(items, key=lambda item: item.chunk_index)
-    ]
-    return "\n\n".join(part for part in parts if part)
 
 
 def _first_result_value(items: list[AIJobWorkItem], kind: str, key: str) -> Any:
@@ -43,91 +26,17 @@ def _first_result_value(items: list[AIJobWorkItem], kind: str, key: str) -> Any:
     return None
 
 
-def _merge_review(items: list[AIJobWorkItem]) -> JobResult:
-    summaries: list[str] = []
-    suggestions: list[str] = []
-    passed = True
-    for item in sorted(items, key=lambda item: item.chunk_index):
-        payload = item.result_payload or {}
-        signals = payload.get("signals") or {}
-        if signals.get("passed") is False:
-            passed = False
-        summary = _artifact_content(payload, "review_summary").strip()
-        suggestion = _artifact_content(payload, "work_note").strip()
-        if summary:
-            summaries.append(f"分块 {item.chunk_index}:\n{summary}")
-        if suggestion:
-            suggestions.append(f"分块 {item.chunk_index}:\n{suggestion}")
-    summary_text = "已满足" if passed else "\n\n".join(summaries)
-    suggestion_text = "" if passed else "\n\n".join(suggestions)
-    artifacts = [
-        {
-            "key": "review_summary",
-            "type": "text",
-            "label": "校验结果",
-            "content": summary_text,
-        }
-    ]
-    if not passed:
-        artifacts.append(
-            {
-                "key": "work_note",
-                "type": "work_note",
-                "label": "建议工作注释",
-                "apply_mode": "replace",
-                "content": suggestion_text,
-            }
-        )
-    return JobResult(
-        artifacts=artifacts,
-        signals={"passed": passed},
-    )
-
 
 def merge_work_items(job: AIJob, items: list[AIJobWorkItem]) -> JobResult:
     if job.execution_mode == "single":
         whole = next(item for item in items if item.kind == "whole")
         return JobResult.model_validate(whole.result_payload)
+    from app.core import workflow_registry
+    handler = workflow_registry.get(job.job_type)
+    # Pass all non-administrative items so the handler can use both chunks and scan results.
+    payload_items = [item for item in items if item.kind not in ("whole", "merge", "memory")]
+    return handler.merge_chunks(payload_items)
 
-    chunk_items = [item for item in items if item.kind == "chunk"]
-    if job.job_type == "novel_localization.step1_localize":
-        localized = _merge_texts(chunk_items, "localized_text")
-        notes = _merge_texts(chunk_items, "work_note")
-        return JobResult(
-            artifacts=[
-                {"key": "localized_text", "type": "text", "label": "本地化正文", "content": localized},
-                {
-                    "key": "work_note",
-                    "type": "work_note",
-                    "label": "工作注释",
-                    "apply_mode": "replace",
-                    "content": notes,
-                },
-            ],
-            signals={},
-        )
-
-    if job.job_type == "novel_localization.step2_review":
-        return _merge_review(chunk_items)
-
-    if job.job_type == "novel_localization.step3_translate":
-        scanned = _artifact_content(_first_scan_payload(items), "translated_text")
-        translated = scanned.strip() or _merge_texts(chunk_items, "translated_text")
-        return JobResult(
-            artifacts=[
-                {"key": "translated_text", "type": "text", "label": "英文终稿", "content": translated},
-            ],
-            signals={"merge_scan_applied": bool(scanned.strip())},
-        )
-
-    raise KeyError(job.job_type)
-
-
-def _first_scan_payload(items: list[AIJobWorkItem]) -> dict[str, Any]:
-    for item in items:
-        if item.kind == "scan" and item.result_payload:
-            return item.result_payload
-    return {}
 
 
 async def create_work_items(db: AsyncSession, job: AIJob, plan: JobPlan) -> dict[str, uuid.UUID]:
@@ -185,60 +94,10 @@ async def execute_work_item(
     await db.commit()
 
     input_text = (item.input_payload or {}).get("text") or ""
-    if item.kind == "memory":
-        system = next(
-            (block["content"] for block in job.prompt_payload.get("blocks", []) if block.get("key") == "system"),
-            "你是一位小说本地化编辑。",
-        )
-        chunks = (item.input_payload or {}).get("chunks") or []
-        chunk_text = "\n\n".join(
-            f"【分块 {chunk.get('chunk_index')}】\n{chunk.get('text', '')}"
-            for chunk in chunks
-        )
-        mapping_prompt = (
-            "请为以下小说生成供后续分块本地化、校验、翻译使用的项目记忆。"
-            "只输出 JSON，不要输出 Markdown。JSON 字段必须包含："
-            "characters、places、glossary、style_guide、cultural_rules、continuity_notes、chunk_summaries。"
-            "characters/places/glossary/cultural_rules/continuity_notes/chunk_summaries 使用数组，style_guide 使用字符串。"
-            "chunk_summaries 应按分块顺序记录每块摘要。\n\n"
-            "===原文开始===\n"
-            f"{chunk_text}\n"
-            "===原文结束==="
-        )
-        mapping_result = generate_text(job.model_id, [{"role": "system", "content": system}, {"role": "user", "content": mapping_prompt}])
-        result_payload = {
-            "project_memory": project_memory_from_generation(mapping_result),
-        }
-    elif item.kind == "scan":
-        translated = _merge_texts(
-            [existing for existing in await JobRepo.list_work_items(db, job_id) if existing.kind == "chunk"],
-            "translated_text",
-        )
-        memory = project_memory_from_job(job)
-        system = next(
-            (block["content"] for block in job.prompt_payload.get("blocks", []) if block.get("key") == "system"),
-            "你是一位小说英文终稿编辑。",
-        )
-        scan_prompt = (
-            f"{format_project_memory(memory)}\n\n"
-            "请对以下英文译稿做最终合并扫描，只修复明显的人名/地名/术语不一致、漏译、重复段落和分块衔接问题。"
-            "不要重写风格，不要添加解释，只输出修订后的英文终稿。\n\n"
-            "===英文译稿开始===\n"
-            f"{translated}\n"
-            "===英文译稿结束==="
-        )
-        scan_result = generate_text(job.model_id, [{"role": "system", "content": system}, {"role": "user", "content": scan_prompt}])
-        result_payload = {
-            "artifacts": [
-                {
-                    "key": "translated_text",
-                    "type": "text",
-                    "label": "英文终稿",
-                    "content": scan_result.text.strip(),
-                }
-            ],
-            "signals": {"merge_scan_applied": True},
-        }
+    if item.kind in ("memory", "scan"):
+        from app.core import workflow_registry
+        handler = workflow_registry.get(job.job_type)
+        result_payload = await handler.execute_special_item(item, job, db)
     else:
         prompt_payload = job.prompt_payload
         if item.kind == "chunk":
@@ -251,7 +110,7 @@ async def execute_work_item(
                 chunk_count=(job.execution_plan or {}).get("chunk_count") or 1,
             )
             prompt_payload = append_context_to_prompt(job, context_text)
-        result = run_ai_job(job.job_type, job.model_id, prompt_payload, input_text)
+        result = await run_ai_job(job.job_type, job.model_id, prompt_payload, input_text)
         result_payload = result.model_dump()
 
     await JobRepo.mark_work_item_succeeded(db, item_id, result_payload)
@@ -310,8 +169,11 @@ async def fail_job(
     await deliver_callback_for_job(job_id)
 
 
-def build_canvas(job_id: uuid.UUID, plan: JobPlan, item_ids: dict[str, uuid.UUID]):
+def build_canvas(job_id: uuid.UUID, job_type: str, plan: JobPlan, item_ids: dict[str, uuid.UUID]):
     from app.tasks.jobs import execute_work_item_task, fanout_after_mapping_task, finalize_job_task
+    from app.core import workflow_registry
+    handler = workflow_registry.get(job_type)
+    pattern = handler.canvas_pattern
 
     job_id_text = str(job_id)
     if plan.execution_mode == "single":
@@ -327,7 +189,7 @@ def build_canvas(job_id: uuid.UUID, plan: JobPlan, item_ids: dict[str, uuid.UUID
         if item.kind == "chunk"
     ]
 
-    if "memory:0" in item_ids:
+    if pattern == "memory_fanout":
         chunk_item_ids = [
             str(item_ids[f"chunk:{item.chunk_index}"])
             for item in plan.work_items
@@ -338,7 +200,7 @@ def build_canvas(job_id: uuid.UUID, plan: JobPlan, item_ids: dict[str, uuid.UUID
             fanout_after_mapping_task.s(job_id_text, chunk_item_ids),
         )
 
-    if "scan:{}".format(plan.chunk_count + 2) in item_ids:
+    if pattern == "scan_chord":
         scan_id = str(item_ids[f"scan:{plan.chunk_count + 2}"])
         return chain(
             chord(group(chunk_signatures), execute_work_item_task.si(job_id_text, scan_id)),

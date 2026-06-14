@@ -168,7 +168,8 @@ def test_openapi_declares_bearer_auth_for_protected_routes():
     security_schemes = schema["components"]["securitySchemes"]
     assert security_schemes["HTTPBearer"] == {"type": "http", "scheme": "bearer"}
 
-    prompt_templates = schema["paths"]["/api/v1/novel-localization-ai/prompt-templates"]["get"]
+    from app.core.config import settings
+    prompt_templates = schema["paths"][f"{settings.SERVICE_API_PREFIX}/prompt-templates"]["get"]
     assert {"HTTPBearer": []} in prompt_templates["security"]
 
 
