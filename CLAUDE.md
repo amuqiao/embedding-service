@@ -120,6 +120,14 @@
 - `.env.example` 是可提交的配置模板，只放配置键、默认示例值和必要注释，不放真实密钥。
 - 新增、删除或重命名配置项时，必须同步检查 `.env.example`、`.env.dev`、`.env.test`，并确认 `.env` 是否需要本地更新。
 - 同步配置键和注释，不强行统一各环境独有的值；端口、容器地址、模型参数、限制参数、密钥占位等允许按环境保留差异。
+
+### 配置面正确性约束
+
+- **`.env.example` 是配置面基准**：只包含 `Settings` 类中操作员应主动感知的业务配置项和运营调优参数；派生值、内部边距常量（以 `_` 开头的模块常量）不得出现。
+- **代码常量不得出现在任何 env 文件中**：已提升为模块常量的字段（如超时链 buffer、AI 调用不重试等）在 `.env.example`、`.env.dev`、`.env.test`、`.env` 中均不得设置，设置无效且制造误导。
+- **`.env.dev` / `.env.test` 以 `.env.example` 为基础**：可覆盖值、添加环境私有项（凭证、代理、环境特定覆盖），但不应引入 `.env.example` 未列出的 `Settings` 字段；环境私有项须在行内注释说明原因。
+- **修改 `Settings` 字段时必须回写配置文件**：将字段从可配置改为代码常量时，必须同步从 `.env.example`、`.env.dev`、`.env.test` 中删除对应键；将代码常量改为可配置字段时，必须同步向 `.env.example` 补充该键和注释。
+- **`.env.example` 的键名必须与 `Settings` 类一致**：提交前确认 `.env.example` 中的每个键都存在于 `app/infrastructure/config.py` 的 `Settings` 类中。`WORKER_*` 系列（`WORKER_CONCURRENCY`、`WORKER_POOL`、`WORKER_LOGLEVEL`）是 `start-worker.sh` 读取的 shell 脚本参数，不在 `Settings` 中，属于合理例外。
 - `.data/` 是本地验证输入，不提交。
 - 本地默认端口：API `8000`，PostgreSQL `25432`，Redis `26379`。
 - `scripts/dev.sh` 会拒绝明显非本地的 `DATABASE_URL` 和 `REDIS_URL`。

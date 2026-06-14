@@ -32,7 +32,7 @@ async def generate_text(model_id: str, messages: list[dict[str, str]]) -> TextGe
             messages=messages,
             temperature=0.7,
             timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
-            num_retries=settings.MODEL_CALL_MAX_RETRIES,
+            num_retries=0,
             drop_params=True,
         ),
         timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,

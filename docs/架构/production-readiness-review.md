@@ -78,7 +78,7 @@ MVP 上线前必须确认的边界：
 | 生命周期环节 | 当前机制 | MVP 结论 |
 | --- | --- | --- |
 | 建单幂等 | `caller_id + client_request_id` 使用 PostgreSQL advisory lock；24 小时内返回已有 Job。 | 单调用方 MVP 可用。 |
-| 入口背压 | `MAX_ACTIVE_JOBS` 检查 queued + running 总数，达到上限返回 `QUEUE_FULL`。 | 可控，但不是严格配额。 |
+| 入口背压 | `MAX_ACTIVE_JOBS` 使用 advisory lock 串行化 active count 检查 queued + running 总数，达到上限返回 `QUEUE_FULL`。 | 可控，但仍是接单保护，不是严格容量配额。 |
 | 投递一致性 | API 先写 `celery_task_id` 并提交 DB，再投递 Celery，投递成功后写 `celery_published_at`。 | 覆盖“DB 已提交、Celery 未投递”的常见窗口。 |
 | Worker 抢占 | Worker 校验 DB 中 `celery_task_id`，并用 `status='queued' AND celery_task_id=:task_id` 抢占。 | 支持多 Worker Pod 并发竞争。 |
 | 终态写入 | succeeded / failed 写入要求 Job 仍为 running 且 task_id 匹配。 | 避免旧 task 或重复 task 覆盖终态。 |
@@ -108,8 +108,10 @@ API 侧主要调参：
 DB_POOL_SIZE=5
 DB_MAX_OVERFLOW=10
 DB_POOL_RECYCLE=1800
-MAX_ACTIVE_JOBS=200
+MAX_ACTIVE_JOBS=5000
 ```
+
+`MAX_ACTIVE_JOBS` 是生产接单上限，不是执行并发。小流量灰度可以按“总执行槽位 × 2~5”设置较小值；业务希望允许较深排队、且外部系统已有限流时，可以使用类似 `.env.example` 的 `5000` 作为生产初始目标。设为 `0` 表示禁用创建守卫，只应在调用方具备可靠外部限速时使用。
 
 ### Worker Pod
 
@@ -160,11 +162,13 @@ terminationGracePeriodSeconds >= celery_time_limit + 60
   + Worker Pod 数 × WORKER_CONCURRENCY
 ```
 
-`MAX_ACTIVE_JOBS` 建议：
+`MAX_ACTIVE_JOBS` 最小建议：
 
 ```text
 MAX_ACTIVE_JOBS >= 总执行槽位 × 2
 ```
+
+该公式只给出“不要卡住执行槽位”的下限。真正的生产值应同时考虑调用方可接受排队深度、Job TTL、数据库连接数、模型额度、Redis 内存和 Callback 接收能力。
 
 示例：
 
@@ -185,7 +189,7 @@ WORKER_CONCURRENCY = 4
 | --- | --- | --- | --- |
 | `WORKER_POOL` | `threads` | 开启单 Worker 多并发。 | 生产不要用 `solo`。 |
 | `WORKER_CONCURRENCY` | `2~4` | 单 Worker Pod 同时执行 Job 数。 | 提高吞吐时调大；优先先加 Worker Pod。 |
-| `MAX_ACTIVE_JOBS` | `总执行槽位 × 2~5` | queued + running 上限。 | 队列太容易满时调大；系统压力大时调小。 |
+| `MAX_ACTIVE_JOBS` | 小流量：`总执行槽位 × 2~5`；生产排队目标：可从 `5000` 起评估 | queued + running 上限。 | 队列太容易满时调大；系统压力大时调小；`0` 表示禁用检查。 |
 | `JOB_RECOVERY_INTERVAL_SECONDS` | `60` | recovery loop 周期。 | 恢复要更快可调小，但会增加 DB 扫描频率。 |
 | `JOB_RECOVERY_BATCH_SIZE` | `100` | 每轮恢复 orphan / stale 的批量。 | 积压大时可调大。 |
 | `JOB_RECOVERY_CALLBACK_BATCH_SIZE` | `50` | 每轮 Callback 补偿批量。 | Callback 积压时可调大。 |
@@ -220,12 +224,15 @@ celery_time_limit
 
 用户只配置锚点和 buffer，代码自动计算 Celery 和 recovery 使用的派生值。buffer 必须大于 0；低于推荐值时启动记录 warning。
 
+注意：代码内置默认值偏向本地安全启动，例如 `MODEL_CALL_TIMEOUT_SECONDS` 默认是 `300` 秒；MVP 生产推荐通过 env 显式覆盖为下表值，`.env.example` 已按该推荐值给出模板。
+
 | 变量 | 推荐 MVP 初始值 | 作用 | 联动要求 |
 | --- | --- | --- | --- |
 | `MODEL_CALL_TIMEOUT_SECONDS` | `600` | L1，模型调用主超时。 | 调大它后，后续派生值会自动跟随；只需确认 buffer 是否足够。 |
 | `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` | `300` | L3 软超时相对 L1 的缓冲。 | 派生 `celery_soft_time_limit`，推荐不少于 300 秒。 |
 | `CELERY_HARD_TIMEOUT_BUFFER_SECONDS` | `60` | L4 硬超时相对 L3 的缓冲。 | 派生 `celery_time_limit`，推荐不少于 60 秒。 |
 | `JOB_STALE_RUNNING_BUFFER_SECONDS` | `600` | L5 stale 扫描相对 L4 的缓冲。 | 派生 `job_stale_running_seconds`，推荐不少于 600 秒。 |
+| `MODEL_CALL_MAX_RETRIES` | `0` | 模型 SDK 内部重试次数。 | 默认保持 0，避免单次 Job 因 SDK 自动重试增加费用和耗时。 |
 | `CELERY_MAX_RETRIES` | `0` | Celery 超时重试次数。 | 模型费用敏感时保持 0。 |
 | `CELERY_RETRY_DELAY` | `60` | Celery 重试间隔。 | 仅 `CELERY_MAX_RETRIES > 0` 时有意义。 |
 
@@ -256,6 +263,7 @@ WORKER_CONCURRENCY=2
 MAX_ACTIVE_JOBS=20
 
 MODEL_CALL_TIMEOUT_SECONDS=600
+MODEL_CALL_MAX_RETRIES=0
 CELERY_SOFT_TIMEOUT_BUFFER_SECONDS=300
 CELERY_HARD_TIMEOUT_BUFFER_SECONDS=60
 JOB_STALE_RUNNING_BUFFER_SECONDS=600
@@ -277,6 +285,8 @@ CALLBACK_MAX_DELIVERY_ATTEMPTS=12
 建议 MAX_ACTIVE_JOBS = 20
 ```
 
+该配置用于灰度观察和保护系统，不代表生产排队目标上限。若调用方希望允许更深排队，应先核算 24 小时 TTL、Callback 收敛时间和下游承载能力，再提高 `MAX_ACTIVE_JOBS`。
+
 ### 中等吞吐
 
 适合业务确认稳定后放量。
@@ -284,7 +294,7 @@ CALLBACK_MAX_DELIVERY_ATTEMPTS=12
 ```bash
 WORKER_POOL=threads
 WORKER_CONCURRENCY=4
-MAX_ACTIVE_JOBS=50
+MAX_ACTIVE_JOBS=50  # 灰度放量；生产排队目标可单独提高
 ```
 
 如果部署 3 个 Worker Pod：
