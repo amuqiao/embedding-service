@@ -12,10 +12,10 @@
 | 维度 | 本项目选择 | 规范对应章节 |
 |---|---|---|
 | 执行模式 | Single（默认）；Chunked 可通过配置启用 | §2.1 / §2.2 |
-| 恢复机制 | Worker 启动扫描（必选）+ Beat 月度清理 | §7.1 / §7.4 |
-| 进程内定期扫描 | **未启用** | §7.3 |
-| 积压上限 | MAX_ACTIVE_JOBS=50；0 可禁用 | §4.3 |
-| 数据保留 | 24h 过期标记 + 每月 1 日 02:00 UTC 清理 | §13 |
+| 恢复机制 | Worker 启动扫描 + Worker 内置定期扫描 | §7.1 / §7.3 |
+| 进程内定期扫描 | **已启用**，由 `JOB_RECOVERY_INTERVAL_SECONDS` 控制 | §7.3 |
+| 积压上限 | MAX_ACTIVE_JOBS=5000；0 可禁用 | §4.3 |
+| 数据保留 | 24h 过期标记 + Worker recovery loop 周期清理 | §13 |
 | Celery Pool | solo（本地），threads（生产） | — |
 | 对象存储 | local（开发），aliyun_oss（生产） | — |
 | Callback 签名 | HMAC-SHA256，密钥来自 `CALLBACK_SIGNING_SECRET` | §8.2 |
@@ -143,16 +143,15 @@ pre-generate task_id
 → deliver_callback
 ```
 
-### 5.2 月度 Beat 清理（已实现）
+### 5.2 Worker 内置定期扫描（已实现）
 
-Celery Beat 每月 1 日 02:00 UTC 触发 `jobs.cleanup_expired`，删除 `expires_at <= now()` 的 Job 记录（级联删除 WorkItem）。
+Worker 启动后会运行内置 recovery loop，周期由 `JOB_RECOVERY_INTERVAL_SECONDS` 控制。每轮扫描会处理 orphan queued、未确认发布、stale running、callback 补偿和 `expires_at <= now()` 的 Job 清理。
 
-Beat 必须单实例部署（K8s `replicas: 1`），不可与 Worker Deployment 合并。
+多 Worker Pod 同时运行时，每轮扫描通过 PostgreSQL advisory lock 做全局单飞，不需要启动 Celery Beat。
 
-### 5.3 进程内定期扫描（未启用）
+### 5.3 Celery Beat（当前不使用）
 
-`async-job-spec.md` §7.3 描述的进程内定期扫描**本项目未配置**。
-在 K8s 滚动重启频率正常的情况下，Worker 启动扫描（§5.1）已足够兜底。
+本项目当前生产形态只要求 API 和 Worker 两类服务。`jobs.cleanup_expired` 仍保留为可手动调用的 Celery task，但默认不依赖 Celery Beat。
 
 ---
 
@@ -162,7 +161,7 @@ Beat 必须单实例部署（K8s `replicas: 1`），不可与 Worker Deployment 
 
 ```
 MAX_ACTIVE_JOBS = 0        → 禁用检查，队列可无限积压（内部系统使用）
-MAX_ACTIVE_JOBS = 50       → 默认，queued+running 总数 ≥ 50 时返回 503
+MAX_ACTIVE_JOBS = 5000     → 默认，queued+running 总数 ≥ 5000 时返回 503
 ```
 
 **注意**：这是 best-effort 软限制，多 API Pod 并发时实际积压可能短暂超出，属预期行为。精确限制需改用 DB 行锁或 Redis 原子计数器，但本项目暂无必要。
@@ -186,8 +185,7 @@ MAX_ACTIVE_JOBS = 50       → 默认，queued+running 总数 ≥ 50 时返回 5
 ```
 Job 创建时刻 T0
 T0 ~ T0+24h      → expires_at 标记过期；仍可通过 GET /jobs/{id} 查询
-T0+24h ~ 月初    → 数据实际保留（未被删除）；仍可查询
-每月 1 日 02:00 UTC → Beat 清理，删除 expires_at <= now() 的记录
+T0+24h 后        → Worker recovery loop 删除 expires_at <= now() 的记录
 ```
 
 业务后端应在收到 Callback 后立即保存结果，不依赖 AI 能力层做长期存储。
@@ -238,7 +236,7 @@ T0+24h ~ 月初    → 数据实际保留（未被删除）；仍可查询
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `MAX_ACTIVE_JOBS` | 50 | 入口积压上限，0=禁用 |
+| `MAX_ACTIVE_JOBS` | 5000 | 入口积压上限，0=禁用 |
 | `JOB_ORPHAN_TIMEOUT_SECONDS` | 300 | queued+task_id=NULL 超时视为孤儿 |
 | `CELERY_MAX_RETRIES` | 0 | L1/L3 超时重试次数 |
 

@@ -1,12 +1,14 @@
 import logging
+import threading
+import time
 
 from celery import Celery
-from celery.schedules import crontab
 from celery.signals import worker_ready
 
 from app.infrastructure.config import settings
 
 logger = logging.getLogger(__name__)
+_recovery_loop_started = False
 
 celery_app = Celery(
     "cms_novel_localize",
@@ -30,21 +32,31 @@ celery_app.conf.update(
     task_max_retries=settings.CELERY_MAX_RETRIES,
     task_default_retry_delay=settings.CELERY_RETRY_DELAY,
     result_expires=settings.CELERY_RESULT_EXPIRES,
-    beat_schedule={
-        "cleanup-expired-jobs": {
-            "task": "jobs.cleanup_expired",
-            "schedule": crontab(hour=2, minute=0),
-        }
-    },
 )
+
+
+def _run_recovery_once() -> None:
+    from app.tasks.recovery import run_recovery
+    try:
+        result = run_recovery()
+        logger.info("recovery completed: %s", result)
+    except Exception:
+        logger.exception("recovery failed, continuing")
+
+
+def _recovery_loop() -> None:
+    while True:
+        time.sleep(settings.JOB_RECOVERY_INTERVAL_SECONDS)
+        _run_recovery_once()
 
 
 @worker_ready.connect
 def _on_worker_ready(sender, **kwargs):
-    from app.tasks.recovery import run_recovery
+    global _recovery_loop_started
     logger.info("worker_ready: running startup recovery scan")
-    try:
-        result = run_recovery()
-        logger.info("startup recovery completed: %s", result)
-    except Exception:
-        logger.exception("startup recovery failed, continuing")
+    _run_recovery_once()
+    if not _recovery_loop_started:
+        thread = threading.Thread(target=_recovery_loop, name="job-recovery-loop", daemon=True)
+        thread.start()
+        _recovery_loop_started = True
+        logger.info("worker_ready: recovery loop started interval_seconds=%d", settings.JOB_RECOVERY_INTERVAL_SECONDS)

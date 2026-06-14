@@ -28,6 +28,8 @@ async def create_ai_job(
     if task_id:
         await db.refresh(job)
         process_job_task.apply_async(args=[str(job.id)], task_id=task_id)
+        await JobRepo.mark_celery_published(db, job.id, task_id)
+        await db.commit()
     response.status_code = status.HTTP_202_ACCEPTED
     return create_job_response(job)
 

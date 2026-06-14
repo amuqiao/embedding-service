@@ -16,7 +16,6 @@ from app.services.job_context import (
     project_memory_from_generation,
     project_memory_from_job,
 )
-from app.services.callbacks import deliver_callback
 from app.services.executor import run_ai_job
 from app.services.job_planner import JobPlan, build_job_plan
 from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404
@@ -148,7 +147,8 @@ async def create_work_items(db: AsyncSession, job: AIJob, plan: JobPlan) -> dict
 
 async def plan_job(db: AsyncSession, job_id: uuid.UUID) -> tuple[AIJob, JobPlan, dict[str, uuid.UUID]]:
     job = await get_job_or_404(db, job_id)
-    await JobRepo.mark_running(db, job_id, progress_text="正在规划执行策略")
+    if job.celery_task_id:
+        await JobRepo.mark_running(db, job_id, celery_task_id=job.celery_task_id, progress_text="正在规划执行策略")
     input_text = _load_input_text(job)
     plan = build_job_plan(job.job_type, input_text)
     item_ids = await create_work_items(db, job, plan)
@@ -284,10 +284,13 @@ async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
                 },
             )
     await JobRepo.update_progress(db, job_id, progress_percent=90, progress_text="正在写入最终结果")
-    await JobRepo.mark_succeeded(db, job_id, result_payload)
+    if not job.celery_task_id:
+        raise RuntimeError(f"job has no celery_task_id: {job_id}")
+    await JobRepo.mark_succeeded(db, job_id, celery_task_id=job.celery_task_id, result_payload=result_payload)
     await db.commit()
     await db.refresh(job)
-    await deliver_callback(job)
+    from app.tasks.jobs import deliver_callback_for_job
+    await deliver_callback_for_job(job_id)
     return {"job_id": str(job_id), "status": "succeeded"}
 
 
@@ -300,10 +303,11 @@ async def fail_job(
 ) -> None:
     if item_id:
         await JobRepo.mark_work_item_failed(db, item_id, error_payload)
-    await JobRepo.mark_failed(db, job_id, error_payload)
-    await db.commit()
     job = await get_job_or_404(db, job_id)
-    await deliver_callback(job)
+    await JobRepo.mark_failed(db, job_id, error_payload, celery_task_id=job.celery_task_id)
+    await db.commit()
+    from app.tasks.jobs import deliver_callback_for_job
+    await deliver_callback_for_job(job_id)
 
 
 def build_canvas(job_id: uuid.UUID, plan: JobPlan, item_ids: dict[str, uuid.UUID]):

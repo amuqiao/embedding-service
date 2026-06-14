@@ -32,13 +32,13 @@ async def healthz():
         ok = False
 
     try:
-        import urllib.parse as _up
-        parsed = _up.urlparse(settings.REDIS_URL)
-        host = parsed.hostname or "127.0.0.1"
-        port = parsed.port or 6379
-        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=2)
-        writer.close()
-        await writer.wait_closed()
+        from redis.asyncio import Redis
+
+        redis = Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+        try:
+            await asyncio.wait_for(redis.ping(), timeout=2)
+        finally:
+            await redis.aclose()
         checks["redis"] = "ok"
     except Exception as exc:
         logger.warning("health_check_redis_failed error=%s", exc)

@@ -195,7 +195,7 @@ DB 连接：Worker 侧 NullPool，30 并发 = 30 个并发 DB 连接，PG 默认
 | ~~P2-1~~ | ~~stale Job `mark_failed` 自身异常可能覆盖原始异常~~ | ~~`tasks/jobs.py:59-61`~~ | ✅ 已修复：P1 修复轮中 `_fail()` 调用已用 try/except 包裹，保留原始 raise |
 | ~~P2-2~~ | ~~callback URL 非法静默返回无日志~~ | ~~`callbacks.py:55-58`~~ | ✅ 已修复：`except ValueError` 补充 `logger.warning` 后返回 |
 | ~~P2-3~~ | ~~Worker request_id 永远是 `-`，日志链路断链~~ | ~~`core/logging.py:7`~~ | ✅ 已修复：`process_job_task` 入口已调用 `set_request_id(job_id)` |
-| ~~P2-4~~ | ~~cleanup 每月执行一次，TTL 24h 数据整月积累~~ | ~~`celery_app.py:33-38`~~ | ✅ 已修复：`beat_schedule` 已改为 `crontab(hour=2, minute=0)` 每天执行 |
+| ~~P2-4~~ | ~~cleanup 每月执行一次，TTL 24h 数据整月积累~~ | ~~`celery_app.py:33-38`~~ | ✅ 已修复：当前由 Worker 内置 recovery loop 周期清理，不依赖 Celery Beat |
 | ~~P2-5~~ | ~~`cleanup_expired_jobs` 内部 commit，破坏分层一致性~~ | ~~`job_repo.py:280-285`~~ | ✅ 已修复：repo 层改为 `flush`，commit 由 task 层统一控制 |
 | ~~P2-6~~ | ~~DB 连接池无显式配置，横向扩展时可能连接耗尽~~ | ~~`database.py:14`~~ | ✅ 已修复：新增 `DB_POOL_SIZE=5`、`DB_MAX_OVERFLOW=10`、`DB_POOL_RECYCLE=1800`；估算公式写入 config 注释和 `.env.example` |
 | ~~P2-7~~ | ~~`cleanup_expired_jobs_task` 失败时 return，Beat 无法感知~~ | ~~`tasks/jobs.py:163-170`~~ | ✅ 已修复：当前实现无 silent return，异常自然向上抛出 |

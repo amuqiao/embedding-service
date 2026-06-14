@@ -7,12 +7,19 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import BaseModel
 
 from app.infrastructure.config import settings
 from app.models.job import AIJob
 from app.services.jobs import _job_to_response
 
 logger = logging.getLogger(__name__)
+
+
+class CallbackDeliveryResult(BaseModel):
+    status: str
+    attempts: int = 0
+    last_error: dict | None = None
 
 
 def _sign(timestamp: str, body: bytes) -> str | None:
@@ -49,24 +56,29 @@ def build_callback_body(job: AIJob) -> dict:
     }
 
 
-async def deliver_callback(job: AIJob) -> None:
+async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
     callback = job.callback_payload or {}
     url = callback.get("url")
     if not url:
-        return
+        return CallbackDeliveryResult(status="skipped")
     try:
         _validate_callback_url(url)
     except ValueError as e:
         logger.warning("callback_url_invalid job_id=%s url=%s reason=%s", job.id, url, e)
-        return
+        return CallbackDeliveryResult(
+            status="skipped",
+            last_error={"code": "CALLBACK_URL_INVALID", "message": str(e)},
+        )
 
     event = "job.succeeded" if job.status == "succeeded" else "job.failed"
     events = set(callback.get("events") or ["job.succeeded", "job.failed"])
     if event not in events:
-        return
+        return CallbackDeliveryResult(status="skipped")
 
     body = json.dumps(build_callback_body(job), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    delays = [0, 10, 30, 60]
+    delays = [0]
+    attempts = 0
+    last_error: dict | None = None
     async with httpx.AsyncClient(timeout=settings.CALLBACK_TIMEOUT_SECONDS) as client:
         for attempt, delay in enumerate(delays):
             if delay:
@@ -82,16 +94,28 @@ async def deliver_callback(job: AIJob) -> None:
             if signature:
                 headers["X-AI-Service-Signature"] = signature
             try:
+                attempts += 1
                 response = await client.post(url, content=body, headers=headers)
                 if 200 <= response.status_code < 300:
-                    return
+                    return CallbackDeliveryResult(status="delivered", attempts=attempts)
+                last_error = {
+                    "code": "CALLBACK_HTTP_ERROR",
+                    "status_code": response.status_code,
+                    "message": response.text[:500],
+                }
                 logger.warning(
                     "callback attempt %d failed for job %s: status=%d",
                     attempt + 1, job.id, response.status_code,
                 )
             except httpx.HTTPError as exc:
+                last_error = {
+                    "code": "CALLBACK_REQUEST_ERROR",
+                    "type": type(exc).__name__,
+                    "message": str(exc)[:500],
+                }
                 logger.warning(
                     "callback attempt %d error for job %s: %s",
                     attempt + 1, job.id, exc,
                 )
     logger.error("all callback attempts exhausted for job %s url=%s", job.id, url)
+    return CallbackDeliveryResult(status="failed", attempts=attempts, last_error=last_error)

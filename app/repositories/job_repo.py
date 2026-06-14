@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.job import AIJob, AIJobWorkItem
@@ -77,8 +77,22 @@ class JobRepo:
         job = await JobRepo.get(db, job_id)
         if job:
             job.celery_task_id = celery_task_id
+            job.celery_published_at = None
             job.updated_at = datetime.now(timezone.utc)
             await db.flush()
+
+    @staticmethod
+    async def mark_celery_published(db: AsyncSession, job_id: uuid.UUID, celery_task_id: str) -> bool:
+        result = await db.execute(
+            text(
+                "UPDATE ai_jobs "
+                "SET celery_published_at = now(), updated_at = now() "
+                "WHERE id = :job_id AND celery_task_id = :task_id"
+            ),
+            {"job_id": str(job_id), "task_id": celery_task_id},
+        )
+        await db.flush()
+        return result.rowcount == 1
 
     @staticmethod
     async def set_execution_plan(
@@ -96,7 +110,13 @@ class JobRepo:
             await db.flush()
 
     @staticmethod
-    async def mark_running_if_queued(db: AsyncSession, job_id: uuid.UUID, progress_text: str = "正在处理文本") -> bool:
+    async def mark_running_if_queued(
+        db: AsyncSession,
+        job_id: uuid.UUID,
+        *,
+        celery_task_id: str,
+        progress_text: str = "正在处理文本",
+    ) -> bool:
         """CAS 原子转移：仅在 status='queued' 时标记 running，防止多 Worker 并发双执行。"""
         result = await db.execute(
             text(
@@ -105,23 +125,35 @@ class JobRepo:
                 "progress_percent=GREATEST(COALESCE(progress_percent, 0), 5), "
                 "progress_text=:progress_text, "
                 "started_at=now(), updated_at=now() "
-                "WHERE id=:job_id AND status='queued'"
+                "WHERE id=:job_id AND status='queued' AND celery_task_id=:task_id"
             ),
-            {"job_id": str(job_id), "progress_text": progress_text},
+            {"job_id": str(job_id), "task_id": celery_task_id, "progress_text": progress_text},
         )
         await db.flush()
         return result.rowcount == 1
 
     @staticmethod
-    async def mark_running(db: AsyncSession, job_id: uuid.UUID, progress_text: str = "正在处理文本") -> None:
-        job = await JobRepo.get(db, job_id)
-        if job:
-            job.status = "running"
-            job.progress_percent = max(job.progress_percent or 0, 5)
-            job.progress_text = progress_text
-            job.started_at = datetime.now(timezone.utc)
-            job.updated_at = datetime.now(timezone.utc)
-            await db.flush()
+    async def mark_running(
+        db: AsyncSession,
+        job_id: uuid.UUID,
+        *,
+        celery_task_id: str,
+        progress_text: str = "正在处理文本",
+    ) -> bool:
+        result = await db.execute(
+            select(AIJob)
+            .where(AIJob.id == job_id, AIJob.status == "running", AIJob.celery_task_id == celery_task_id)
+            .with_for_update(skip_locked=True)
+        )
+        job = result.scalar_one_or_none()
+        if not job:
+            return False
+        job.progress_percent = max(job.progress_percent or 0, 5)
+        job.progress_text = progress_text
+        job.started_at = datetime.now(timezone.utc)
+        job.updated_at = datetime.now(timezone.utc)
+        await db.flush()
+        return True
 
     @staticmethod
     async def update_progress(
@@ -139,30 +171,67 @@ class JobRepo:
             await db.flush()
 
     @staticmethod
-    async def mark_succeeded(db: AsyncSession, job_id: uuid.UUID, result_payload: dict[str, Any]) -> None:
-        job = await JobRepo.get(db, job_id)
-        if job:
-            now = datetime.now(timezone.utc)
-            job.status = "succeeded"
-            job.progress_percent = 100
-            job.progress_text = "已完成"
-            job.result_payload = result_payload
-            job.error_payload = None
-            job.finished_at = now
-            job.updated_at = now
-            await db.flush()
+    async def mark_succeeded(
+        db: AsyncSession,
+        job_id: uuid.UUID,
+        *,
+        celery_task_id: str,
+        result_payload: dict[str, Any],
+    ) -> bool:
+        result = await db.execute(
+            select(AIJob)
+            .where(AIJob.id == job_id, AIJob.status == "running", AIJob.celery_task_id == celery_task_id)
+            .with_for_update(skip_locked=True)
+        )
+        job = result.scalar_one_or_none()
+        if not job:
+            return False
+        now = datetime.now(timezone.utc)
+        job.status = "succeeded"
+        job.progress_percent = 100
+        job.progress_text = "已完成"
+        job.result_payload = result_payload
+        job.error_payload = None
+        job.finished_at = now
+        job.updated_at = now
+        job.callback_status = "pending"
+        job.callback_attempts = 0
+        job.callback_next_retry_at = None
+        job.callback_last_error = None
+        await db.flush()
+        return True
 
     @staticmethod
-    async def mark_failed(db: AsyncSession, job_id: uuid.UUID, error_payload: dict[str, Any]) -> None:
-        job = await JobRepo.get(db, job_id)
-        if job:
-            now = datetime.now(timezone.utc)
-            job.status = "failed"
-            job.progress_text = "处理失败"
-            job.error_payload = error_payload
-            job.finished_at = now
-            job.updated_at = now
-            await db.flush()
+    async def mark_failed(
+        db: AsyncSession,
+        job_id: uuid.UUID,
+        error_payload: dict[str, Any],
+        *,
+        celery_task_id: str | None = None,
+    ) -> bool:
+        conditions = [AIJob.id == job_id, AIJob.status.in_(["queued", "running"])]
+        if celery_task_id:
+            conditions.append(AIJob.celery_task_id == celery_task_id)
+        result = await db.execute(
+            select(AIJob)
+            .where(*conditions)
+            .with_for_update(skip_locked=True)
+        )
+        job = result.scalar_one_or_none()
+        if not job:
+            return False
+        now = datetime.now(timezone.utc)
+        job.status = "failed"
+        job.progress_text = "处理失败"
+        job.error_payload = error_payload
+        job.finished_at = now
+        job.updated_at = now
+        job.callback_status = "pending"
+        job.callback_attempts = 0
+        job.callback_next_retry_at = None
+        job.callback_last_error = None
+        await db.flush()
+        return True
 
     @staticmethod
     async def mark_failed_if_running(db: AsyncSession, job_id: uuid.UUID, error_payload: dict[str, Any]) -> bool:
@@ -180,6 +249,10 @@ class JobRepo:
         job.progress_text = "处理失败"
         job.error_payload = error_payload
         job.finished_at = now
+        job.callback_status = "pending"
+        job.callback_attempts = 0
+        job.callback_next_retry_at = None
+        job.callback_last_error = None
         job.updated_at = now
         await db.flush()
         return True
@@ -270,26 +343,35 @@ class JobRepo:
             await db.flush()
 
     @staticmethod
-    async def find_stuck_dispatched_jobs(db: AsyncSession, created_before: datetime) -> list[AIJob]:
-        """查找 celery_task_id 已设但长时间未执行的 queued Job（dispatch 前 crash 导致 task 未入队）。"""
+    async def find_unpublished_queued_jobs(
+        db: AsyncSession,
+        created_before: datetime,
+        *,
+        limit: int,
+    ) -> list[AIJob]:
+        """查找已分配 task_id 但未确认 publish 的 queued Job。"""
         result = await db.execute(
             select(AIJob).where(
                 AIJob.status == "queued",
                 AIJob.celery_task_id.is_not(None),
+                AIJob.celery_published_at.is_(None),
                 AIJob.created_at < created_before,
             )
+            .order_by(AIJob.created_at.asc())
+            .limit(limit)
         )
         return list(result.scalars().all())
 
     @staticmethod
-    async def claim_stuck_for_dispatch(
+    async def claim_unpublished_for_dispatch(
         db: AsyncSession, job_id: uuid.UUID, old_task_id: str, new_task_id: str
     ) -> bool:
-        """CAS 替换 celery_task_id：仅在 status='queued' 且 celery_task_id 匹配时成功，防止并发重投。"""
+        """CAS 替换未确认发布的 task_id，防止并发补偿投递。"""
         result = await db.execute(
             text(
                 "UPDATE ai_jobs SET celery_task_id = :new_task_id, updated_at = now() "
-                "WHERE id = :job_id AND status = 'queued' AND celery_task_id = :old_task_id"
+                "WHERE id = :job_id AND status = 'queued' "
+                "AND celery_task_id = :old_task_id AND celery_published_at IS NULL"
             ),
             {"new_task_id": new_task_id, "job_id": str(job_id), "old_task_id": old_task_id},
         )
@@ -297,24 +379,106 @@ class JobRepo:
         return result.rowcount == 1
 
     @staticmethod
-    async def find_orphaned_queued_jobs(db: AsyncSession, created_before: datetime) -> list[AIJob]:
+    async def mark_callback_delivering(
+        db: AsyncSession,
+        job_id: uuid.UUID,
+        *,
+        now: datetime,
+        max_attempts: int,
+        next_retry_at: datetime,
+    ) -> bool:
+        result = await db.execute(
+            text(
+                "UPDATE ai_jobs "
+                "SET callback_status='delivering', callback_next_retry_at=:next_retry_at, updated_at=now() "
+                "WHERE id=:job_id AND status IN ('succeeded', 'failed') "
+                "AND callback_status IN ('pending', 'failed', 'delivering') "
+                "AND callback_attempts < :max_attempts "
+                "AND (callback_next_retry_at IS NULL OR callback_next_retry_at <= :now)"
+            ),
+            {
+                "job_id": str(job_id),
+                "now": now,
+                "max_attempts": max_attempts,
+                "next_retry_at": next_retry_at,
+            },
+        )
+        await db.flush()
+        return result.rowcount == 1
+
+    @staticmethod
+    async def mark_callback_result(
+        db: AsyncSession,
+        job_id: uuid.UUID,
+        *,
+        status: str,
+        attempts_increment: int,
+        last_error: dict[str, Any] | None,
+        next_retry_at: datetime | None,
+    ) -> None:
+        job = await JobRepo.get(db, job_id)
+        if job:
+            job.callback_status = status
+            job.callback_attempts = (job.callback_attempts or 0) + attempts_increment
+            job.callback_last_error = last_error
+            job.callback_next_retry_at = next_retry_at
+            job.updated_at = datetime.now(timezone.utc)
+            await db.flush()
+
+    @staticmethod
+    async def find_due_callbacks(
+        db: AsyncSession,
+        *,
+        now: datetime,
+        max_attempts: int,
+        limit: int,
+    ) -> list[AIJob]:
+        result = await db.execute(
+            select(AIJob)
+            .where(
+                AIJob.status.in_(["succeeded", "failed"]),
+                AIJob.callback_status.in_(["pending", "failed", "delivering"]),
+                AIJob.callback_attempts < max_attempts,
+                or_(AIJob.callback_next_retry_at.is_(None), AIJob.callback_next_retry_at <= now),
+            )
+            .order_by(AIJob.finished_at.asc(), AIJob.created_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def find_orphaned_queued_jobs(
+        db: AsyncSession,
+        created_before: datetime,
+        *,
+        limit: int,
+    ) -> list[AIJob]:
         result = await db.execute(
             select(AIJob).where(
                 AIJob.status == "queued",
                 AIJob.celery_task_id.is_(None),
                 AIJob.created_at < created_before,
             )
+            .order_by(AIJob.created_at.asc())
+            .limit(limit)
         )
         return list(result.scalars().all())
 
     @staticmethod
-    async def find_stale_running_jobs(db: AsyncSession, started_before: datetime) -> list[AIJob]:
+    async def find_stale_running_jobs(
+        db: AsyncSession,
+        started_before: datetime,
+        *,
+        limit: int,
+    ) -> list[AIJob]:
         result = await db.execute(
             select(AIJob).where(
                 AIJob.status == "running",
                 AIJob.started_at.is_not(None),
                 AIJob.started_at < started_before,
             )
+            .order_by(AIJob.started_at.asc())
+            .limit(limit)
         )
         return list(result.scalars().all())
 
@@ -326,7 +490,7 @@ class JobRepo:
         result = await db.execute(
             text(
                 "UPDATE ai_jobs SET celery_task_id = :task_id, updated_at = now() "
-                "WHERE id = :job_id AND celery_task_id IS NULL"
+                "WHERE id = :job_id AND status = 'queued' AND celery_task_id IS NULL"
             ),
             {"task_id": celery_task_id, "job_id": str(job_id)},
         )

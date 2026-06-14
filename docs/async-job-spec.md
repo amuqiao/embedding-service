@@ -12,7 +12,7 @@
 
 **技术栈**：FastAPI / Celery / PostgreSQL / Redis，LLM 调用使用 litellm 或原生 async SDK（openai-python、anthropic 等）。
 
-**部署环境**：测试和生产环境使用 Kubernetes（K8s）。API 服务和 Worker 服务各自作为独立 Deployment 部署，均支持水平扩展；Celery Beat（定期扫描，可选）须作为独立 Deployment 单实例运行（`replicas: 1`），不得与 Worker Deployment 合并。
+**部署环境**：测试和生产环境使用 Kubernetes（K8s）。API 服务和 Worker 服务各自作为独立 Deployment 部署，均支持水平扩展；定期扫描可由 Worker 内置 recovery loop 承担。若项目额外启用 Celery Beat，必须作为独立 Deployment 单实例运行（`replicas: 1`），不得与 Worker Deployment 合并。
 
 ---
 

@@ -371,7 +371,7 @@ callback.events 首版固定支持 job.succeeded 和 job.failed；不传时默�
 Job 进入 succeeded 或 failed 后，AI 能力层必须 POST callback.url。
 Callback 是完成通知，不替代 GET /jobs/{job_id}；业务后端必须保留查询兜底。
 Callback 投递失败不改变 Job 最终状态。
-Callback 失败后重试 3 次，重试间隔固定为 10 秒、30 秒、60 秒。
+Callback 终态后立即尝试投递 1 次；失败后由 Worker recovery loop 按 `CALLBACK_RETRY_DELAY_SECONDS` 补偿重试，最多尝试 `CALLBACK_MAX_DELIVERY_ATTEMPTS` 次。
 业务后端必须按 job_id + event 做幂等去重。
 ```
 

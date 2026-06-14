@@ -375,7 +375,7 @@ callback.events 首版固定支持 job.succeeded 和 job.failed；不传时默�
 Job 进入 succeeded 或 failed 后，AI 能力层必须 POST callback.url。
 Callback 是完成通知，不替代 GET /jobs/{job_id}；业务后端必须保留查询兜底。
 Callback 投递失败不改变 Job 最终状态。
-Callback 失败后重试 3 次，重试间隔固定为 10 秒、30 秒、60 秒。
+Callback 终态后立即尝试投递 1 次；失败后由 Worker recovery loop 按 `CALLBACK_RETRY_DELAY_SECONDS` 补偿重试，最多尝试 `CALLBACK_MAX_DELIVERY_ATTEMPTS` 次。
 业务后端必须按 job_id + event 做幂等去重。
 ```
 
@@ -988,8 +988,8 @@ Job 创建时间：T0
 ### 13.5 自动清理机制
 
 ```
-执行方式（由 Celery Beat 驱动）：
-  - 定时运行清理任务（默认：每月 1 日凌晨 2 点）
+执行方式（由 Worker 内置 recovery loop 驱动）：
+  - 定时运行清理任务（默认：由 JOB_RECOVERY_INTERVAL_SECONDS 控制）
   - 查询所有 expires_at <= now() 的记录
   - 删除关联的中间数据（ai_job_work_items）
   - 删除 Job 记录（ai_jobs）
@@ -997,9 +997,9 @@ Job 创建时间：T0
   
 配置说明：
   - 任务名：jobs.cleanup_expired
-  - 触发频率：crontab(day_of_month=1, hour=2, minute=0)
-  - 默认：每月 1 日凌晨 2:00 UTC
-  - 可配置：修改 celery_app.py 中的 beat_schedule
+  - 触发频率：JOB_RECOVERY_INTERVAL_SECONDS
+  - 默认：60 秒
+  - 可配置：通过环境变量调整 JOB_RECOVERY_INTERVAL_SECONDS
   
 数据库影响：
   - 数据量保持稳定（不会无限增长）

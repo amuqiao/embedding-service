@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from billiard.exceptions import SoftTimeLimitExceeded
@@ -38,14 +39,14 @@ async def _with_db(coro):
 def process_job_task(self, job_id: str):
     set_request_id(job_id)
     try:
-        return asyncio.run(_process(job_id))
+        return asyncio.run(_process(job_id, self.request.id))
     except (SoftTimeLimitExceeded, asyncio.TimeoutError) as exc:
         # 两类超时（asyncio.wait_for L1 / Celery SIGALRM L3）统一重试策略。
         # 每次 self.retry() 启动全新 Celery task，asyncio.wait_for 和 CELERY_SOFT_TIME_LIMIT
         # 均从 0 重新计时；CELERY_MAX_RETRIES=0（默认）表示不重试，直接进入终态。
         if self.request.retries >= settings.CELERY_MAX_RETRIES:
             try:
-                asyncio.run(_mark_timeout(job_id))
+                asyncio.run(_mark_timeout(job_id, self.request.id))
             except Exception:
                 logger.exception("job_timeout_cleanup_error job_id=%s", job_id)
             raise
@@ -63,13 +64,13 @@ def process_job_task(self, job_id: str):
         )
     except Exception as exc:
         try:
-            asyncio.run(_fail(job_id, None, exc))
+            asyncio.run(_fail(job_id, None, exc, self.request.id))
         except Exception:
             logger.exception("job_fail_cleanup_error job_id=%s", job_id)
         raise
 
 
-async def _process(job_id: str) -> dict[str, Any]:
+async def _process(job_id: str, celery_task_id: str) -> dict[str, Any]:
     job_uuid = uuid.UUID(job_id)
     started = time.monotonic()
 
@@ -78,15 +79,27 @@ async def _process(job_id: str) -> dict[str, Any]:
         if job.status in ("succeeded", "failed"):
             logger.warning("job_skipped job_id=%s status=%s", job_id, job.status)
             return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
+        if job.celery_task_id != celery_task_id:
+            logger.warning(
+                "job_task_id_mismatch job_id=%s message_task_id=%s db_task_id=%s status=%s",
+                job_id, celery_task_id, job.celery_task_id, job.status,
+            )
+            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
         logger.info("job_started job_id=%s job_type=%s model_id=%s", job_id, job.job_type, job.model_id)
         if job.status == "queued":
-            claimed = await JobRepo.mark_running_if_queued(db, job.id)
+            claimed = await JobRepo.mark_running_if_queued(db, job.id, celery_task_id=celery_task_id)
             if not claimed:
                 logger.warning("job_claim_failed job_id=%s status=%s", job_id, job.status)
                 return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
-        else:
+        elif job.status == "running":
             # status == 'running'：Path A 恢复重执行（Worker 崩溃后消息回队）
-            await JobRepo.mark_running(db, job.id)
+            refreshed = await JobRepo.mark_running(db, job.id, celery_task_id=celery_task_id)
+            if not refreshed:
+                logger.warning("job_running_claim_lost job_id=%s task_id=%s", job_id, celery_task_id)
+                return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
+        else:
+            logger.warning("job_skipped_unexpected_status job_id=%s status=%s", job_id, job.status)
+            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
         await db.commit()
 
         input_text = _load_input_text(job)
@@ -96,15 +109,17 @@ async def _process(job_id: str) -> dict[str, Any]:
                 )
         result_data = _persist_large_artifacts(job, result)
 
-        await JobRepo.mark_succeeded(db, job.id, result_data)
+        succeeded = await JobRepo.mark_succeeded(db, job.id, celery_task_id=celery_task_id, result_payload=result_data)
         await db.commit()
+        if not succeeded:
+            logger.warning("job_success_state_lost job_id=%s", job_id)
+            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
 
-        job = await JobRepo.get(db, job.id)
-        await deliver_callback(job)
         return {"job_id": job_id, "status": "succeeded", "job_type": job.job_type}
 
     result = await _with_db(run)
     if result.get("status") == "succeeded":
+        await deliver_callback_for_job(job_uuid)
         duration_ms = int((time.monotonic() - started) * 1000)
         logger.info(
             "job_completed job_id=%s job_type=%s duration_ms=%d",
@@ -113,7 +128,7 @@ async def _process(job_id: str) -> dict[str, Any]:
     return result
 
 
-async def _fail(job_id: str, _work_item_id: str | None, exc: Exception) -> None:
+async def _fail(job_id: str, _work_item_id: str | None, exc: Exception, celery_task_id: str) -> None:
     if isinstance(exc, AppError):
         logger.error("job_failed job_id=%s error_code=%s", job_id, exc.code)
         error_payload = {"code": exc.code, "message": exc.message, "details": exc.details}
@@ -127,31 +142,79 @@ async def _fail(job_id: str, _work_item_id: str | None, exc: Exception) -> None:
 
     async def run(db):
         job_uuid = uuid.UUID(job_id)
-        await JobRepo.mark_failed(db, job_uuid, error_payload)
+        marked = await JobRepo.mark_failed(db, job_uuid, error_payload, celery_task_id=celery_task_id)
         await db.commit()
-        job = await get_job_or_404(db, job_uuid)
-        await deliver_callback(job)
+        return marked
 
-    await _with_db(run)
+    marked = await _with_db(run)
+    if marked:
+        await deliver_callback_for_job(uuid.UUID(job_id))
+    else:
+        logger.warning("job_fail_state_lost job_id=%s", job_id)
 
 
-async def _mark_timeout(job_id: str) -> None:
+async def _mark_timeout(job_id: str, celery_task_id: str) -> None:
     logger.error("job_timeout job_id=%s", job_id)
 
     async def run(db):
         job_uuid = uuid.UUID(job_id)
         error_payload = {"code": "JOB_TIMEOUT", "message": "任务执行超时", "details": {}}
-        await JobRepo.mark_failed(db, job_uuid, error_payload)
+        marked = await JobRepo.mark_failed(db, job_uuid, error_payload, celery_task_id=celery_task_id)
         await db.commit()
-        job = await get_job_or_404(db, job_uuid)
-        await deliver_callback(job)
+        return marked
 
-    await _with_db(run)
+    marked = await _with_db(run)
+    if marked:
+        await deliver_callback_for_job(uuid.UUID(job_id))
+    else:
+        logger.warning("job_timeout_state_lost job_id=%s", job_id)
+
+
+async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
+    async def run(db):
+        job = await get_job_or_404(db, job_id)
+        if job.status not in ("succeeded", "failed"):
+            return False
+        if job.callback_attempts >= settings.CALLBACK_MAX_DELIVERY_ATTEMPTS:
+            return False
+        now = datetime.now(timezone.utc)
+        delivery_deadline = now + timedelta(seconds=settings.CALLBACK_DELIVERY_TIMEOUT_SECONDS)
+        claimed = await JobRepo.mark_callback_delivering(
+            db,
+            job.id,
+            now=now,
+            max_attempts=settings.CALLBACK_MAX_DELIVERY_ATTEMPTS,
+            next_retry_at=delivery_deadline,
+        )
+        await db.commit()
+        if not claimed:
+            return False
+
+        result = await deliver_callback(job)
+        next_retry_at = None
+        if result.status == "failed" and job.callback_attempts + result.attempts < settings.CALLBACK_MAX_DELIVERY_ATTEMPTS:
+            next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=settings.CALLBACK_RETRY_DELAY_SECONDS)
+        await JobRepo.mark_callback_result(
+            db,
+            job.id,
+            status=result.status,
+            attempts_increment=result.attempts,
+            last_error=result.last_error,
+            next_retry_at=next_retry_at,
+        )
+        await db.commit()
+        return result.status in ("delivered", "skipped")
+
+    try:
+        return await _with_db(run)
+    except Exception:
+        logger.exception("callback_delivery_record_error job_id=%s", job_id)
+        return False
 
 
 @celery_app.task(name="jobs.cleanup_expired")
 def cleanup_expired_jobs_task() -> dict[str, Any]:
-    """定期清理过期的 Job 记录（expires_at <= now()），由 Celery Beat 每天凌晨 2 点调度。"""
+    """清理过期 Job 记录；worker recovery loop 会周期调用同一 repo 方法。"""
     async def run(db):
         deleted_count = await JobRepo.cleanup_expired_jobs(db)
         await db.commit()
