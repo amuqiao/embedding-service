@@ -245,12 +245,11 @@ celery_time_limit
 | --- | --- | --- | --- |
 | `CALLBACK_SIGNING_SECRET` | 非空随机密钥 | HMAC 签名。 | 接收方必须验签。 |
 | `ALLOW_INSECURE_CALLBACKS` | `false` | 是否允许本地 HTTP callback。 | 非本地环境必须关闭。 |
-| `CALLBACK_TIMEOUT_SECONDS` | `5` | 单次 HTTP 请求超时。 | Callback 领取窗口的锚点。 |
-| `CALLBACK_DELIVERY_WINDOW_BUFFER_SECONDS` | `175` | 领取窗口相对单次请求超时的缓冲。 | 派生 `callback_delivery_timeout_seconds`。 |
+| `CALLBACK_TIMEOUT_SECONDS` | `5` | 单次 HTTP 请求超时。 | 接收端慢时调大。 |
 | `CALLBACK_RETRY_DELAY_SECONDS` | `300` | 失败后的补偿重试间隔。 | 接收方不稳定时调大。 |
 | `CALLBACK_MAX_DELIVERY_ATTEMPTS` | `12` | 最大投递次数。 | 调大表示更长时间补偿。 |
 
-代码按 `CALLBACK_TIMEOUT_SECONDS + CALLBACK_DELIVERY_WINDOW_BUFFER_SECONDS` 派生 `callback_delivery_timeout_seconds`，避免用户直接配置两个互相冲突的绝对值。
+代码按 `CALLBACK_TIMEOUT_SECONDS + 内部 claim grace` 派生 `callback_delivery_timeout_seconds`，确保一次投递领取窗口覆盖 HTTP 请求和结果记录；启动时校验该窗口早于 `CALLBACK_RETRY_DELAY_SECONDS`。调用方和部署人员不需要配置内部领取窗口。
 
 ## 六、推荐 MVP 参数
 
@@ -273,7 +272,6 @@ JOB_RECOVERY_BATCH_SIZE=100
 JOB_RECOVERY_CALLBACK_BATCH_SIZE=50
 
 CALLBACK_TIMEOUT_SECONDS=5
-CALLBACK_DELIVERY_WINDOW_BUFFER_SECONDS=175
 CALLBACK_RETRY_DELAY_SECONDS=300
 CALLBACK_MAX_DELIVERY_ATTEMPTS=12
 ```
@@ -322,7 +320,7 @@ MAX_ACTIVE_JOBS=50  # 灰度放量；生产排队目标可单独提高
 | 队列太深，想保护系统 | 降低 `MAX_ACTIVE_JOBS`。 | 让上游更早收到 503，避免无限积压。 |
 | 模型经常超时 | 提高 `MODEL_CALL_TIMEOUT_SECONDS`。 | L3/L4/L5 会按 buffer 自动派生；无需直接调底层值。 |
 | Worker 被误判 stale | 提高 `JOB_STALE_RUNNING_BUFFER_SECONDS`。 | 增大 L5 相对 L4 的缓冲，避免误杀正常长任务。 |
-| Callback 接收端慢 | 提高 `CALLBACK_TIMEOUT_SECONDS`，必要时提高 `CALLBACK_DELIVERY_WINDOW_BUFFER_SECONDS`。 | 代码会自动派生领取窗口，避免两个绝对值冲突。 |
+| Callback 接收端慢 | 提高 `CALLBACK_TIMEOUT_SECONDS`；如果启动校验提示重试间隔不足，再提高 `CALLBACK_RETRY_DELAY_SECONDS`。 | 内部领取窗口由代码自动派生，不作为生产旋钮暴露。 |
 | Callback 接收端不稳定 | 提高 `CALLBACK_RETRY_DELAY_SECONDS` 或 `CALLBACK_MAX_DELIVERY_ATTEMPTS`。 | 降低对接收方的瞬时压力。 |
 | Worker 重启后有 running 卡住 | 等待派生的 `job_stale_running_seconds` 后 recovery 收敛，或临时调小 `JOB_STALE_RUNNING_BUFFER_SECONDS` 后重启 Worker。 | 调小前确认不会误杀正常长任务。 |
 | 需要暂停放量 | 降低 Worker Pod 数或 `WORKER_CONCURRENCY`，同时降低 `MAX_ACTIVE_JOBS`。 | 让系统进入低吞吐保护模式。 |

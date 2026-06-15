@@ -3,7 +3,7 @@ from pydantic import ValidationError
 
 from app.core.config import (
     Settings,
-    _CALLBACK_DELIVERY_WINDOW_BUFFER,
+    _CALLBACK_DELIVERY_CLAIM_GRACE,
     _CELERY_HARD_TIMEOUT_BUFFER,
     _CELERY_SOFT_TIMEOUT_BUFFER,
     _JOB_STALE_RUNNING_BUFFER,
@@ -38,7 +38,7 @@ def test_derived_timeout_properties_use_fixed_buffers():
     assert s.job_stale_running_seconds == (
         300 + _CELERY_SOFT_TIMEOUT_BUFFER + _CELERY_HARD_TIMEOUT_BUFFER + _JOB_STALE_RUNNING_BUFFER
     )
-    assert s.callback_delivery_timeout_seconds == 5 + _CALLBACK_DELIVERY_WINDOW_BUFFER
+    assert s.callback_delivery_timeout_seconds == 5 + _CALLBACK_DELIVERY_CLAIM_GRACE
 
 
 def test_settings_rejects_buffers_below_minimum():
@@ -52,19 +52,33 @@ def test_settings_rejects_buffers_below_minimum():
     assert _JOB_STALE_RUNNING_BUFFER >= 600
 
 
-def test_settings_rejects_callback_delivery_window_overlap():
-    # Violate: CALLBACK_TIMEOUT_SECONDS(130) + buffer(175) = 305 >= RETRY_DELAY(300)
-    with pytest.raises(ValidationError, match="delivery window must not overlap"):
-        Settings(**_settings_kwargs(
-            CALLBACK_TIMEOUT_SECONDS=130,
-            CALLBACK_RETRY_DELAY_SECONDS=300,
-        ))
+def test_callback_delivery_window_is_anchored_to_http_timeout_not_retry_delay():
+    fast_retry = Settings(**_settings_kwargs(
+        CALLBACK_TIMEOUT_SECONDS=5,
+        CALLBACK_RETRY_DELAY_SECONDS=300,
+    ))
+    slow_retry = Settings(**_settings_kwargs(
+        CALLBACK_TIMEOUT_SECONDS=5,
+        CALLBACK_RETRY_DELAY_SECONDS=600,
+    ))
 
-    # Violate: CALLBACK_TIMEOUT_SECONDS(5) + buffer(175) = 180 >= RETRY_DELAY(180)
-    with pytest.raises(ValidationError, match="delivery window must not overlap"):
+    assert fast_retry.callback_delivery_timeout_seconds == 5 + _CALLBACK_DELIVERY_CLAIM_GRACE
+    assert slow_retry.callback_delivery_timeout_seconds == 5 + _CALLBACK_DELIVERY_CLAIM_GRACE
+
+
+def test_settings_rejects_callback_retry_interval_overlapping_delivery_window():
+    # Violate: timeout(5) + internal grace(175) = 180 >= retry_delay(180)
+    with pytest.raises(ValidationError, match="retry interval must start after"):
         Settings(**_settings_kwargs(
             CALLBACK_TIMEOUT_SECONDS=5,
             CALLBACK_RETRY_DELAY_SECONDS=180,
+        ))
+
+    # Violate: timeout(130) + internal grace(175) = 305 >= retry_delay(300)
+    with pytest.raises(ValidationError, match="retry interval must start after"):
+        Settings(**_settings_kwargs(
+            CALLBACK_TIMEOUT_SECONDS=130,
+            CALLBACK_RETRY_DELAY_SECONDS=300,
         ))
 
 

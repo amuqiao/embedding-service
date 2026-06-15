@@ -13,7 +13,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 _CELERY_SOFT_TIMEOUT_BUFFER: int = 300   # time for L1 cleanup (job write + callback) after AI timeout
 _CELERY_HARD_TIMEOUT_BUFFER: int = 60    # time for soft-limit handler to finish before SIGKILL
 _JOB_STALE_RUNNING_BUFFER: int = 600     # recovery scan gap to avoid mis-classifying a recently killed job
-_CALLBACK_DELIVERY_WINDOW_BUFFER: int = 175  # per-delivery claim window above CALLBACK_TIMEOUT_SECONDS
+_CALLBACK_DELIVERY_CLAIM_GRACE: int = 175  # DB commit/recovery skew margin after one callback HTTP timeout
 
 
 class Settings(BaseSettings):
@@ -133,14 +133,14 @@ class Settings(BaseSettings):
                 raise ValueError(f"{name} must be greater than or equal to 0")
 
         # Callback delivery window invariant:
-        # delivery_timeout < retry_delay ensures no two workers claim the same callback.
-        delivery_timeout = self.CALLBACK_TIMEOUT_SECONDS + _CALLBACK_DELIVERY_WINDOW_BUFFER
+        # The claim window is derived from callback timeout + an internal grace period.
+        # Retry delay must open after that window to avoid concurrent delivery claims.
+        delivery_timeout = self.callback_delivery_timeout_seconds
         if delivery_timeout >= self.CALLBACK_RETRY_DELAY_SECONDS:
             raise ValueError(
-                f"CALLBACK_TIMEOUT_SECONDS({self.CALLBACK_TIMEOUT_SECONDS}) + "
-                f"internal window buffer({_CALLBACK_DELIVERY_WINDOW_BUFFER}) "
-                f"= {delivery_timeout}s must be < CALLBACK_RETRY_DELAY_SECONDS({self.CALLBACK_RETRY_DELAY_SECONDS}s): "
-                "delivery window must not overlap retry interval."
+                f"derived callback claim window({delivery_timeout}s) must be < "
+                f"CALLBACK_RETRY_DELAY_SECONDS({self.CALLBACK_RETRY_DELAY_SECONDS}s): "
+                "retry interval must start after the callback claim window."
             )
 
         if not self.CALLBACK_SIGNING_SECRET:
@@ -165,7 +165,7 @@ class Settings(BaseSettings):
 
     @property
     def callback_delivery_timeout_seconds(self) -> int:
-        return self.CALLBACK_TIMEOUT_SECONDS + _CALLBACK_DELIVERY_WINDOW_BUFFER
+        return self.CALLBACK_TIMEOUT_SECONDS + _CALLBACK_DELIVERY_CLAIM_GRACE
 
     # ── Derived: OSS ──────────────────────────────────────────────────────────
 
