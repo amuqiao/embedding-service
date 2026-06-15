@@ -263,6 +263,8 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
         if not claimed:
             return False
 
+        job.callback_status = "delivering"
+        job.callback_next_retry_at = delivery_deadline
         result = await deliver_callback(job)
         next_retry_at = None
         if result.status == "failed" and job.callback_attempts + result.attempts < settings.CALLBACK_MAX_DELIVERY_ATTEMPTS:

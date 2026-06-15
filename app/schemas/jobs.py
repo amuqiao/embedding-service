@@ -135,6 +135,13 @@ class JobProgress(StrictBaseModel):
     stage: str | None = None
 
 
+class CallbackDeliveryView(StrictBaseModel):
+    status: str
+    attempts: int
+    next_retry_at: datetime | None = None
+    last_error: dict[str, Any] | None = None
+
+
 class JobView(StrictBaseModel):
     job_id: UUID
     client_request_id: str | None = None
@@ -143,6 +150,7 @@ class JobView(StrictBaseModel):
     progress: JobProgress
     result: dict[str, Any] | None = None
     error: JobError | None = None
+    callback: CallbackDeliveryView
     metadata: dict[str, Any] = {}
     created_at: datetime
     started_at: datetime | None = None

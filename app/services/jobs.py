@@ -67,6 +67,12 @@ def _job_to_response(job: AIJob) -> JobStatusResponse:
         },
         result=job.result_payload,
         error=job.error_payload,
+        callback={
+            "status": job.callback_status,
+            "attempts": job.callback_attempts,
+            "next_retry_at": job.callback_next_retry_at,
+            "last_error": job.callback_last_error,
+        },
         metadata=input_payload.get("metadata") or {},
         created_at=job.created_at,
         started_at=job.started_at,

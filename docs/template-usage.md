@@ -167,7 +167,7 @@ curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
 }
 ```
 
-`GET /jobs/{job_id}` 返回统一 JobView。`queued` / `running` 时 `result` 和 `error` 都为 `null`；`succeeded` 时 `result` 由 job_type 的结果 schema 定义；`failed` 时 `error` 使用统一错误结构。
+`GET /jobs/{job_id}` 返回统一 JobView。`queued` / `running` 时 `result` 和 `error` 都为 `null`；`succeeded` 时 `result` 由 job_type 的结果 schema 定义；`failed` 时 `error` 使用统一错误结构。`callback` 描述终态通知的投递状态；Callback 投递失败只重试 Callback，不重新执行 Job。
 
 ```json
 {
@@ -178,6 +178,12 @@ curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
   "progress": {"percent": 30, "message": "processing", "stage": null},
   "result": null,
   "error": null,
+  "callback": {
+    "status": "pending",
+    "attempts": 0,
+    "next_retry_at": null,
+    "last_error": null
+  },
   "metadata": {"caller_task_id": "task-1"},
   "created_at": "2026-06-15T10:00:00Z",
   "started_at": "2026-06-15T10:00:03Z",
@@ -185,7 +191,7 @@ curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
 }
 ```
 
-Callback 只在终态事件触发，body 是事件 envelope，内部 `job` 字段复用同一份 JobView：
+Callback 只在终态事件触发，body 是事件 envelope，内部 `job` 字段复用同一份 JobView。Callback 正文里的 `job.callback` 是本次发送前的投递快照；发送完成后的 `delivered` / `failed` / `next_retry_at` 以之后的 `GET /jobs/{job_id}` 为准。
 
 ```json
 {
@@ -201,6 +207,12 @@ Callback 只在终态事件触发，body 是事件 envelope，内部 `job` 字�
     "progress": {"percent": 100, "message": "已完成", "stage": null},
     "result": {},
     "error": null,
+    "callback": {
+      "status": "delivering",
+      "attempts": 0,
+      "next_retry_at": "2026-06-15T10:04:00Z",
+      "last_error": null
+    },
     "metadata": {"caller_task_id": "task-1"},
     "created_at": "2026-06-15T10:00:00Z",
     "started_at": "2026-06-15T10:00:03Z",
