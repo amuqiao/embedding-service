@@ -22,6 +22,7 @@ AI 负责：
 - 返回与输入结构一一对应的 `translated_schemas`。
 
 AI 不负责保存、分发或切换 RS 标签库。本接口只通过轮询获取结果。
+本接口创建 Job 时不传 `callback`；RS 不接收 Callback，也不消费通用 JobView 中的 Callback 投递状态。
 
 ## 基础接口
 
@@ -147,6 +148,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 状态字段规则：
 
 - 只有 `succeeded` 和 `failed` 是终态。
+- 本接口不触发 callback，终态结果只通过查询接口获取。
 - `queued` 和 `running` 时 `result` 和 `error` 必须为 `null`。
 - `succeeded` 时 `result` 必须存在，`error` 必须为 `null`。
 - `failed` 时 `error` 必须存在，`result` 必须为 `null`。

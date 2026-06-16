@@ -1,10 +1,10 @@
 # CPP 请求 AI 打标任务接口
 
-本文面向 CPP 调用方，定义 CPP 如何调用 AI 服务创建短剧打标任务、查询状态和接收终态 callback。
+本文面向 CPP 调用方，完整定义 CPP 如何创建短剧打标 Job、轮询查询 Job 状态和结果，以及接收终态 callback。
 
 ## 接口边界
 
-CPP 向 AI 提供作品素材资源。AI 接收任务后，从 RS 获取默认 `TagSchemaSnapshot` 和 `MutualExclusionRule[]`，异步执行打标，并在终态写入 RS 后 callback CPP。
+CPP 向 AI 提供作品素材资源和 callback 地址。AI 接收任务后，从 RS 获取默认标签体系和互斥规则，异步执行打标，并在终态写入 RS 后 callback CPP。
 
 CPP 负责：
 
@@ -36,6 +36,33 @@ GET  /api/v1/ai-jobs/jobs/{job_id}
 Authorization: Bearer <SERVICE_API_KEY>
 X-AI-Service-Caller-ID: cpp
 ```
+
+## Job 壳边界
+
+本接口使用统一 AI Job 壳。外层只承载 Job 生命周期字段，短剧打标专属数据必须放在固定扩展位置：
+
+| 数据类型 | 位置 | 说明 |
+| --- | --- | --- |
+| 打标任务入参 | `job_params` | `t_book_id`、作品上下文和素材资源都放在这里。 |
+| 打标成功结果 | `result.artifacts[]` | 具体产物由 `job_type` 定义，当前包含 `final_tags`、`story_overview` 和 `tagging_detail`。 |
+| 机器判断信号 | `result.signals` | `t_book_id`、`result_checksum` 等用于自动校验和对账的字段。 |
+| 打标失败信息 | `error` | 失败终态统一使用 `code`、`message`、`details`。 |
+| 终态通知 | `CallbackEnvelope` | Callback 请求体是事件 envelope，其中 `job` 字段复用轮询接口返回的成功或失败终态 `JobView`。 |
+
+不得把 `t_book_id`、素材、标签结果、剧情分析或打标明细提升到 Job 顶层。
+
+创建请求顶层只使用：
+
+```text
+client_request_id
+job_type
+job_params
+callback
+metadata
+options
+```
+
+查询响应统一使用 `JobView`。如果 CPP 在创建请求中传入 `callback.url`，AI 只在 Job 进入 `succeeded` 或 `failed` 后发送 callback，且 callback 请求体中的 `job` 字段与同一 Job 的终态 `JobView` 同形并来自同一份结果。
 
 ## 创建打标 Job
 
@@ -80,8 +107,7 @@ Content-Type: application/json
     ]
   },
   "callback": {
-    "url": "https://cpp.example.com/ai-jobs/callback",
-    "events": ["job.succeeded", "job.failed"]
+    "url": "https://cpp.example.com/ai-jobs/callback"
   },
   "metadata": {
     "source_service": "cpp",
@@ -107,8 +133,12 @@ Content-Type: application/json
 | `job_params.work_context.series_structure` | 必需 | `continuous_series` 或 `unit_series`。 |
 | `job_params.assets` | 必需 | 素材资源列表，至少包含一个 `subtitle_srt`。 |
 | `callback` | 可选 | CPP 终态通知配置。不传时 CPP 只轮询。 |
+| `callback.url` | 配置 callback 时必需 | AI 在终态时请求的 CPP callback 地址。 |
+| `metadata` | 可选 | CPP 透传元数据，AI 不解释业务语义。 |
+| `options.priority` | 可选 | 执行优先级，允许 `low`、`normal`、`high`。 |
+| `options.timeout_seconds` | 可选 | 任务超时时间，必须大于 `0`。 |
 
-请求体不得包含 `tag_schema_version`。标签数据由 AI 从 RS 获取默认结构体。
+标签数据由 AI 在执行时从 RS 获取，CPP 创建 Job 时只提供作品素材和作品上下文。
 
 ### 响应体
 
@@ -210,40 +240,29 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         "content": {
           "t_book_id": "204200150000004872",
           "tags": {
-            "audience": [
+            "000001": [
               {
-                "label_id": "lbl_audience_female",
-                "display_name": "女频"
+                "label_id": "65f0a1b2c3d4e5f6a7b8c902",
+                "标签名": "女频",
+                "权重": 1,
+                "打标原因": "剧情以女主视角展开。",
+                "标签释义": "核心受众为女性群体。"
               }
             ],
-            "space_time": [
+            "000006": [
               {
-                "label_id": "lbl_space_modern_urban",
-                "display_name": "现代都市"
-              }
-            ],
-            "genre": [
+                "label_id": "65f0a1b2c3d4e5f6a7b8ca01",
+                "标签名": "虐",
+                "权重": 0.9,
+                "打标原因": "女主遭受冤屈羞辱。",
+                "标签释义": "刻意营造悲伤、压抑的情绪。"
+              },
               {
-                "label_id": "lbl_genre_romance",
-                "display_name": "言情"
-              }
-            ],
-            "plot": [
-              {
-                "label_id": "lbl_plot_contract_marriage",
-                "display_name": "契约婚姻"
-              }
-            ],
-            "character": [
-              {
-                "label_id": "lbl_character_independent_woman",
-                "display_name": "独立女性"
-              }
-            ],
-            "emotion": [
-              {
-                "label_id": "lbl_emotion_abuse_sweet_satisfying",
-                "display_name": "虐-甜-爽"
+                "label_id": "65f0a1b2c3d4e5f6a7b8ca02",
+                "标签名": "爽",
+                "权重": 0.8,
+                "打标原因": "最终获证据平反并反击成功。",
+                "标签释义": "畅快、解气的愉悦感。"
               }
             ]
           }
@@ -277,15 +296,40 @@ GET /api/v1/ai-jobs/jobs/{job_id}
       "series_structure": "continuous_series",
       "tagging_strategy": "work",
       "result_checksum": "sha256:canonical-result"
-    },
-    "warnings": []
+    }
   },
   "error": null,
-  "callback": {
-    "status": "delivered",
-    "attempts": 1,
-    "next_retry_at": null,
-    "last_error": null
+  "metadata": {
+    "source_service": "cpp",
+    "business_scene": "short_drama_tagging"
+  },
+  "created_at": "2026-06-15T10:00:00Z",
+  "started_at": "2026-06-15T10:00:05Z",
+  "finished_at": "2026-06-15T10:03:00Z"
+}
+```
+
+失败终态示例：
+
+```json
+{
+  "job_id": "7b5c2c62-9a3a-41b7-bd41-f24a5d34a099",
+  "client_request_id": "cpp:204200150000004872:initial:20260615",
+  "job_type": "short_drama.tagging.initial",
+  "status": "failed",
+  "progress": {
+    "percent": 100,
+    "message": "rs result write failed",
+    "stage": "failed"
+  },
+  "result": null,
+  "error": {
+    "code": "RS_RESULT_WRITE_FAILED",
+    "message": "AI generated tagging result, but RS rejected the write request.",
+    "details": {
+      "t_book_id": "204200150000004872",
+      "rs_error_code": "INVALID_TAG_RESULT"
+    }
   },
   "metadata": {
     "source_service": "cpp",
@@ -297,15 +341,129 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 }
 ```
 
-`final_tags` 必须使用 `label_id`。`display_name` 只用于展示和排查，不作为业务引用键。
+### 查询响应字段
+
+| 字段 | 类型 | 必需性 | 说明 |
+| --- | --- | --- | --- |
+| `job_id` | `string` | 必需 | AI Job 唯一 id。 |
+| `client_request_id` | `string \| null` | 可选 | 创建请求中传入的幂等键。 |
+| `job_type` | `string` | 必需 | `short_drama.tagging.initial` 或 `short_drama.tagging.incremental`。 |
+| `status` | `string` | 必需 | `queued`、`running`、`succeeded`、`failed`。 |
+| `progress` | `object` | 必需 | 任务进度信息。 |
+| `result` | `object \| null` | 成功终态必需 | 成功终态的 JobResult。非成功终态为 `null`。 |
+| `error` | `object \| null` | 失败终态必需 | 失败终态的错误对象。非失败终态为 `null`。 |
+| `metadata` | `object` | 可选 | 创建请求透传元数据。 |
+| `created_at` | `string` | 必需 | Job 创建时间，RFC 3339 / ISO 8601。 |
+| `started_at` | `string \| null` | 可选 | Job 开始执行时间。 |
+| `finished_at` | `string \| null` | 终态时必需 | Job 完成时间。 |
+
+### result 字段
+
+| 字段 | 类型 | 必需性 | 说明 |
+| --- | --- | --- | --- |
+| `result.artifacts` | `object[]` | 必需 | Job 产物列表。成功终态必须包含 `final_tags`、`story_overview` 和 `tagging_detail`。 |
+| `result.signals` | `object` | 必需 | 机器可读信号字段。 |
+| `artifacts[].key` | `string` | 必需 | 产物 key，由 `job_type` 定义。 |
+| `artifacts[].type` | `string` | 必需 | 产物类型，当前为 `json`。 |
+| `artifacts[].label` | `string` | 必需 | 产物展示名。 |
+| `artifacts[].content` | `object` | 必需 | 产物内容，具体结构由 `artifacts[].key` 决定。 |
+| `final_tags.content.t_book_id` | `string` | 必需 | 作品主键。 |
+| `final_tags.content.tags` | `object` | 必需 | RS 写入同源打标结果。key 为 `category_id`，value 为该分类下的标签数组。 |
+| `final_tags.content.tags.{category_id}[].label_id` | `string` | 必需 | 标签全局唯一 id。 |
+| `final_tags.content.tags.{category_id}[].标签名` | `string` | 必需 | 标签名，展示和排查用。 |
+| `final_tags.content.tags.{category_id}[].权重` | `number` | 可选 | 置信或强度，取值 `0 < 权重 <= 1`。 |
+| `final_tags.content.tags.{category_id}[].打标原因` | `string` | 必需 | 打标依据。 |
+| `final_tags.content.tags.{category_id}[].标签释义` | `string` | 必需 | 打标时的标签定义快照。 |
+| `result.signals.t_book_id` | `string` | 必需 | 作品主键。 |
+| `result.signals.result_checksum` | `string` | 必需 | 完整 JobResult 的校验值。 |
+
+`final_tags.content` 必须使用 RS 定稿中的打标结果结构。`tags` 的 key 是 `category_id`，不是 `audience`、`genre` 等业务分类别名。
 
 ## Callback
 
-AI 使用通用 `CallbackEnvelope`。`job` 字段与 `GET /api/v1/ai-jobs/jobs/{job_id}` 返回的 `JobView` 同形。
+Callback 是终态通知，不替代轮询。CPP 创建 Job 时传入 `callback.url` 后，AI 只在 `succeeded` 或 `failed` 终态向该地址发送 callback。
 
-Callback 与 AI 写 RS 的 payload 必须由同一份 `job.result` 派生，并通过 `result_checksum` 对齐。
+如果创建请求没有传入 `callback.url`，AI 不发送 callback，CPP 只通过查询接口获取状态和结果。
 
-CPP 必须按 `event_id` 或 `job.job_id + event + attempt` 做幂等消费。
+```http
+POST <callback.url>
+Content-Type: application/json
+X-AI-Service-Job-Id: <job_id>
+X-AI-Service-Event: job.succeeded | job.failed
+X-AI-Service-Timestamp: 2026-06-15T10:03:01Z
+X-AI-Service-Signature: sha256=<hmac>
+```
+
+当 AI 配置 callback 签名密钥时，会发送 `X-AI-Service-Signature`。签名内容为：
+
+```text
+timestamp + "." + raw_body
+```
+
+### Callback 请求体
+
+Callback 请求体是事件 envelope，其中 `job` 字段复用同一个 job 在 `GET /api/v1/ai-jobs/jobs/{job_id}` 查询接口中的终态 `JobView`。成功 callback 的 `job` 字段必须与同一 job 的成功终态轮询响应同形并来自同一份结果；失败 callback 的 `job` 字段必须与同一 job 的失败终态轮询响应同形并来自同一份错误。
+
+失败 callback 示例：
+
+```json
+{
+  "event": "job.failed",
+  "event_id": "8e6a3d4a-1d43-4f4a-a5f5-1efcb75e5a6d",
+  "attempt": 1,
+  "sent_at": "2026-06-15T10:03:01Z",
+  "job": {
+    "job_id": "7b5c2c62-9a3a-41b7-bd41-f24a5d34a099",
+    "client_request_id": "cpp:204200150000004872:initial:20260615",
+    "job_type": "short_drama.tagging.initial",
+    "status": "failed",
+    "progress": {
+      "percent": 100,
+      "message": "rs result write failed",
+      "stage": "failed"
+    },
+    "result": null,
+    "error": {
+      "code": "RS_RESULT_WRITE_FAILED",
+      "message": "AI generated tagging result, but RS rejected the write request.",
+      "details": {
+        "t_book_id": "204200150000004872",
+        "rs_error_code": "INVALID_TAG_RESULT"
+      }
+    },
+    "metadata": {
+      "source_service": "cpp",
+      "business_scene": "short_drama_tagging"
+    },
+    "created_at": "2026-06-15T10:00:00Z",
+    "started_at": "2026-06-15T10:00:05Z",
+    "finished_at": "2026-06-15T10:03:00Z"
+  }
+}
+```
+
+### Callback 字段
+
+Callback 请求体字段：
+
+| 字段 | 类型 | 必需性 | 说明 |
+| --- | --- | --- | --- |
+| `event` | `string` | 必需 | 终态事件，取值为 `job.succeeded` 或 `job.failed`。 |
+| `event_id` | `string` | 必需 | 本次 Callback 投递事件 id。 |
+| `attempt` | `number` | 必需 | 本次投递尝试序号。 |
+| `sent_at` | `string` | 必需 | 本次投递发送时间。 |
+| `job` | `object` | 必需 | 终态 `JobView`，业务结果只从 `job.result` 或 `job.error` 读取。 |
+
+CPP 必须按 `job.job_id + event` 做业务幂等消费，并在处理成功后返回任意 `2xx`。`event_id` 用于标识一次 Callback 投递事件，不能替代 `job.job_id` 作为业务幂等键。AI 收到非 `2xx` 响应时可按内部策略重试同一个终态 Job 的 Callback。
+
+## 一致性规则
+
+- `job_params` 是短剧打标任务唯一入参扩展位置。
+- `result.artifacts` 和 `result.signals` 是短剧打标任务唯一成功出参扩展位置。
+- 成功 callback 的 `job` 字段必须与轮询成功终态响应体同形，并来自同一份 canonical result。
+- 失败 callback 的 `job` 字段必须与轮询失败终态响应体同形，并来自同一份错误。
+- AI 写 RS 的 payload 必须由 `final_tags.content` 派生，不允许另行生成一份不同的打标结果。
+- CPP callback 与 AI 写 RS 必须来自同一份 canonical result，并通过 `result_checksum` 对齐。
 
 ## 终态成功定义
 
