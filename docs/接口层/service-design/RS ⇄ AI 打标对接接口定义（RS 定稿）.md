@@ -1,8 +1,8 @@
 # RS ⇄ AI 打标对接接口定义（RS 定稿）
 
 > 原 AI 侧接口文档（标签事实 / 打标写入）作废。接口定义由 RS 定稿，以本文为准。AI 仅提供 JSON 结构示例，字段补充与存储语义由 RS 定义。
->
->
+> 
+> 
 
 ## 一、通用约定
 
@@ -10,15 +10,21 @@
 
 - **category\_id**：分类 id，6 位补零字符串（如 `000001`），取 RS `ai_tag_category.category_id`。
 
+- **情绪** 分类与其他分类结构完全一致，按普通标签处理；无 `output_type`，无情绪序列（虐/紧张/爽 各为独立标签项）。
+
 - 名称统一用标签名；AI 基于 cpp 传入语言对应的标签体系打标。
 
+- 业务字段统一英文 key：`name` / `weight` / `reason` / `definition`。
+
 - **鉴权**：服务间鉴权方式与 URL 前缀待双方对齐。
+
+- **请求域名：测试：****https://test\-v\-adm\-api\.stardustworld\.cn/****  正式：****https://v\-adm\-api\.stardustgod\.com/**
 
 ## 二、接口 B：拉取标签体系（RS 提供，AI 调）
 
 AI 打标前拉取当前**启用**的标签体系与互斥规则。
 
-**请求**：`GET /api/v1/tag-schemas/default`
+**请求**：`GET /api/v1/tag-schemas/default?lang=zh`（URL 前缀 / 鉴权待对齐）。入参 `lang`：语言代码, 单选必需, 取 language\-codes\.md 22 种之一\(如 zh/en/es/pt\), AI 按 cpp 传入语言拉对应语言标签体系, 标签 name/definition 按该语言返回, 非法或缺省回退基准 zh; 分类 name 暂无多语言固定人工填入内容。
 
 **响应**：
 
@@ -62,18 +68,18 @@ AI 打标前拉取当前**启用**的标签体系与互斥规则。
 |mutual\_exclusion\_rules\[\]\.mutex\_label\_ids|互斥|是|与主标签互斥的标签 id 列表|
 
 > 互斥规则独立于 categories，放顶层 `mutual_exclusion_rules[]`，与 RS `ai_tag_mutex`（一标签一行）直接对应。
->
->
+> 
+> 
 
 ## 三、接口 C：写打标结果（RS 提供，AI 调）
 
 AI 打标完成后写入 `source=ai_auto` 的结果。
 
-**请求**：`POST /api/v1/ai-tag-results`
+**请求**：`POST /api/v1/ai-tag-results`（URL 前缀 / 鉴权待对齐）
 
 > `tags` 的 key 为 `category_id`（6 位补零字符串），value 为该分类下的标签数组。
->
->
+> 
+> 
 
 ```json
 {
@@ -82,11 +88,11 @@ AI 打标完成后写入 `source=ai_auto` 的结果。
   "tag_schema_version": "v1.1",
   "tags": {
     "000001": [
-      { "label_id": "65f0a1b2c3d4e5f6a7b8c902", "标签名": "女频", "权重": 1, "打标原因": "剧情以女主视角展开。", "标签释义": "核心受众为女性群体。" }
+      { "label_id": "65f0a1b2c3d4e5f6a7b8c902", "name": "女频", "weight": 1, "reason": "剧情以女主视角展开。", "definition": "核心受众为女性群体。" }
     ],
     "000006": [
-      { "label_id": "65f0a1b2c3d4e5f6a7b8ca01", "标签名": "虐", "权重": 0.9, "打标原因": "女主遭受冤屈羞辱。", "标签释义": "刻意营造悲伤、压抑的情绪。" },
-      { "label_id": "65f0a1b2c3d4e5f6a7b8ca02", "标签名": "爽", "权重": 0.8, "打标原因": "最终获证据平反并反击成功。", "标签释义": "畅快、解气的愉悦感。" }
+      { "label_id": "65f0a1b2c3d4e5f6a7b8ca01", "name": "虐", "weight": 0.9, "reason": "女主遭受冤屈羞辱。", "definition": "刻意营造悲伤、压抑的情绪。" },
+      { "label_id": "65f0a1b2c3d4e5f6a7b8ca02", "name": "爽", "weight": 0.8, "reason": "最终获证据平反并反击成功。", "definition": "畅快、解气的愉悦感。" }
     ]
   }
 }
@@ -101,10 +107,10 @@ AI 打标完成后写入 `source=ai_auto` 的结果。
 |tag\_schema\_version|顶层|否|AI 会带，RS 忽略|
 |tags|顶层|是|打标结果，category\_id 为 key|
 |tags\.\{category\_id\}\[\]\.label\_id|标签|是|标签 id（= ai\_tag `_id`）|
-|tags\.\{category\_id\}\[\]\.标签名|标签|是|标签名（展示/排查用）|
-|tags\.\{category\_id\}\[\]\.权重|标签|否|置信/强度，取值 0 \< 权重 ≤ 1|
-|tags\.\{category\_id\}\[\]\.打标原因|标签|是|打标依据|
-|tags\.\{category\_id\}\[\]\.标签释义|标签|是|打标时的标签定义快照|
+|tags\.\{category\_id\}\[\]\.name|标签|是|标签名（展示/排查用）|
+|tags\.\{category\_id\}\[\]\.weight|标签|否|置信/强度，取值 0 \< weight ≤ 1|
+|tags\.\{category\_id\}\[\]\.reason|标签|是|打标原因/依据|
+|tags\.\{category\_id\}\[\]\.definition|标签|是|打标时的标签定义快照|
 
 **幂等与存储（RS 侧）**
 
@@ -112,7 +118,7 @@ AI 打标完成后写入 `source=ai_auto` 的结果。
 
 - 按 `job_id` 幂等：首次新增一条 `ai_tag_result` 流水（原样存 `tags`）并覆盖 `ai_work_tag` 的 ai\_auto 标签；重复 `job_id` 直接返回已有，不重复处理。
 
-- 每次按全量覆盖 ai\_auto 处理，人工（manual）标签保留。
+- 无 `result_checksum`、无 initial/incremental 区分：每次按全量覆盖 ai\_auto 处理，人工（manual）标签保留。
 
 - 同 ipid 其他语言作品联动更新 ai\_auto。
 
@@ -122,8 +128,8 @@ AI 打标完成后写入 `source=ai_auto` 的结果。
 
 |情形|处理|
 |---|---|
-|作品（t\_book\_id）不存在|失败返回，提示作品不存在|
+|作品（t\_book\_id）不存在|失败返回，提示 work not found|
 |tags 为空 / 结构非法|失败返回，提示参数错误|
-|重复 job\_id|成功返回，无额外提示|
+|重复 job\_id|返回已有结果，不重复写入|
 
 > (注：内容由 AI 生成，请谨慎参考）
