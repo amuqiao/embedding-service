@@ -17,7 +17,7 @@ RS 负责：
 
 AI 负责：
 
-- 异步翻译分类展示名、标签展示名和标签定义。
+- 异步翻译分类名、标签名和标签定义。
 - 保持标签 id、辅助 slug、数量约束和互斥规则不变。
 - 返回与输入结构一一对应的 `translated_schemas`。
 
@@ -59,14 +59,16 @@ Content-Type: application/json
     "source_schema": {
       "categories": [
         {
-          "display_name": "受众",
+          "category_id": "000001",
+          "name": "受众",
+          "required": true,
           "min_items": 1,
           "max_items": 1,
           "labels": [
             {
               "label_id": "lbl_audience_male",
               "label_key": "male_oriented",
-              "display_name": "男频",
+              "name": "男频",
               "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心..."
             }
           ]
@@ -76,7 +78,7 @@ Content-Type: application/json
     "source_mutual_exclusion_rules": [
       {
         "label_id": "lbl_genre_family_ethics",
-        "exclude_label_ids": ["lbl_genre_thriller_supernatural", "lbl_genre_adventure"]
+        "mutex_label_ids": ["lbl_genre_thriller_supernatural", "lbl_genre_adventure"]
       }
     ]
   },
@@ -177,14 +179,16 @@ GET /api/v1/ai-jobs/jobs/{job_id}
           {
             "categories": [
               {
-                "display_name": "Audience",
+                "category_id": "000001",
+                "name": "Audience",
+                "required": true,
                 "min_items": 1,
                 "max_items": 1,
                 "labels": [
                   {
                     "label_id": "lbl_audience_male",
                     "label_key": "male_oriented",
-                    "display_name": "Male-oriented",
+                    "name": "Male-oriented",
                     "definition": "The core audience is male..."
                   }
                 ]
@@ -194,14 +198,16 @@ GET /api/v1/ai-jobs/jobs/{job_id}
           {
             "categories": [
               {
-                "display_name": "Audiencia",
+                "category_id": "000001",
+                "name": "Audiencia",
+                "required": true,
                 "min_items": 1,
                 "max_items": 1,
                 "labels": [
                   {
                     "label_id": "lbl_audience_male",
                     "label_key": "male_oriented",
-                    "display_name": "Orientado a hombres",
+                    "name": "Orientado a hombres",
                     "definition": "La audiencia principal es masculina..."
                   }
                 ]
@@ -211,14 +217,16 @@ GET /api/v1/ai-jobs/jobs/{job_id}
           {
             "categories": [
               {
-                "display_name": "Público",
+                "category_id": "000001",
+                "name": "Público",
+                "required": true,
                 "min_items": 1,
                 "max_items": 1,
                 "labels": [
                   {
                     "label_id": "lbl_audience_male",
                     "label_key": "male_oriented",
-                    "display_name": "Voltado ao público masculino",
+                    "name": "Voltado ao público masculino",
                     "definition": "O público principal é masculino..."
                   }
                 ]
@@ -234,7 +242,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         "content": [
           {
             "label_id": "lbl_genre_family_ethics",
-            "exclude_label_ids": ["lbl_genre_thriller_supernatural", "lbl_genre_adventure"]
+            "mutex_label_ids": ["lbl_genre_thriller_supernatural", "lbl_genre_adventure"]
           }
         ]
       }
@@ -337,7 +345,9 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 
 | 字段 | 类型 | 必需性 | 说明 |
 | --- | --- | --- | --- |
-| `display_name` | `string` | 必需 | 分类展示名，需要翻译。 |
+| `category_id` | `string` | 必需 | 分类 id，不翻译、不改变。 |
+| `name` | `string` | 必需 | 分类名，需要翻译。 |
+| `required` | `boolean` | 必需 | 是否必打，不翻译。 |
 | `min_items` | `integer` | 必需 | 最少输出数量，不翻译。 |
 | `max_items` | `integer` | 必需 | 最多输出数量，不翻译。 |
 | `labels` | `object[]` | 必需 | 标签列表，元素类型为 `TagLabel`。 |
@@ -348,7 +358,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | --- | --- | --- | --- |
 | `label_id` | `string` | 必需 | 标签全局唯一 id，不翻译、不改变。 |
 | `label_key` | `string` | 可选 | 辅助 slug，不翻译、不作为引用键。 |
-| `display_name` | `string` | 必需 | 标签展示名，需要翻译。 |
+| `name` | `string` | 必需 | 标签名，需要翻译。 |
 | `definition` | `string` | 必需 | 标签定义，需要翻译。 |
 
 ### MutualExclusionRule
@@ -356,15 +366,15 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | 字段 | 类型 | 必需性 | 说明 |
 | --- | --- | --- | --- |
 | `label_id` | `string` | 必需 | 互斥规则主标签 id，不翻译。 |
-| `exclude_label_ids` | `string[]` | 必需 | 与主标签互斥的标签 id 列表，不翻译。 |
+| `mutex_label_ids` | `string[]` | 必需 | 与主标签互斥的标签 id 列表，不翻译。 |
 
 ## 翻译规则
 
-- `display_name` 翻译。
+- `name` 翻译。
 - `definition` 翻译。
 - `label_id` 不翻译、不改变。
 - `label_key` 如存在，不翻译、不作为引用键。
-- `min_items`、`max_items` 不翻译。
+- `category_id`、`required`、`min_items`、`max_items` 不翻译。
 - `source_mutual_exclusion_rules` 不翻译，只原样带入结果。
 - `translated_schemas.content` 必须与请求 `job_params.target_languages` 按数组顺序一一对应。
 
@@ -374,7 +384,8 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 - `target_languages` 必须非空、去重，且每个值都必须来自 [language-codes.md](language-codes.md)。
 - `target_languages` 必须按 [language-codes.md](language-codes.md) 的业务列表顺序排列；顺序不符合时返回 `400 INVALID_REQUEST`。
 - `translated_schemas.content` 的长度必须等于 `target_languages` 的长度。
-- 每个翻译后的 `TagSchemaSnapshot` 必须保留源 schema 的分类数量和标签数量。
+- 每个翻译后的 `TagSchemaSnapshot` 必须保留源 schema 的分类数量、标签数量和分类顺序。
+- 每个 `category_id` 必须与源 schema 一致。
 - 每个 `label_id` 必须与源 schema 一致。
 - `label_id` 全局唯一，翻译过程不得新增、删除、替换或重写。
 - 互斥规则引用必须仍然指向存在的 `label_id`。

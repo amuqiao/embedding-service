@@ -8,8 +8,7 @@ flowchart TD
   CREATE["CPP -> AI：创建打标 Job\n携带素材资源 + callback.url"]
   JOB["AI：创建 queued job\n返回 job_id"]
 
-  RS_SCHEMA["AI -> RS：获取默认 TagSchemaSnapshot"]
-  RS_MUTEX["AI -> RS：获取默认 MutualExclusionRule[]\n规则使用全局 label_id"]
+  RS_SCHEMA["AI -> RS：获取默认标签体系响应\ncategories + mutual_exclusion_rules"]
 
   RUN["AI：剧情理解 + 标签判断\n输入 = CPP 素材 + RS 标签结构体 + RS 互斥结构体"]
   RESULT{"AI 结果"}
@@ -21,7 +20,7 @@ flowchart TD
   RS_FAIL["AI：RS 写入失败\njob.failed + callback CPP"]
 
   CPP_READY --> CREATE --> JOB
-  JOB --> RS_SCHEMA --> RS_MUTEX --> RUN --> RESULT
+  JOB --> RS_SCHEMA --> RUN --> RESULT
   RESULT -->|"成功"| PERSIST --> WRITE_RS
   WRITE_RS -->|"RS 接受写入"| CALLBACK_OK
   WRITE_RS -->|"RS 写入失败"| RS_FAIL
@@ -33,5 +32,5 @@ flowchart TD
 - CPP 不传标签结构体、互斥结构体或 `tag_schema_version`。
 - RS 提供默认标签数据。
 - 每个标签必须有全局唯一 `label_id`。
-- 互斥规则必须使用 `label_id` / `exclude_label_ids`。
-- AI callback CPP 和写 RS 是两个独立发送动作，但都来自同一份 canonical result。
+- 互斥规则必须使用 `label_id` / `mutex_label_ids`。
+- AI 写 RS payload 来自同一份内部 canonical result；CPP callback 只发送终态 JobView。

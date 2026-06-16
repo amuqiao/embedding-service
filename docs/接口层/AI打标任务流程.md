@@ -14,7 +14,7 @@
 ```text
 CPP 准备素材
   -> CPP 创建 AI 打标 Job
-  -> AI 从 RS 获取默认 TagSchemaSnapshot 和 MutualExclusionRule[]
+  -> AI 从 RS 获取默认标签体系响应
   -> AI 执行剧情理解和标签判断
   -> AI 持久化 canonical result
   -> AI 写入 RS
@@ -54,25 +54,24 @@ prepare
   校验 CPP 素材，解析 SRT。
 
 load_rs_tag_structs
-  从 RS 获取默认 TagSchemaSnapshot 和 MutualExclusionRule[]。
+  从 RS 获取默认标签体系响应。
   校验 label_id 全局唯一、规则引用存在、数量约束合法。
 
 story_overview
   基于作品上下文和字幕生成剧情概览。
 
 tagging
-  基于剧情概览、TagSchemaSnapshot 和 MutualExclusionRule[] 生成标签判断。
+  基于剧情概览、categories 和 mutual_exclusion_rules 生成标签判断。
 
 finalize
-  校验标签合法性，生成 final_tags、tagging_detail、story_overview 和 result_checksum。
+  校验标签合法性，生成内部 canonical result 和写 RS payload。
 ```
 
-AI 打标关注三类输入：
+AI 打标关注两类外部输入：
 
 ```text
 CPP material/assets
-RS TagSchemaSnapshot
-RS MutualExclusionRule[]
+RS 默认标签体系响应
 ```
 
 ## 终态动作
@@ -88,13 +87,12 @@ AI -> CPP callback
 
 为了避免 CPP 与 RS 结果分叉，AI 只有在 RS 接受写入后才把 job 标记为 `succeeded` 并发送成功 callback。若 RS 写入失败，job 进入 `failed`，错误码为 `RS_RESULT_WRITE_FAILED`，并 callback CPP 失败终态。
 
-两者的结果内容必须一致：
+终态动作必须满足：
 
 ```text
 同一个 job_id
-同一个 t_book_id
-同一个 result_checksum
-同一份基于 label_id 的 final_tags / story_overview / tagging_detail
+RS 写入 payload 来自同一份内部 canonical result
+CPP callback 只携带终态 JobView，JobView.result 固定为 null
 ```
 
 模型推理、素材校验或标签校验失败时不写入 RS，只 callback CPP 失败结果。
@@ -106,11 +104,11 @@ flowchart TD
   CPP_READY["CPP：素材准备完成"]
   CREATE["CPP -> AI：创建打标 Job\n携带素材资源 + callback.url"]
   JOB["AI：创建 queued job\n返回 job_id"]
-  RS_SCHEMA["AI -> RS：获取默认 TagSchemaSnapshot\n和 MutualExclusionRule[]"]
+  RS_SCHEMA["AI -> RS：获取默认标签体系响应\ncategories + mutual_exclusion_rules"]
   RUN["AI：剧情理解 + 标签判断 + 结果校验\n基于 label_id 输出结果"]
   RESULT{"AI 结果"}
   PERSIST["AI：持久化 canonical result"]
-  WRITE_RS["AI -> RS：写入 ai_auto 打标结果\npayload 与 callback 中 result 一致"]
+  WRITE_RS["AI -> RS：写入 ai_auto 打标结果\npayload 来自 canonical result"]
   CALLBACK["AI -> CPP callback\n发送终态 JobView"]
   RS_FAIL["AI：RS 写入失败\njob.failed + callback CPP"]
   FAIL_CB["AI -> CPP callback\n发送失败终态"]

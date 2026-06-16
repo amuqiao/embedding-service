@@ -1,0 +1,77 @@
+{
+  "version": "v1.1",
+  "generated_at": 1700000000,
+  "categories": [
+    {
+      "category_id": "000001",
+      "name": "受众",
+      "required": true,
+      "min_items": 1,
+      "max_items": 1,
+      "labels": [
+        {
+          "label_id": "65f0a1b2c3d4e5f6a7b8c901",
+          "name": "男频",
+          "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心。"
+        },
+        {
+          "label_id": "65f0a1b2c3d4e5f6a7b8c902",
+          "name": "女频",
+          "definition": "核心受众为女性群体，叙事视角、人物塑造、情感逻辑以女性主角为核心。"
+        }
+      ]
+    },
+    {
+      "category_id": "000003",
+      "name": "题材",
+      "required": true,
+      "min_items": 1,
+      "max_items": 3,
+      "labels": [
+        {
+          "label_id": "65f0a1b2c3d4e5f6a7b8c9f1",
+          "name": "家庭伦理",
+          "definition": "聚焦普通家庭内部的人际关系、责任、冲突、和解或背叛。"
+        },
+        {
+          "label_id": "65f0a1b2c3d4e5f6a7b8c9f2",
+          "name": "惊悚灵异",
+          "definition": "通过离奇事件、鬼魂传说、诅咒或异象营造恐惧与刺激。"
+        }
+      ]
+    },
+    {
+      "category_id": "000006",
+      "name": "情绪",
+      "required": true,
+      "min_items": 1,
+      "max_items": 3,
+      "labels": [
+        {
+          "label_id": "65f0a1b2c3d4e5f6a7b8ca01",
+          "name": "虐",
+          "definition": "刻意营造悲伤、压抑、委屈或受伤害的情绪体验。"
+        },
+        {
+          "label_id": "65f0a1b2c3d4e5f6a7b8ca02",
+          "name": "爽",
+          "definition": "通过反击、逆袭、惩罚加害者或获得补偿制造畅快感。"
+        }
+      ]
+    }
+  ],
+  "mutual_exclusion_rules": [
+    {
+      "label_id": "65f0a1b2c3d4e5f6a7b8c9f1",
+      "mutex_label_ids": [
+        "65f0a1b2c3d4e5f6a7b8c9f2"
+      ]
+    },
+    {
+      "label_id": "65f0a1b2c3d4e5f6a7b8c9f2",
+      "mutex_label_ids": [
+        "65f0a1b2c3d4e5f6a7b8c9f1"
+      ]
+    }
+  ]
+}
