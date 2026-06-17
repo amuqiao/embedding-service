@@ -68,6 +68,20 @@ def test_job_view_exposes_callback_delivery_state():
     assert view.callback.last_error == {"code": "CALLBACK_HTTP_ERROR", "status_code": 503}
 
 
+def test_job_view_prefers_public_shell_fields():
+    job = _job({"url": "https://example.com/callback"})
+    job.progress_stage = "finalize"
+    job.public_metadata = {"visible": "metadata"}
+    job.public_result_payload = {"artifacts": [{"key": "public"}], "signals": {"public": True}}
+    job.result_payload = {"artifacts": [{"key": "legacy"}], "signals": {"legacy": True}}
+
+    view = _job_to_response(job)
+
+    assert view.progress.stage == "finalize"
+    assert view.metadata == {"visible": "metadata"}
+    assert view.result == {"artifacts": [{"key": "public"}], "signals": {"public": True}}
+
+
 def test_build_callback_body_reuses_job_view_callback_state():
     next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=5)
     job = _job({"url": "https://example.com/callback"})
@@ -136,6 +150,41 @@ async def test_deliver_callback_tries_once_on_http_failure(monkeypatch):
     assert result.status == "failed"
     assert result.attempts == 1
     assert result.last_error["code"] == "CALLBACK_HTTP_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_prefers_shell_callback_fields(monkeypatch):
+    posted: dict = {}
+
+    class _Response:
+        status_code = 204
+        text = ""
+
+    class _Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, content, headers):
+            posted["url"] = url
+            posted["headers"] = headers
+            return _Response()
+
+    monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
+    job = _job({"url": "https://legacy.example.com/callback", "events": ["job.failed"]})
+    job.callback_url = "https://shell.example.com/callback"
+    job.callback_events = ["job.succeeded"]
+
+    result = await deliver_callback(job)
+
+    assert result.status == "delivered"
+    assert posted["url"] == "https://shell.example.com/callback"
+    assert posted["headers"]["X-AI-Service-Event"] == "job.succeeded"
 
 
 @pytest.mark.asyncio

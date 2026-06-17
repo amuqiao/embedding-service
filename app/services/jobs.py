@@ -55,6 +55,7 @@ def _request_fingerprint(payload: CreateJobRequest, job_params: dict[str, Any]) 
 
 def _job_to_response(job: AIJob) -> JobStatusResponse:
     input_payload = job.input_payload or {}
+    result_payload = job.public_result_payload if job.public_result_payload is not None else job.result_payload
     return JobStatusResponse(
         job_id=job.id,
         client_request_id=job.client_request_id,
@@ -63,9 +64,9 @@ def _job_to_response(job: AIJob) -> JobStatusResponse:
         progress={
             "percent": job.progress_percent,
             "message": job.progress_text,
-            "stage": None,
+            "stage": job.progress_stage,
         },
-        result=job.result_payload,
+        result=result_payload,
         error=job.error_payload,
         callback={
             "status": job.callback_status,
@@ -73,7 +74,7 @@ def _job_to_response(job: AIJob) -> JobStatusResponse:
             "next_retry_at": job.callback_next_retry_at,
             "last_error": job.callback_last_error,
         },
-        metadata=input_payload.get("metadata") or {},
+        metadata=job.public_metadata or input_payload.get("metadata") or {},
         created_at=job.created_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
@@ -183,7 +184,7 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
             db, caller_id=caller_id, client_request_id=payload.client_request_id
         )
         if existing:
-            existing_fingerprint = (existing.input_payload or {}).get("request_fingerprint")
+            existing_fingerprint = existing.request_fingerprint or (existing.input_payload or {}).get("request_fingerprint")
             if existing_fingerprint is not None and existing_fingerprint != request_fingerprint:
                 raise AppError(
                     "CLIENT_REQUEST_ID_CONFLICT",
@@ -207,11 +208,14 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
                 details={"active_jobs": active, "limit": settings.MAX_ACTIVE_JOBS},
             )
 
+    options_payload = payload.options.model_dump() if payload.options else None
+    callback_payload = payload.callback.model_dump() if payload.callback else {}
+    output_payload = _job_output_payload(uuid.uuid4())
     input_payload_data = {
         "job_params": job_params,
         "request_fingerprint": request_fingerprint,
         "metadata": payload.metadata,
-        "options": payload.options.model_dump() if payload.options else None,
+        "options": options_payload,
     }
     job = await JobRepo.create(
         db,
@@ -220,11 +224,26 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
         job_type=payload.job_type,
         model_id=runtime_fields.get("model_id"),
         input_payload=input_payload_data,
-        output_payload=_job_output_payload(uuid.uuid4()),
-        callback_payload=payload.callback.model_dump() if payload.callback else {},
+        output_payload=output_payload,
+        callback_payload=callback_payload,
         prompt_payload=runtime_fields.get("prompt_payload") or {},
+        request_fingerprint=request_fingerprint,
+        public_metadata=payload.metadata,
+        options_payload=options_payload,
+        priority=payload.options.priority if payload.options else "normal",
+        timeout_seconds=payload.options.timeout_seconds if payload.options else None,
+        runtime_ref={"model_id": runtime_fields.get("model_id")} if runtime_fields.get("model_id") else None,
+        callback_url=payload.callback.url if payload.callback else None,
+        callback_events=payload.callback.events if payload.callback else None,
+        output_oss_bucket=output_payload["oss_bucket"],
+        output_oss_prefix=output_payload["oss_prefix"],
+        output_oss_region=output_payload["oss_region"],
     )
-    job.output_payload = _job_output_payload(job.id)
+    final_output_payload = _job_output_payload(job.id)
+    job.output_payload = final_output_payload
+    job.output_oss_bucket = final_output_payload["oss_bucket"]
+    job.output_oss_prefix = final_output_payload["oss_prefix"]
+    job.output_oss_region = final_output_payload["oss_region"]
     await db.flush()
     return job, True
 
@@ -285,7 +304,7 @@ def _load_input_text(job: AIJob) -> str:
 
 
 def _artifact_key(job: AIJob, artifact_key: str) -> str:
-    prefix = job.output_payload["oss_prefix"].strip("/")
+    prefix = (job.output_oss_prefix or (job.output_payload or {}).get("oss_prefix") or "").strip("/")
     filename = f"{artifact_key}.txt"
     return f"{prefix}/{filename}" if prefix else filename
 
@@ -304,9 +323,9 @@ def _persist_large_artifacts(job: AIJob, result: JobResult) -> dict[str, Any]:
         if content is None:
             continue
         stored = storage.write_text(
-            bucket=job.output_payload["oss_bucket"],
+            bucket=job.output_oss_bucket or job.output_payload["oss_bucket"],
             key=_artifact_key(job, artifact["key"]),
-            region=job.output_payload["oss_region"],
+            region=job.output_oss_region or job.output_payload["oss_region"],
             content=content,
         )
         artifact.update({"storage": "oss_object", **stored})

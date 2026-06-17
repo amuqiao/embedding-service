@@ -57,7 +57,7 @@ def build_callback_body(job: AIJob) -> dict:
 
 async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
     callback = job.callback_payload or {}
-    url = callback.get("url")
+    url = job.callback_url or callback.get("url")
     if not url:
         return CallbackDeliveryResult(status="skipped")
     try:
@@ -70,7 +70,7 @@ async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
         )
 
     event = "job.succeeded" if job.status == "succeeded" else "job.failed"
-    events = set(callback.get("events") or ["job.succeeded", "job.failed"])
+    events = set(job.callback_events or callback.get("events") or ["job.succeeded", "job.failed"])
     if event not in events:
         return CallbackDeliveryResult(status="skipped")
 
