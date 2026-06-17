@@ -34,6 +34,9 @@ def test_settings_rejects_zero_or_negative_control_values():
     with pytest.raises(ValidationError, match="OSS_INPUT_MAX_BYTES"):
         Settings(**_settings_kwargs(OSS_INPUT_MAX_BYTES=0))
 
+    with pytest.raises(ValidationError, match="JOB_MAX_EXECUTION_ATTEMPTS"):
+        Settings(**_settings_kwargs(JOB_MAX_EXECUTION_ATTEMPTS=0))
+
 
 def test_derived_timeout_properties_use_fixed_buffers():
     # Buffer values are now code constants — passing them has no effect.

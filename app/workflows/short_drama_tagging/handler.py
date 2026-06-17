@@ -127,6 +127,36 @@ def _short_drama_callback_data(job: AIJob) -> dict[str, Any]:
     return data
 
 
+async def _update_current_job_progress(
+    db: AsyncSession,
+    job: AIJob,
+    *,
+    progress_percent: int,
+    progress_text: str,
+) -> None:
+    from app.repositories.job_repo import JobRepo
+
+    updated = await JobRepo.update_progress(
+        db,
+        job.id,
+        progress_percent=progress_percent,
+        progress_text=progress_text,
+        celery_task_id=job.celery_task_id,
+        execution_generation=int(getattr(job, "execution_generation", None) or 1),
+    )
+    if updated is False:
+        raise AppError(
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "job progress update lost current execution claim",
+            status_code=500,
+            details={
+                "job_id": str(job.id),
+                "celery_task_id": job.celery_task_id,
+                "execution_generation": int(getattr(job, "execution_generation", None) or 1),
+            },
+        )
+
+
 class ShortDramaTaggingHandler(WorkflowHandler):
     params_schema = ShortDramaTaggingParams
     canonical_result_schema = JobResult
@@ -184,12 +214,11 @@ class ShortDramaTaggingHandler(WorkflowHandler):
         db: AsyncSession,
     ) -> dict[str, Any] | None:
         from app.integrations.ai_gateway import generate_text
-        from app.repositories.job_repo import JobRepo
 
         params = ShortDramaTaggingParams.model_validate(work_item_payload(item)).model_dump()
         runtime_fields = runtime_fields_from_job(job)
         language = params["work_context"]["subtitle_language"]
-        await JobRepo.update_progress(db, job.id, progress_percent=35, progress_text="正在获取 RS 标签体系")
+        await _update_current_job_progress(db, job, progress_percent=35, progress_text="正在获取 RS 标签体系")
         await db.commit()
         rs_default_tag_bundle = await get_tag_schema_provider(runtime_fields).fetch(language)
         tag_schema = rs_default_tag_bundle["tag_schema_snapshot"]
@@ -204,7 +233,7 @@ class ShortDramaTaggingHandler(WorkflowHandler):
             (60, "candidate_tagging", "candidate_tags"),
             (75, "finalize", "final_result"),
         ):
-            await JobRepo.update_progress(db, job.id, progress_percent=percent, progress_text=f"正在执行 {stage}")
+            await _update_current_job_progress(db, job, progress_percent=percent, progress_text=f"正在执行 {stage}")
             await db.commit()
             messages = stage_messages(
                 stage,
@@ -227,7 +256,7 @@ class ShortDramaTaggingHandler(WorkflowHandler):
             final_result=artifacts["final_result"],
         )
         result_status = tagging_detail["result_status"]
-        await JobRepo.update_progress(db, job.id, progress_percent=85, progress_text="正在生成 RS 兼容打标结果")
+        await _update_current_job_progress(db, job, progress_percent=85, progress_text="正在生成 RS 兼容打标结果")
         await db.commit()
 
         success = result_status == "success"
@@ -253,7 +282,7 @@ class ShortDramaTaggingHandler(WorkflowHandler):
                 "subtitle_language": language,
                 "requested_schema_language": language,
                 "source_schema_hash": payload_hash(tag_schema),
-                "rs_write_after_callback": True,
+                "rs_write_before_callback": True,
             },
         ).model_dump()
 

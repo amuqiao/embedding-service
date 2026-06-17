@@ -1,11 +1,9 @@
 import asyncio
 import logging
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -14,9 +12,7 @@ from app.core.logging import set_request_id
 from app.core.config import settings
 from app.repositories.job_repo import JobRepo
 from app.services.callbacks import deliver_callback
-from app.services.executor import run_ai_job
-from app.services.job_runtime import model_id_from_job, prompt_payload_from_job
-from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404
+from app.services.jobs import get_job_or_404
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -89,7 +85,13 @@ async def _dispatch(job_id: str, celery_task_id: str) -> dict[str, Any]:
             return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
 
         job, plan, item_ids = await plan_job(db, job_uuid)
-        canvas = build_canvas(job.id, job.job_type, plan, item_ids)
+        canvas = build_canvas(
+            job.id,
+            job.job_type,
+            plan,
+            item_ids,
+            execution_generation=int(job.execution_generation or 1),
+        )
         canvas.apply_async()
         logger.info(
             "job_workflow_dispatched job_id=%s job_type=%s execution_mode=%s chunk_count=%d",
@@ -107,116 +109,6 @@ async def _dispatch(job_id: str, celery_task_id: str) -> dict[str, Any]:
         }
 
     return await _with_db(run)
-
-
-@celery_app.task(name="jobs.process", bind=True, acks_late=True)
-def process_job_task(self, job_id: str):
-    _ensure_workflows_registered()
-    set_request_id(job_id)
-    try:
-        return asyncio.run(_process(job_id, self.request.id))
-    except (SoftTimeLimitExceeded, asyncio.TimeoutError) as exc:
-        # 两类超时（asyncio.wait_for L1 / Celery SIGALRM L3）统一重试策略。
-        # 每次 self.retry() 启动全新 Celery task，asyncio.wait_for 和 celery_soft_time_limit
-        # 均从 0 重新计时；CELERY_MAX_RETRIES=0（默认）表示不重试，直接进入终态。
-        if self.request.retries >= settings.CELERY_MAX_RETRIES:
-            try:
-                asyncio.run(_mark_timeout(job_id, self.request.id))
-            except Exception:
-                logger.exception("job_timeout_cleanup_error job_id=%s", job_id)
-            raise
-        logger.warning(
-            "job_timeout_retry job_id=%s attempt=%d/%d exc=%s",
-            job_id,
-            self.request.retries + 1,
-            settings.CELERY_MAX_RETRIES,
-            type(exc).__name__,
-        )
-        raise self.retry(
-            exc=exc,
-            countdown=settings.CELERY_RETRY_DELAY,
-            max_retries=settings.CELERY_MAX_RETRIES,
-        )
-    except Exception as exc:
-        try:
-            asyncio.run(_fail(job_id, None, exc, self.request.id))
-        except Exception:
-            logger.exception("job_fail_cleanup_error job_id=%s", job_id)
-        raise
-
-
-async def _process(job_id: str, celery_task_id: str) -> dict[str, Any]:
-    job_uuid = uuid.UUID(job_id)
-    started = time.monotonic()
-
-    async def run(db):
-        job = await get_job_or_404(db, job_uuid)
-        if job.status in ("succeeded", "failed"):
-            logger.warning("job_skipped job_id=%s status=%s", job_id, job.status)
-            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
-        if job.celery_task_id != celery_task_id:
-            logger.warning(
-                "job_task_id_mismatch job_id=%s message_task_id=%s db_task_id=%s status=%s",
-                job_id, celery_task_id, job.celery_task_id, job.status,
-            )
-            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
-        model_id = model_id_from_job(job)
-        logger.info("job_started job_id=%s job_type=%s model_id=%s", job_id, job.job_type, model_id)
-        if job.status == "queued":
-            claimed = await JobRepo.mark_running_if_queued(db, job.id, celery_task_id=celery_task_id)
-            if not claimed:
-                logger.warning("job_claim_failed job_id=%s status=%s", job_id, job.status)
-                return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
-        elif job.status == "running":
-            # status == 'running'：Path A 恢复重执行（Worker 崩溃后消息回队）
-            refreshed = await JobRepo.mark_running(db, job.id, celery_task_id=celery_task_id)
-            if not refreshed:
-                logger.warning("job_running_claim_lost job_id=%s task_id=%s", job_id, celery_task_id)
-                return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
-        else:
-            logger.warning("job_skipped_unexpected_status job_id=%s status=%s", job_id, job.status)
-            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
-        await db.commit()
-
-        input_text = _load_input_text(job)
-        if not model_id:
-            raise AppError(
-                "JOB_RUNTIME_NOT_SUPPORTED",
-                "job_type 未配置可执行运行时",
-                status_code=500,
-                details={"job_type": job.job_type},
-            )
-        result = await asyncio.wait_for(
-                    run_ai_job(job.job_type, model_id, prompt_payload_from_job(job), input_text),
-                    timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
-                )
-        from app.core import workflow_registry
-        handler = workflow_registry.get(job.job_type)
-        result_data = handler.validate_canonical_result(_persist_large_artifacts(job, result))
-
-        succeeded = await JobRepo.mark_succeeded(
-            db,
-            job.id,
-            celery_task_id=celery_task_id,
-            result=handler.public_result(result_data),
-            canonical_result=result_data,
-        )
-        await db.commit()
-        if not succeeded:
-            logger.warning("job_success_state_lost job_id=%s", job_id)
-            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
-
-        return {"job_id": job_id, "status": "succeeded", "job_type": job.job_type}
-
-    result = await _with_db(run)
-    if result.get("status") == "succeeded":
-        await deliver_callback_for_job(job_uuid)
-        duration_ms = int((time.monotonic() - started) * 1000)
-        logger.info(
-            "job_completed job_id=%s job_type=%s duration_ms=%d",
-            job_id, result.get("job_type", "unknown"), duration_ms,
-        )
-    return result
 
 
 async def _fail(job_id: str, _work_item_id: str | None, exc: Exception, celery_task_id: str) -> None:
@@ -242,23 +134,6 @@ async def _fail(job_id: str, _work_item_id: str | None, exc: Exception, celery_t
         await deliver_callback_for_job(uuid.UUID(job_id))
     else:
         logger.warning("job_fail_state_lost job_id=%s", job_id)
-
-
-async def _mark_timeout(job_id: str, celery_task_id: str) -> None:
-    logger.error("job_timeout job_id=%s", job_id)
-
-    async def run(db):
-        job_uuid = uuid.UUID(job_id)
-        error = {"code": "JOB_TIMEOUT", "message": "任务执行超时", "details": {}}
-        marked = await JobRepo.mark_failed(db, job_uuid, error, celery_task_id=celery_task_id)
-        await db.commit()
-        return marked
-
-    marked = await _with_db(run)
-    if marked:
-        await deliver_callback_for_job(uuid.UUID(job_id))
-    else:
-        logger.warning("job_timeout_state_lost job_id=%s", job_id)
 
 
 async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
@@ -345,7 +220,12 @@ def execute_work_item_task(self, job_id: str, item_id: str) -> dict:
 
 
 @celery_app.task(name="jobs.fanout_after_mapping", acks_late=True)
-def fanout_after_mapping_task(memory_result: dict, job_id: str, chunk_item_ids: list[str]) -> dict[str, Any]:
+def fanout_after_mapping_task(
+    memory_result: dict,
+    job_id: str,
+    chunk_item_ids: list[str],
+    execution_generation: int = 1,
+) -> dict[str, Any]:
     """After memory mapping completes, dispatch chunks and finalize when all chunks finish."""
     _ensure_workflows_registered()
     from celery import chord as celery_chord
@@ -354,18 +234,22 @@ def fanout_after_mapping_task(memory_result: dict, job_id: str, chunk_item_ids: 
     celery_chord(celery_group([
         execute_work_item_task.s(job_id, item_id)
         for item_id in chunk_item_ids
-    ]), finalize_job_task.s(job_id)).apply_async()
+    ]), finalize_job_task.s(job_id, execution_generation)).apply_async()
     return {"job_id": job_id, "dispatched_chunks": len(chunk_item_ids)}
 
 
 @celery_app.task(name="jobs.finalize_job", acks_late=True)
-def finalize_job_task(prev_result, job_id: str) -> dict:
+def finalize_job_task(prev_result, job_id: str, execution_generation: int | None = None) -> dict:
     """Finalize a job after all work items complete."""
     _ensure_workflows_registered()
     set_request_id(job_id)
     async def run(db):
         from app.services.job_workflow import finalize_job
-        return await finalize_job(db, uuid.UUID(job_id))
+        return await finalize_job(
+            db,
+            uuid.UUID(job_id),
+            execution_generation=execution_generation,
+        )
     try:
         return asyncio.run(_with_db(run))
     except Exception as exc:

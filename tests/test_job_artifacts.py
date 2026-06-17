@@ -237,7 +237,7 @@ def test_persist_large_artifacts_uses_runtime_output_target(monkeypatch):
 
     assert written == {
         "bucket": "bucket",
-        "key": "ai-jobs/frozen-job/localized_text.txt",
+        "key": "ai-jobs/frozen-job/results/g1/localized_text.txt",
         "region": "region",
         "content": "正文",
     }
@@ -251,6 +251,7 @@ def test_persist_work_item_large_artifacts_uses_work_item_scope(monkeypatch):
     job = AIJob(
         id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
         job_type="novel_localization.step1_localize",
+        execution_generation=2,
         job_params_hash=job_params_hash,
         runtime_ref={"oss_bucket": "runtime-bucket", "oss_key": "runtime/runtime.json", "oss_region": "runtime-region"},
     )
@@ -295,7 +296,7 @@ def test_persist_work_item_large_artifacts_uses_work_item_scope(monkeypatch):
 
     assert written == {
         "bucket": "bucket",
-        "key": "ai-jobs/frozen-job/work-items/chunk-1/localized_text.txt",
+        "key": "ai-jobs/frozen-job/work-items/g2/chunk-1/localized_text.txt",
         "region": "region",
         "content": "分块正文",
     }
@@ -358,12 +359,12 @@ def test_single_mode_large_artifact_uses_final_job_scope(monkeypatch):
     assert written == [
         {
             "bucket": "bucket",
-            "key": "ai-jobs/final-job/localized_text.txt",
+            "key": "ai-jobs/final-job/results/g1/localized_text.txt",
             "region": "region",
             "content": "完整正文",
         }
     ]
-    assert result["artifacts"][0]["oss_key"] == "ai-jobs/final-job/localized_text.txt"
+    assert result["artifacts"][0]["oss_key"] == "ai-jobs/final-job/results/g1/localized_text.txt"
     assert "content" not in result["artifacts"][0]
 
 
@@ -375,6 +376,7 @@ async def test_finalize_single_mode_rewrites_work_item_to_final_artifact_ref(mon
     job = AIJob(
         id=job_id,
         job_type="novel_localization.step1_localize",
+        status="running",
         execution_plan={"execution_mode": "single"},
         celery_task_id="root-task",
         job_params_hash=job_params_hash,
@@ -399,7 +401,7 @@ async def test_finalize_single_mode_rewrites_work_item_to_final_artifact_ref(mon
     async def fake_get_job_or_404(_db, _job_id):
         return job
 
-    async def fake_list_work_items(_db, _job_id):
+    async def fake_list_work_items(_db, _job_id, **_kwargs):
         return [whole]
 
     async def fake_mark_work_item_succeeded(_db, _item_id, result):
@@ -450,10 +452,10 @@ async def test_finalize_single_mode_rewrites_work_item_to_final_artifact_ref(mon
     finalized = await finalize_job(_FakeDB(), job_id)
 
     assert finalized == {"job_id": str(job_id), "status": "succeeded"}
-    assert written[0]["key"] == "ai-jobs/final-job/localized_text.txt"
+    assert written[0]["key"] == "ai-jobs/final-job/results/g1/localized_text.txt"
     artifact = captured["work_item_result"]["artifacts"][0]
     assert artifact["storage"] == "oss_object"
-    assert artifact["oss_key"] == "ai-jobs/final-job/localized_text.txt"
+    assert artifact["oss_key"] == "ai-jobs/final-job/results/g1/localized_text.txt"
     assert "content" not in artifact
     assert captured["job_result"] == captured["canonical_result"] == captured["work_item_result"]
 

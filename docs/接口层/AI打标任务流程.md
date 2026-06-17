@@ -67,6 +67,8 @@ finalize
   校验标签合法性，生成内部 canonical result 和写 RS payload。
 ```
 
+这些阶段只是 AI 服务内部 workflow / Celery canvas 的组织方式，不是对 CPP 或 RS 的恢复合同。Worker 重启或 stale running 恢复时，本服务按 `job_id` 作为整体重新规划并重新投递，旧代内部阶段和 work item 不参与新代 merge。
+
 AI 打标关注两类外部输入：
 
 ```text
@@ -76,28 +78,29 @@ RS 默认标签体系响应
 
 ## 终态动作
 
-AI 生成并持久化 canonical result 后，在同一终态阶段执行两个独立发送动作：
+AI 生成并持久化 canonical result 后，在同一终态阶段执行两个独立动作：
 
 ```text
+AI -> RS 写入打标结果（success side effect）
 AI -> CPP callback
-AI -> RS 写入打标结果
 ```
 
 两者不能互相中转。CPP callback 使用 CPP 创建 job 时传入的 `callback.url`；RS 写入使用 AI 服务内部配置的 RS 地址。
 
-当前顺序是：AI 先把 job 标记为 `succeeded` 并向 CPP callback 终态，再从同一份 canonical result 派生兼容格式 payload 写入 RS。RS 写入 payload 由专用 adapter 拼接，不把 `status/msg/tag_schema_version` 等兼容字段混入模型输出流程。
+当前框架顺序是：AI 先从同一份 canonical result 派生兼容格式 payload 写入 RS；RS 写入成功后才把 job 标记为 `succeeded` 并向 CPP callback 终态。RS 写入 payload 由专用 adapter 拼接，不把 `status/msg/tag_schema_version` 等兼容字段混入模型输出流程。
 
-当模型生成的结果可写入 RS，但存在缺失分类、低于数量约束等 `partial_success` 问题时，AI 仍进入 `succeeded` 并写入 RS。`partial_success` 的 `success=false` 信号和原因保存在 AI 内部 canonical result / RS 写入明细中，CPP callback 仍只携带 `result=null` 的终态 `JobView`。
+当模型生成的结果可写入 RS，但存在缺失分类、低于数量约束等 `partial_success` 问题时，AI 仍进入 `succeeded` 并写入 RS。`partial_success` 的 `success=false` 信号和原因保存在 AI 内部 canonical result / RS 写入明细中；CPP callback 使用统一 `CallbackEnvelope`，其中 `data` 只携带短剧打标对外信号，不暴露内部完整 canonical result。
 
 终态动作必须满足：
 
 ```text
 同一个 job_id
 RS 写入 payload 来自同一份内部 canonical result
-CPP callback 只携带终态 JobView，JobView.result 固定为 null
+CPP callback 使用统一 CallbackEnvelope，data 来自短剧 handler 明确的公开信号
+GET /jobs/{job_id} 的 public result 固定为 null
 ```
 
-模型推理、素材校验或标签校验失败时不写入 RS，只 callback CPP 失败结果。
+模型推理、素材校验、标签校验或 RS 写入失败时，Job 进入 `failed`，并 callback CPP 失败结果。
 
 ## Mermaid
 
@@ -110,13 +113,13 @@ flowchart TD
   RUN["AI：剧情理解 + 标签判断 + 结果校验\n基于 label_id 输出结果"]
   RESULT{"AI 结果"}
   PERSIST["AI：持久化 canonical result"]
-  CALLBACK["AI -> CPP callback\n发送终态 JobView"]
   WRITE_RS["AI -> RS：写入 ai_auto 打标结果\npayload 来自 canonical result"]
+  CALLBACK["AI -> CPP callback\n发送终态 CallbackEnvelope"]
   FAIL_CB["AI -> CPP callback\n发送失败终态"]
 
   CPP_READY --> CREATE --> JOB --> RS_SCHEMA --> RUN --> RESULT
   RESULT -->|"成功"| PERSIST
-  PERSIST --> CALLBACK --> WRITE_RS
+  PERSIST --> WRITE_RS --> CALLBACK
   RESULT -->|"失败 / 超时"| FAIL_CB
 ```
 

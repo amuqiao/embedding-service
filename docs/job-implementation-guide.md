@@ -1,4 +1,4 @@
-# FastAPI AI Job Template Job 系统实施说明
+# AI Job Service Job 系统实施说明
 
 本文是 [`archive/async-job-spec.md`](archive/async-job-spec.md) 通用规范在本项目的落地说明。规范中有大量可选项和分支，本文只记录**本项目实际启用的内容**，以及每处选择的依据，方便开发和运维直接对照。
 
@@ -11,7 +11,7 @@
 
 | 维度 | 本项目选择 | 规范对应章节 |
 |---|---|---|
-| 执行模式 | Single（默认）；Chunked 可通过配置启用 | §2.1 / §2.2 |
+| 执行模式 | Single（默认）；Chunked 通过 Celery canvas 表达复杂流程 | §2.1 / §2.2 |
 | 恢复机制 | Worker 启动扫描 + Worker 内置定期扫描 | §7.1 / §7.3 |
 | 进程内定期扫描 | **已启用**，由 `JOB_RECOVERY_INTERVAL_SECONDS` 控制 | §7.3 |
 | 积压上限 | MAX_ACTIVE_JOBS=5000；0 可禁用 | §4.3 |
@@ -81,7 +81,7 @@ dispatch_job_task(job_id)
   → load_input_text (OSS 读取)
   → asyncio.wait_for(run_ai_job(), timeout=MODEL_CALL_TIMEOUT_SECONDS)  ← L1
   → finalize_job_task
-  → persist_large_artifacts (OSS 写入 localized.txt / translated.txt)
+  → persist_large_artifacts (OSS 写入 results/g<generation>/<artifact_key>.txt)
   → mark_succeeded
   → deliver_callback
 ```
@@ -97,7 +97,7 @@ dispatch_job_task(job_id)
 - step3 额外生成 scan WorkItem（最终合并扫描）
 - WorkItem 结果汇总后进入 finalize，对外仍返回单一 Job 状态
 
-**本地开发不建议启用**，模型成本高且恢复逻辑更复杂。
+Chunked 模式只改变内部 canvas 结构，不改变对外 Job 合同。服务承诺的是 **job 作为整体可恢复、可重跑、可收敛**；不承诺按 `memory`、`chunk`、`scan`、`merge` 等内部 work item 精确续跑。Worker 重启或 stale running 恢复时，服务会按新的执行代次重新规划并重新投递整个 Job，旧代 work item 只作为内部历史记录保留，不参与新代 merge。
 
 ---
 
@@ -107,9 +107,9 @@ dispatch_job_task(job_id)
 
 ```
 L1  MODEL_CALL_TIMEOUT_SECONDS
-L3  celery_soft_time_limit      = L1 + CELERY_SOFT_TIMEOUT_BUFFER_SECONDS
-L4  celery_time_limit           = L3 + CELERY_HARD_TIMEOUT_BUFFER_SECONDS
-L5  job_stale_running_seconds   = L4 + JOB_STALE_RUNNING_BUFFER_SECONDS
+L3  celery_soft_time_limit      = L1 + _CELERY_SOFT_TIMEOUT_BUFFER
+L4  celery_time_limit           = L3 + _CELERY_HARD_TIMEOUT_BUFFER
+L5  job_stale_running_seconds   = L4 + _JOB_STALE_RUNNING_BUFFER
 ```
 
 本项目默认值：
@@ -117,9 +117,9 @@ L5  job_stale_running_seconds   = L4 + JOB_STALE_RUNNING_BUFFER_SECONDS
 | 层 | 变量 | 默认值 | 作用 |
 |---|---|---|---|
 | L1 | `MODEL_CALL_TIMEOUT_SECONDS` | 600s | `asyncio.wait_for` 截断 LLM 调用，超时 → `JOB_TIMEOUT` |
-| L3 buffer | `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` | 300s | 派生 Celery soft time limit |
-| L4 buffer | `CELERY_HARD_TIMEOUT_BUFFER_SECONDS` | 60s | 派生 Celery hard time limit |
-| L5 buffer | `JOB_STALE_RUNNING_BUFFER_SECONDS` | 600s | 派生 recovery stale running 阈值 |
+| L3 buffer | `_CELERY_SOFT_TIMEOUT_BUFFER` | 300s | 代码常量，派生 Celery soft time limit |
+| L4 buffer | `_CELERY_HARD_TIMEOUT_BUFFER` | 60s | 代码常量，派生 Celery hard time limit |
+| L5 buffer | `_JOB_STALE_RUNNING_BUFFER` | 600s | 代码常量，派生 recovery stale running 阈值 |
 
 L1/L3 超时均触发 `JOB_TIMEOUT` 错误码，由 `CELERY_MAX_RETRIES` 统一控制重试次数（默认 0 不重试）。
 
@@ -140,16 +140,21 @@ pre-generate task_id
 → 失败：跳过（另一 Worker 已抢占）
 ```
 
-**僵死 running Job 强制失败**（`started_at < now - settings.job_stale_running_seconds`）：
+**僵死 running Job 整体恢复**（`last_heartbeat_at IS NULL OR last_heartbeat_at < now - settings.job_stale_running_seconds`）：
 
 ```
-→ mark_failed(code=JOB_TIMEOUT)
-→ deliver_callback
+execution_attempts < JOB_MAX_EXECUTION_ATTEMPTS
+→ CAS: running -> queued
+→ execution_generation + 1
+→ 清空旧 execution_plan，绑定新 celery_task_id
+→ apply_async 重新投递 dispatch_job_task
 ```
+
+达到 `JOB_MAX_EXECUTION_ATTEMPTS` 后不再重投递，CAS 标记 `failed(JOB_TIMEOUT)` 并触发失败 Callback。该策略只保证 Job 级恢复，不保证某个内部步骤从断点继续。
 
 ### 5.2 Worker 内置定期扫描（已实现）
 
-Worker 启动后会运行内置 recovery loop，周期由 `JOB_RECOVERY_INTERVAL_SECONDS` 控制。每轮扫描会处理 orphan queued、未确认发布、stale running、callback 补偿和 `expires_at <= now()` 的 Job 清理。
+Worker 启动后会运行内置 recovery loop，周期由 `JOB_RECOVERY_INTERVAL_SECONDS` 控制。每轮扫描会处理 orphan queued、未确认发布、stale running、callback 补偿，以及 `expires_at <= now()` 且终态 Callback 已 `delivered/skipped` 的 Job 清理。
 
 多 Worker Pod 同时运行时，每轮扫描通过 PostgreSQL advisory lock 做全局单飞，不需要启动 Celery Beat。
 
@@ -180,7 +185,7 @@ MAX_ACTIVE_JOBS = 5000     → 默认，queued+running 总数 ≥ 5000 时返回
 | 生产 | `aliyun_oss` | 读写阿里云 OSS，bucket/region/AK 由 env 配置 |
 
 **输入对象**：调用方只传 `oss_key`，AI 能力层用自身配置的 bucket+凭证读取。
-**输出对象**：AI 能力层按 `OSS_OUTPUT_PREFIX/{job_id}/` 前缀写入，`localized_text` → `localized.txt`，`translated_text` → `translated.txt`。
+**输出对象**：AI 能力层按 `OSS_OUTPUT_PREFIX/{job_id}/` 前缀写入。Work item 大产物写到 `work-items/g<execution_generation>/<kind>-<chunk_index>/<artifact_key>.txt`，最终大产物写到 `results/g<execution_generation>/<artifact_key>.txt`。
 
 ---
 
@@ -211,12 +216,12 @@ T0+24h 后        → Worker recovery loop 删除 expires_at <= now() 的记录
 | `JOB_NOT_FOUND` | job_id 不存在（已过期或从未创建） |
 | `MODEL_CALL_FAILED` | 模型调用失败（非超时，包括通用内部异常） |
 | `MODEL_OUTPUT_INVALID` | 模型输出不符合 output_contract（缺少标记、疑似拒绝等） |
-| `JOB_TIMEOUT` | L1/L3 超时，或 L5 扫描强制终止僵死 running Job |
+| `JOB_TIMEOUT` | L1/L3 超时，或 L5 扫描发现 running Job 多次整体恢复后仍未收敛 |
 | `QUEUE_FULL` | queued+running ≥ MAX_ACTIVE_JOBS，HTTP 503 |
 
 ---
 
-## 十、关键环境变量速查
+## 十、关键配置速查
 
 ### 必填
 
@@ -227,14 +232,14 @@ T0+24h 后        → Worker recovery loop 删除 expires_at <= now() 的记录
 | `CALLBACK_SIGNING_SECRET` | Callback HMAC-SHA256 签名密钥 |
 | `OPENAI_API_KEY` | 模型调用密钥 |
 
-### 超时链（L3/L4/L5 由 buffer 派生）
+### 超时链（L3/L4/L5 由代码常量 buffer 派生）
 
-| 变量 | 默认 | 说明 |
+| 配置 / 常量 | 默认 | 说明 |
 |---|---|---|
 | `MODEL_CALL_TIMEOUT_SECONDS` | 600 | L1 asyncio.wait_for 截断 |
-| `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` | 300 | L3 相对 L1 的 buffer |
-| `CELERY_HARD_TIMEOUT_BUFFER_SECONDS` | 60 | L4 相对 L3 的 buffer |
-| `JOB_STALE_RUNNING_BUFFER_SECONDS` | 600 | L5 相对 L4 的 buffer |
+| `_CELERY_SOFT_TIMEOUT_BUFFER` | 300 | 代码常量，L3 相对 L1 的 buffer |
+| `_CELERY_HARD_TIMEOUT_BUFFER` | 60 | 代码常量，L4 相对 L3 的 buffer |
+| `_JOB_STALE_RUNNING_BUFFER` | 600 | 代码常量，L5 相对 L4 的 buffer |
 
 ### 积压与恢复
 
@@ -242,6 +247,7 @@ T0+24h 后        → Worker recovery loop 删除 expires_at <= now() 的记录
 |---|---|---|
 | `MAX_ACTIVE_JOBS` | 5000 | 入口积压上限，0=禁用 |
 | `JOB_ORPHAN_TIMEOUT_SECONDS` | 300 | queued+task_id=NULL 超时视为孤儿 |
+| `JOB_MAX_EXECUTION_ATTEMPTS` | 3 | stale running 整体重跑最大次数，达到后 failed |
 | `CELERY_MAX_RETRIES` | 0 | L1/L3 超时重试次数 |
 
 ### 分块（可选）
@@ -260,7 +266,7 @@ T0+24h 后        → Worker recovery loop 删除 expires_at <= now() 的记录
 |---|---|
 | `POST /jobs` 返回 503 | 检查 `queued+running` 总数是否达到 `MAX_ACTIVE_JOBS`；扩 Worker Pod 或临时调高限制 |
 | Job 长期停留在 queued | 检查 Worker 是否存活；Redis 队列是否有消息（`LLEN celery`）；查 `.run/worker.pid` 和 `logs/worker.log` |
-| Job 长期停留在 running | 检查 Worker 日志；派生的 `job_stale_running_seconds` 到期后恢复扫描会强制 failed |
+| Job 长期停留在 running | 检查 Worker 日志；派生的 `job_stale_running_seconds` 到期后恢复扫描会按整体 Job 重投递，超过 `JOB_MAX_EXECUTION_ATTEMPTS` 后 failed |
 | 收不到 Callback | 检查 `CALLBACK_SIGNING_SECRET` 和 `ALLOW_INSECURE_CALLBACKS`；查 worker 日志中的 callback 重试记录 |
 | 模型输出 `MODEL_OUTPUT_INVALID` | 检查 `prompts.yaml` 的 output_contract 标记是否与 `executor.py` 解析规则一致 |
 | OSS 写入失败 | 检查 `OSS_BUCKET`、`OSS_ACCESS_KEY_ID/SECRET`、endpoint 配置；确认 bucket 权限 |

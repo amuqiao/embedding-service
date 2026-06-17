@@ -119,12 +119,22 @@ class JobRepo:
         job_id: uuid.UUID,
         *,
         execution_plan: dict[str, Any],
-    ) -> None:
-        job = await JobRepo.get(db, job_id)
-        if job:
-            job.execution_plan = execution_plan
-            job.updated_at = datetime.now(timezone.utc)
-            await db.flush()
+        celery_task_id: str | None = None,
+        execution_generation: int | None = None,
+    ) -> bool:
+        conditions = [AIJob.id == job_id, AIJob.deleted_at.is_(None)]
+        if celery_task_id is not None:
+            conditions.extend([AIJob.status == "running", AIJob.celery_task_id == celery_task_id])
+        if execution_generation is not None:
+            conditions.append(AIJob.execution_generation == execution_generation)
+        result = await db.execute(select(AIJob).where(*conditions).with_for_update(skip_locked=True))
+        job = result.scalar_one_or_none()
+        if not job:
+            return False
+        job.execution_plan = execution_plan
+        job.updated_at = datetime.now(timezone.utc)
+        await db.flush()
+        return True
 
     @staticmethod
     async def mark_running_if_queued(
@@ -191,17 +201,27 @@ class JobRepo:
         progress_percent: int,
         progress_text: str,
         progress_stage: str | None = None,
-    ) -> None:
-        job = await JobRepo.get(db, job_id)
-        if job:
-            now = datetime.now(timezone.utc)
-            job.progress_percent = max(0, min(100, progress_percent))
-            job.progress_text = progress_text
-            if progress_stage is not None:
-                job.progress_stage = progress_stage
-            job.last_heartbeat_at = now
-            job.updated_at = now
-            await db.flush()
+        celery_task_id: str | None = None,
+        execution_generation: int | None = None,
+    ) -> bool:
+        conditions = [AIJob.id == job_id, AIJob.deleted_at.is_(None)]
+        if celery_task_id is not None:
+            conditions.extend([AIJob.status == "running", AIJob.celery_task_id == celery_task_id])
+        if execution_generation is not None:
+            conditions.append(AIJob.execution_generation == execution_generation)
+        result = await db.execute(select(AIJob).where(*conditions).with_for_update(skip_locked=True))
+        job = result.scalar_one_or_none()
+        if not job:
+            return False
+        now = datetime.now(timezone.utc)
+        job.progress_percent = max(0, min(100, progress_percent))
+        job.progress_text = progress_text
+        if progress_stage is not None:
+            job.progress_stage = progress_stage
+        job.last_heartbeat_at = now
+        job.updated_at = now
+        await db.flush()
+        return True
 
     @staticmethod
     async def mark_succeeded(
@@ -308,32 +328,46 @@ class JobRepo:
         return True
 
     @staticmethod
-    async def mark_success_side_effect_recovery_dispatched(
+    async def requeue_stale_running_for_recovery(
         db: AsyncSession,
         job_id: uuid.UUID,
         *,
-        progress_stage: str,
+        new_task_id: str,
+        max_execution_attempts: int,
     ) -> bool:
+        """把 stale running Job 作为整体重新入队，并切到新的内部执行代次。"""
         result = await db.execute(
-            select(AIJob)
-            .where(
-                AIJob.id == job_id,
-                AIJob.status == "running",
-                AIJob.progress_stage == progress_stage,
-                AIJob.deleted_at.is_(None),
-            )
-            .with_for_update(skip_locked=True)
+            text(
+                "UPDATE ai_jobs "
+                "SET status='queued', "
+                "progress_percent=0, "
+                "progress_text='恢复后重新排队', "
+                "progress_stage='requeued', "
+                "queued_at=now(), "
+                "started_at=NULL, "
+                "finished_at=NULL, "
+                "result=NULL, "
+                "canonical_result=NULL, "
+                "canonical_result_ref=NULL, "
+                "error=NULL, "
+                "celery_task_id=:new_task_id, "
+                "celery_published_at=NULL, "
+                "execution_generation=execution_generation + 1, "
+                "execution_plan=NULL, "
+                "last_heartbeat_at=now(), "
+                "updated_at=now() "
+                "WHERE id=:job_id AND status='running' "
+                "AND execution_attempts < :max_execution_attempts "
+                "AND deleted_at IS NULL"
+            ),
+            {
+                "job_id": str(job_id),
+                "new_task_id": new_task_id,
+                "max_execution_attempts": max_execution_attempts,
+            },
         )
-        job = result.scalar_one_or_none()
-        if not job:
-            return False
-        now = datetime.now(timezone.utc)
-        job.progress_percent = max(job.progress_percent or 0, 90)
-        job.progress_text = "正在恢复成功前副作用"
-        job.last_heartbeat_at = now
-        job.updated_at = now
         await db.flush()
-        return True
+        return result.rowcount == 1
 
     @staticmethod
     async def create_work_item(
@@ -343,10 +377,12 @@ class JobRepo:
         name: str,
         kind: str,
         chunk_index: int = 0,
+        execution_generation: int = 1,
         input_ref: dict[str, Any] | None = None,
     ) -> AIJobWorkItem:
         item = AIJobWorkItem(
             job_id=job_id,
+            execution_generation=execution_generation,
             name=name,
             kind=kind,
             chunk_index=chunk_index,
@@ -359,10 +395,18 @@ class JobRepo:
         return item
 
     @staticmethod
-    async def list_work_items(db: AsyncSession, job_id: uuid.UUID) -> list[AIJobWorkItem]:
+    async def list_work_items(
+        db: AsyncSession,
+        job_id: uuid.UUID,
+        *,
+        execution_generation: int | None = None,
+    ) -> list[AIJobWorkItem]:
+        conditions = [AIJobWorkItem.job_id == job_id, AIJobWorkItem.deleted_at.is_(None)]
+        if execution_generation is not None:
+            conditions.append(AIJobWorkItem.execution_generation == execution_generation)
         result = await db.execute(
             select(AIJobWorkItem)
-            .where(AIJobWorkItem.job_id == job_id, AIJobWorkItem.deleted_at.is_(None))
+            .where(*conditions)
             .order_by(AIJobWorkItem.chunk_index.asc(), AIJobWorkItem.created_at.asc())
         )
         return list(result.scalars().all())

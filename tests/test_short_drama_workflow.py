@@ -636,7 +636,7 @@ async def test_short_drama_handler_builds_rs_payload_without_writing(monkeypatch
     assert rs_payload["tags"]["000006"] == []
     assert result["signals"]["success"] is False
     assert result["signals"]["result_status"] == "partial_success"
-    assert result["signals"]["rs_write_after_callback"] is True
+    assert result["signals"]["rs_write_before_callback"] is True
 
 
 @pytest.mark.asyncio

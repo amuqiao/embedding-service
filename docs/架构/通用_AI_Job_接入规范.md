@@ -49,6 +49,8 @@ AI Job 服务
 
 通用顶层不得新增具体能力字段。模型、输入源、Prompt、业务 ID、领域选项、执行细节都必须放在 `job_params` 或 `metadata` 中，并由对应 `job_type` 解释。
 
+恢复边界同样按 Job 级定义：服务保证 `job_id` 最终收敛到 `succeeded` 或 `failed`，并支持 Worker 重启后整 Job 重新投递。内部可以用 Celery canvas 表达 `chain`、`group`、`chord` 等复杂流程，但不对调用方承诺 work item、phase 或某个 canvas step 的精确断点续跑。内部 `execution_generation` 仅用于隔离旧代 canvas 消息和新一轮执行记录，不进入 API 合同。
+
 ## 二、API 总览
 
 默认 API 前缀：
@@ -242,7 +244,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 |---|---|
 | `queued` | Job 已创建，等待 worker 领取或恢复投递。 |
 | `running` | Job 正在规划、执行、合并或写入结果。 |
-| `succeeded` | Job 成功结束，`result` 非空，`error=null`。 |
+| `succeeded` | Job 成功结束，`error=null`；`result` 是否非空由 `job_type` 的公开结果合同决定。 |
 | `failed` | Job 失败结束，`result=null`，`error` 非空。 |
 
 当前对外合同没有取消接口，也不产生 `canceled` 状态。
@@ -251,7 +253,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 
 ```text
 queued/running: result = null, error = null
-succeeded:      result != null, error = null
+succeeded:      result 由 job_type 决定，可以是 JobResult 或 null；error = null
 failed:         result = null, error != null
 ```
 
@@ -315,7 +317,7 @@ Artifact 字段：
   "label": "Output",
   "storage": "oss_object",
   "oss_bucket": "bucket",
-  "oss_key": "ai-jobs/<job_id>/output.txt",
+  "oss_key": "ai-jobs/<job_id>/results/g1/output.txt",
   "oss_region": "region",
   "content_hash": "sha256:<64 lowercase hex>",
   "content_size_bytes": 12345,
@@ -323,7 +325,7 @@ Artifact 字段：
 }
 ```
 
-调用方应根据 `oss_bucket`、`oss_key`、`oss_region` 读取大产物，并按 `content_hash` 做必要校验。
+调用方应根据 `oss_bucket`、`oss_key`、`oss_region` 读取大产物，并按 `content_hash` 做必要校验。`results/g<execution_generation>/` 是服务内部整 Job 重跑隔离路径，不要求调用方理解或拼接；调用方只消费响应中返回的完整 `oss_key`。
 
 ## 十、Callback
 
@@ -485,6 +487,7 @@ HTTP 错误统一返回：
 | 运行时派生 | 能力实现方从 `job_params` 派生内部运行时字段。 |
 | 成功结果 | 成功时返回符合 `JobResult` 的 `artifacts` 和 `signals`。 |
 | 失败结果 | 失败时写入统一 `JobError`。 |
+| 复杂流程 | 可用 Celery canvas 组织内部步骤，但必须能接受整 Job 重跑；外部副作用必须按 `job_id` 幂等。 |
 | 大产物 | 大内容通过 artifact 的对象存储字段交付，不扩展 `JobView` 顶层。 |
 | Callback | Callback 请求体使用 `CallbackEnvelope`，由公共 Job 事件字段和 `data` 扩展组成。 |
 
@@ -494,6 +497,7 @@ HTTP 错误统一返回：
 - 把能力专属字段提升到 Job 顶层。
 - 为错误参数添加 silent fallback。
 - 返回非 `JobResult` 形态的成功结果。
+- 依赖内部 work item 级断点恢复作为正确性前提。
 - 绕过 `CallbackEnvelope.data` 另起一套 callback 顶层业务字段。
 
 内部执行计划、分片策略和具体 runtime 属于实现细节，不进入本文的外部接入合同。需要维护这些内容时，应放入单独的实现接入文档。

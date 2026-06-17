@@ -372,9 +372,11 @@ def _persist_large_artifact_payload(
 
 
 def _persist_large_artifacts(job: AIJob, result: JobResult) -> dict[str, Any]:
-    return _persist_large_artifact_payload(job, result.model_dump())
+    generation = int(getattr(job, "execution_generation", None) or 1)
+    return _persist_large_artifact_payload(job, result.model_dump(), scope=f"results/g{generation}")
 
 
 def _persist_work_item_artifacts(job: AIJob, *, kind: str, chunk_index: int, result: dict[str, Any]) -> dict[str, Any]:
-    scope = f"work-items/{kind}-{chunk_index}"
+    generation = int(getattr(job, "execution_generation", None) or 1)
+    scope = f"work-items/g{generation}/{kind}-{chunk_index}"
     return _persist_large_artifact_payload(job, result, scope=scope)

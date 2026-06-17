@@ -7,7 +7,7 @@ from app.models.job import AIJob, AIJobWorkItem
 from app.core.workflow_registry import WorkflowHandler
 from app.schemas.jobs import CreateJobRequest, JobResult
 from app.services.job_runtime import payload_hash
-from app.services.job_lifecycle import SUCCESS_SIDE_EFFECT_DONE_STAGE
+from app.services.job_lifecycle import SUCCESS_SIDE_EFFECT_DONE_STAGE, SUCCESS_SIDE_EFFECT_STAGE
 from app.services.jobs import _validate_create_request
 from app.services.job_workflow import execute_work_item, finalize_job, plan_job
 from app.workflows.register import register_all_workflows
@@ -103,7 +103,7 @@ async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch
     async def fake_mark_running(*_args, **_kwargs):
         return True
 
-    async def fake_list_work_items(_db, _job_id):
+    async def fake_list_work_items(_db, _job_id, **_kwargs):
         return [created_item] if marked.get("planned") else []
 
     async def fake_create_work_item(*_args, **kwargs):
@@ -113,7 +113,7 @@ async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch
         created_item.input_ref = kwargs["input_ref"]
         return created_item
 
-    async def fake_set_execution_plan(_db, _job_id, *, execution_plan):
+    async def fake_set_execution_plan(_db, _job_id, *, execution_plan, **_kwargs):
         assert "input_data" not in execution_plan["work_items"][0]
         job.execution_plan = execution_plan
 
@@ -223,7 +223,7 @@ async def test_finalize_runs_handler_hook_before_success_callback(monkeypatch):
     async def fake_get_job_or_404(_db, _job_id):
         return job
 
-    async def fake_list_work_items(_db, _job_id):
+    async def fake_list_work_items(_db, _job_id, **_kwargs):
         return [whole]
 
     async def fake_mark_work_item_succeeded(_db, _item_id, result):
@@ -296,7 +296,7 @@ async def test_finalize_marks_failed_when_handler_hook_fails(monkeypatch):
     async def fake_get_job_or_404(_db, _job_id):
         return job
 
-    async def fake_list_work_items(_db, _job_id):
+    async def fake_list_work_items(_db, _job_id, **_kwargs):
         return [whole]
 
     async def fake_mark_work_item_succeeded(_db, _item_id, result):
@@ -338,6 +338,74 @@ async def test_finalize_marks_failed_when_handler_hook_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_finalize_skips_success_side_effect_when_execution_claim_is_lost(monkeypatch):
+    job_id = uuid.uuid4()
+    job = AIJob(
+        id=job_id,
+        job_type="generic.echo",
+        status="running",
+        celery_task_id="old-root-task",
+        execution_generation=1,
+        execution_plan={"execution_mode": "single", "execution_generation": 1},
+    )
+    whole = AIJobWorkItem(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        execution_generation=1,
+        name="generic.echo.whole",
+        kind="whole",
+        chunk_index=0,
+        status="succeeded",
+        result={
+            "artifacts": [{"key": "echo", "type": "json", "label": "Echo", "content": {"ok": True}}],
+            "signals": {"echoed": True},
+        },
+    )
+
+    class Handler(WorkflowHandler):
+        job_type = "generic.echo"
+        canonical_result_schema = JobResult
+        public_result_schema = JobResult
+        large_artifact_keys = frozenset()
+
+        async def run_success_side_effect(self, *_args, **_kwargs):
+            raise AssertionError("stale generation must not run success side effect")
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_list_work_items(_db, _job_id, **_kwargs):
+        return [whole]
+
+    async def fake_mark_work_item_succeeded(_db, _item_id, result):
+        whole.result = result
+
+    async def fake_update_progress(*_args, progress_stage=None, **_kwargs):
+        if progress_stage == SUCCESS_SIDE_EFFECT_STAGE:
+            return False
+        return True
+
+    async def fake_mark_succeeded(*_args, **_kwargs):
+        raise AssertionError("lost execution claim must not mark job succeeded")
+
+    async def fake_deliver_callback(_job_id):
+        raise AssertionError("lost execution claim must not deliver callback")
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.list_work_items", fake_list_work_items)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_work_item_succeeded", fake_mark_work_item_succeeded)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.update_progress", fake_update_progress)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: Handler())
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback)
+
+    finalized = await finalize_job(FakeDB(), job_id)
+
+    assert finalized == {"job_id": str(job_id), "status": "skipped", "reason": "stale_execution_generation"}
+    assert job.status == "running"
+
+
+@pytest.mark.asyncio
 async def test_finalize_raises_when_succeeded_state_transition_fails(monkeypatch):
     job_id = uuid.uuid4()
     job = AIJob(
@@ -373,11 +441,14 @@ async def test_finalize_raises_when_succeeded_state_transition_fails(monkeypatch
     async def fake_get_job_or_404(_db, _job_id):
         return job
 
-    async def fake_list_work_items(_db, _job_id):
+    async def fake_list_work_items(_db, _job_id, **_kwargs):
         return [whole]
 
     async def fake_mark_work_item_succeeded(_db, _item_id, result):
         whole.result = result
+
+    async def fake_update_progress(*_args, **_kwargs):
+        return True
 
     async def fake_mark_succeeded(*_args, **_kwargs):
         return False
@@ -388,6 +459,7 @@ async def test_finalize_raises_when_succeeded_state_transition_fails(monkeypatch
     monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
     monkeypatch.setattr("app.services.job_workflow.JobRepo.list_work_items", fake_list_work_items)
     monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_work_item_succeeded", fake_mark_work_item_succeeded)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.update_progress", fake_update_progress)
     monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_succeeded", fake_mark_succeeded)
     monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: Handler())
     monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback)

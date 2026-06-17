@@ -37,7 +37,7 @@ usage() {
   rs-translation-smoke 成功 = 真实模型 short_drama.tag_schema.translation job 进入 succeeded 状态并通过结果校验。
   cpp-tagging-smoke 成功 = 真实模型 short_drama.tagging.initial job 进入 succeeded 状态，public result 为 null。
   mock-smoke 成功 = Mock AI step1_localize job 进入 succeeded 状态，全程不调用真实模型。
-  workflow-smoke 成功 = 真实模型长文本触发内部 workflow，localized.txt 和 translated.txt 存在且非空。
+  workflow-smoke 成功 = 真实模型长文本触发内部 workflow，核心大文本 artifact 存在且非空。
   e2e 成功 = meta 契约、错误请求预检、三个 Job、轮询结果、callback 和核心 artifact 均通过校验。
 
 rs-translation-smoke 常用参数：

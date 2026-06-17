@@ -30,7 +30,7 @@
   ▼
 FastAPI API
   ├─ Bearer token 鉴权
-  ├─ 校验 job_type / model_id / prompt / source / callback
+  ├─ 校验 job_type / job_params / runtime fields / callback
   ├─ client_request_id 幂等保护
   ├─ MAX_ACTIVE_JOBS 入口软背压
   ├─ 创建 ai_jobs(status=queued)
@@ -41,7 +41,7 @@ FastAPI API
 Celery Worker
   ├─ 按 job_id + celery_task_id claim queued Job
   ├─ 规划或复用 execution_plan / work items
-  ├─ 按 canvas pattern 投递 work item
+  ├─ 按 canvas pattern 投递 work item，并把 execution_generation 传给 finalize
   ├─ 执行模型调用
   ├─ 写回大文本 artifact
   ├─ CAS 标记 succeeded / failed
@@ -50,9 +50,9 @@ Celery Worker
 Worker recovery loop
   ├─ queued + celery_task_id IS NULL：补 task_id 并重投递
   ├─ queued + celery_task_id 非空 + celery_published_at IS NULL：替换 task_id 并重投递
-  ├─ stale running：标记 failed(JOB_TIMEOUT) 并补 Callback
+  ├─ stale running：低于上限时整 Job 重投递；达到上限后 failed(JOB_TIMEOUT) 并补 Callback
   ├─ due callback：重试终态 Callback
-  └─ expired jobs：清理过期记录
+  └─ expired settled jobs：清理已终态且 Callback 已 delivered/skipped 的过期记录
 ```
 
 MVP 上线前必须确认的边界：
@@ -62,7 +62,7 @@ MVP 上线前必须确认的边界：
 - 生产使用共享对象存储，例如 `STORAGE_BACKEND=aliyun_oss`。
 - Worker 吞吐通过 `Worker Pod 数 × WORKER_CONCURRENCY` 控制。
 - API 接单上限通过 `MAX_ACTIVE_JOBS` 控制。
-- 模型、Celery、stale running 和 Callback 超时链按本文约束配置。
+- 模型调用、Celery、stale running 和 Callback 超时链按本文约束派生。
 - 目标环境完成一次主链路 smoke/e2e、OSS 读写、Callback 验签、Worker 重启恢复验证。
 
 不应在当前 MVP 承诺：
@@ -70,7 +70,7 @@ MVP 上线前必须确认的边界：
 - 无限队列。
 - 已验证 30+ 并发。
 - 多调用方 / 多租户隔离。
-- 分块 workflow 已生产化。
+- 分块 workflow 已按目标环境完成生产级验证。
 - Redis 已发布消息极端丢失后自动恢复。
 - 完整生产平台成熟度。
 
@@ -82,12 +82,12 @@ MVP 上线前必须确认的边界：
 | 入口背压 | `MAX_ACTIVE_JOBS` 使用 advisory lock 串行化 active count 检查 queued + running 总数，达到上限返回 `QUEUE_FULL`。 | 可控，但仍是接单保护，不是严格容量配额。 |
 | 投递一致性 | API 先写 `celery_task_id` 并提交 DB，再投递 Celery，投递成功后写 `celery_published_at`。 | 覆盖“DB 已提交、Celery 未投递”的常见窗口。 |
 | Worker 抢占 | Worker 校验 DB 中 `celery_task_id`，并用 `status='queued' AND celery_task_id=:task_id` 抢占。 | 支持多 Worker Pod 并发竞争。 |
-| 终态写入 | succeeded / failed 写入要求 Job 仍为 running 且 task_id 匹配。 | 避免旧 task 或重复 task 覆盖终态。 |
+| 终态写入 | succeeded / failed 写入要求 Job 仍为 running 且 task_id 匹配；finalize 前关键进度和成功前副作用要求当前 `task_id + execution_generation` claim。 | 避免旧 task 或旧代 canvas 覆盖当前终态。 |
 | 模型超时 | `MODEL_CALL_TIMEOUT_SECONDS` 截断模型调用，Celery soft/hard time limit 兜底。 | 可通过 env 控制。 |
-| Worker 崩溃 | Celery `acks_late` + `task_reject_on_worker_lost` 配合 running claim；stale running 由 recovery 收敛。 | 可恢复到明确终态。 |
+| Worker 崩溃 | Celery `acks_late` + `task_reject_on_worker_lost` 配合 running claim；stale running 由 recovery 按整 Job 重跑、提升 `execution_generation` 并最终收敛。 | 可恢复到明确终态。 |
 | API 崩溃 | 已落库但未投递、未确认发布的 queued Job 由 recovery 重投递。 | 可恢复。 |
 | Callback 失败 | 终态后立即尝试；失败后通过 `callback_next_retry_at` 和 recovery loop 补偿。 | 可控重试。 |
-| 过期清理 | recovery loop 清理 `expires_at <= now()` 的 Job。 | MVP 可用，但必须保证排队 + 执行 + Callback 收敛小于 24 小时 TTL。 |
+| 过期清理 | recovery loop 只清理 `expires_at <= now()`、已终态且 Callback 已 `delivered/skipped` 的 Job。 | MVP 可用，但必须保证排队 + 执行 + Callback 收敛小于 24 小时 TTL。 |
 
 结论：Job 主流程骨架是稳定的。当前最大约束不是代码结构，而是上线时必须正确配置吞吐、超时、共享存储和目标环境容量。
 
@@ -126,7 +126,7 @@ Worker Pod 重启影响：
 
 - 正在执行的任务可能被中断。
 - Celery 会根据 `acks_late` / `task_reject_on_worker_lost` 让消息回队。
-- 如果消息未能正常回队，DB 中长期 running 的 Job 会被派生值 `job_stale_running_seconds` 扫描为 failed，并补 Callback。
+- 如果消息未能正常回队，DB 中长期 running 的 Job 会被派生值 `job_stale_running_seconds` 扫描出来；低于 `JOB_MAX_EXECUTION_ATTEMPTS` 时整体重新投递，达到上限后 failed 并补 Callback。
 - Worker 启动后会立即跑一次 recovery，并启动周期 recovery loop。
 
 Worker 侧主要调参：
@@ -194,6 +194,7 @@ WORKER_CONCURRENCY = 4
 | `JOB_RECOVERY_INTERVAL_SECONDS` | `60` | recovery loop 周期。 | 恢复要更快可调小，但会增加 DB 扫描频率。 |
 | `JOB_RECOVERY_BATCH_SIZE` | `100` | 每轮恢复 orphan / stale 的批量。 | 积压大时可调大。 |
 | `JOB_RECOVERY_CALLBACK_BATCH_SIZE` | `50` | 每轮 Callback 补偿批量。 | Callback 积压时可调大。 |
+| `JOB_MAX_EXECUTION_ATTEMPTS` | `3` | stale running 整 Job 重跑最大次数。 | 提高会增加恢复容忍度，也会增加重复执行成本和外部副作用幂等压力。 |
 
 ### API 与数据库
 
@@ -207,32 +208,29 @@ WORKER_CONCURRENCY = 4
 
 ### 超时链
 
-当前真正接入执行路径的超时链由一个锚点和三个 buffer 派生：
+当前真正接入执行路径的超时链由一个 env 锚点和三个代码常量 buffer 派生：
 
 ```text
 MODEL_CALL_TIMEOUT_SECONDS
-  + CELERY_SOFT_TIMEOUT_BUFFER_SECONDS
+  + _CELERY_SOFT_TIMEOUT_BUFFER
   = celery_soft_time_limit
 
 celery_soft_time_limit
-  + CELERY_HARD_TIMEOUT_BUFFER_SECONDS
+  + _CELERY_HARD_TIMEOUT_BUFFER
   = celery_time_limit
 
 celery_time_limit
-  + JOB_STALE_RUNNING_BUFFER_SECONDS
+  + _JOB_STALE_RUNNING_BUFFER
   = job_stale_running_seconds
 ```
 
-用户只配置锚点和 buffer，代码自动计算 Celery 和 recovery 使用的派生值。buffer 必须大于 0；低于推荐值时启动记录 warning。
+用户只配置锚点 `MODEL_CALL_TIMEOUT_SECONDS`。三个 buffer 是 `app/core/config.py` 中的结构性安全常量，不是 `.env` 配置项；代码自动计算 Celery 和 recovery 使用的派生值。
 
 注意：代码内置默认值偏向本地安全启动，例如 `MODEL_CALL_TIMEOUT_SECONDS` 默认是 `300` 秒；MVP 生产推荐通过 env 显式覆盖为下表值，`.env.example` 已按该推荐值给出模板。
 
 | 变量 | 推荐 MVP 初始值 | 作用 | 联动要求 |
 | --- | --- | --- | --- |
 | `MODEL_CALL_TIMEOUT_SECONDS` | `600` | L1，模型调用主超时。 | 调大它后，后续派生值会自动跟随；只需确认 buffer 是否足够。 |
-| `CELERY_SOFT_TIMEOUT_BUFFER_SECONDS` | `300` | L3 软超时相对 L1 的缓冲。 | 派生 `celery_soft_time_limit`，推荐不少于 300 秒。 |
-| `CELERY_HARD_TIMEOUT_BUFFER_SECONDS` | `60` | L4 硬超时相对 L3 的缓冲。 | 派生 `celery_time_limit`，推荐不少于 60 秒。 |
-| `JOB_STALE_RUNNING_BUFFER_SECONDS` | `600` | L5 stale 扫描相对 L4 的缓冲。 | 派生 `job_stale_running_seconds`，推荐不少于 600 秒。 |
 | `app/core/models.yaml` 的 `generation.num_retries` | `0` | 模型 SDK 内部重试次数。 | 默认保持 0，避免单次 Job 因 SDK 自动重试增加费用和耗时。 |
 | `CELERY_MAX_RETRIES` | `0` | Celery 超时重试次数。 | 模型费用敏感时保持 0。 |
 | `CELERY_RETRY_DELAY` | `60` | Celery 重试间隔。 | 仅 `CELERY_MAX_RETRIES > 0` 时有意义。 |
@@ -263,13 +261,11 @@ WORKER_CONCURRENCY=2
 MAX_ACTIVE_JOBS=20
 
 MODEL_CALL_TIMEOUT_SECONDS=600
-CELERY_SOFT_TIMEOUT_BUFFER_SECONDS=300
-CELERY_HARD_TIMEOUT_BUFFER_SECONDS=60
-JOB_STALE_RUNNING_BUFFER_SECONDS=600
 
 JOB_RECOVERY_INTERVAL_SECONDS=60
 JOB_RECOVERY_BATCH_SIZE=100
 JOB_RECOVERY_CALLBACK_BATCH_SIZE=50
+JOB_MAX_EXECUTION_ATTEMPTS=3
 
 CALLBACK_TIMEOUT_SECONDS=5
 CALLBACK_RETRY_DELAY_SECONDS=300
@@ -318,11 +314,11 @@ MAX_ACTIVE_JOBS=50  # 灰度放量；生产排队目标可单独提高
 | Worker Pod 已够但仍慢 | 提高 `WORKER_CONCURRENCY`。 | 从 2 到 4 起步；同步核算 DB、模型额度和内存。 |
 | API 返回 `QUEUE_FULL` | 提高 `MAX_ACTIVE_JOBS` 或增加 Worker 执行槽位。 | `MAX_ACTIVE_JOBS` 只控制接单，不提高执行速度。 |
 | 队列太深，想保护系统 | 降低 `MAX_ACTIVE_JOBS`。 | 让上游更早收到 503，避免无限积压。 |
-| 模型经常超时 | 提高 `MODEL_CALL_TIMEOUT_SECONDS`。 | L3/L4/L5 会按 buffer 自动派生；无需直接调底层值。 |
-| Worker 被误判 stale | 提高 `JOB_STALE_RUNNING_BUFFER_SECONDS`。 | 增大 L5 相对 L4 的缓冲，避免误杀正常长任务。 |
+| 模型经常超时 | 提高 `MODEL_CALL_TIMEOUT_SECONDS`。 | L3/L4/L5 会按代码常量 buffer 自动派生；无需直接调底层值。 |
+| Worker 被误判 stale | 提高 `MODEL_CALL_TIMEOUT_SECONDS`，或调整代码内 `_JOB_STALE_RUNNING_BUFFER` 后走代码发布。 | L5 由 L1 和代码常量派生；生产不暴露单独 stale buffer env。 |
 | Callback 接收端慢 | 提高 `CALLBACK_TIMEOUT_SECONDS`；如果启动校验提示重试间隔不足，再提高 `CALLBACK_RETRY_DELAY_SECONDS`。 | 内部领取窗口由代码自动派生，不作为生产旋钮暴露。 |
 | Callback 接收端不稳定 | 提高 `CALLBACK_RETRY_DELAY_SECONDS` 或 `CALLBACK_MAX_DELIVERY_ATTEMPTS`。 | 降低对接收方的瞬时压力。 |
-| Worker 重启后有 running 卡住 | 等待派生的 `job_stale_running_seconds` 后 recovery 收敛，或临时调小 `JOB_STALE_RUNNING_BUFFER_SECONDS` 后重启 Worker。 | 调小前确认不会误杀正常长任务。 |
+| Worker 重启后有 running 卡住 | 等待派生的 `job_stale_running_seconds` 后 recovery 收敛；确需缩短 stale 判断时应作为代码配置策略变更处理。 | 当前不提供临时调小 stale buffer 的 env 旋钮。 |
 | 需要暂停放量 | 降低 Worker Pod 数或 `WORKER_CONCURRENCY`，同时降低 `MAX_ACTIVE_JOBS`。 | 让系统进入低吞吐保护模式。 |
 
 ## 八、上线前最小检查

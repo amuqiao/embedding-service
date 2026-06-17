@@ -291,7 +291,8 @@ class Step3TranslateHandler(NovelLocalizationHandler):
         from app.repositories.job_repo import JobRepo
         from app.services.job_context import format_project_memory, project_memory_from_job
 
-        all_items = await JobRepo.list_work_items(db, job.id)
+        generation = int(getattr(job, "execution_generation", None) or 1)
+        all_items = await JobRepo.list_work_items(db, job.id, execution_generation=generation)
         chunk_items = [i for i in all_items if i.kind == "chunk"]
         translated = _merge_texts(chunk_items, "translated_text")
         memory = project_memory_from_job(job)

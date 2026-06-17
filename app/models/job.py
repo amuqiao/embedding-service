@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -40,6 +40,7 @@ class AIJob(Base):
     first_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     execution_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    execution_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     last_execution_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     callback_status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
@@ -70,13 +71,21 @@ class AIJob(Base):
 class AIJobWorkItem(Base):
     __tablename__ = "ai_job_work_items"
     __table_args__ = (
-        UniqueConstraint("job_id", "name", "chunk_index", name="uq_ai_job_work_items_job_name_chunk"),
+        Index("ix_ai_job_work_items_job_generation", "job_id", "execution_generation"),
+        UniqueConstraint(
+            "job_id",
+            "execution_generation",
+            "name",
+            "chunk_index",
+            name="uq_ai_job_work_items_job_generation_name_chunk",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     job_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("ai_jobs.id"), nullable=False, index=True
     )
+    execution_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     name: Mapped[str] = mapped_column(String(96), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

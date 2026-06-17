@@ -24,6 +24,49 @@ def _job_execution_mode(job: AIJob) -> str | None:
     return (job.execution_plan or {}).get("execution_mode")
 
 
+def _execution_generation(entity: Any) -> int:
+    return int(getattr(entity, "execution_generation", None) or 1)
+
+
+def _plan_execution_generation(job: AIJob) -> int:
+    return int((job.execution_plan or {}).get("execution_generation") or 1)
+
+
+def _current_generation_items(job: AIJob, items: list[AIJobWorkItem]) -> list[AIJobWorkItem]:
+    generation = _execution_generation(job)
+    return [item for item in items if _execution_generation(item) == generation]
+
+
+async def _list_current_generation_items(db: AsyncSession, job: AIJob) -> list[AIJobWorkItem]:
+    items = await JobRepo.list_work_items(db, job.id, execution_generation=_execution_generation(job))
+    return _current_generation_items(job, items)
+
+
+def _plan_payload(job: AIJob, plan: JobPlan) -> dict[str, Any]:
+    payload = plan.model_dump()
+    payload["execution_generation"] = _execution_generation(job)
+    return payload
+
+
+async def _update_current_progress(
+    db: AsyncSession,
+    job: AIJob,
+    *,
+    progress_percent: int,
+    progress_text: str,
+    progress_stage: str | None = None,
+) -> bool:
+    updated = await JobRepo.update_progress(
+        db,
+        job.id,
+        progress_percent=progress_percent,
+        progress_text=progress_text,
+        progress_stage=progress_stage,
+        celery_task_id=job.celery_task_id,
+        execution_generation=_execution_generation(job),
+    )
+    return updated is not False
+
 
 def _first_result_value(items: list[AIJobWorkItem], kind: str, key: str) -> Any:
     for item in sorted(items, key=lambda item: item.chunk_index):
@@ -64,6 +107,7 @@ def merge_work_items(job: AIJob, items: list[AIJobWorkItem]) -> JobResult:
 
 async def create_work_items(db: AsyncSession, job: AIJob, plan: JobPlan) -> dict[str, uuid.UUID]:
     item_ids: dict[str, uuid.UUID] = {}
+    execution_generation = _execution_generation(job)
     for item in plan.work_items:
         input_ref = item.input_ref
         if input_ref is None and item.input_data is not None:
@@ -71,6 +115,7 @@ async def create_work_items(db: AsyncSession, job: AIJob, plan: JobPlan) -> dict
         created = await JobRepo.create_work_item(
             db,
             job_id=job.id,
+            execution_generation=execution_generation,
             name=item.name,
             kind=item.kind,
             chunk_index=item.chunk_index,
@@ -83,18 +128,34 @@ async def create_work_items(db: AsyncSession, job: AIJob, plan: JobPlan) -> dict
 async def plan_job(db: AsyncSession, job_id: uuid.UUID) -> tuple[AIJob, JobPlan, dict[str, uuid.UUID]]:
     job = await get_job_or_404(db, job_id)
     if job.celery_task_id:
-        await JobRepo.mark_running(db, job_id, celery_task_id=job.celery_task_id, progress_text="正在规划执行策略")
-    existing_items = await JobRepo.list_work_items(db, job_id)
-    if job.execution_plan and existing_items:
+        refreshed = await JobRepo.mark_running(
+            db,
+            job_id,
+            celery_task_id=job.celery_task_id,
+            progress_text="正在规划执行策略",
+        )
+        if not refreshed:
+            raise AppError(
+                "JOB_STATE_TRANSITION_CONFLICT",
+                "job could not refresh running state before planning",
+                status_code=500,
+                details={"job_id": str(job_id), "celery_task_id": job.celery_task_id},
+            )
+    existing_items = await _list_current_generation_items(db, job)
+    if (
+        job.execution_plan
+        and _plan_execution_generation(job) == _execution_generation(job)
+        and existing_items
+    ):
         plan = job_plan_from_payload(job.execution_plan)
         item_ids = {f"{item.kind}:{item.chunk_index}": item.id for item in existing_items}
         expected_keys = {f"{item.kind}:{item.chunk_index}" for item in plan.work_items}
         missing_keys = sorted(expected_keys - set(item_ids))
         if missing_keys:
             raise RuntimeError(f"execution plan missing work items: {missing_keys}")
-        await JobRepo.update_progress(
+        await _update_current_progress(
             db,
-            job_id,
+            job,
             progress_percent=max(job.progress_percent or 0, 10),
             progress_text=f"复用 {plan.execution_mode} 执行计划",
         )
@@ -108,14 +169,23 @@ async def plan_job(db: AsyncSession, job_id: uuid.UUID) -> tuple[AIJob, JobPlan,
         input_text = _load_input_text(job)
         plan = build_job_plan(job.job_type, input_text)
     item_ids = await create_work_items(db, job, plan)
-    await JobRepo.set_execution_plan(
+    plan_stored = await JobRepo.set_execution_plan(
         db,
         job_id,
-        execution_plan=plan.model_dump(),
+        execution_plan=_plan_payload(job, plan),
+        celery_task_id=job.celery_task_id,
+        execution_generation=_execution_generation(job),
     )
-    await JobRepo.update_progress(
+    if plan_stored is False:
+        raise AppError(
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "job could not store execution plan for current generation",
+            status_code=500,
+            details={"job_id": str(job_id), "celery_task_id": job.celery_task_id},
+        )
+    await _update_current_progress(
         db,
-        job_id,
+        job,
         progress_percent=10,
         progress_text=f"已生成 {plan.execution_mode} 执行计划",
     )
@@ -135,6 +205,14 @@ async def execute_work_item(
     item = await JobRepo.get_work_item(db, item_id)
     if not item:
         raise RuntimeError(f"work item not found: {item_id}")
+    if _execution_generation(item) != _execution_generation(job):
+        return {
+            "work_item_id": str(item_id),
+            "kind": item.kind,
+            "chunk_index": item.chunk_index,
+            "status": "skipped",
+            "reason": "stale_execution_generation",
+        }
     claimed = await JobRepo.claim_work_item_for_execution(db, item_id, celery_task_id=celery_task_id)
     if not claimed:
         return {
@@ -143,7 +221,7 @@ async def execute_work_item(
             "chunk_index": item.chunk_index,
             "status": "skipped",
         }
-    await JobRepo.update_progress(db, job_id, progress_percent=30, progress_text=f"正在执行 {item.kind}")
+    await _update_current_progress(db, job, progress_percent=30, progress_text=f"正在执行 {item.kind}")
     await db.commit()
 
     from app.core import workflow_registry
@@ -169,8 +247,9 @@ async def execute_work_item(
             if item.kind == "chunk":
                 memory = project_memory_from_job(job)
                 if handler.canvas_pattern == "memory_fanout":
+                    current_items = await _list_current_generation_items(db, job)
                     memory = (
-                        _first_result_value(await JobRepo.list_work_items(db, job_id), "memory", "project_memory")
+                        _first_result_value(current_items, "memory", "project_memory")
                         or memory
                     )
                 context_text = build_chunk_context(
@@ -189,9 +268,36 @@ async def execute_work_item(
     return {"work_item_id": str(item_id), "kind": item.kind, "chunk_index": item.chunk_index}
 
 
-async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
+async def finalize_job(
+    db: AsyncSession,
+    job_id: uuid.UUID,
+    *,
+    execution_generation: int | None = None,
+) -> dict[str, Any]:
     job = await get_job_or_404(db, job_id)
-    items = await JobRepo.list_work_items(db, job_id)
+    if execution_generation is not None and _execution_generation(job) != execution_generation:
+        return {
+            "job_id": str(job_id),
+            "status": "skipped",
+            "reason": "stale_execution_generation",
+            "expected_execution_generation": execution_generation,
+            "current_execution_generation": _execution_generation(job),
+        }
+    if job.status in ("succeeded", "failed"):
+        return {"job_id": str(job_id), "status": "skipped", "job_status": job.status}
+    if job.status != "running":
+        return {"job_id": str(job_id), "status": "skipped", "job_status": job.status}
+
+    items = await _list_current_generation_items(db, job)
+    if not items:
+        await _update_current_progress(
+            db,
+            job,
+            progress_percent=max(job.progress_percent or 0, 80),
+            progress_text="等待执行计划生成",
+        )
+        await db.commit()
+        return {"job_id": str(job_id), "status": "waiting", "pending_items": []}
     failed = [item for item in items if item.status == "failed"]
     if failed:
         raise AppError(
@@ -202,9 +308,9 @@ async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
         )
     pending = [item for item in items if item.kind != "merge" and item.status != "succeeded"]
     if pending:
-        await JobRepo.update_progress(
+        await _update_current_progress(
             db,
-            job_id,
+            job,
             progress_percent=max(job.progress_percent or 0, 80),
             progress_text="等待分片执行完成",
         )
@@ -217,6 +323,15 @@ async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
 
     from app.core import workflow_registry
     handler = workflow_registry.get(job.job_type)
+    claimed_finalize = await _update_current_progress(
+        db,
+        job,
+        progress_percent=max(job.progress_percent or 0, 85),
+        progress_text="正在合并执行结果",
+    )
+    await db.commit()
+    if not claimed_finalize:
+        return {"job_id": str(job_id), "status": "skipped", "reason": "stale_execution_generation"}
     merged_result = merge_work_items(job, items)
     canonical_result = handler.validate_canonical_result(_persist_large_artifacts(job, merged_result))
     public_result = handler.public_result(canonical_result)
@@ -241,14 +356,16 @@ async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
     if not job.celery_task_id:
         raise RuntimeError(f"job has no celery_task_id: {job_id}")
     if job.progress_stage != SUCCESS_SIDE_EFFECT_DONE_STAGE:
-        await JobRepo.update_progress(
+        claimed_side_effect = await _update_current_progress(
             db,
-            job_id,
+            job,
             progress_percent=90,
             progress_text="正在执行成功前副作用",
             progress_stage=SUCCESS_SIDE_EFFECT_STAGE,
         )
         await db.commit()
+        if not claimed_side_effect:
+            return {"job_id": str(job_id), "status": "skipped", "reason": "stale_execution_generation"}
         try:
             await handler.run_success_side_effect(job, canonical_result, db)
         except Exception as exc:
@@ -262,14 +379,16 @@ async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
             from app.tasks.jobs import deliver_callback_for_job
             await deliver_callback_for_job(job_id)
             return {"job_id": str(job_id), "status": "failed"}
-        await JobRepo.update_progress(
+        marked_side_effect_done = await _update_current_progress(
             db,
-            job_id,
+            job,
             progress_percent=95,
             progress_text="成功前副作用已完成",
             progress_stage=SUCCESS_SIDE_EFFECT_DONE_STAGE,
         )
         await db.commit()
+        if not marked_side_effect_done:
+            return {"job_id": str(job_id), "status": "skipped", "reason": "stale_execution_generation"}
     succeeded = await JobRepo.mark_succeeded(
         db,
         job_id,
@@ -298,16 +417,27 @@ async def fail_job(
     item_id: uuid.UUID | None,
     error: dict[str, Any],
 ) -> None:
-    if item_id:
-        await JobRepo.mark_work_item_failed(db, item_id, error)
     job = await get_job_or_404(db, job_id)
+    if item_id:
+        item = await JobRepo.get_work_item(db, item_id)
+        if item and _execution_generation(item) != _execution_generation(job):
+            await db.commit()
+            return
+        await JobRepo.mark_work_item_failed(db, item_id, error)
     await JobRepo.mark_failed(db, job_id, error, celery_task_id=job.celery_task_id)
     await db.commit()
     from app.tasks.jobs import deliver_callback_for_job
     await deliver_callback_for_job(job_id)
 
 
-def build_canvas(job_id: uuid.UUID, job_type: str, plan: JobPlan, item_ids: dict[str, uuid.UUID]):
+def build_canvas(
+    job_id: uuid.UUID,
+    job_type: str,
+    plan: JobPlan,
+    item_ids: dict[str, uuid.UUID],
+    *,
+    execution_generation: int = 1,
+):
     from app.tasks.jobs import execute_work_item_task, fanout_after_mapping_task, finalize_job_task
     from app.core import workflow_registry
     handler = workflow_registry.get(job_type)
@@ -318,7 +448,7 @@ def build_canvas(job_id: uuid.UUID, job_type: str, plan: JobPlan, item_ids: dict
         whole_id = str(item_ids["whole:0"])
         return chain(
             execute_work_item_task.s(job_id_text, whole_id),
-            finalize_job_task.s(job_id_text),
+            finalize_job_task.s(job_id_text, execution_generation),
         )
 
     chunk_signatures = [
@@ -335,14 +465,14 @@ def build_canvas(job_id: uuid.UUID, job_type: str, plan: JobPlan, item_ids: dict
         ]
         return chain(
             execute_work_item_task.s(job_id_text, str(item_ids["memory:0"])),
-            fanout_after_mapping_task.s(job_id_text, chunk_item_ids),
+            fanout_after_mapping_task.s(job_id_text, chunk_item_ids, execution_generation),
         )
 
     if pattern == "scan_chord":
         scan_id = str(item_ids[f"scan:{plan.chunk_count + 2}"])
         return chain(
             chord(group(chunk_signatures), execute_work_item_task.si(job_id_text, scan_id)),
-            finalize_job_task.s(job_id_text),
+            finalize_job_task.s(job_id_text, execution_generation),
         )
 
-    return chord(group(chunk_signatures), finalize_job_task.s(job_id_text))
+    return chord(group(chunk_signatures), finalize_job_task.s(job_id_text, execution_generation))

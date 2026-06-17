@@ -1,19 +1,27 @@
 # 架构文档
 
-本目录记录 FastAPI AI Job Template 的稳定架构说明。当前入口是：
+本目录记录 AI Job 服务的稳定架构说明。文档不合并成单篇；每篇承担不同心智入口，避免把外部合同、内部实现和生产准入证据混在一起。
 
-- [架构总览](架构总览.md)：服务定位、边界、API、Job 生命周期、异步执行、Callback、恢复机制、数据模型和扩展边界；当前仍包含内置 `novel_localization` 示例细节，后续应继续抽离通用机制与示例业务。
-- [生产就绪性评审](production-readiness-review.md)：基于当前代码区分已具备能力、生产前置条件和仍缺失的验证证据。
+## 文档心智模型
+
+| 文档 | 负责回答 | 不负责 |
+|---|---|---|
+| [架构总览](架构总览.md) | 当前代码事实：服务边界、运行组件、Job 生命周期、Celery canvas、恢复机制、数据模型。 | 具体调用方协议细节、生产准入结论。 |
+| [通用 AI Job 接入规范](通用_AI_Job_接入规范.md) | 外部合同：调用方如何创建、查询、接收 Callback；新增 `job_type` 必须遵守什么。 | 内部代码结构、部署调参。 |
+| [生产就绪性评审](production-readiness-review.md) | 生产判断：当前骨架能力、上线前置条件、调参方式和剩余风险。 | API 合同细节、某个业务能力的领域规则。 |
 
 ## 阅读顺序
 
 第一次理解服务时，先读 [架构总览](架构总览.md)。
 
-需要评估上线风险、做上线决策或准备发布准入材料时，再读 [生产就绪性评审](production-readiness-review.md)。
+接入新调用方或新增能力时，读 [通用 AI Job 接入规范](通用_AI_Job_接入规范.md)。
+
+需要评估上线风险、做上线决策或准备发布准入材料时，读 [生产就绪性评审](production-readiness-review.md)。
 
 ## 维护规则
 
 - 架构文档只记录当前代码和稳定设计，不记录临时排查过程。
-- API、Job 状态机、Prompt 契约、Callback、数据库字段或部署模式变化时，应同步更新 [架构总览](架构总览.md)。
+- `workflow_registry`、Job 状态机、Celery canvas、recovery、数据库字段或内部执行路径变化时，应同步更新 [架构总览](架构总览.md)。
+- API 合同、错误码、Callback envelope、`job_type` 接入边界变化时，应同步更新 [通用 AI Job 接入规范](通用_AI_Job_接入规范.md)。
 - 生产准入结论、目标环境证据缺口、风险清单和生产前置条件放在 [生产就绪性评审](production-readiness-review.md)，不要混入总览文档。
 - 后续如果补齐目标环境 e2e、K8s 接入或压测证据，应同步更新 [生产就绪性评审](production-readiness-review.md)。

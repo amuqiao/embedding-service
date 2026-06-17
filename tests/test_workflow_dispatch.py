@@ -5,7 +5,7 @@ import uuid
 from app.core import workflow_registry
 from app.models.job import AIJob, AIJobWorkItem
 from app.services.job_planner import JobPlan, PlannedWorkItem, build_job_plan
-from app.services.job_workflow import execute_work_item, finalize_job, plan_job
+from app.services.job_workflow import execute_work_item, fail_job, finalize_job, plan_job
 from app.tasks.jobs import _ensure_workflows_registered, fanout_after_mapping_task
 from scripts.verify.e2e_backend_call import Config, api_path
 
@@ -60,7 +60,7 @@ def test_memory_fanout_dispatches_finalize_chord(monkeypatch):
     assert calls["applied"] is True
     assert len(calls["group"]) == 2
     assert calls["body"].task == "jobs.finalize_job"
-    assert calls["body"].args == ("job-1",)
+    assert calls["body"].args == ("job-1", 1)
 
 
 def test_e2e_api_path_uses_configured_prefix(tmp_path):
@@ -118,7 +118,7 @@ async def test_plan_job_reuses_existing_execution_plan(monkeypatch):
     async def fake_mark_running(*_args, **_kwargs):
         return True
 
-    async def fake_list_work_items(_db, _job_id):
+    async def fake_list_work_items(_db, _job_id, **_kwargs):
         return existing_items
 
     async def fail_create_work_item(*_args, **_kwargs):
@@ -189,7 +189,7 @@ async def test_plan_job_allows_custom_plan_without_text_source(monkeypatch):
     async def fake_mark_running(*_args, **_kwargs):
         return True
 
-    async def fake_list_work_items(_db, _job_id):
+    async def fake_list_work_items(_db, _job_id, **_kwargs):
         return []
 
     async def fake_create_work_item(*_args, **_kwargs):
@@ -217,6 +217,103 @@ async def test_plan_job_allows_custom_plan_without_text_source(monkeypatch):
 
     assert planned == plan
     assert item_ids == {"whole:0": created_item.id}
+
+
+@pytest.mark.asyncio
+async def test_plan_job_ignores_old_generation_work_items(monkeypatch):
+    job_id = uuid.uuid4()
+    job = AIJob(
+        id=job_id,
+        job_type="generic.custom",
+        status="running",
+        progress_percent=5,
+        celery_task_id="root-task",
+        execution_generation=2,
+        execution_plan={
+            "execution_mode": "single",
+            "chunk_count": 1,
+            "chunk_registry": [],
+            "work_items": [{"name": "generic.custom.whole", "kind": "whole", "chunk_index": 0}],
+            "execution_generation": 1,
+        },
+    )
+    old_item = AIJobWorkItem(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        execution_generation=1,
+        name="generic.custom.whole",
+        kind="whole",
+        chunk_index=0,
+        status="succeeded",
+    )
+    new_item = AIJobWorkItem(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        execution_generation=2,
+        name="generic.custom.whole",
+        kind="whole",
+        chunk_index=0,
+        status="queued",
+    )
+    plan = JobPlan(
+        execution_mode="single",
+        chunk_count=1,
+        chunk_registry=[{"chunk_index": 1, "input": {"value": 2}}],
+        work_items=[
+            PlannedWorkItem(
+                name="generic.custom.whole",
+                kind="whole",
+                chunk_index=0,
+                input_data={"value": 2},
+            )
+        ],
+    )
+    stored_plan: dict = {}
+
+    class CustomHandler:
+        large_artifact_keys = frozenset()
+
+        def build_execution_plan(self, received_job):
+            assert received_job.execution_generation == 2
+            return plan
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_mark_running(*_args, **_kwargs):
+        return True
+
+    async def fake_list_work_items(_db, _job_id, **_kwargs):
+        return [old_item]
+
+    async def fake_create_work_item(*_args, **kwargs):
+        assert kwargs["execution_generation"] == 2
+        return new_item
+
+    async def fake_set_execution_plan(_db, _job_id, *, execution_plan, **_kwargs):
+        stored_plan.update(execution_plan)
+        job.execution_plan = execution_plan
+
+    async def fake_update_progress(*_args, **_kwargs):
+        pass
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_running", fake_mark_running)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.list_work_items", fake_list_work_items)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.create_work_item", fake_create_work_item)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.set_execution_plan", fake_set_execution_plan)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.update_progress", fake_update_progress)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda job_type: CustomHandler())
+    monkeypatch.setattr(
+        "app.services.job_workflow._load_input_text",
+        lambda _job: (_ for _ in ()).throw(AssertionError("custom plan should not load text")),
+    )
+
+    _job, planned, item_ids = await plan_job(FakeDB(), job_id)
+
+    assert planned == plan
+    assert item_ids == {"whole:0": new_item.id}
+    assert stored_plan["execution_generation"] == 2
 
 
 @pytest.mark.asyncio
@@ -250,7 +347,7 @@ async def test_finalize_waits_for_pending_work_items(monkeypatch):
     async def fake_get_job_or_404(_db, _job_id):
         return job
 
-    async def fake_list_work_items(_db, _job_id):
+    async def fake_list_work_items(_db, _job_id, **_kwargs):
         return [chunk, merge]
 
     async def fake_update_progress(*_args, **_kwargs):
@@ -268,6 +365,123 @@ async def test_finalize_waits_for_pending_work_items(monkeypatch):
 
     assert result["status"] == "waiting"
     assert result["pending_items"] == [str(chunk.id)]
+
+
+@pytest.mark.asyncio
+async def test_finalize_ignores_failed_work_items_from_older_generation(monkeypatch):
+    job_id = uuid.uuid4()
+    job = AIJob(
+        id=job_id,
+        job_type="generic.custom",
+        status="running",
+        progress_percent=80,
+        celery_task_id="root-task",
+        execution_generation=2,
+        execution_plan={"execution_mode": "single", "execution_generation": 2},
+    )
+    old_failed = AIJobWorkItem(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        execution_generation=1,
+        name="whole",
+        kind="whole",
+        chunk_index=0,
+        status="failed",
+        error={"code": "OLD_FAILURE"},
+    )
+    current_whole = AIJobWorkItem(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        execution_generation=2,
+        name="whole",
+        kind="whole",
+        chunk_index=0,
+        status="succeeded",
+        result={"artifacts": [], "signals": {"ok": True}},
+    )
+    delivered: list[str] = []
+
+    class Handler:
+        large_artifact_keys = frozenset()
+
+        def validate_canonical_result(self, result):
+            return result
+
+        def public_result(self, result):
+            return result
+
+        async def run_success_side_effect(self, _job, _canonical_result, _db):
+            return None
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_list_work_items(_db, _job_id, **_kwargs):
+        return [old_failed, current_whole]
+
+    async def fake_mark_work_item_succeeded(_db, _item_id, result):
+        current_whole.result = result
+
+    async def fake_update_progress(*_args, **_kwargs):
+        pass
+
+    async def fake_mark_succeeded(_db, _job_id, *, celery_task_id, result, canonical_result, canonical_result_ref=None):
+        assert celery_task_id == "root-task"
+        assert canonical_result["signals"] == {"ok": True}
+        job.status = "succeeded"
+        job.result = result
+        return True
+
+    async def fake_deliver_callback(_job_id):
+        delivered.append(str(_job_id))
+        return True
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.list_work_items", fake_list_work_items)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_work_item_succeeded", fake_mark_work_item_succeeded)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.update_progress", fake_update_progress)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: Handler())
+    monkeypatch.setattr("app.services.job_workflow._persist_large_artifacts", lambda _job, result: result.model_dump())
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback)
+
+    result = await finalize_job(FakeDB(), job_id)
+
+    assert result == {"job_id": str(job_id), "status": "succeeded"}
+    assert delivered == [str(job_id)]
+
+
+@pytest.mark.asyncio
+async def test_finalize_skips_when_canvas_generation_is_stale(monkeypatch):
+    job_id = uuid.uuid4()
+    job = AIJob(
+        id=job_id,
+        job_type="generic.custom",
+        status="running",
+        progress_percent=80,
+        celery_task_id="new-root-task",
+        execution_generation=2,
+        execution_plan={"execution_mode": "single", "execution_generation": 2},
+    )
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fail_list_work_items(*_args, **_kwargs):
+        raise AssertionError("stale finalize must not inspect current generation work items")
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.list_work_items", fail_list_work_items)
+
+    result = await finalize_job(FakeDB(), job_id, execution_generation=1)
+
+    assert result == {
+        "job_id": str(job_id),
+        "status": "skipped",
+        "reason": "stale_execution_generation",
+        "expected_execution_generation": 1,
+        "current_execution_generation": 2,
+    }
 
 
 @pytest.mark.asyncio
@@ -332,3 +546,94 @@ async def test_execute_work_item_allows_custom_runtime_without_model(monkeypatch
 
     assert result == {"work_item_id": str(item_id), "kind": "whole", "chunk_index": 0}
     assert succeeded["result"] == {"artifacts": [], "signals": {"custom": True}}
+
+
+@pytest.mark.asyncio
+async def test_execute_work_item_skips_stale_generation_item(monkeypatch):
+    job_id = uuid.uuid4()
+    item_id = uuid.uuid4()
+    job = AIJob(
+        id=job_id,
+        job_type="generic.custom",
+        status="running",
+        execution_generation=2,
+        celery_task_id="root-task",
+    )
+    item = AIJobWorkItem(
+        id=item_id,
+        job_id=job_id,
+        execution_generation=1,
+        name="whole",
+        kind="whole",
+        chunk_index=0,
+        status="queued",
+    )
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_get_work_item(_db, _item_id):
+        return item
+
+    async def fail_claim(*_args, **_kwargs):
+        raise AssertionError("stale generation item must not be claimed")
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.get_work_item", fake_get_work_item)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.claim_work_item_for_execution", fail_claim)
+
+    result = await execute_work_item(FakeDB(), job_id=job_id, item_id=item_id, celery_task_id="task-1")
+
+    assert result == {
+        "work_item_id": str(item_id),
+        "kind": "whole",
+        "chunk_index": 0,
+        "status": "skipped",
+        "reason": "stale_execution_generation",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fail_job_ignores_stale_generation_item(monkeypatch):
+    job_id = uuid.uuid4()
+    item_id = uuid.uuid4()
+    job = AIJob(
+        id=job_id,
+        job_type="generic.custom",
+        status="running",
+        execution_generation=2,
+        celery_task_id="root-task",
+    )
+    item = AIJobWorkItem(
+        id=item_id,
+        job_id=job_id,
+        execution_generation=1,
+        name="whole",
+        kind="whole",
+        chunk_index=0,
+        status="running",
+    )
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_get_work_item(_db, _item_id):
+        return item
+
+    async def fail_mark_item(*_args, **_kwargs):
+        raise AssertionError("stale generation item must not be marked failed")
+
+    async def fail_mark_job(*_args, **_kwargs):
+        raise AssertionError("stale generation item failure must not fail current job")
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.get_work_item", fake_get_work_item)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_work_item_failed", fail_mark_item)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_failed", fail_mark_job)
+
+    await fail_job(
+        FakeDB(),
+        job_id=job_id,
+        item_id=item_id,
+        error={"code": "WORK_ITEM_FAILED", "message": "old generation", "details": {}},
+    )
