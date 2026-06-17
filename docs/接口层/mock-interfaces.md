@@ -102,7 +102,7 @@ CPP mock 在 `status=succeeded` 时返回 `result=null`，表示 AI 已完成打
 
 ## RS Mock Job
 
-RS mock 用于模拟 RS 调 AI 的多标签翻译 Job。
+RS mock 用于模拟 RS 调 AI 的标签体系翻译 Job。
 
 ```http
 POST /api/v1/mock/rs/ai-jobs/jobs
@@ -113,35 +113,41 @@ GET  /api/v1/mock/rs/ai-jobs/jobs/{job_id}
 
 | job_type | 用途 |
 | --- | --- |
-| `short_drama.tag_labels.translation` | 多标签翻译 mock。 |
+| `short_drama.tag_schema.translation` | 标签体系翻译 mock。 |
 
-创建请求的 `job_params` 必须是对象，不再接受历史列表型 `job_params`。多标签列表放在 `job_params.labels`，每个标签项保持独立完整结构，包含 `label_id`、`source_language`、`target_languages`、`display_name` 和 `definition`。
+创建请求的 `job_params` 必须是对象，不接受历史列表型 `job_params`。字段与正式 [AI标签体系翻译接口.md](AI标签体系翻译接口.md) 一致：`source_language`、`target_languages`、`source_schema` 和 `source_mutual_exclusion_rules`。
 
 ```json
 {
-  "client_request_id": "rs:tag-labels:batch:20260617",
-  "job_type": "short_drama.tag_labels.translation",
+  "client_request_id": "rs:tag-schema-default:en,es,pt",
+  "job_type": "short_drama.tag_schema.translation",
   "job_params": {
-    "labels": [
-      {
-        "label_id": "65f0a1b2c3d4e5f6a7b8c901",
-        "source_language": "zh",
-        "target_languages": ["en", "es", "pt"],
-        "display_name": "男频",
-        "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心。"
-      },
-      {
-        "label_id": "65f0a1b2c3d4e5f6a7b8c902",
-        "source_language": "zh",
-        "target_languages": ["en", "es", "ko"],
-        "display_name": "女频",
-        "definition": "核心受众为女性群体，叙事视角、人物塑造、情感逻辑以女性主角为核心。"
-      }
-    ]
+    "source_language": "zh",
+    "target_languages": ["en", "es", "pt"],
+    "source_schema": {
+      "categories": [
+        {
+          "category_id": "000001",
+          "name": "受众",
+          "required": true,
+          "min_items": 1,
+          "max_items": 1,
+          "labels": [
+            {
+              "label_id": "65f0a1b2c3d4e5f6a7b8c901",
+              "label_key": "male_oriented",
+              "name": "男频",
+              "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心。"
+            }
+          ]
+        }
+      ]
+    },
+    "source_mutual_exclusion_rules": []
   },
   "metadata": {
     "source_service": "rs",
-    "business_scene": "tag_labels_translation"
+    "business_scene": "tag_schema_translation"
   }
 }
 ```
@@ -151,65 +157,56 @@ GET  /api/v1/mock/rs/ai-jobs/jobs/{job_id}
 ```json
 {
   "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
-  "client_request_id": "rs:tag-labels:batch:20260617",
-  "job_type": "short_drama.tag_labels.translation",
+  "client_request_id": "rs:tag-schema-default:en,es,pt",
+  "job_type": "short_drama.tag_schema.translation",
   "status": "queued",
   "status_url": "/api/v1/mock/rs/ai-jobs/jobs/0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
   "created_at": "2026-06-15T10:00:00Z"
 }
 ```
 
-RS mock 在 `status=succeeded` 时返回翻译结果。结果兼容通用 `JobResult`：业务数组放在 `result.artifacts[0].content`。
+RS mock 在 `status=succeeded` 时返回翻译结果。结果兼容通用 `JobResult`，成功终态包含 `translated_schemas` 和 `mutual_exclusion_rules` 两个 artifact。
 
 ```json
 {
   "result": {
     "artifacts": [
       {
-        "key": "translated_labels",
+        "key": "translated_schemas",
         "type": "json",
-        "label": "翻译后的标签",
+        "label": "翻译后的标签结构体",
         "content": [
           {
-            "label_id": "65f0a1b2c3d4e5f6a7b8c901",
-            "langs": {
-              "en": {
-                "name": "Male-oriented",
-                "definition": "The story is primarily written for male audiences, with the narrative viewpoint and character arcs centered on a male lead."
-              },
-              "es": {
-                "name": "Orientado a hombres",
-                "definition": "La historia se dirige principalmente a una audiencia masculina, con el punto de vista narrativo y los arcos de personajes centrados en un protagonista masculino."
-              },
-              "pt": {
-                "name": "Voltado ao publico masculino",
-                "definition": "A historia e voltada principalmente ao publico masculino, com o ponto de vista narrativo e os arcos dos personagens centrados em um protagonista homem."
+            "categories": [
+              {
+                "category_id": "000001",
+                "name": "Audience",
+                "required": true,
+                "min_items": 1,
+                "max_items": 1,
+                "labels": [
+                  {
+                    "label_id": "65f0a1b2c3d4e5f6a7b8c901",
+                    "label_key": "male_oriented",
+                    "name": "Male-oriented",
+                    "definition": "The story is primarily written for male audiences, with the narrative viewpoint and character arcs centered on a male lead."
+                  }
+                ]
               }
-            }
-          },
-          {
-            "label_id": "65f0a1b2c3d4e5f6a7b8c902",
-            "langs": {
-              "en": {
-                "name": "Female-oriented",
-                "definition": "The story is primarily written for female audiences, with the narrative viewpoint, characterization, and emotional logic centered on a female lead."
-              },
-              "es": {
-                "name": "Orientado a mujeres",
-                "definition": "La historia se dirige principalmente a una audiencia femenina, con el punto de vista, la caracterización y la lógica emocional centrados en una protagonista femenina."
-              },
-              "ko": {
-                "name": "여성향",
-                "definition": "핵심 독자는 여성이며, 서사 시점과 인물 설정, 감정선이 여성 주인공을 중심으로 전개됩니다."
-              }
-            }
+            ]
           }
         ]
+      },
+      {
+        "key": "mutual_exclusion_rules",
+        "type": "json",
+        "label": "互斥标签结构体",
+        "content": []
       }
     ],
     "signals": {
-      "source_schema_hash": "sha256:387d2f3bb1b89bccf00bb9939d81c3b3a41054c03af607a2a09da683f8dc576d",
-      "translated_schemas_hash": "sha256:12f54f8e0d5055cf0b3bbe0780667c3b952aa9c175d14fdcac8c21f91821f9ac"
+      "source_schema_hash": "sha256:source-schema",
+      "translated_schemas_hash": "sha256:translated-schemas"
     }
   }
 }
@@ -230,7 +227,7 @@ GET /api/v1/mock/cpp/ai-jobs/jobs/{job_id}?status=running
 GET /api/v1/mock/rs/ai-jobs/jobs/{job_id}?status=failed
 ```
 
-CPP mock `failed` 时返回 `MODEL_OUTPUT_INVALID`，RS mock `failed` 时返回 `INVALID_LABEL_TRANSLATION_INPUT`；不支持的 `job_type` 返回 `INVALID_JOB_TYPE`。
+CPP mock `failed` 时返回 `MODEL_OUTPUT_INVALID`，RS mock `failed` 时返回 `TRANSLATION_FAILED`；不支持的 `job_type` 返回 `INVALID_JOB_TYPE`。
 
 ## 不再暴露的内部 Fixture
 

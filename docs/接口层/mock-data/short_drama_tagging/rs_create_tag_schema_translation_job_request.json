@@ -1,0 +1,38 @@
+{
+  "client_request_id": "rs:tag-schema-default:en,es,pt",
+  "job_type": "short_drama.tag_schema.translation",
+  "job_params": {
+    "source_language": "zh",
+    "target_languages": ["en", "es", "pt"],
+    "source_schema": {
+      "categories": [
+        {
+          "category_id": "000001",
+          "name": "受众",
+          "required": true,
+          "min_items": 1,
+          "max_items": 1,
+          "labels": [
+            {
+              "label_id": "65f0a1b2c3d4e5f6a7b8c901",
+              "label_key": "male_oriented",
+              "name": "男频",
+              "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心。"
+            },
+            {
+              "label_id": "65f0a1b2c3d4e5f6a7b8c902",
+              "label_key": "female_oriented",
+              "name": "女频",
+              "definition": "核心受众为女性群体，叙事视角、人物塑造、情感逻辑以女性主角为核心。"
+            }
+          ]
+        }
+      ]
+    },
+    "source_mutual_exclusion_rules": []
+  },
+  "metadata": {
+    "source_service": "rs",
+    "business_scene": "tag_schema_translation"
+  }
+}
