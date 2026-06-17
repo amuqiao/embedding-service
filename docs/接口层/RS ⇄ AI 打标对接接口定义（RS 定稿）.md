@@ -30,7 +30,6 @@ AI 打标前拉取当前**启用**的标签体系与互斥规则。
 
 ```json
 {
-  "version": "v1.1",
   "generated_at": 1700000000,
   "categories": [
     {
