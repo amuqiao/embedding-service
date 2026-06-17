@@ -589,11 +589,11 @@ def _mock_error(job_type: str, job_params: MockJobParams) -> dict[str, Any]:
         }
     object_job_params = _object_job_params(job_params)
     return {
-        "code": "RS_RESULT_WRITE_FAILED",
-        "message": "AI generated tagging result, but RS rejected the write request.",
+        "code": "MODEL_OUTPUT_INVALID",
+        "message": "AI generated tagging result is not valid for the RS tag schema.",
         "details": {
             "t_book_id": object_job_params.get("t_book_id", MOCK_TAGGING_RESULT["t_book_id"]),
-            "rs_error_code": "INVALID_TAG_RESULT",
+            "reason": "selected tag label name is not in schema",
             "rejected_category_id": "000006",
         },
     }

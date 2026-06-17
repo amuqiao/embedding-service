@@ -65,6 +65,14 @@ class WorkflowHandler:
         """
         return None
 
+    async def after_success_callback(
+        self,
+        job: AIJob,
+        canonical_result: dict[str, Any],
+        db: AsyncSession,
+    ) -> None:
+        """Run workflow-specific side effects after the succeeded callback step."""
+
     def validate_extra(self, extra: dict[str, Any] | None) -> None:
         """Validate legacy job-type-specific extra params. Prefer normalize_job_params()."""
 

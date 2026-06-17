@@ -1,0 +1,34 @@
+{
+  "status": "success",
+  "msg": null,
+  "t_book_id": "300000000300000279",
+  "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
+  "tag_schema_version": "v1.1",
+  "tags": {
+    "000001": [
+      {
+        "label_id": "65f0a1b2c3d4e5f6a7b8c902",
+        "name": "女频",
+        "weight": 1,
+        "reason": "剧情以女主视角展开。",
+        "definition": "核心受众为女性群体。"
+      }
+    ],
+    "000006": [
+      {
+        "label_id": "65f0a1b2c3d4e5f6a7b8ca01",
+        "name": "虐",
+        "weight": 0.9,
+        "reason": "女主遭受冤屈羞辱。",
+        "definition": "刻意营造悲伤、压抑的情绪。"
+      },
+      {
+        "label_id": "65f0a1b2c3d4e5f6a7b8ca02",
+        "name": "爽",
+        "weight": 0.8,
+        "reason": "最终获证据平反并反击成功。",
+        "definition": "畅快、解气的愉悦感。"
+      }
+    ]
+  }
+}

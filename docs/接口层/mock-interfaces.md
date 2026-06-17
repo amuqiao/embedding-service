@@ -8,6 +8,8 @@
 
 Mock 接口固定使用 `v1`，不开放 `api_version` 路径参数。
 
+Mock 接口由 `ENABLE_MOCK_INTERFACES` 控制。本地联调默认开启；上线后应设置为 `false`，避免暴露 mock tool。
+
 Mock 接口按调用方拆成两组 Job 接口：
 
 ```http
@@ -228,7 +230,7 @@ GET /api/v1/mock/cpp/ai-jobs/jobs/{job_id}?status=running
 GET /api/v1/mock/rs/ai-jobs/jobs/{job_id}?status=failed
 ```
 
-CPP mock `failed` 时返回 `RS_RESULT_WRITE_FAILED`，RS mock `failed` 时返回 `INVALID_LABEL_TRANSLATION_INPUT`；不支持的 `job_type` 返回 `INVALID_JOB_TYPE`。
+CPP mock `failed` 时返回 `MODEL_OUTPUT_INVALID`，RS mock `failed` 时返回 `INVALID_LABEL_TRANSLATION_INPUT`；不支持的 `job_type` 返回 `INVALID_JOB_TYPE`。
 
 ## 不再暴露的内部 Fixture
 

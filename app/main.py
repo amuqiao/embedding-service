@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api.routes import health, jobs, meta, mock_interfaces
+from app.api.routes import health, jobs, meta
 from app.core.exceptions import AppError
 from app.core.logging import configure_logging, set_request_id
 from app.core.config import settings
@@ -95,4 +95,7 @@ API_PREFIX = settings.SERVICE_API_PREFIX
 app.include_router(health.router)
 app.include_router(meta.router, prefix=API_PREFIX)
 app.include_router(jobs.router, prefix=API_PREFIX)
-app.include_router(mock_interfaces.router)
+if settings.ENABLE_MOCK_INTERFACES:
+    from app.api.routes import mock_interfaces
+
+    app.include_router(mock_interfaces.router)

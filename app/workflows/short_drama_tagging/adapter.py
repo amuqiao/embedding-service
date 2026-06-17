@@ -4,6 +4,8 @@ from typing import Any
 
 from app.core.exceptions import AppError
 
+RS_AI_TAG_RESULTS_ARTIFACT_KEY = "rs_ai_tag_results_request"
+
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
@@ -25,6 +27,13 @@ def _schema_indexes(tag_schema: dict[str, Any]) -> tuple[dict[str, Any], dict[st
         for category_id, category in categories.items()
     }
     return categories, labels_by_name_by_category
+
+
+def _tag_schema_version(tag_schema: dict[str, Any]) -> str:
+    version = tag_schema.get("version")
+    if not isinstance(version, str) or not version.strip():
+        raise AppError("TAG_SCHEMA_INVALID", "tag schema missing version", status_code=502)
+    return version
 
 
 def _selected_label_name(item: dict[str, Any]) -> str:
@@ -212,3 +221,47 @@ def build_rs_tagging_payload(
         },
         tagging_detail,
     )
+
+
+def build_rs_ai_tag_results_payload(
+    *,
+    t_book_id: str,
+    job_id: str,
+    tag_schema: dict[str, Any],
+    mutual_exclusion_rules: list[dict[str, Any]],
+    final_result: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    base_payload, tagging_detail = build_rs_tagging_payload(
+        t_book_id=t_book_id,
+        job_id=job_id,
+        tag_schema=tag_schema,
+        mutual_exclusion_rules=mutual_exclusion_rules,
+        final_result=final_result,
+    )
+    return (
+        {
+            "status": "success",
+            "msg": None,
+            "t_book_id": base_payload["t_book_id"],
+            "job_id": base_payload["job_id"],
+            "tag_schema_version": _tag_schema_version(tag_schema),
+            "tags": base_payload["tags"],
+        },
+        tagging_detail,
+    )
+
+
+def rs_ai_tag_results_payload_from_canonical_result(canonical_result: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(canonical_result, dict):
+        raise AppError("RS_RESULT_WRITE_FAILED", "canonical result must be an object", status_code=500)
+    artifacts = canonical_result.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise AppError("RS_RESULT_WRITE_FAILED", "canonical result missing artifacts", status_code=500)
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("key") != RS_AI_TAG_RESULTS_ARTIFACT_KEY:
+            continue
+        payload = artifact.get("content")
+        if not isinstance(payload, dict):
+            raise AppError("RS_RESULT_WRITE_FAILED", "RS ai-tag-results artifact content must be an object", status_code=500)
+        return payload
+    raise AppError("RS_RESULT_WRITE_FAILED", "canonical result missing RS ai-tag-results payload", status_code=500)

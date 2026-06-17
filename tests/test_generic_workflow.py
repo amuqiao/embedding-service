@@ -177,3 +177,75 @@ async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch
     assert job.result["artifacts"][0]["label"] == "Echo"
     assert job.result["signals"] == {"echoed": True}
     assert job.canonical_result == job.result
+
+
+@pytest.mark.asyncio
+async def test_finalize_runs_handler_hook_after_success_callback(monkeypatch):
+    job_id = uuid.uuid4()
+    job = AIJob(
+        id=job_id,
+        job_type="generic.echo",
+        status="running",
+        celery_task_id="root-task",
+        execution_plan={"execution_mode": "single"},
+    )
+    whole = AIJobWorkItem(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        name="generic.echo.whole",
+        kind="whole",
+        chunk_index=0,
+        status="succeeded",
+        result={
+            "artifacts": [{"key": "echo", "type": "json", "label": "Echo", "content": {"ok": True}}],
+            "signals": {"echoed": True},
+        },
+    )
+    calls: list[str] = []
+
+    class Handler:
+        expose_result_in_job_view = True
+        large_artifact_keys = frozenset()
+
+        def public_result(self, canonical_result):
+            return canonical_result
+
+        async def after_success_callback(self, received_job, canonical_result, _db):
+            assert received_job.id == job_id
+            assert canonical_result["signals"] == {"echoed": True}
+            calls.append("after_success_callback")
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_list_work_items(_db, _job_id):
+        return [whole]
+
+    async def fake_mark_work_item_succeeded(_db, _item_id, result):
+        whole.result = result
+
+    async def fake_update_progress(*_args, **_kwargs):
+        pass
+
+    async def fake_mark_succeeded(_db, _job_id, *, celery_task_id, result, canonical_result, canonical_result_ref=None):
+        job.status = "succeeded"
+        job.result = result
+        job.canonical_result = canonical_result
+        return True
+
+    async def fake_deliver_callback(_job_id):
+        calls.append("callback")
+        return True
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.list_work_items", fake_list_work_items)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_work_item_succeeded", fake_mark_work_item_succeeded)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.update_progress", fake_update_progress)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: Handler())
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback)
+
+    finalized = await finalize_job(FakeDB(), job_id)
+
+    assert finalized == {"job_id": str(job_id), "status": "succeeded"}
+    assert calls == ["callback", "after_success_callback"]

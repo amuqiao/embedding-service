@@ -14,16 +14,13 @@ flowchart TD
   RESULT{"AI 结果"}
   PERSIST["AI：持久化 canonical result\nfinal_tags 使用 label_id"]
 
-  WRITE_RS["AI -> RS：写入 ai_auto 打标结果\n独立发送，payload 来自 canonical result"]
   CALLBACK_OK["AI -> CPP callback\n发送成功 JobView"]
+  WRITE_RS["AI -> RS：写入 ai_auto 打标结果\n独立发送，payload 来自 canonical result"]
   CALLBACK_FAIL["AI -> CPP callback\n发送失败 JobView"]
-  RS_FAIL["AI：RS 写入失败\njob.failed + callback CPP"]
 
   CPP_READY --> CREATE --> JOB
   JOB --> RS_SCHEMA --> RUN --> RESULT
-  RESULT -->|"成功"| PERSIST --> WRITE_RS
-  WRITE_RS -->|"RS 接受写入"| CALLBACK_OK
-  WRITE_RS -->|"RS 写入失败"| RS_FAIL
+  RESULT -->|"成功"| PERSIST --> CALLBACK_OK --> WRITE_RS
   RESULT -->|"模型 / 素材 / 标签校验失败"| CALLBACK_FAIL
 ```
 

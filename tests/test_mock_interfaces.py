@@ -279,11 +279,11 @@ def test_cpp_mock_failed_status_returns_contract_error_details(monkeypatch):
     assert body["status"] == "failed"
     assert body["progress"]["message"] == "mock failure generated for integration testing"
     assert body["error"] == {
-        "code": "RS_RESULT_WRITE_FAILED",
-        "message": "AI generated tagging result, but RS rejected the write request.",
+        "code": "MODEL_OUTPUT_INVALID",
+        "message": "AI generated tagging result is not valid for the RS tag schema.",
         "details": {
             "t_book_id": "204200150000004872",
-            "rs_error_code": "INVALID_TAG_RESULT",
+            "reason": "selected tag label name is not in schema",
             "rejected_category_id": "000006",
         },
     }

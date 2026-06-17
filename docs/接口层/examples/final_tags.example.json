@@ -1,6 +1,9 @@
 {
+  "status": "success",
+  "msg": null,
   "t_book_id": "300000000300000279",
   "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
+  "tag_schema_version": "v1.1",
   "tags": {
     "000001": [
       {

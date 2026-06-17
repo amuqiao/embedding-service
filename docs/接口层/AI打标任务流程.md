@@ -17,8 +17,8 @@ CPP 准备素材
   -> AI 从 RS 获取默认标签体系响应
   -> AI 执行剧情理解和标签判断
   -> AI 持久化 canonical result
-  -> AI 写入 RS
   -> AI callback CPP
+  -> AI 写入 RS
 ```
 
 CPP 只传作品素材资源和 callback 地址。标签结构体和互斥标签结构体不由 CPP 提供，而是由 AI 在任务执行时向 RS 获取默认数据。
@@ -34,7 +34,7 @@ CPP 发起打标前至少确认：
 | 视频资源可追溯 | 视频可作为扩展素材传入；当前 POC 主要依赖字幕。 |
 | callback 地址可用 | 如 CPP 需要终态通知，则在创建 job 时传 `callback.url`。 |
 
-CPP 不需要传 `tag_schema_version`。本流程不存在三方传递标签版本。
+CPP 不需要传 `tag_schema_version`。AI 写 RS 时从本次 RS 标签体系响应中派生 `tag_schema_version`。
 
 ## 任务类型
 
@@ -79,15 +79,15 @@ RS 默认标签体系响应
 AI 生成并持久化 canonical result 后，在同一终态阶段执行两个独立发送动作：
 
 ```text
-AI -> RS 写入打标结果
 AI -> CPP callback
+AI -> RS 写入打标结果
 ```
 
 两者不能互相中转。CPP callback 使用 CPP 创建 job 时传入的 `callback.url`；RS 写入使用 AI 服务内部配置的 RS 地址。
 
-为了避免 CPP 与 RS 结果分叉，AI 只有在 RS 接受写入后才把 job 标记为 `succeeded` 并发送成功 callback。若 RS 写入失败，job 进入 `failed`，错误码为 `RS_RESULT_WRITE_FAILED`，并 callback CPP 失败终态。
+当前顺序是：AI 先把 job 标记为 `succeeded` 并向 CPP callback 终态，再从同一份 canonical result 派生兼容格式 payload 写入 RS。RS 写入 payload 由专用 adapter 拼接，不把 `status/msg/tag_schema_version` 等兼容字段混入模型输出流程。
 
-当模型生成的结果可写入 RS，但存在缺失分类、低于数量约束等 `partial_success` 问题时，AI 仍写入 RS，Job 仍进入 `succeeded`。`partial_success` 的 `success=false` 信号和原因保存在 AI 内部 canonical result / RS 写入明细中，CPP callback 仍只携带 `result=null` 的终态 `JobView`。
+当模型生成的结果可写入 RS，但存在缺失分类、低于数量约束等 `partial_success` 问题时，AI 仍进入 `succeeded` 并写入 RS。`partial_success` 的 `success=false` 信号和原因保存在 AI 内部 canonical result / RS 写入明细中，CPP callback 仍只携带 `result=null` 的终态 `JobView`。
 
 终态动作必须满足：
 
@@ -110,16 +110,13 @@ flowchart TD
   RUN["AI：剧情理解 + 标签判断 + 结果校验\n基于 label_id 输出结果"]
   RESULT{"AI 结果"}
   PERSIST["AI：持久化 canonical result"]
-  WRITE_RS["AI -> RS：写入 ai_auto 打标结果\npayload 来自 canonical result"]
   CALLBACK["AI -> CPP callback\n发送终态 JobView"]
-  RS_FAIL["AI：RS 写入失败\njob.failed + callback CPP"]
+  WRITE_RS["AI -> RS：写入 ai_auto 打标结果\npayload 来自 canonical result"]
   FAIL_CB["AI -> CPP callback\n发送失败终态"]
 
   CPP_READY --> CREATE --> JOB --> RS_SCHEMA --> RUN --> RESULT
   RESULT -->|"成功"| PERSIST
-  PERSIST --> WRITE_RS
-  WRITE_RS -->|"写入成功"| CALLBACK
-  WRITE_RS -->|"写入失败"| RS_FAIL
+  PERSIST --> CALLBACK --> WRITE_RS
   RESULT -->|"失败 / 超时"| FAIL_CB
 ```
 

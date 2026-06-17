@@ -11,7 +11,11 @@ from app.integrations.storage import sha256_digest, storage
 from app.schemas.jobs import JobResult
 from app.services.job_planner import JobPlan, PlannedWorkItem
 from app.services.job_runtime import job_params_from_job, model_id_from_job, payload_hash, work_item_payload
-from app.workflows.short_drama_tagging.adapter import build_rs_tagging_payload
+from app.workflows.short_drama_tagging.adapter import (
+    RS_AI_TAG_RESULTS_ARTIFACT_KEY,
+    build_rs_ai_tag_results_payload,
+    rs_ai_tag_results_payload_from_canonical_result,
+)
 from app.workflows.short_drama_tagging.prompts import parse_model_json, stage_messages
 from app.workflows.short_drama_tagging.rs_client import (
     assert_schema_fixture_available,
@@ -139,7 +143,7 @@ class ShortDramaTaggingHandler(WorkflowHandler):
             parsed = parse_model_json(result.text, stage)
             artifacts[output_key] = parsed
 
-        rs_payload, tagging_detail = build_rs_tagging_payload(
+        rs_payload, tagging_detail = build_rs_ai_tag_results_payload(
             t_book_id=params["t_book_id"],
             job_id=str(job.id),
             tag_schema=tag_schema,
@@ -147,18 +151,16 @@ class ShortDramaTaggingHandler(WorkflowHandler):
             final_result=artifacts["final_result"],
         )
         result_status = tagging_detail["result_status"]
-        await JobRepo.update_progress(db, job.id, progress_percent=85, progress_text="正在写入 RS 打标结果")
+        await JobRepo.update_progress(db, job.id, progress_percent=85, progress_text="正在生成 RS 兼容打标结果")
         await db.commit()
-        rs_response = await get_tagging_result_writer().write(rs_payload)
 
         success = result_status == "success"
         return JobResult(
             artifacts=[
-                {"key": "final_tags", "type": "json", "label": "RS 打标写入 payload", "content": rs_payload},
+                {"key": RS_AI_TAG_RESULTS_ARTIFACT_KEY, "type": "json", "label": "RS ai-tag-results 请求 payload", "content": rs_payload},
                 {"key": "story_overview", "type": "json", "label": "剧情概览", "content": artifacts["story_overview_result"]},
                 {"key": "tagging_detail", "type": "json", "label": "打标明细", "content": tagging_detail},
                 {"key": "rs_default_tag_bundle", "type": "json", "label": "RS 标签体系快照", "content": rs_default_tag_bundle},
-                {"key": "rs_write_response", "type": "json", "label": "RS 写入响应", "content": rs_response},
                 {"key": "prompts", "type": "json", "label": "模型 Prompt", "content": rendered_prompts},
             ],
             signals={
@@ -175,9 +177,18 @@ class ShortDramaTaggingHandler(WorkflowHandler):
                 "subtitle_language": language,
                 "requested_schema_language": language,
                 "source_schema_hash": payload_hash(tag_schema),
-                "rs_write_accepted": True,
+                "rs_write_after_callback": True,
             },
         ).model_dump()
+
+    async def after_success_callback(
+        self,
+        job: AIJob,
+        canonical_result: dict[str, Any],
+        db: AsyncSession,
+    ) -> None:
+        rs_payload = rs_ai_tag_results_payload_from_canonical_result(canonical_result)
+        await get_tagging_result_writer().write(rs_payload)
 
     def parse_output(self, text: str) -> JobResult:
         raise NotImplementedError("short drama tagging uses execute_standard_item")

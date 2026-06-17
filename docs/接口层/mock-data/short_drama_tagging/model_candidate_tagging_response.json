@@ -1,0 +1,20 @@
+{
+  "id": "mock-chatcmpl-candidate-tagging",
+  "object": "chat.completion",
+  "model": "gpt-4.1",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"t_book_id\":\"300000000300000279\",\"category_decisions\":[],\"raw_candidates\":[],\"uncertainties\":[]}"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 90,
+    "total_tokens": 210
+  }
+}

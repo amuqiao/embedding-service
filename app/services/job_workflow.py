@@ -230,6 +230,7 @@ async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
     await db.refresh(job)
     from app.tasks.jobs import deliver_callback_for_job
     await deliver_callback_for_job(job_id)
+    await handler.after_success_callback(job, canonical_result, db)
     return {"job_id": str(job_id), "status": "succeeded"}
 
 

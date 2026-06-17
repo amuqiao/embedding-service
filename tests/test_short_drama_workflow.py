@@ -9,7 +9,12 @@ from app.core.exceptions import AppError
 from app.models.job import AIJob, AIJobWorkItem
 from app.schemas.jobs import CreateJobRequest
 from app.services.jobs import _validate_create_request
-from app.workflows.short_drama_tagging.adapter import build_rs_tagging_payload
+from app.workflows.short_drama_tagging.adapter import (
+    RS_AI_TAG_RESULTS_ARTIFACT_KEY,
+    build_rs_ai_tag_results_payload,
+    build_rs_tagging_payload,
+    rs_ai_tag_results_payload_from_canonical_result,
+)
 from app.workflows.short_drama_tagging.handler import InitialShortDramaTaggingHandler
 from app.workflows.short_drama_tagging.rs_client import (
     FixtureTagSchemaProvider,
@@ -147,6 +152,29 @@ def test_rs_payload_adapter_uses_schema_text_and_keeps_partial_success():
     assert detail["validation_issues"][0]["issue"] == "missing_required_category"
 
 
+def test_rs_ai_tag_results_adapter_builds_compatibility_payload():
+    bundle = normalize_tag_schema_response(fixture_schema())
+    payload, detail = build_rs_ai_tag_results_payload(
+        t_book_id="300000000300000279",
+        job_id="0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
+        tag_schema=bundle["tag_schema_snapshot"],
+        mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
+        final_result={
+            "selected_tags": {
+                "000001": [{"标签名": "女频", "权重": 1, "打标原因": "剧情以女主视角展开。"}],
+                "000006": [{"标签名": "虐", "权重": 0.9, "打标原因": "女主遭受冤屈羞辱。"}],
+            },
+            "tagging_detail": {"notes": []},
+        },
+    )
+
+    assert payload["status"] == "success"
+    assert payload["msg"] is None
+    assert payload["tag_schema_version"] == "v1.1"
+    assert payload["tags"]["000001"][0]["label_id"] == "lbl-audience-female"
+    assert detail["result_status"] == "success"
+
+
 def test_rs_payload_adapter_rejects_mutual_exclusion_conflicts():
     schema = fixture_schema()
     schema["categories"].append(
@@ -226,14 +254,13 @@ def test_short_drama_create_validation_checks_fixture_language_before_queue(monk
 
 
 @pytest.mark.asyncio
-async def test_short_drama_handler_writes_rs_and_returns_false_success_signal(monkeypatch):
+async def test_short_drama_handler_builds_rs_payload_without_writing(monkeypatch):
     handler = InitialShortDramaTaggingHandler()
     job_id = uuid.uuid4()
     item_id = uuid.uuid4()
     job = AIJob(id=job_id, job_type="short_drama.tagging.initial")
     item = AIJobWorkItem(id=item_id, job_id=job_id, name="whole", kind="whole", chunk_index=0)
     bundle = normalize_tag_schema_response(fixture_schema())
-    written = {}
     responses = iter(
         [
             {"t_book_id": "300000000300000279", "analysis_status": "ok", "characters": [], "world_setting": {}, "plot_timeline": [], "main_conflicts": [], "uncertainties": []},
@@ -260,8 +287,7 @@ async def test_short_drama_handler_writes_rs_and_returns_false_success_signal(mo
 
     class Writer:
         async def write(self, payload):
-            written["payload"] = payload
-            return {"code": 0, "msg": "ok", "data": {"saved": True}}
+            raise AssertionError("RS write must run after succeeded callback, not during work item execution")
 
     async def fake_generate_text(model_id, messages):
         return SimpleNamespace(text=json.dumps(next(responses), ensure_ascii=False))
@@ -278,11 +304,46 @@ async def test_short_drama_handler_writes_rs_and_returns_false_success_signal(mo
 
     result = await handler.execute_standard_item(item, job, FakeDB())
 
-    assert written["payload"]["job_id"] == str(job_id)
-    assert written["payload"]["tags"]["000006"] == []
+    rs_payload = rs_ai_tag_results_payload_from_canonical_result(result)
+    assert rs_payload["job_id"] == str(job_id)
+    assert rs_payload["tag_schema_version"] == "v1.1"
+    assert rs_payload["tags"]["000006"] == []
     assert result["signals"]["success"] is False
     assert result["signals"]["result_status"] == "partial_success"
-    assert result["signals"]["rs_write_accepted"] is True
+    assert result["signals"]["rs_write_after_callback"] is True
+
+
+@pytest.mark.asyncio
+async def test_short_drama_after_success_callback_writes_rs_payload(monkeypatch):
+    handler = InitialShortDramaTaggingHandler()
+    job_id = uuid.uuid4()
+    job = AIJob(id=job_id, job_type="short_drama.tagging.initial")
+    payload = {
+        "status": "success",
+        "msg": None,
+        "t_book_id": "300000000300000279",
+        "job_id": str(job_id),
+        "tag_schema_version": "v1.1",
+        "tags": {"000001": []},
+    }
+    canonical_result = {
+        "artifacts": [
+            {"key": RS_AI_TAG_RESULTS_ARTIFACT_KEY, "type": "json", "label": "RS", "content": payload}
+        ],
+        "signals": {},
+    }
+    written = {}
+
+    class Writer:
+        async def write(self, rs_payload):
+            written["payload"] = rs_payload
+            return {"code": 0, "msg": "ok", "data": {"saved": True}}
+
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.get_tagging_result_writer", lambda: Writer())
+
+    await handler.after_success_callback(job, canonical_result, FakeDB())
+
+    assert written["payload"] == payload
 
 
 def test_translation_job_params_are_object_and_ordered():

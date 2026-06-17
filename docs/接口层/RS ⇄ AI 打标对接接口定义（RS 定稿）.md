@@ -83,8 +83,11 @@ AI 打标完成后写入 `source=ai_auto` 的结果。
 
 ```json
 {
+  "status": "success",
+  "msg": null,
   "t_book_id": "300000000300000279",
   "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
+  "tag_schema_version": "v1.1",
   "tags": {
     "000001": [
       { "label_id": "65f0a1b2c3d4e5f6a7b8c902", "name": "女频", "weight": 1, "reason": "剧情以女主视角展开。", "definition": "核心受众为女性群体。" }
@@ -101,8 +104,11 @@ AI 打标完成后写入 `source=ai_auto` 的结果。
 
 |字段|层级|必需|说明|
 |---|---|---|---|
+|status|顶层|是|兼容字段，AI 成功生成可写入结果时固定为 `success`。|
+|msg|顶层|否|兼容字段，无额外消息时为 `null`。|
 |t\_book\_id|顶层|是|作品对接键|
 |job\_id|顶层|是|AI 任务 id，RS 幂等键|
+|tag\_schema\_version|顶层|是|本次打标使用的 RS 标签体系版本，由 AI 从 RS 标签体系响应中派生。|
 |tags|顶层|是|打标结果，category\_id 为 key|
 |tags\.\{category\_id\}\[\]\.label\_id|标签|是|标签 id（= ai\_tag `_id`）|
 |tags\.\{category\_id\}\[\]\.name|标签|是|标签名（展示/排查用）|
@@ -116,7 +122,7 @@ AI 打标完成后写入 `source=ai_auto` 的结果。
 
 - 按 `job_id` 幂等：首次新增一条 `ai_tag_result` 流水（原样存 `tags`）并覆盖 `ai_work_tag` 的 ai\_auto 标签；重复 `job_id` 直接返回已有，不重复处理。
 
-- AI 写 RS 不传 `tag_schema_version`；RS 按 `job_id` 和本次 `tags` payload 处理。
+- AI 写 RS 时透传本次使用的 `tag_schema_version`；RS 按 `job_id` 和本次 `tags` payload 处理。
 
 - 无 `result_checksum`、无 initial/incremental 区分：每次按全量覆盖 ai\_auto 处理，人工（manual）标签保留。
 

@@ -1,0 +1,11 @@
+{
+  "method": "GET",
+  "path": "/api/v1/tag-schemas/default",
+  "query": {
+    "lang": "zh"
+  },
+  "headers": {
+    "Authorization": "Bearer <SHORT_DRAMA_RS_API_KEY>",
+    "X-AI-Service-Caller-ID": "ai"
+  }
+}

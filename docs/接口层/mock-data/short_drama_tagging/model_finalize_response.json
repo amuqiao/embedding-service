@@ -1,0 +1,20 @@
+{
+  "id": "mock-chatcmpl-finalize",
+  "object": "chat.completion",
+  "model": "gpt-4.1",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"selected_tags\":{\"000001\":[{\"标签名\":\"女频\",\"权重\":1,\"打标原因\":\"剧情以女主视角展开。\"}],\"000006\":[{\"标签名\":\"虐\",\"权重\":0.9,\"打标原因\":\"女主遭受冤屈羞辱。\"},{\"标签名\":\"爽\",\"权重\":0.8,\"打标原因\":\"最终获证据平反并反击成功。\"}]},\"tagging_detail\":{\"rule_applications\":[],\"removed_tags\":[],\"notes\":[\"local mock payload\"]}}"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 140,
+    "completion_tokens": 120,
+    "total_tokens": 260
+  }
+}

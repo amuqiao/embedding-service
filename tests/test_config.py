@@ -102,3 +102,9 @@ def test_short_drama_rs_http_mode_requires_url_and_key():
     ))
 
     assert settings.SHORT_DRAMA_RS_SCHEMA_SOURCE == "http"
+
+
+def test_mock_interfaces_can_be_disabled_by_config():
+    settings = Settings(**_settings_kwargs(ENABLE_MOCK_INTERFACES=False))
+
+    assert settings.ENABLE_MOCK_INTERFACES is False

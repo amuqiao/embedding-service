@@ -10,7 +10,7 @@
 | --- | --- |
 | `tag_schema_snapshot.example.json` | RS 返回给 AI 的默认标签体系响应示例，包含 `categories` 和 `mutual_exclusion_rules`。 |
 | `mutual_exclusion_rules.example.json` | 独立 `MutualExclusionRule[]` 结构示例，用于需要单独传递互斥规则的接口场景。 |
-| `final_tags.example.json` | AI 写入 RS 的 `ai_auto` 打标结果结构示例。 |
+| `final_tags.example.json` | AI 写入 RS 的 `ai_auto` 打标结果兼容请求结构示例。 |
 
 ## 使用约定
 

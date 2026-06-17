@@ -4,7 +4,7 @@
 
 ## 接口边界
 
-CPP 向 AI 提供作品素材资源和 callback 地址。AI 接收任务后，从 RS 获取默认标签体系和互斥规则，异步执行打标，并在终态写入 RS 后 callback CPP。
+CPP 向 AI 提供作品素材资源和 callback 地址。AI 接收任务后，从 RS 获取默认标签体系和互斥规则，异步执行打标，终态 callback CPP 后再写入 RS。
 
 CPP 负责：
 
@@ -61,7 +61,7 @@ metadata
 options
 ```
 
-查询响应统一使用 `JobView`。`JobView.result` 固定为 `null`，成功终态只表示 AI 已完成打标并将结果写入 RS。如果 CPP 在创建请求中传入 `callback.url`，AI 只在 Job 进入 `succeeded` 或 `failed` 后发送 callback，且 callback 请求体中的 `job` 字段与同一 Job 的终态 `JobView` 同形。
+查询响应统一使用 `JobView`。`JobView.result` 固定为 `null`，成功终态只表示 AI 已完成打标并生成可写入 RS 的 canonical result。如果 CPP 在创建请求中传入 `callback.url`，AI 只在 Job 进入 `succeeded` 或 `failed` 后发送 callback，且 callback 请求体中的 `job` 字段与同一 Job 的终态 `JobView` 同形。
 
 ## 创建打标 Job
 
@@ -204,8 +204,8 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | status | 是否终态 | CPP 处理方式 | 语义 |
 | --- | --- | --- | --- |
 | `queued` | 否 | 继续轮询。 | AI 已接单并创建 job，但尚未开始执行。 |
-| `running` | 否 | 继续轮询，可展示 `progress`。 | AI 已开始执行，可能处于素材解析、拉取 RS 标签体系、模型打标、结果校验或写 RS 阶段。即使 AI 已生成结果但 RS 尚未接受写入，对外仍保持 `running`。 |
-| `succeeded` | 是 | 停止轮询，确认任务完成。 | AI 已生成 canonical result，完成结果校验，且 RS 已接受同一份打标结果写入。 |
+| `running` | 否 | 继续轮询，可展示 `progress`。 | AI 已开始执行，可能处于素材解析、拉取 RS 标签体系、模型打标或结果校验阶段。 |
+| `succeeded` | 是 | 停止轮询，确认任务完成。 | AI 已生成 canonical result，完成结果校验，并已进入成功终态；RS 写入由成功 callback 后的后置动作发送。 |
 | `failed` | 是 | 停止轮询，读取 `error`。 | 任务失败。失败原因由 `error.code` 和 `error.message` 表示。 |
 
 状态字段规则：
@@ -252,16 +252,16 @@ GET /api/v1/ai-jobs/jobs/{job_id}
   "status": "failed",
   "progress": {
     "percent": 100,
-    "message": "rs result write failed",
+    "message": "model output invalid",
     "stage": "failed"
   },
   "result": null,
   "error": {
-    "code": "RS_RESULT_WRITE_FAILED",
-    "message": "AI generated tagging result, but RS rejected the write request.",
+    "code": "MODEL_OUTPUT_INVALID",
+    "message": "AI generated tagging result is not valid for the RS tag schema.",
     "details": {
       "t_book_id": "204200150000004872",
-      "rs_error_code": "INVALID_TAG_RESULT"
+      "reason": "selected tag label name is not in schema"
     }
   },
   "metadata": {
@@ -330,16 +330,16 @@ Callback 请求体是事件 envelope，其中 `job` 字段复用同一个 job �
     "status": "failed",
     "progress": {
       "percent": 100,
-      "message": "rs result write failed",
+      "message": "model output invalid",
       "stage": "failed"
     },
     "result": null,
     "error": {
-      "code": "RS_RESULT_WRITE_FAILED",
-      "message": "AI generated tagging result, but RS rejected the write request.",
+      "code": "MODEL_OUTPUT_INVALID",
+      "message": "AI generated tagging result is not valid for the RS tag schema.",
       "details": {
         "t_book_id": "204200150000004872",
-        "rs_error_code": "INVALID_TAG_RESULT"
+        "reason": "selected tag label name is not in schema"
       }
     },
     "metadata": {
@@ -373,7 +373,7 @@ CPP 必须按 `job.job_id + event` 做业务幂等消费，并在处理成功后
 - `JobView.result` 固定为 `null`，不承载短剧打标成功出参。
 - 成功 callback 的 `job` 字段必须与轮询成功终态响应体同形。
 - 失败 callback 的 `job` 字段必须与轮询失败终态响应体同形，并来自同一份错误。
-- AI 写 RS 的 payload 必须来自当前 job 的 canonical result，不允许另行生成一份不同的打标结果。
+- AI 写 RS 的 payload 必须来自当前 job 的 canonical result，并由专用兼容 adapter 拼接，不允许另行生成一份不同的打标结果。
 - CPP callback 表示同一 job 的终态通知，不携带 canonical result。
 
 ## 终态成功定义
@@ -383,12 +383,12 @@ CPP 必须按 `job.job_id + event` 做业务幂等消费，并在处理成功后
 ```text
 AI 已生成 canonical result
 AI 已完成结果校验
-RS 已接受该 job_id 对应的 ai_auto 结果写入
+已调度成功 callback 后的 RS 写入动作
 ```
 
-如果 AI 生成了可写入 RS 的部分结果，但存在缺失分类或低于数量约束等 `partial_success` 问题，Job 仍可进入 `succeeded`，AI 仍写入 RS 并向 CPP 发送成功 callback。该类问题只记录在 AI 内部 canonical result 和写 RS payload 相关明细中，对 CPP 的 `JobView.result` 仍保持 `null`。
+如果 AI 生成了可写入 RS 的部分结果，但存在缺失分类或低于数量约束等 `partial_success` 问题，Job 仍可进入 `succeeded`，AI 仍会在成功 callback 后写入 RS。该类问题只记录在 AI 内部 canonical result 和写 RS payload 相关明细中，对 CPP 的 `JobView.result` 仍保持 `null`。
 
-如果 AI 已生成结果但 RS 写入失败，job 必须进入 `failed`，错误码为 `RS_RESULT_WRITE_FAILED`，并向 CPP callback 失败终态。CPP 不需要额外判断 RS 是否落库。
+如果模型推理、素材校验或标签结构校验失败，job 进入 `failed`，并向 CPP callback 失败终态。RS 写入失败发生在成功 callback 后，由 AI 侧任务日志和告警暴露，CPP 不通过 JobView 消费 RS 落库细节。
 
 ## 幂等
 
@@ -418,6 +418,6 @@ caller_id + client_request_id + 最近 24 小时
 | `INVALID_SUBTITLE_SRT` | 字幕不是合法 SRT。 |
 | `TAG_SCHEMA_UNAVAILABLE` | RS 未返回可用默认标签结构体。 |
 | `TAG_SCHEMA_INVALID` | 标签结构体或互斥结构体不合法。 |
-| `RS_RESULT_WRITE_FAILED` | AI 结果已生成，但写入 RS 失败。 |
+| `RS_RESULT_WRITE_FAILED` | AI 结果已生成，但后置写入 RS 失败。 |
 | `JOB_TIMEOUT` | 任务执行超时。 |
 | `INTERNAL_ERROR` | AI 服务内部错误。 |

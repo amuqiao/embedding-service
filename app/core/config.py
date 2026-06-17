@@ -40,6 +40,7 @@ class Settings(BaseSettings):
 
     # ── Access control ────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: str = "http://localhost:3000"
+    ENABLE_MOCK_INTERFACES: bool = True
 
     # ── Object storage ────────────────────────────────────────────────────────
     STORAGE_BACKEND: str = "local"
