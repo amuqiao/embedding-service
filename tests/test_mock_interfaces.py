@@ -67,12 +67,22 @@ def test_rs_mock_ai_job_create_and_translation_status(monkeypatch):
         json={
             "client_request_id": "rs:tag-schema-default:en",
             "job_type": "short_drama.tag_schema.translation",
-            "job_params": {
-                "source_language": "zh",
-                "target_languages": ["en", "es", "pt"],
-                "source_schema": {"categories": []},
-                "source_mutual_exclusion_rules": [],
-            },
+            "job_params": [
+                {
+                    "label_id": "bihuihuigu76576585",
+                    "source_language": "zh",
+                    "target_languages": ["en", "es", "pt"],
+                    "display_name": "男频",
+                    "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心...",
+                },
+                {
+                    "label_id": "bihuihuigu76576585211212",
+                    "source_language": "zh",
+                    "target_languages": ["en", "es", "kr"],
+                    "display_name": "男频",
+                    "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心...",
+                },
+            ],
             "metadata": {"source_service": "rs"},
         },
     )
@@ -104,7 +114,7 @@ def test_rs_mock_ai_job_create_and_translation_status(monkeypatch):
     assert body["metadata"]["api_version"] == "v1"
     assert body["metadata"]["mock_translation"] == {
         "source_language": "zh",
-        "target_languages": ["en", "es", "pt"],
+        "target_languages": ["en", "es", "pt", "kr"],
         "category_count": 3,
         "artifact_keys": ["translated_schemas", "mutual_exclusion_rules"],
     }
@@ -152,12 +162,22 @@ def test_rs_mock_failed_status_returns_contract_error_details(monkeypatch):
         json={
             "client_request_id": "rs:failed",
             "job_type": "short_drama.tag_schema.translation",
-            "job_params": {
-                "source_language": "zh",
-                "target_languages": ["en", "es", "pt"],
-                "source_schema": {"categories": []},
-                "source_mutual_exclusion_rules": [],
-            },
+            "job_params": [
+                {
+                    "label_id": "bihuihuigu76576585",
+                    "source_language": "zh",
+                    "target_languages": ["en", "es", "pt"],
+                    "display_name": "男频",
+                    "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心...",
+                },
+                {
+                    "label_id": "bihuihuigu76576585211212",
+                    "source_language": "zh",
+                    "target_languages": ["en", "es", "kr"],
+                    "display_name": "男频",
+                    "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心...",
+                },
+            ],
         },
     )
     created = create_response.json()
@@ -173,7 +193,7 @@ def test_rs_mock_failed_status_returns_contract_error_details(monkeypatch):
         "details": {
             "label_id": "65f0a1b2c3d4e5f6a7b8c901",
             "source_language": "zh",
-            "target_languages": ["en", "es", "pt"],
+            "target_languages": ["en", "es", "pt", "kr"],
         },
     }
 
@@ -293,7 +313,8 @@ def test_openapi_provides_mock_request_and_response_examples():
     ]["value"]
     rs_response_example = rs_post["responses"]["202"]["content"]["application/json"]["example"]
     assert rs_request_example["job_type"] == "short_drama.tag_schema.translation"
-    assert rs_request_example["job_params"]["source_schema"]["categories"][0]["category_id"] == "000001"
+    assert rs_request_example["job_params"][0]["label_id"] == "bihuihuigu76576585"
+    assert rs_request_example["job_params"][1]["target_languages"] == ["en", "es", "kr"]
     assert rs_response_example["status_url"].startswith("/api/v1/mock/rs/ai-jobs/jobs/")
 
     cpp_get_example = schema["paths"]["/api/v1/mock/cpp/ai-jobs/jobs/{job_id}"]["get"]["responses"]["200"][

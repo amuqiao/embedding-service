@@ -5,10 +5,12 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, Query, status
+from pydantic import Field, field_validator
 
 from app.core.exceptions import ValidationAppError
 from app.core.security import require_service_auth
-from app.schemas.jobs import CreateJobRequest, CreateJobResponse, JobStatusResponse
+from app.schemas.common import StrictBaseModel
+from app.schemas.jobs import CallbackConfig, CreateJobRequest, CreateJobResponse, JobOptions, JobStatusResponse
 
 router = APIRouter(tags=["mock-interfaces"], dependencies=[Depends(require_service_auth)])
 
@@ -72,6 +74,34 @@ MockJobType = Literal[
     "short_drama.tagging.incremental",
     "short_drama.tag_schema.translation",
 ]
+MockJobParams = dict[str, Any] | list[dict[str, Any]]
+
+
+class MockCreateJobRequest(StrictBaseModel):
+    client_request_id: str | None = Field(default=None, max_length=255)
+    job_type: str = Field(min_length=1)
+    job_params: MockJobParams = Field(default_factory=dict)
+    callback: CallbackConfig | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    options: JobOptions | None = None
+
+    @field_validator("job_params")
+    @classmethod
+    def validate_list_job_params(cls, value: MockJobParams) -> MockJobParams:
+        if not isinstance(value, list):
+            return value
+        if not value:
+            raise ValueError("job_params list must not be empty")
+        for index, item in enumerate(value):
+            source_language = item.get("source_language")
+            if not isinstance(source_language, str) or not source_language.strip():
+                raise ValueError(f"job_params[{index}].source_language must be a non-empty string")
+            target_languages = item.get("target_languages")
+            if not isinstance(target_languages, list) or not target_languages:
+                raise ValueError(f"job_params[{index}].target_languages must be a non-empty list")
+            if any(not isinstance(language, str) or not language.strip() for language in target_languages):
+                raise ValueError(f"job_params[{index}].target_languages must contain only non-empty strings")
+        return value
 
 
 def mock_tag_schema() -> dict[str, Any]:
@@ -176,7 +206,7 @@ def _validate_mock_job_type(mock_client: MockClient, job_type: str) -> None:
         )
 
 
-def _job_id_for_payload(mock_client: MockClient, payload: CreateJobRequest) -> uuid.UUID:
+def _job_id_for_payload(mock_client: MockClient, payload: CreateJobRequest | MockCreateJobRequest) -> uuid.UUID:
     fingerprint = json.dumps(payload.model_dump(mode="json"), sort_keys=True, ensure_ascii=False)
     return uuid.uuid5(MOCK_JOB_NAMESPACE, f"{MOCK_API_VERSION}:{mock_client}:{fingerprint}")
 
@@ -415,22 +445,53 @@ def _mock_progress(job_type: str, job_status: str) -> dict[str, Any]:
     return {"percent": 100, "message": "mock failure generated for integration testing", "stage": "failed"}
 
 
-def _mock_error(job_type: str, job_params: dict[str, Any]) -> dict[str, Any]:
+def _object_job_params(job_params: MockJobParams) -> dict[str, Any]:
+    if isinstance(job_params, list):
+        raise ValidationAppError("INVALID_INPUT", "Mock job_params must be an object for this job_type.", {})
+    return job_params
+
+
+def _translation_source_language(job_params: MockJobParams) -> str:
+    if isinstance(job_params, list):
+        if not job_params:
+            raise ValidationAppError("INVALID_INPUT", "RS mock job_params list must not be empty.", {})
+        return job_params[0]["source_language"]
+    source_language = job_params.get("source_language")
+    return source_language if isinstance(source_language, str) else "zh"
+
+
+def _translation_target_languages(job_params: MockJobParams) -> list[str]:
+    if not isinstance(job_params, list):
+        target_languages = job_params.get("target_languages")
+        return target_languages if isinstance(target_languages, list) else ["en", "es", "pt"]
+
+    if not job_params:
+        raise ValidationAppError("INVALID_INPUT", "RS mock job_params list must not be empty.", {})
+    languages: list[str] = []
+    for item in job_params:
+        for language in item["target_languages"]:
+            if language not in languages:
+                languages.append(language)
+    return languages
+
+
+def _mock_error(job_type: str, job_params: MockJobParams) -> dict[str, Any]:
     if _is_translation_job(job_type):
         return {
             "code": "INVALID_SOURCE_SCHEMA",
             "message": "source_schema contains duplicate label_id",
             "details": {
                 "label_id": "65f0a1b2c3d4e5f6a7b8c901",
-                "source_language": job_params.get("source_language", "zh"),
-                "target_languages": job_params.get("target_languages", ["en", "es", "pt"]),
+                "source_language": _translation_source_language(job_params),
+                "target_languages": _translation_target_languages(job_params),
             },
         }
+    object_job_params = _object_job_params(job_params)
     return {
         "code": "RS_RESULT_WRITE_FAILED",
         "message": "AI generated tagging result, but RS rejected the write request.",
         "details": {
-            "t_book_id": job_params.get("t_book_id", MOCK_TAGGING_RESULT["t_book_id"]),
+            "t_book_id": object_job_params.get("t_book_id", MOCK_TAGGING_RESULT["t_book_id"]),
             "rs_error_code": "INVALID_TAG_RESULT",
             "rejected_category_id": "000006",
         },
@@ -441,7 +502,7 @@ def _mock_metadata(
     mock_client: MockClient,
     job_type: str,
     job_status: str,
-    job_params: dict[str, Any],
+    job_params: MockJobParams,
     request_metadata: dict[str, Any],
 ) -> dict[str, Any]:
     metadata = dict(request_metadata)
@@ -454,16 +515,17 @@ def _mock_metadata(
     )
     if _is_translation_job(job_type):
         metadata["mock_translation"] = {
-            "source_language": job_params.get("source_language", "zh"),
-            "target_languages": ["en", "es", "pt"],
+            "source_language": _translation_source_language(job_params),
+            "target_languages": _translation_target_languages(job_params),
             "category_count": len(mock_tag_schema()["categories"]),
             "artifact_keys": ["translated_schemas", "mutual_exclusion_rules"],
         }
     else:
-        work_context = job_params.get("work_context", {})
+        object_job_params = _object_job_params(job_params)
+        work_context = object_job_params.get("work_context", {})
         tags = MOCK_TAGGING_RESULT["tags"]
         metadata["mock_tagging"] = {
-            "t_book_id": job_params.get("t_book_id", MOCK_TAGGING_RESULT["t_book_id"]),
+            "t_book_id": object_job_params.get("t_book_id", MOCK_TAGGING_RESULT["t_book_id"]),
             "title": work_context.get("title", "Acting for Real-He Fell First"),
             "rs_write": {
                 "saved": job_status == "succeeded",
@@ -531,7 +593,7 @@ def _mock_job_view(
     }
 
 
-def _create_mock_ai_job(mock_client: MockClient, payload: CreateJobRequest) -> dict[str, Any]:
+def _create_mock_ai_job(mock_client: MockClient, payload: CreateJobRequest | MockCreateJobRequest) -> dict[str, Any]:
     _validate_mock_job_type(mock_client, payload.job_type)
     job_id = _job_id_for_payload(mock_client, payload)
     MOCK_JOBS[job_id] = {
@@ -581,12 +643,22 @@ CPP_CREATE_REQUEST_EXAMPLE = {
 RS_CREATE_REQUEST_EXAMPLE = {
     "client_request_id": "rs:tag-schema-default:en,es,pt",
     "job_type": "short_drama.tag_schema.translation",
-    "job_params": {
-        "source_language": "zh",
-        "target_languages": ["en", "es", "pt"],
-        "source_schema": {"categories": mock_tag_schema()["categories"]},
-        "source_mutual_exclusion_rules": mock_tag_schema()["mutual_exclusion_rules"],
-    },
+    "job_params": [
+        {
+            "label_id": "bihuihuigu76576585",
+            "source_language": "zh",
+            "target_languages": ["en", "es", "pt"],
+            "display_name": "男频",
+            "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心...",
+        },
+        {
+            "label_id": "bihuihuigu76576585211212",
+            "source_language": "zh",
+            "target_languages": ["en", "es", "kr"],
+            "display_name": "男频",
+            "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心...",
+        },
+    ],
     "metadata": {"source_service": "rs", "business_scene": "tag_schema_translation"},
 }
 
@@ -712,7 +784,7 @@ async def get_cpp_mock_ai_job(
     },
 )
 async def create_rs_mock_ai_job(
-    payload: CreateJobRequest = Body(
+    payload: MockCreateJobRequest = Body(
         openapi_examples={
             "rs_tag_schema_translation": {
                 "summary": "RS 标签体系翻译 mock",
