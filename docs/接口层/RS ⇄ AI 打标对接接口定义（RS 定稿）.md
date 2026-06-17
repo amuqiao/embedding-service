@@ -1,8 +1,8 @@
 # RS ⇄ AI 打标对接接口定义（RS 定稿）
 
 > 原 AI 侧接口文档（标签事实 / 打标写入）作废。接口定义由 RS 定稿，以本文为准。AI 仅提供 JSON 结构示例，字段补充与存储语义由 RS 定义。
-> 
-> 
+>
+>
 
 ## 一、通用约定
 
@@ -68,8 +68,8 @@ AI 打标前拉取当前**启用**的标签体系与互斥规则。
 |mutual\_exclusion\_rules\[\]\.mutex\_label\_ids|互斥|是|与主标签互斥的标签 id 列表|
 
 > 互斥规则独立于 categories，放顶层 `mutual_exclusion_rules[]`，与 RS `ai_tag_mutex`（一标签一行）直接对应。
-> 
-> 
+>
+>
 
 ## 三、接口 C：写打标结果（RS 提供，AI 调）
 
@@ -78,8 +78,8 @@ AI 打标完成后写入 `source=ai_auto` 的结果。
 **请求**：`POST /api/v1/ai-tag-results`（URL 前缀 / 鉴权待对齐）
 
 > `tags` 的 key 为 `category_id`（6 位补零字符串），value 为该分类下的标签数组。
-> 
-> 
+>
+>
 
 ```json
 {
