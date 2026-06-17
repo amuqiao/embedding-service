@@ -119,8 +119,26 @@ class Artifact(StrictBaseModel):
 
 
 class JobResult(StrictBaseModel):
-    artifacts: list[Artifact]
+    artifacts: list[Artifact | dict[str, Any]]
     signals: dict[str, Any] = {}
+
+    @field_validator("artifacts", mode="before")
+    @classmethod
+    def validate_artifacts(cls, value):
+        if not isinstance(value, list):
+            raise ValueError("artifacts must be a list")
+        artifacts: list[Artifact | dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, Artifact):
+                artifacts.append(item)
+                continue
+            if not isinstance(item, dict):
+                raise ValueError("artifact must be an object")
+            if "key" in item:
+                artifacts.append(Artifact.model_validate(item))
+            else:
+                artifacts.append(item)
+        return artifacts
 
 
 class JobError(StrictBaseModel):

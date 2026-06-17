@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 from typing import Any
 
@@ -8,114 +7,120 @@ from app.core.exceptions import AppError
 from app.services.job_runtime import payload_hash
 from app.workflows.short_drama_tagging.prompts import parse_model_json
 
-_TRANSLATABLE_CATEGORY_KEYS = {"name"}
-_TRANSLATABLE_LABEL_KEYS = {"name", "definition"}
-
 
 def translation_messages(params: dict[str, Any]) -> list[dict[str, str]]:
     return [
         {
             "role": "user",
-            "content": f"""You are a tag schema translation system.
+            "content": f"""You are a short-drama tag label translation system.
 
-Translate category names, label names, and label definitions from source_language={params['source_language']} to target_languages={params['target_languages']}.
-Preserve category_id, required, min_items, max_items, label_id, label_key, label counts, category order, and label order.
-Do not translate source_mutual_exclusion_rules.
-Return JSON only with one key: translated_schemas. The value must be an array whose order matches target_languages.
+Translate each label's display_name and definition from its source_language to its target_languages.
+Preserve label_id and label order. Do not add, remove, merge, split, or rewrite label_id.
+Return JSON only with exactly one key: artifacts.
+artifacts must be an array whose order matches input labels.
+Each artifact must be:
+{{
+  "label_id": "...",
+  "langs": {{
+    "<target_language>": {{"name": "...", "definition": "..."}}
+  }}
+}}
+The langs object must contain exactly the requested target_languages for that label.
 
-Source schema:
-{json.dumps(params['source_schema'], ensure_ascii=False, indent=2)}
+Labels:
+{json.dumps(params['labels'], ensure_ascii=False, indent=2)}
 """,
         }
     ]
 
 
-def validate_translated_schemas(params: dict[str, Any], model_output: dict[str, Any]) -> list[dict[str, Any]]:
-    translated_schemas = model_output.get("translated_schemas")
-    if not isinstance(translated_schemas, list):
-        raise AppError("TRANSLATION_FAILED", "model output missing translated_schemas array", status_code=502)
-    if len(translated_schemas) != len(params["target_languages"]):
+def _require_object(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise AppError("TRANSLATION_FAILED", f"{label} must be an object", status_code=502)
+    return value
+
+
+def _require_non_empty_string(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise AppError("TRANSLATION_FAILED", f"{label} must be a non-empty string", status_code=502)
+    return value
+
+
+def validate_translation_artifacts(params: dict[str, Any], model_output: dict[str, Any]) -> list[dict[str, Any]]:
+    artifacts = model_output.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise AppError("TRANSLATION_FAILED", "model output missing artifacts array", status_code=502)
+    labels = params["labels"]
+    if len(artifacts) != len(labels):
         raise AppError(
             "TRANSLATION_FAILED",
-            "translated_schemas length does not match target_languages",
+            "artifacts length does not match labels",
             status_code=502,
-            details={"expected": len(params["target_languages"]), "actual": len(translated_schemas)},
+            details={"expected": len(labels), "actual": len(artifacts)},
         )
-    source_categories = params["source_schema"]["categories"]
-    for schema_index, translated_schema in enumerate(translated_schemas):
-        if not isinstance(translated_schema, dict):
-            raise AppError("TRANSLATION_FAILED", "translated schema must be an object", status_code=502)
-        target_language = params["target_languages"][schema_index]
-        unexpected_top_keys = set(translated_schema) - {"language", "categories"}
-        if unexpected_top_keys:
+    validated: list[dict[str, Any]] = []
+    for index, source_label in enumerate(labels):
+        artifact = _require_object(artifacts[index], f"artifacts[{index}]")
+        if set(artifact) != {"label_id", "langs"}:
             raise AppError(
                 "TRANSLATION_FAILED",
-                "translated schema contains unexpected top-level keys",
+                "translation artifact keys changed",
                 status_code=502,
-                details={"keys": sorted(unexpected_top_keys)},
+                details={"index": index, "keys": sorted(artifact)},
             )
-        if "language" in translated_schema and translated_schema["language"] != target_language:
-            raise AppError("TRANSLATION_FAILED", "translated schema language does not match target language", status_code=502)
-        categories = translated_schema.get("categories")
-        if not isinstance(categories, list) or len(categories) != len(source_categories):
-            raise AppError("TRANSLATION_FAILED", "translated schema category shape mismatch", status_code=502)
-        for category_index, source_category in enumerate(source_categories):
-            category = categories[category_index]
-            if not isinstance(category, dict):
-                raise AppError("TRANSLATION_FAILED", "translated category must be an object", status_code=502)
-            if set(category) != set(source_category):
-                raise AppError("TRANSLATION_FAILED", "translated category keys changed", status_code=502)
-            if category.get("category_id") != source_category["category_id"]:
-                raise AppError("TRANSLATION_FAILED", "translated category_id changed", status_code=502)
-            for key, value in source_category.items():
-                if key in _TRANSLATABLE_CATEGORY_KEYS or key == "labels":
-                    continue
-                if category.get(key) != value:
-                    raise AppError("TRANSLATION_FAILED", f"translated category field changed: {key}", status_code=502)
-            labels = category.get("labels")
-            if not isinstance(labels, list) or len(labels) != len(source_category["labels"]):
-                raise AppError("TRANSLATION_FAILED", "translated label shape mismatch", status_code=502)
-            for label_index, source_label in enumerate(source_category["labels"]):
-                label = labels[label_index]
-                if not isinstance(label, dict):
-                    raise AppError("TRANSLATION_FAILED", "translated label must be an object", status_code=502)
-                if set(label) != set(source_label):
-                    raise AppError("TRANSLATION_FAILED", "translated label keys changed", status_code=502)
-                if label.get("label_id") != source_label["label_id"]:
-                    raise AppError("TRANSLATION_FAILED", "translated label_id changed", status_code=502)
-                for key, value in source_label.items():
-                    if key in _TRANSLATABLE_LABEL_KEYS:
-                        continue
-                    if label.get(key) != value:
-                        raise AppError("TRANSLATION_FAILED", f"translated label field changed: {key}", status_code=502)
-    return translated_schemas
+        if artifact["label_id"] != source_label["label_id"]:
+            raise AppError(
+                "TRANSLATION_FAILED",
+                "translated label_id changed",
+                status_code=502,
+                details={"index": index, "expected": source_label["label_id"], "actual": artifact["label_id"]},
+            )
+        langs = _require_object(artifact["langs"], f"artifacts[{index}].langs")
+        expected_languages = source_label["target_languages"]
+        actual_languages = list(langs)
+        if set(actual_languages) != set(expected_languages):
+            raise AppError(
+                "TRANSLATION_FAILED",
+                "translation languages do not match target_languages",
+                status_code=502,
+                details={
+                    "label_id": source_label["label_id"],
+                    "expected": expected_languages,
+                    "actual": actual_languages,
+                },
+            )
+        validated_langs: dict[str, dict[str, str]] = {}
+        for language in expected_languages:
+            value = _require_object(langs[language], f"artifacts[{index}].langs.{language}")
+            if set(value) != {"name", "definition"}:
+                raise AppError(
+                    "TRANSLATION_FAILED",
+                    "translation language entry keys changed",
+                    status_code=502,
+                    details={"label_id": source_label["label_id"], "language": language, "keys": sorted(value)},
+                )
+            validated_langs[language] = {
+                "name": _require_non_empty_string(value["name"], f"artifacts[{index}].langs.{language}.name"),
+                "definition": _require_non_empty_string(
+                    value["definition"],
+                    f"artifacts[{index}].langs.{language}.definition",
+                ),
+            }
+        validated.append({"label_id": source_label["label_id"], "langs": validated_langs})
+    return validated
 
 
-def build_translation_result(params: dict[str, Any], translated_schemas: list[dict[str, Any]]) -> dict[str, Any]:
-    mutual_rules = copy.deepcopy(params["source_mutual_exclusion_rules"])
+def build_translation_result(params: dict[str, Any], artifacts: list[dict[str, Any]]) -> dict[str, Any]:
     return {
-        "artifacts": [
-            {
-                "key": "translated_schemas",
-                "type": "json",
-                "label": "翻译后的标签结构体",
-                "content": translated_schemas,
-            },
-            {
-                "key": "mutual_exclusion_rules",
-                "type": "json",
-                "label": "互斥标签结构体",
-                "content": mutual_rules,
-            },
-        ],
+        "artifacts": artifacts,
         "signals": {
-            "source_schema_hash": payload_hash(params["source_schema"]),
-            "translated_schemas_hash": payload_hash({"translated_schemas": translated_schemas}),
+            "source_schema_hash": payload_hash({"labels": params["labels"]}),
+            "translated_schemas_hash": payload_hash({"artifacts": artifacts}),
         },
     }
 
 
 def parse_translation_output(text: str, params: dict[str, Any]) -> dict[str, Any]:
     model_output = parse_model_json(text, "tag_schema_translation")
-    translated_schemas = validate_translated_schemas(params, model_output)
-    return build_translation_result(params, translated_schemas)
+    artifacts = validate_translation_artifacts(params, model_output)
+    return build_translation_result(params, artifacts)

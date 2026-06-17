@@ -405,11 +405,24 @@ def _validate_schema_translation_params(job_params: dict[str, Any]) -> dict[str,
 
 def _default_translation_job_params() -> dict[str, Any]:
     source = mock_tag_schema()
+    audience_labels = source["categories"][0]["labels"]
     return {
-        "source_language": "zh",
-        "target_languages": ["en", "es", "pt"],
-        "source_schema": {"categories": source["categories"]},
-        "source_mutual_exclusion_rules": source["mutual_exclusion_rules"],
+        "labels": [
+            {
+                "label_id": audience_labels[0]["label_id"],
+                "source_language": "zh",
+                "target_languages": ["en", "es", "pt"],
+                "display_name": audience_labels[0]["name"],
+                "definition": audience_labels[0]["definition"],
+            },
+            {
+                "label_id": audience_labels[1]["label_id"],
+                "source_language": "zh",
+                "target_languages": ["en", "es", "ko"],
+                "display_name": audience_labels[1]["name"],
+                "definition": audience_labels[1]["definition"],
+            },
+        ],
     }
 
 
@@ -441,20 +454,12 @@ def _ko_label_translations() -> dict[str, dict[str, str]]:
     }
 
 
-def _translation_source_schema(job_params: MockJobParams) -> dict[str, Any]:
-    return _object_job_params(job_params)["source_schema"]
-
-
-def _translation_mutual_rules(job_params: MockJobParams) -> list[dict[str, Any]]:
-    return _object_job_params(job_params)["source_mutual_exclusion_rules"]
-
-
-def _translation_source_language(job_params: MockJobParams) -> str:
-    return _object_job_params(job_params)["source_language"]
+def _translation_labels(job_params: MockJobParams) -> list[dict[str, Any]]:
+    return _object_job_params(job_params)["labels"]
 
 
 def _translation_label_count(job_params: MockJobParams) -> int:
-    return sum(len(category["labels"]) for category in _translation_source_schema(job_params)["categories"])
+    return len(_translation_labels(job_params))
 
 
 def _translated_label_text(label: dict[str, Any], language: str) -> dict[str, str]:
@@ -465,63 +470,26 @@ def _translated_label_text(label: dict[str, Any], language: str) -> dict[str, st
     translated = _translation_lookup(language)[1].get(label["label_id"])
     if translated:
         return {"name": translated["name"], "definition": translated["definition"]}
-    return {"name": label["name"], "definition": label["definition"]}
-
-
-def _translated_category_name(category: dict[str, Any], language: str) -> str:
-    translated = _translation_lookup(language)[0].get(category["category_id"])
-    if translated:
-        return translated["name"]
-    return category["name"]
-
-
-def _translated_schema(job_params: MockJobParams, language: str) -> dict[str, Any]:
-    translated_categories: list[dict[str, Any]] = []
-    for category in _translation_source_schema(job_params)["categories"]:
-        translated_category = dict(category)
-        translated_category["name"] = _translated_category_name(category, language)
-        translated_label_items: list[dict[str, Any]] = []
-        for label in category["labels"]:
-            translated_label = dict(label)
-            translated_text = _translated_label_text(label, language)
-            translated_label["name"] = translated_text["name"]
-            translated_label["definition"] = translated_text["definition"]
-            translated_label_items.append(translated_label)
-        translated_category["labels"] = translated_label_items
-        translated_categories.append(translated_category)
-    return {"categories": translated_categories}
-
-
-def _translated_schemas(job_params: MockJobParams) -> list[dict[str, Any]]:
-    return [
-        _translated_schema(job_params, language)
-        for language in _translation_target_languages(job_params)
-    ]
+    return {"name": label["display_name"], "definition": label["definition"]}
 
 
 def _translated_schema_result(job_params: MockJobParams) -> dict[str, Any]:
     object_job_params = _object_job_params(job_params)
-    source_schema = _translation_source_schema(object_job_params)
-    translated_schemas = _translated_schemas(object_job_params)
-    mutual_rules = _translation_mutual_rules(object_job_params)
+    artifacts = [
+        {
+            "label_id": label["label_id"],
+            "langs": {
+                language: _translated_label_text(label, language)
+                for language in label["target_languages"]
+            },
+        }
+        for label in _translation_labels(object_job_params)
+    ]
     return {
-        "artifacts": [
-            {
-                "key": "translated_schemas",
-                "type": "json",
-                "label": "翻译后的标签结构体",
-                "content": translated_schemas,
-            },
-            {
-                "key": "mutual_exclusion_rules",
-                "type": "json",
-                "label": "互斥标签结构体",
-                "content": mutual_rules,
-            },
-        ],
+        "artifacts": artifacts,
         "signals": {
-            "source_schema_hash": _hash_json(source_schema),
-            "translated_schemas_hash": _hash_json({"translated_schemas": translated_schemas}),
+            "source_schema_hash": _hash_json({"labels": object_job_params["labels"]}),
+            "translated_schemas_hash": _hash_json({"artifacts": artifacts}),
         },
     }
 
@@ -545,11 +513,21 @@ def _object_job_params(job_params: MockJobParams) -> dict[str, Any]:
 
 
 def _translation_source_languages(job_params: MockJobParams) -> list[str]:
-    return [_translation_source_language(job_params)]
+    languages: list[str] = []
+    for label in _translation_labels(job_params):
+        language = label["source_language"]
+        if language not in languages:
+            languages.append(language)
+    return languages
 
 
 def _translation_target_languages(job_params: MockJobParams) -> list[str]:
-    return _object_job_params(job_params)["target_languages"]
+    languages: list[str] = []
+    for label in _translation_labels(job_params):
+        for language in label["target_languages"]:
+            if language not in languages:
+                languages.append(language)
+    return languages
 
 
 def _mock_error(job_type: str, job_params: MockJobParams) -> dict[str, Any]:
@@ -593,9 +571,8 @@ def _mock_metadata(
         metadata["mock_translation"] = {
             "source_languages": _translation_source_languages(job_params),
             "target_languages": _translation_target_languages(job_params),
-            "category_count": len(_translation_source_schema(job_params)["categories"]),
             "label_count": _translation_label_count(job_params),
-            "artifact_keys": ["translated_schemas", "mutual_exclusion_rules"],
+            "artifact_shape": "label_translations",
         }
     else:
         object_job_params = _object_job_params(job_params)
@@ -718,7 +695,7 @@ CPP_CREATE_REQUEST_EXAMPLE = {
 }
 
 RS_CREATE_REQUEST_EXAMPLE = {
-    "client_request_id": "rs:tag-schema-default:en,es,pt",
+    "client_request_id": "rs:tag-labels:en,es,pt,ko",
     "job_type": RS_TRANSLATION_JOB_TYPE,
     "job_params": _default_translation_job_params(),
     "metadata": {"source_service": "rs", "business_scene": RS_TRANSLATION_BUSINESS_SCENE},
@@ -735,7 +712,7 @@ CPP_CREATE_RESPONSE_EXAMPLE = {
 
 RS_CREATE_RESPONSE_EXAMPLE = {
     "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
-    "client_request_id": "rs:tag-schema-default:en,es,pt",
+    "client_request_id": "rs:tag-labels:en,es,pt,ko",
     "job_type": RS_TRANSLATION_JOB_TYPE,
     "status": "queued",
     "status_url": "/api/v1/mock/rs/ai-jobs/jobs/0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
@@ -768,7 +745,7 @@ CPP_STATUS_RESPONSE_EXAMPLE = {
 
 RS_STATUS_RESPONSE_EXAMPLE = {
     "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
-    "client_request_id": "rs:tag-schema-default:en,es,pt",
+    "client_request_id": "rs:tag-labels:en,es,pt,ko",
     "job_type": RS_TRANSLATION_JOB_TYPE,
     "status": "succeeded",
     "progress": {"percent": 100, "message": "finished", "stage": "finished"},
@@ -781,10 +758,9 @@ RS_STATUS_RESPONSE_EXAMPLE = {
         "api_version": "v1",
         "mock_translation": {
             "source_languages": ["zh"],
-            "target_languages": ["en", "es", "pt"],
-            "category_count": 3,
-            "label_count": 6,
-            "artifact_keys": ["translated_schemas", "mutual_exclusion_rules"],
+            "target_languages": ["en", "es", "pt", "ko"],
+            "label_count": 2,
+            "artifact_shape": "label_translations",
         },
     },
     "created_at": "2026-06-15T10:00:00Z",

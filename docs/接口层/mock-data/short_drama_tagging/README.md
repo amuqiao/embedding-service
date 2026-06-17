@@ -13,7 +13,7 @@ SHORT_DRAMA_RS_RESULT_SINK=http
 | HTTP 交互 | 文件 |
 | --- | --- |
 | CPP -> AI 创建 Job | `cpp_create_tagging_job_request.json` |
-| RS -> AI 创建标签体系翻译 Job | `rs_create_tag_schema_translation_job_request.json` |
+| RS -> AI 创建标签翻译 Job | `rs_create_tag_schema_translation_job_request.json` |
 | AI -> RS 获取标签体系请求 | `rs_tag_schema_request.zh.json` |
 | AI -> RS 获取标签体系响应 | `tag_schema_snapshot.zh.json`、`tag_schema_snapshot.en.json` |
 | AI -> 模型服务剧情概览响应 | `model_story_overview_response.json` |

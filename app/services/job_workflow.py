@@ -31,6 +31,14 @@ def _first_result_value(items: list[AIJobWorkItem], kind: str, key: str) -> Any:
     return None
 
 
+def _artifact_identifier(artifact: Any) -> str | None:
+    if isinstance(artifact, dict):
+        value = artifact.get("key") or artifact.get("label_id")
+        return value if isinstance(value, str) else None
+    value = getattr(artifact, "key", None)
+    return value if isinstance(value, str) else None
+
+
 
 def merge_work_items(job: AIJob, items: list[AIJobWorkItem]) -> JobResult:
     if _job_execution_mode(job) == "single":
@@ -213,7 +221,11 @@ async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
                 item.id,
                 {
                     "merged": True,
-                    "artifact_keys": [artifact.key for artifact in merged_result.artifacts],
+                    "artifact_keys": [
+                        key
+                        for artifact in merged_result.artifacts
+                        if (key := _artifact_identifier(artifact)) is not None
+                    ],
                 },
             )
     await JobRepo.update_progress(db, job_id, progress_percent=90, progress_text="正在写入最终结果")

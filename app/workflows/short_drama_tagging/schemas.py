@@ -93,11 +93,12 @@ class MutualExclusionRule(StrictBaseModel):
     mutex_label_ids: list[str]
 
 
-class TagSchemaTranslationParams(StrictBaseModel):
+class TagSchemaTranslationLabel(StrictBaseModel):
+    label_id: str = Field(min_length=1)
     source_language: str
     target_languages: list[str] = Field(min_length=1)
-    source_schema: TagSchemaSnapshot
-    source_mutual_exclusion_rules: list[MutualExclusionRule]
+    display_name: str = Field(min_length=1)
+    definition: str = Field(min_length=1)
 
     @field_validator("source_language")
     @classmethod
@@ -116,18 +117,15 @@ class TagSchemaTranslationParams(StrictBaseModel):
             raise ValueError("target_languages must follow business language order")
         return value
 
+
+class TagSchemaTranslationParams(StrictBaseModel):
+    labels: list[TagSchemaTranslationLabel] = Field(min_length=1)
+
     @model_validator(mode="after")
-    def validate_schema_references(self):
+    def validate_unique_labels(self):
         label_ids: set[str] = set()
-        for category in self.source_schema.categories:
-            for label in category.labels:
-                if label.label_id in label_ids:
-                    raise ValueError(f"duplicate label_id: {label.label_id}")
-                label_ids.add(label.label_id)
-        for rule in self.source_mutual_exclusion_rules:
-            if rule.label_id not in label_ids:
-                raise ValueError(f"mutual exclusion rule references unknown label_id: {rule.label_id}")
-            for mutex_label_id in rule.mutex_label_ids:
-                if mutex_label_id not in label_ids:
-                    raise ValueError(f"mutual exclusion rule references unknown mutex label_id: {mutex_label_id}")
+        for label in self.labels:
+            if label.label_id in label_ids:
+                raise ValueError(f"duplicate label_id: {label.label_id}")
+            label_ids.add(label.label_id)
         return self

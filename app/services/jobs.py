@@ -307,7 +307,8 @@ def _persist_large_artifact_payload(
         persist_keys = frozenset()
     output_target: dict[str, Any] | None = None
     for artifact in result_data.get("artifacts") or []:
-        if artifact["key"] not in persist_keys:
+        artifact_key = artifact.get("key") if isinstance(artifact, dict) else None
+        if not artifact_key or artifact_key not in persist_keys:
             continue
         content = artifact.pop("content", None)
         if content is None:
@@ -316,7 +317,7 @@ def _persist_large_artifact_payload(
             output_target = output_target_from_job(job)
         stored = storage.write_text(
             bucket=output_target["oss_bucket"],
-            key=_artifact_key(output_target, artifact["key"], scope=scope),
+            key=_artifact_key(output_target, artifact_key, scope=scope),
             region=output_target["oss_region"],
             content=content,
         )

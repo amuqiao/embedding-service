@@ -16,35 +16,25 @@ def _headers() -> dict[str, str]:
 
 
 def _rs_translation_job_params(target_languages: list[str] | None = None) -> dict:
+    first_targets = target_languages or ["en", "es", "pt"]
+    second_targets = target_languages or ["en", "es", "ko"]
     return {
-        "source_language": "zh",
-        "target_languages": target_languages or ["en", "es", "pt"],
-        "source_schema": {
-            "categories": [
-                {
-                    "category_id": "000001",
-                    "name": "受众",
-                    "required": True,
-                    "min_items": 1,
-                    "max_items": 1,
-                    "labels": [
-                        {
-                            "label_id": "65f0a1b2c3d4e5f6a7b8c901",
-                            "label_key": "male_oriented",
-                            "name": "男频",
-                            "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心。",
-                        },
-                        {
-                            "label_id": "65f0a1b2c3d4e5f6a7b8c902",
-                            "label_key": "female_oriented",
-                            "name": "女频",
-                            "definition": "核心受众为女性群体，叙事视角、人物塑造、情感逻辑以女性主角为核心。",
-                        },
-                    ],
-                },
-            ]
-        },
-        "source_mutual_exclusion_rules": [],
+        "labels": [
+            {
+                "label_id": "65f0a1b2c3d4e5f6a7b8c901",
+                "source_language": "zh",
+                "target_languages": first_targets,
+                "display_name": "男频",
+                "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心。",
+            },
+            {
+                "label_id": "65f0a1b2c3d4e5f6a7b8c902",
+                "source_language": "zh",
+                "target_languages": second_targets,
+                "display_name": "女频",
+                "definition": "核心受众为女性群体，叙事视角、人物塑造、情感逻辑以女性主角为核心。",
+            },
+        ],
     }
 
 
@@ -127,16 +117,13 @@ def test_rs_mock_ai_job_create_and_translation_status(monkeypatch):
     assert body["status"] == "succeeded"
     assert body["client_request_id"] == "rs:tag-schema-default:en"
     assert body["job_type"] == RS_TRANSLATION_JOB_TYPE
-    artifacts = {artifact["key"]: artifact for artifact in body["result"]["artifacts"]}
-    assert set(artifacts) == {"translated_schemas", "mutual_exclusion_rules"}
-    translated_schemas = artifacts["translated_schemas"]["content"]
-    assert translated_schemas[0]["categories"][0]["name"] == "Audience"
-    assert translated_schemas[0]["categories"][0]["labels"][0]["label_id"] == "65f0a1b2c3d4e5f6a7b8c901"
-    assert translated_schemas[0]["categories"][0]["labels"][0]["label_key"] == "male_oriented"
-    assert translated_schemas[0]["categories"][0]["labels"][0]["name"] == "Male-oriented"
-    assert translated_schemas[1]["categories"][0]["labels"][0]["name"] == "Orientado a hombres"
-    assert translated_schemas[2]["categories"][0]["labels"][0]["name"] == "Voltado ao publico masculino"
-    assert artifacts["mutual_exclusion_rules"]["content"] == []
+    artifacts = body["result"]["artifacts"]
+    assert artifacts[0]["label_id"] == "65f0a1b2c3d4e5f6a7b8c901"
+    assert artifacts[0]["langs"]["en"]["name"] == "Male-oriented"
+    assert artifacts[0]["langs"]["es"]["name"] == "Orientado a hombres"
+    assert artifacts[0]["langs"]["pt"]["name"] == "Voltado ao publico masculino"
+    assert artifacts[1]["label_id"] == "65f0a1b2c3d4e5f6a7b8c902"
+    assert artifacts[1]["langs"]["ko"]["name"] == "여성향"
     assert body["result"]["signals"]["source_schema_hash"].startswith("sha256:")
     assert body["result"]["signals"]["translated_schemas_hash"].startswith("sha256:")
     assert body["metadata"]["source_service"] == "rs"
@@ -144,10 +131,9 @@ def test_rs_mock_ai_job_create_and_translation_status(monkeypatch):
     assert body["metadata"]["api_version"] == "v1"
     assert body["metadata"]["mock_translation"] == {
         "source_languages": ["zh"],
-        "target_languages": ["en", "es", "pt"],
-        "category_count": 1,
+        "target_languages": ["en", "es", "pt", "ko"],
         "label_count": 2,
-        "artifact_keys": ["translated_schemas", "mutual_exclusion_rules"],
+        "artifact_shape": "label_translations",
     }
 
 
@@ -155,27 +141,15 @@ def test_rs_mock_translation_result_is_derived_from_request_schema(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
     client = TestClient(app)
     job_params = {
-        "source_language": "zh",
-        "target_languages": ["en"],
-        "source_schema": {
-            "categories": [
-                {
-                    "category_id": "custom-category",
-                    "name": "自定义分类",
-                    "required": True,
-                    "min_items": 1,
-                    "max_items": 1,
-                    "labels": [
-                        {
-                            "label_id": "custom-label",
-                            "name": "自定义标签",
-                            "definition": "自定义释义。",
-                        }
-                    ],
-                }
-            ]
-        },
-        "source_mutual_exclusion_rules": [],
+        "labels": [
+            {
+                "label_id": "custom-label",
+                "source_language": "zh",
+                "target_languages": ["en"],
+                "display_name": "自定义标签",
+                "definition": "自定义释义。",
+            }
+        ],
     }
     create_response = client.post(
         "/api/v1/mock/rs/ai-jobs/jobs",
@@ -189,30 +163,11 @@ def test_rs_mock_translation_result_is_derived_from_request_schema(monkeypatch):
     status_response = client.get(create_response.json()["status_url"], headers=_headers())
 
     body = status_response.json()
-    translated_schema = body["result"]["artifacts"][0]["content"][0]
-    assert translated_schema["categories"][0]["name"] == "自定义分类"
-    assert translated_schema["categories"][0]["labels"][0]["name"] == "自定义标签"
-    assert translated_schema["categories"][0]["labels"][0]["definition"] == "自定义释义。"
-    expected_source_schema = {
-        "categories": [
-            {
-                "category_id": "custom-category",
-                "name": "自定义分类",
-                "required": True,
-                "min_items": 1,
-                "max_items": 1,
-                "labels": [
-                    {
-                        "label_id": "custom-label",
-                        "label_key": None,
-                        "name": "自定义标签",
-                        "definition": "自定义释义。",
-                    }
-                ],
-            }
-        ]
-    }
-    assert body["result"]["signals"]["source_schema_hash"] == _hash_json(expected_source_schema)
+    artifact = body["result"]["artifacts"][0]
+    assert artifact["label_id"] == "custom-label"
+    assert artifact["langs"]["en"]["name"] == "自定义标签"
+    assert artifact["langs"]["en"]["definition"] == "自定义释义。"
+    assert body["result"]["signals"]["source_schema_hash"] == _hash_json({"labels": job_params["labels"]})
     assert body["metadata"]["mock_translation"]["label_count"] == 1
 
 
@@ -242,7 +197,7 @@ def test_rs_mock_rejects_list_job_params(monkeypatch):
         json={
             "client_request_id": "rs:tag-schema-default:en,es,pt",
             "job_type": RS_TRANSLATION_JOB_TYPE,
-            "job_params": [{"source_language": "zh", "target_languages": ["en", "es", "pt"]}],
+            "job_params": [{"labels": _rs_translation_job_params()["labels"]}],
             "metadata": {"source_service": "rs"},
         },
     )
@@ -268,7 +223,7 @@ def test_rs_mock_reuses_translation_param_validation(monkeypatch):
     assert bad_language_order.json()["error"]["code"] == "INVALID_INPUT"
 
     bad_language_params = _rs_translation_job_params(["en"])
-    bad_language_params["target_languages"] = ["kr"]
+    bad_language_params["labels"][0]["target_languages"] = ["kr"]
     bad_language = client.post(
         "/api/v1/mock/rs/ai-jobs/jobs",
         headers=_headers(),
@@ -339,7 +294,7 @@ def test_rs_mock_failed_status_returns_contract_error_details(monkeypatch):
         "message": "tag schema translation mock failed",
         "details": {
             "source_languages": ["zh"],
-            "target_languages": ["en", "es", "pt"],
+            "target_languages": ["en", "es", "pt", "ko"],
         },
     }
 
@@ -459,8 +414,8 @@ def test_openapi_provides_mock_request_and_response_examples():
     ]["value"]
     rs_response_example = rs_post["responses"]["202"]["content"]["application/json"]["example"]
     assert rs_request_example["job_type"] == RS_TRANSLATION_JOB_TYPE
-    assert rs_request_example["job_params"]["source_language"] == "zh"
-    assert rs_request_example["job_params"]["target_languages"] == ["en", "es", "pt"]
+    assert rs_request_example["job_params"]["labels"][0]["source_language"] == "zh"
+    assert rs_request_example["job_params"]["labels"][0]["target_languages"] == ["en", "es", "pt"]
     assert rs_response_example["status_url"].startswith("/api/v1/mock/rs/ai-jobs/jobs/")
 
     cpp_get_example = schema["paths"]["/api/v1/mock/cpp/ai-jobs/jobs/{job_id}"]["get"]["responses"]["200"][
@@ -470,5 +425,5 @@ def test_openapi_provides_mock_request_and_response_examples():
         "content"
     ]["application/json"]["example"]
     assert cpp_get_example["metadata"]["mock_tagging"]["rs_write"]["label_count"] == 4
-    assert rs_get_example["result"]["artifacts"][0]["key"] == "translated_schemas"
-    assert rs_get_example["result"]["artifacts"][0]["content"][0]["categories"][0]["labels"][0]["name"] == "Male-oriented"
+    assert rs_get_example["result"]["artifacts"][0]["label_id"] == "65f0a1b2c3d4e5f6a7b8c901"
+    assert rs_get_example["result"]["artifacts"][0]["langs"]["en"]["name"] == "Male-oriented"

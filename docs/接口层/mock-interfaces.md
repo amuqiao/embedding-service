@@ -115,35 +115,29 @@ GET  /api/v1/mock/rs/ai-jobs/jobs/{job_id}
 | --- | --- |
 | `short_drama.tag_schema.translation` | 标签体系翻译 mock。 |
 
-创建请求的 `job_params` 必须是对象，不接受历史列表型 `job_params`。字段与正式 [AI标签体系翻译接口.md](AI标签体系翻译接口.md) 一致：`source_language`、`target_languages`、`source_schema` 和 `source_mutual_exclusion_rules`。
+创建请求的 `job_params` 必须是对象，不接受历史列表型 `job_params`。字段与正式 [AI标签体系翻译接口.md](AI标签体系翻译接口.md) 一致：`labels[]` 中每个标签独立携带 `label_id`、`source_language`、`target_languages`、`display_name` 和 `definition`。
 
 ```json
 {
-  "client_request_id": "rs:tag-schema-default:en,es,pt",
+  "client_request_id": "rs:tag-labels:en,es,pt,ko",
   "job_type": "short_drama.tag_schema.translation",
   "job_params": {
-    "source_language": "zh",
-    "target_languages": ["en", "es", "pt"],
-    "source_schema": {
-      "categories": [
-        {
-          "category_id": "000001",
-          "name": "受众",
-          "required": true,
-          "min_items": 1,
-          "max_items": 1,
-          "labels": [
-            {
-              "label_id": "65f0a1b2c3d4e5f6a7b8c901",
-              "label_key": "male_oriented",
-              "name": "男频",
-              "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心。"
-            }
-          ]
-        }
-      ]
-    },
-    "source_mutual_exclusion_rules": []
+    "labels": [
+      {
+        "label_id": "65f0a1b2c3d4e5f6a7b8c901",
+        "source_language": "zh",
+        "target_languages": ["en", "es", "pt"],
+        "display_name": "男频",
+        "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心。"
+      },
+      {
+        "label_id": "65f0a1b2c3d4e5f6a7b8c902",
+        "source_language": "zh",
+        "target_languages": ["en", "es", "ko"],
+        "display_name": "女频",
+        "definition": "核心受众为女性群体，叙事视角、人物塑造、情感逻辑以女性主角为核心。"
+      }
+    ]
   },
   "metadata": {
     "source_service": "rs",
@@ -157,7 +151,7 @@ GET  /api/v1/mock/rs/ai-jobs/jobs/{job_id}
 ```json
 {
   "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
-  "client_request_id": "rs:tag-schema-default:en,es,pt",
+  "client_request_id": "rs:tag-labels:en,es,pt,ko",
   "job_type": "short_drama.tag_schema.translation",
   "status": "queued",
   "status_url": "/api/v1/mock/rs/ai-jobs/jobs/0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
@@ -165,43 +159,24 @@ GET  /api/v1/mock/rs/ai-jobs/jobs/{job_id}
 }
 ```
 
-RS mock 在 `status=succeeded` 时返回翻译结果。结果兼容通用 `JobResult`，成功终态包含 `translated_schemas` 和 `mutual_exclusion_rules` 两个 artifact。
+RS mock 在 `status=succeeded` 时返回翻译结果。成功终态 `result.artifacts[]` 与请求 `labels[]` 一一对应，每个 artifact 直接包含 `label_id` 和按目标语种分组的 `langs`。
 
 ```json
 {
   "result": {
     "artifacts": [
       {
-        "key": "translated_schemas",
-        "type": "json",
-        "label": "翻译后的标签结构体",
-        "content": [
-          {
-            "categories": [
-              {
-                "category_id": "000001",
-                "name": "Audience",
-                "required": true,
-                "min_items": 1,
-                "max_items": 1,
-                "labels": [
-                  {
-                    "label_id": "65f0a1b2c3d4e5f6a7b8c901",
-                    "label_key": "male_oriented",
-                    "name": "Male-oriented",
-                    "definition": "The story is primarily written for male audiences, with the narrative viewpoint and character arcs centered on a male lead."
-                  }
-                ]
-              }
-            ]
+        "label_id": "65f0a1b2c3d4e5f6a7b8c901",
+        "langs": {
+          "en": {
+            "name": "Male-oriented",
+            "definition": "The core audience is male..."
+          },
+          "es": {
+            "name": "Orientado a hombres",
+            "definition": "La audiencia principal es masculina..."
           }
-        ]
-      },
-      {
-        "key": "mutual_exclusion_rules",
-        "type": "json",
-        "label": "互斥标签结构体",
-        "content": []
+        }
       }
     ],
     "signals": {

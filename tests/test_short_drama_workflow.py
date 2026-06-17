@@ -348,15 +348,25 @@ async def test_short_drama_after_success_callback_writes_rs_payload(monkeypatch)
 
 def test_translation_job_params_are_object_and_ordered():
     params = {
-        "source_language": "zh",
-        "target_languages": ["en", "es", "pt"],
-        "source_schema": {"categories": fixture_schema()["categories"]},
-        "source_mutual_exclusion_rules": [],
+        "labels": [
+            {
+                "label_id": "lbl-audience-male",
+                "source_language": "zh",
+                "target_languages": ["en", "es", "pt"],
+                "display_name": "男频",
+                "definition": "男性受众。",
+            }
+        ]
     }
-    assert TagSchemaTranslationParams.model_validate(params).target_languages == ["en", "es", "pt"]
+    assert TagSchemaTranslationParams.model_validate(params).labels[0].target_languages == ["en", "es", "pt"]
 
     with pytest.raises(Exception, match="business language order"):
-        TagSchemaTranslationParams.model_validate({**params, "target_languages": ["pt", "en"]})
+        bad_order = copy.deepcopy(params)
+        bad_order["labels"][0]["target_languages"] = ["pt", "en"]
+        TagSchemaTranslationParams.model_validate(bad_order)
+
+    with pytest.raises(Exception, match="duplicate label_id"):
+        TagSchemaTranslationParams.model_validate({"labels": params["labels"] + copy.deepcopy(params["labels"])})
 
     with pytest.raises(Exception):
         TagSchemaTranslationParams.model_validate([
@@ -364,50 +374,64 @@ def test_translation_job_params_are_object_and_ordered():
         ])
 
 
-def test_translation_output_preserves_non_translated_schema_fields():
+def test_translation_output_returns_label_artifacts():
     params = {
-        "source_language": "zh",
-        "target_languages": ["en"],
-        "source_schema": {
-            "categories": [
-                {
-                    "category_id": "000001",
-                    "name": "受众",
-                    "required": True,
-                    "min_items": 1,
-                    "max_items": 1,
-                    "labels": [
-                        {
-                            "label_id": "lbl-audience-male",
-                            "label_key": "audience_male",
-                            "name": "男频",
-                            "definition": "男性受众。",
-                        }
-                    ],
-                }
-            ]
-        },
-        "source_mutual_exclusion_rules": [],
+        "labels": [
+            {
+                "label_id": "lbl-audience-male",
+                "source_language": "zh",
+                "target_languages": ["en", "es"],
+                "display_name": "男频",
+                "definition": "男性受众。",
+            }
+        ]
     }
-    translated_schema = copy.deepcopy(params["source_schema"])
-    translated_schema["language"] = "en"
-    translated_schema["categories"][0]["name"] = "Audience"
-    translated_schema["categories"][0]["labels"][0]["name"] = "Male-oriented"
-    translated_schema["categories"][0]["labels"][0]["definition"] = "Male audience."
-
     result = parse_translation_output(
-        json.dumps({"translated_schemas": [translated_schema]}, ensure_ascii=False),
+        json.dumps(
+            {
+                "artifacts": [
+                    {
+                        "label_id": "lbl-audience-male",
+                        "langs": {
+                            "en": {"name": "Male-oriented", "definition": "Male audience."},
+                            "es": {"name": "Orientado a hombres", "definition": "Audiencia masculina."},
+                        },
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
         params,
     )
 
-    assert result["artifacts"][0]["content"][0]["categories"][0]["labels"][0]["label_key"] == "audience_male"
+    assert result["artifacts"][0] == {
+        "label_id": "lbl-audience-male",
+        "langs": {
+            "en": {"name": "Male-oriented", "definition": "Male audience."},
+            "es": {"name": "Orientado a hombres", "definition": "Audiencia masculina."},
+        },
+    }
+    assert result["signals"]["source_schema_hash"].startswith("sha256:")
+    assert result["signals"]["translated_schemas_hash"].startswith("sha256:")
 
-    changed_cardinality = copy.deepcopy(translated_schema)
-    changed_cardinality["categories"][0]["max_items"] = 2
-    with pytest.raises(AppError, match="category field changed"):
-        parse_translation_output(json.dumps({"translated_schemas": [changed_cardinality]}), params)
+    changed_label_id = {
+        "artifacts": [
+            {
+                "label_id": "rewritten-label",
+                "langs": {"en": {"name": "Male-oriented", "definition": "Male audience."}},
+            }
+        ]
+    }
+    with pytest.raises(AppError, match="label_id changed"):
+        parse_translation_output(json.dumps(changed_label_id), params)
 
-    missing_label_key = copy.deepcopy(translated_schema)
-    del missing_label_key["categories"][0]["labels"][0]["label_key"]
-    with pytest.raises(AppError, match="label keys changed"):
-        parse_translation_output(json.dumps({"translated_schemas": [missing_label_key]}), params)
+    missing_language = {
+        "artifacts": [
+            {
+                "label_id": "lbl-audience-male",
+                "langs": {"en": {"name": "Male-oriented", "definition": "Male audience."}},
+            }
+        ]
+    }
+    with pytest.raises(AppError, match="languages do not match"):
+        parse_translation_output(json.dumps(missing_language), params)
