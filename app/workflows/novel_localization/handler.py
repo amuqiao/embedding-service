@@ -12,8 +12,9 @@ import re
 from typing import Any, TYPE_CHECKING
 
 from app.core.workflow_registry import WorkflowHandler, register
+from app.integrations.storage import storage
 from app.schemas.jobs import NovelLocalizationJobParams
-from app.services.job_runtime import prompt_payload_from_job, work_item_payload
+from app.services.job_runtime import model_id_from_job, prompt_payload_from_job, work_item_payload
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,13 +43,22 @@ def _looks_like_english_translation(text: str) -> bool:
 def _artifact_content(result_payload: dict[str, Any], key: str) -> str:
     for artifact in result_payload.get("artifacts") or []:
         if artifact.get("key") == key:
-            return str(artifact.get("content") or "")
+            content = artifact.get("content")
+            if content is not None:
+                return str(content)
+            if artifact.get("storage") == "oss_object":
+                return storage.read_text(
+                    bucket=artifact["oss_bucket"],
+                    key=artifact["oss_key"],
+                    region=artifact["oss_region"],
+                )
+            return ""
     return ""
 
 
 def _merge_texts(items: list[AIJobWorkItem], artifact_key: str) -> str:
     parts = [
-        _artifact_content(item.result_payload or {}, artifact_key).strip()
+        _artifact_content(item.result or {}, artifact_key).strip()
         for item in sorted(items, key=lambda item: item.chunk_index)
     ]
     return "\n\n".join(part for part in parts if part)
@@ -110,7 +120,7 @@ def _merge_review(items: list[AIJobWorkItem]) -> JobResult:
     suggestions: list[str] = []
     passed = True
     for item in sorted(items, key=lambda item: item.chunk_index):
-        payload = item.result_payload or {}
+        payload = item.result or {}
         signals = payload.get("signals") or {}
         if signals.get("passed") is False:
             passed = False
@@ -204,8 +214,11 @@ class Step1LocalizeHandler(NovelLocalizationHandler):
             f"{chunk_text}\n"
             "===原文结束==="
         )
+        model_id = model_id_from_job(job)
+        if not model_id:
+            raise RuntimeError(f"job_type has no model runtime: {job.job_type}")
         mapping_result = await generate_text(
-            job.model_id,
+            model_id,
             [{"role": "system", "content": system}, {"role": "user", "content": mapping_prompt}],
         )
         return {"project_memory": project_memory_from_generation(mapping_result)}
@@ -260,8 +273,8 @@ class Step3TranslateHandler(NovelLocalizationHandler):
         # scan item's result takes priority if available
         scan_content = ""
         for item in items:
-            if item.kind == "scan" and item.result_payload:
-                scan_content = _artifact_content(item.result_payload, "translated_text")
+            if item.kind == "scan" and item.result:
+                scan_content = _artifact_content(item.result, "translated_text")
                 break
         chunk_items = [item for item in items if item.kind == "chunk"]
         translated = scan_content.strip() or _merge_texts(chunk_items, "translated_text")
@@ -294,8 +307,11 @@ class Step3TranslateHandler(NovelLocalizationHandler):
             f"{translated}\n"
             "===英文译稿结束==="
         )
+        model_id = model_id_from_job(job)
+        if not model_id:
+            raise RuntimeError(f"job_type has no model runtime: {job.job_type}")
         scan_result = await generate_text(
-            job.model_id,
+            model_id,
             [{"role": "system", "content": system}, {"role": "user", "content": scan_prompt}],
         )
         return {

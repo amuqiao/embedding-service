@@ -1,9 +1,11 @@
+import json
 import uuid
 
 import pytest
 
 from app.models.job import AIJob, AIJobWorkItem
 from app.schemas.jobs import CreateJobRequest
+from app.services.job_runtime import payload_hash
 from app.services.jobs import _validate_create_request
 from app.services.job_workflow import execute_work_item, finalize_job, plan_job
 
@@ -51,20 +53,18 @@ def test_generic_echo_rejects_missing_value():
 async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch):
     job_id = uuid.uuid4()
     item_id = uuid.uuid4()
+    job_params = {"value": {"hello": "world"}, "label": "Echo"}
+    job_params_hash = payload_hash(job_params)
     job = AIJob(
         id=job_id,
         job_type="generic.echo",
-        model_id=None,
         status="running",
         progress_percent=5,
         celery_task_id="root-task",
-        input_payload={
-            "job_params": {"value": {"hello": "world"}, "label": "Echo"},
-            "metadata": {"caller_task_id": "echo-1"},
-        },
-        output_payload={},
-        callback_payload={},
-        prompt_payload={},
+        job_params_ref={"oss_bucket": "bucket", "oss_key": "runtime/job_params.json", "oss_region": "region"},
+        job_params_hash=job_params_hash,
+        runtime_ref={"oss_bucket": "bucket", "oss_key": "runtime/runtime.json", "oss_region": "region"},
+        metadata_={"caller_task_id": "echo-1"},
     )
     created_item = AIJobWorkItem(
         id=item_id,
@@ -73,9 +73,23 @@ async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch
         kind="whole",
         chunk_index=0,
         status="queued",
-        input_payload={"value": {"hello": "world"}, "label": "Echo"},
     )
     marked = {}
+    runtime_objects = {
+        "runtime/job_params.json": job_params,
+        "runtime/runtime.json": {
+            "schema_version": 1,
+            "job_type": "generic.echo",
+            "job_params_hash": job_params_hash,
+            "runtime_fields": {},
+            "output_target": {
+                "type": "oss_prefix",
+                "oss_bucket": "bucket",
+                "oss_prefix": "runtime-output/",
+                "oss_region": "region",
+            },
+        },
+    }
 
     async def fake_get_job_or_404(_db, _job_id):
         return job
@@ -89,12 +103,12 @@ async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch
     async def fake_create_work_item(*_args, **kwargs):
         marked["planned"] = True
         assert "input_payload" not in kwargs
-        assert kwargs["input_ref"]["payload_snapshot"] == {"value": {"hello": "world"}, "label": "Echo"}
+        assert kwargs["input_ref"]["oss_key"] == "runtime/work-items/whole-0.json"
+        created_item.input_ref = kwargs["input_ref"]
         return created_item
 
-    async def fake_set_execution_plan(_db, _job_id, *, execution_mode, execution_plan):
-        assert "input_payload" not in execution_plan["work_items"][0]
-        job.execution_mode = execution_mode
+    async def fake_set_execution_plan(_db, _job_id, *, execution_plan):
+        assert "input_data" not in execution_plan["work_items"][0]
         job.execution_plan = execution_plan
 
     async def fake_update_progress(*_args, **_kwargs):
@@ -106,20 +120,28 @@ async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch
     async def fake_claim_work_item(*_args, **_kwargs):
         return True
 
-    async def fake_mark_work_item_succeeded(_db, _item_id, result_payload):
+    async def fake_mark_work_item_succeeded(_db, _item_id, result):
         created_item.status = "succeeded"
-        created_item.result_payload = result_payload
+        created_item.result = result
 
-    async def fake_mark_succeeded(_db, _job_id, *, celery_task_id, result_payload):
+    async def fake_mark_succeeded(_db, _job_id, *, celery_task_id, result, canonical_result, canonical_result_ref=None):
         job.status = "succeeded"
-        job.result_payload = result_payload
+        job.result = result
+        job.canonical_result = canonical_result
         return True
 
     async def fake_deliver_callback(_job_id):
         return True
 
     def fake_write_runtime_json(_job, _name, payload):
-        return {"storage": "oss_object", "type": "json", "payload_snapshot": payload}
+        key = f"runtime/{_name}.json"
+        runtime_objects[key] = payload
+        return {"storage": "oss_object", "type": "json", "oss_bucket": "bucket", "oss_key": key, "oss_region": "region"}
+
+    def fake_read_text(*, bucket, key, region):
+        assert bucket == "bucket"
+        assert region == "region"
+        return json.dumps(runtime_objects[key], ensure_ascii=False)
 
     monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
     monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_running", fake_mark_running)
@@ -140,6 +162,7 @@ async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("generic.echo should not call LLM")),
     )
     monkeypatch.setattr("app.services.job_workflow.write_runtime_json", fake_write_runtime_json)
+    monkeypatch.setattr("app.services.job_runtime.storage.read_text", fake_read_text)
     monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback)
 
     _job, plan, item_ids = await plan_job(FakeDB(), job_id)
@@ -150,6 +173,7 @@ async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch
     assert item_ids == {"whole:0": item_id}
     assert executed == {"work_item_id": str(item_id), "kind": "whole", "chunk_index": 0}
     assert finalized == {"job_id": str(job_id), "status": "succeeded"}
-    assert job.result_payload["artifacts"][0]["content"] == {"hello": "world"}
-    assert job.result_payload["artifacts"][0]["label"] == "Echo"
-    assert job.result_payload["signals"] == {"echoed": True}
+    assert job.result["artifacts"][0]["content"] == {"hello": "world"}
+    assert job.result["artifacts"][0]["label"] == "Echo"
+    assert job.result["signals"] == {"echoed": True}
+    assert job.canonical_result == job.result

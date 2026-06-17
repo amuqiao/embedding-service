@@ -26,23 +26,14 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
             client_request_id=kwargs["client_request_id"],
             request_fingerprint=kwargs["request_fingerprint"],
             job_type=kwargs["job_type"],
-            model_id=kwargs["model_id"],
             status="queued",
             progress_percent=0,
             progress_text="已排队",
-            input_payload=kwargs["input_payload"],
-            output_payload=kwargs["output_payload"],
-            callback_payload=kwargs["callback_payload"],
             callback_url=kwargs["callback_url"],
             callback_events=kwargs["callback_events"],
-            prompt_payload=kwargs["prompt_payload"],
-            public_metadata=kwargs["public_metadata"],
-            options_payload=kwargs["options_payload"],
+            metadata_=kwargs["metadata"],
             priority=kwargs["priority"],
             timeout_seconds=kwargs["timeout_seconds"],
-            output_oss_bucket=kwargs["output_oss_bucket"],
-            output_oss_prefix=kwargs["output_oss_prefix"],
-            output_oss_region=kwargs["output_oss_region"],
             created_at=now,
             updated_at=now,
         )
@@ -57,9 +48,9 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
         return {
             "storage": "oss_object",
             "type": "json",
-            "oss_bucket": job.output_oss_bucket,
-            "oss_key": f"{job.output_oss_prefix}runtime/{name}.json",
-            "oss_region": job.output_oss_region,
+            "oss_bucket": "bucket",
+            "oss_key": f"ai-jobs/{job.id}/runtime/{name}.json",
+            "oss_region": "region",
             "payload_snapshot": payload,
         }
 
@@ -85,19 +76,23 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     assert created is True
     assert job.request_fingerprint.startswith("sha256:")
     assert captured["request_fingerprint"] == job.request_fingerprint
-    assert captured["input_payload"] == {}
-    assert captured["prompt_payload"] == {}
-    assert captured["output_payload"] == {}
-    assert captured["callback_payload"] == {}
-    assert captured["public_metadata"] == {"caller_task_id": "task-1"}
-    assert captured["options_payload"] == {"priority": "high", "timeout_seconds": 123}
+    assert "input_payload" not in captured
+    assert "prompt_payload" not in captured
+    assert "output_payload" not in captured
+    assert "callback_payload" not in captured
+    assert "options_payload" not in captured
+    assert captured["metadata"] == {"caller_task_id": "task-1"}
     assert captured["priority"] == "high"
     assert captured["timeout_seconds"] == 123
     assert captured["callback_url"] == "https://example.com/callback"
     assert captured["callback_events"] == ["job.succeeded", "job.failed"]
-    assert job.output_oss_prefix.endswith(f"{job.id}/")
-    assert job.input_ref["payload_snapshot"] == {"value": {"hello": "world"}, "label": "Echo"}
-    assert job.runtime_ref["job_params_ref"] == job.input_ref
+    assert job.job_params_ref["payload_snapshot"] == {"value": {"hello": "world"}, "label": "Echo"}
+    assert job.job_params_hash.startswith("sha256:")
+    assert job.runtime_ref["payload_snapshot"]["schema_version"] == 1
+    assert job.runtime_ref["payload_snapshot"]["job_type"] == "generic.echo"
+    assert job.runtime_ref["payload_snapshot"]["job_params_hash"] == job.job_params_hash
+    assert job.runtime_ref["payload_snapshot"]["runtime_fields"] == {}
+    assert job.runtime_ref["payload_snapshot"]["output_target"]["type"] == "oss_prefix"
 
 
 @pytest.mark.asyncio
@@ -108,14 +103,9 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
         client_request_id="req-1",
         request_fingerprint=None,
         job_type="generic.echo",
-        model_id=None,
         status="queued",
         progress_percent=0,
-        input_payload={},
-        output_payload={},
-        callback_payload={},
-        prompt_payload={},
-        public_metadata={},
+        metadata_={},
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )

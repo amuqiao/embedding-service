@@ -16,7 +16,9 @@ def test_extract_tagged_json_from_work_note():
     assert extract_tagged_json(text, "project_memory") == {"characters": ["李明"], "style_guide": "美式"}
 
 
-def test_append_context_to_system_prompt():
+def test_append_context_to_system_prompt(monkeypatch):
+    monkeypatch.setattr("app.services.job_context.prompt_payload_from_job", lambda _job: DummyJob.prompt_payload)
+
     payload = append_context_to_prompt(DummyJob(), "冻结映射表")
 
     # no system block in payload → creates system_context block at position 0

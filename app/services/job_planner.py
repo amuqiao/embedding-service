@@ -10,7 +10,7 @@ class PlannedWorkItem:
     name: str
     kind: str
     chunk_index: int
-    input_payload: dict[str, Any] | None = None
+    input_data: dict[str, Any] | None = None
     input_ref: dict[str, Any] | None = None
 
 
@@ -31,8 +31,8 @@ class JobPlan:
             }
             if item.input_ref is not None:
                 item_data["input_ref"] = item.input_ref
-            if include_payload and item.input_payload is not None:
-                item_data["input_payload"] = item.input_payload
+            if include_payload and item.input_data is not None:
+                item_data["input_data"] = item.input_data
             work_items.append(item_data)
         return {
             "execution_mode": self.execution_mode,
@@ -52,7 +52,7 @@ def job_plan_from_payload(payload: dict[str, Any]) -> JobPlan:
                 name=item["name"],
                 kind=item["kind"],
                 chunk_index=item["chunk_index"],
-                input_payload=item.get("input_payload"),
+                input_data=item.get("input_data"),
                 input_ref=item.get("input_ref"),
             )
             for item in payload["work_items"]
@@ -190,7 +190,7 @@ def build_job_plan(job_type: str, input_text: str) -> JobPlan:
                     name=f"{job_type}.whole",
                     kind="whole",
                     chunk_index=0,
-                    input_payload={"text": input_text},
+                    input_data={"text": input_text},
                 )
             ],
         )
@@ -204,7 +204,7 @@ def build_job_plan(job_type: str, input_text: str) -> JobPlan:
                 name=f"{job_type}.memory",
                 kind="memory",
                 chunk_index=0,
-                input_payload={"chunks": chunk_registry},
+                input_data={"chunks": chunk_registry},
             )
         )
 
@@ -214,7 +214,7 @@ def build_job_plan(job_type: str, input_text: str) -> JobPlan:
                 name=f"{job_type}.chunk",
                 kind="chunk",
                 chunk_index=chunk["chunk_index"],
-                input_payload={"text": chunk["text"], "char_count": chunk["char_count"]},
+                input_data={"text": chunk["text"], "char_count": chunk["char_count"]},
             )
         )
 
@@ -223,7 +223,7 @@ def build_job_plan(job_type: str, input_text: str) -> JobPlan:
             name=f"{job_type}.merge",
             kind="merge",
             chunk_index=len(chunk_registry) + 1,
-            input_payload={"chunk_count": len(chunk_registry)},
+            input_data={"chunk_count": len(chunk_registry)},
         )
     )
 
@@ -233,7 +233,7 @@ def build_job_plan(job_type: str, input_text: str) -> JobPlan:
                 name=f"{job_type}.scan",
                 kind="scan",
                 chunk_index=len(chunk_registry) + 2,
-                input_payload={"chunk_count": len(chunk_registry)},
+                input_data={"chunk_count": len(chunk_registry)},
             )
         )
 

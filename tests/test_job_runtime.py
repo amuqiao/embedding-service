@@ -1,14 +1,39 @@
 import json
 import uuid
 
+import pytest
+
 from app.models.job import AIJob, AIJobWorkItem
-from app.services.job_runtime import job_params_from_job, prompt_payload_from_job, work_item_payload
+from app.services.job_runtime import job_params_from_job, payload_hash, prompt_payload_from_job, work_item_payload
 
 
 def test_runtime_helpers_read_payload_from_refs(monkeypatch):
+    from app.workflows.novel_localization.handler import register_all
+
+    register_all()
+    job_params = {
+        "model_id": "gpt-4.1",
+        "source": {"inline": {"text": "原文"}},
+        "prompt": {"blocks": [{"key": "user", "role": "user", "content": "prompt"}]},
+    }
+    job_params_hash = payload_hash(job_params)
     objects = {
-        "runtime/job_params.json": {"value": {"hello": "world"}},
-        "runtime/prompt.json": {"blocks": [{"key": "user", "role": "user", "content": "prompt"}]},
+        "runtime/job_params.json": job_params,
+        "runtime/runtime.json": {
+            "schema_version": 1,
+            "job_type": "novel_localization.step1_localize",
+            "job_params_hash": job_params_hash,
+            "runtime_fields": {
+                "model_id": "gpt-4.1",
+                "prompt_payload": {"blocks": [{"key": "user", "role": "user", "content": "prompt"}]},
+            },
+            "output_target": {
+                "type": "oss_prefix",
+                "oss_bucket": "bucket",
+                "oss_prefix": "runtime-output/",
+                "oss_region": "region",
+            },
+        },
         "runtime/work-item.json": {"text": "chunk text"},
     }
 
@@ -21,47 +46,54 @@ def test_runtime_helpers_read_payload_from_refs(monkeypatch):
 
     job = AIJob(
         id=uuid.uuid4(),
-        job_type="generic.echo",
-        model_id=None,
-        input_payload={"job_params": {"legacy": True}},
-        output_payload={},
-        callback_payload={},
-        prompt_payload={"blocks": []},
-        input_ref={"oss_bucket": "bucket", "oss_key": "runtime/job_params.json", "oss_region": "region"},
-        prompt_ref={"oss_bucket": "bucket", "oss_key": "runtime/prompt.json", "oss_region": "region"},
+        job_type="novel_localization.step1_localize",
+        job_params_ref={"oss_bucket": "bucket", "oss_key": "runtime/job_params.json", "oss_region": "region"},
+        job_params_hash=job_params_hash,
+        runtime_ref={"oss_bucket": "bucket", "oss_key": "runtime/runtime.json", "oss_region": "region"},
     )
     item = AIJobWorkItem(
         id=uuid.uuid4(),
         job_id=job.id,
         name="chunk",
         kind="chunk",
-        input_payload={"text": "legacy text"},
         input_ref={"oss_bucket": "bucket", "oss_key": "runtime/work-item.json", "oss_region": "region"},
     )
 
-    assert job_params_from_job(job) == {"value": {"hello": "world"}}
+    assert job_params_from_job(job)["model_id"] == "gpt-4.1"
     assert prompt_payload_from_job(job) == {"blocks": [{"key": "user", "role": "user", "content": "prompt"}]}
     assert work_item_payload(item) == {"text": "chunk text"}
 
 
-def test_runtime_helpers_fallback_to_legacy_payloads():
+def test_job_params_hash_mismatch_fails_fast(monkeypatch):
+    def fake_read_text(*, bucket, key, region):
+        return json.dumps({"value": "tampered"}, ensure_ascii=False)
+
+    monkeypatch.setattr("app.services.job_runtime.storage.read_text", fake_read_text)
+
     job = AIJob(
         id=uuid.uuid4(),
         job_type="generic.echo",
-        model_id=None,
-        input_payload={"job_params": {"legacy": True}},
-        output_payload={},
-        callback_payload={},
-        prompt_payload={"blocks": [{"key": "user", "role": "user", "content": "legacy"}]},
+        job_params_ref={"oss_bucket": "bucket", "oss_key": "runtime/job_params.json", "oss_region": "region"},
+        job_params_hash=payload_hash({"value": "original"}),
+    )
+
+    with pytest.raises(Exception, match="运行时参数 hash 不匹配"):
+        job_params_from_job(job)
+
+
+def test_runtime_helpers_fail_fast_without_refs():
+    job = AIJob(
+        id=uuid.uuid4(),
+        job_type="generic.echo",
     )
     item = AIJobWorkItem(
         id=uuid.uuid4(),
         job_id=job.id,
         name="chunk",
         kind="chunk",
-        input_payload={"text": "legacy text"},
     )
 
-    assert job_params_from_job(job) == {"legacy": True}
-    assert prompt_payload_from_job(job) == {"blocks": [{"key": "user", "role": "user", "content": "legacy"}]}
-    assert work_item_payload(item) == {"text": "legacy text"}
+    with pytest.raises(Exception, match="运行时引用不存在"):
+        job_params_from_job(job)
+    with pytest.raises(Exception, match="运行时引用不存在"):
+        work_item_payload(item)

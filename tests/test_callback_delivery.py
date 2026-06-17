@@ -8,19 +8,16 @@ from app.services.callbacks import CallbackDeliveryResult, build_callback_body, 
 from app.services.jobs import _job_to_response
 
 
-def _job(callback_payload: dict) -> AIJob:
+def _job(callback_url: str | None = "https://example.com/callback") -> AIJob:
     now = datetime.now(timezone.utc)
     return AIJob(
         id=uuid.uuid4(),
         job_type="novel_localization.step1_localize",
-        model_id="gpt-4.1",
         status="succeeded",
         progress_percent=100,
-        input_payload={"metadata": {"caller_task_id": "task-1"}},
-        output_payload={},
-        callback_payload=callback_payload,
-        prompt_payload={},
-        result_payload={"artifacts": [], "signals": {}},
+        metadata_={"caller_task_id": "task-1"},
+        callback_url=callback_url,
+        result={"artifacts": [], "signals": {}},
         callback_status="pending",
         callback_attempts=0,
         callback_next_retry_at=None,
@@ -31,7 +28,7 @@ def _job(callback_payload: dict) -> AIJob:
 
 
 def test_build_callback_body_wraps_job_view():
-    job = _job({"url": "https://example.com/callback"})
+    job = _job()
     body = build_callback_body(job)
 
     assert body["event"] == "job.succeeded"
@@ -54,7 +51,7 @@ def test_build_callback_body_wraps_job_view():
 
 def test_job_view_exposes_callback_delivery_state():
     next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=5)
-    job = _job({"url": "https://example.com/callback"})
+    job = _job()
     job.callback_status = "failed"
     job.callback_attempts = 2
     job.callback_next_retry_at = next_retry_at
@@ -68,12 +65,11 @@ def test_job_view_exposes_callback_delivery_state():
     assert view.callback.last_error == {"code": "CALLBACK_HTTP_ERROR", "status_code": 503}
 
 
-def test_job_view_prefers_public_shell_fields():
-    job = _job({"url": "https://example.com/callback"})
+def test_job_view_uses_shell_result_and_metadata():
+    job = _job()
     job.progress_stage = "finalize"
-    job.public_metadata = {"visible": "metadata"}
-    job.public_result_payload = {"artifacts": [{"key": "public"}], "signals": {"public": True}}
-    job.result_payload = {"artifacts": [{"key": "legacy"}], "signals": {"legacy": True}}
+    job.metadata_ = {"visible": "metadata"}
+    job.result = {"artifacts": [{"key": "public"}], "signals": {"public": True}}
 
     view = _job_to_response(job)
 
@@ -84,7 +80,7 @@ def test_job_view_prefers_public_shell_fields():
 
 def test_build_callback_body_reuses_job_view_callback_state():
     next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=5)
-    job = _job({"url": "https://example.com/callback"})
+    job = _job()
     job.callback_status = "failed"
     job.callback_attempts = 2
     job.callback_next_retry_at = next_retry_at
@@ -103,7 +99,7 @@ def test_build_callback_body_reuses_job_view_callback_state():
 
 @pytest.mark.asyncio
 async def test_deliver_callback_skips_missing_url():
-    result = await deliver_callback(_job({}))
+    result = await deliver_callback(_job(None))
 
     assert result.status == "skipped"
     assert result.attempts == 0
@@ -112,7 +108,7 @@ async def test_deliver_callback_skips_missing_url():
 
 @pytest.mark.asyncio
 async def test_deliver_callback_skips_invalid_url_with_error():
-    result = await deliver_callback(_job({"url": "ftp://example.com/callback"}))
+    result = await deliver_callback(_job("ftp://example.com/callback"))
 
     assert result.status == "skipped"
     assert result.attempts == 0
@@ -144,7 +140,7 @@ async def test_deliver_callback_tries_once_on_http_failure(monkeypatch):
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
 
-    result = await deliver_callback(_job({"url": "https://example.com/callback"}))
+    result = await deliver_callback(_job())
 
     assert attempts == 1
     assert result.status == "failed"
@@ -153,7 +149,7 @@ async def test_deliver_callback_tries_once_on_http_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deliver_callback_prefers_shell_callback_fields(monkeypatch):
+async def test_deliver_callback_uses_shell_callback_fields(monkeypatch):
     posted: dict = {}
 
     class _Response:
@@ -176,8 +172,7 @@ async def test_deliver_callback_prefers_shell_callback_fields(monkeypatch):
             return _Response()
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
-    job = _job({"url": "https://legacy.example.com/callback", "events": ["job.failed"]})
-    job.callback_url = "https://shell.example.com/callback"
+    job = _job("https://shell.example.com/callback")
     job.callback_events = ["job.succeeded"]
 
     result = await deliver_callback(job)
@@ -191,7 +186,7 @@ async def test_deliver_callback_prefers_shell_callback_fields(monkeypatch):
 async def test_deliver_callback_for_job_records_failed_delivery_without_changing_job_status(monkeypatch):
     from app.tasks.jobs import deliver_callback_for_job
 
-    job = _job({"url": "https://example.com/callback"})
+    job = _job()
     commits = 0
     recorded: dict = {}
 

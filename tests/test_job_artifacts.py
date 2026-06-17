@@ -1,4 +1,5 @@
 import asyncio
+import json
 import uuid
 
 import pytest
@@ -8,8 +9,8 @@ from app.integrations.ai_gateway import TextGenerationResult
 from app.models.job import AIJob, AIJobWorkItem
 from app.schemas.jobs import JobResult
 from app.services.executor import run_ai_job
-from app.services.job_workflow import merge_work_items
-from app.services.jobs import _persist_large_artifacts
+from app.services.job_workflow import finalize_job, merge_work_items
+from app.services.jobs import _persist_large_artifacts, _persist_work_item_artifacts
 
 
 def _prompt_payload() -> dict:
@@ -33,6 +34,14 @@ def _mock_generate(text: str):
     async def _generate(model_id, messages):
         return TextGenerationResult(text=text)
     return _generate
+
+
+class _FakeDB:
+    async def commit(self):
+        pass
+
+    async def refresh(self, _obj):
+        pass
 
 
 def test_step1_returns_work_note_artifact(monkeypatch):
@@ -127,12 +136,7 @@ def test_step2_rejects_missing_suggested_work_note(monkeypatch):
 def test_chunked_step1_merge_uses_work_note_artifact():
     job = AIJob(
         job_type="novel_localization.step1_localize",
-        model_id="gpt-4.1",
-        execution_mode="chunked",
-        input_payload={},
-        output_payload={},
-        callback_payload={},
-        prompt_payload={},
+        execution_plan={"execution_mode": "chunked"},
     )
     job_id = uuid.uuid4()
     items = [
@@ -141,7 +145,7 @@ def test_chunked_step1_merge_uses_work_note_artifact():
             name="chunk-1",
             kind="chunk",
             chunk_index=1,
-            result_payload={
+            result={
                 "artifacts": [
                     {"key": "localized_text", "type": "text", "label": "本地化正文", "content": "第二段"},
                     {
@@ -160,7 +164,7 @@ def test_chunked_step1_merge_uses_work_note_artifact():
             name="chunk-0",
             kind="chunk",
             chunk_index=0,
-            result_payload={
+            result={
                 "artifacts": [
                     {"key": "localized_text", "type": "text", "label": "本地化正文", "content": "第一段"},
                     {
@@ -185,24 +189,41 @@ def test_chunked_step1_merge_uses_work_note_artifact():
     assert work_note.content == "第一段注释\n\n第二段注释"
 
 
-def test_persist_large_artifacts_uses_shell_output_fields(monkeypatch):
+def test_persist_large_artifacts_uses_runtime_output_target(monkeypatch):
     written: dict = {}
+    job_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    job_params_hash = "sha256:" + "0" * 64
     job = AIJob(
+        id=job_id,
         job_type="novel_localization.step1_localize",
-        model_id="gpt-4.1",
-        output_payload={},
-        callback_payload={},
-        prompt_payload={},
-        output_oss_bucket="bucket",
-        output_oss_prefix="ai-jobs/job-1/",
-        output_oss_region="region",
+        job_params_hash=job_params_hash,
+        runtime_ref={"oss_bucket": "runtime-bucket", "oss_key": "runtime/runtime.json", "oss_region": "runtime-region"},
     )
 
     def fake_write_text(*, bucket, key, region, content):
         written.update({"bucket": bucket, "key": key, "region": region, "content": content})
         return {"oss_bucket": bucket, "oss_key": key, "oss_region": region, "content_hash": "sha256:" + "0" * 64}
 
+    def fake_read_text(*, bucket, key, region):
+        assert (bucket, key, region) == ("runtime-bucket", "runtime/runtime.json", "runtime-region")
+        return json.dumps(
+            {
+                "schema_version": 1,
+                "job_type": "novel_localization.step1_localize",
+                "job_params_hash": job_params_hash,
+                "runtime_fields": {},
+                "output_target": {
+                    "type": "oss_prefix",
+                    "oss_bucket": "bucket",
+                    "oss_prefix": "ai-jobs/frozen-job/",
+                    "oss_region": "region",
+                },
+            },
+            ensure_ascii=False,
+        )
+
     monkeypatch.setattr("app.services.jobs.storage.write_text", fake_write_text)
+    monkeypatch.setattr("app.services.job_runtime.storage.read_text", fake_read_text)
 
     result = _persist_large_artifacts(
         job,
@@ -216,7 +237,7 @@ def test_persist_large_artifacts_uses_shell_output_fields(monkeypatch):
 
     assert written == {
         "bucket": "bucket",
-        "key": "ai-jobs/job-1/localized_text.txt",
+        "key": "ai-jobs/frozen-job/localized_text.txt",
         "region": "region",
         "content": "正文",
     }
@@ -224,15 +245,292 @@ def test_persist_large_artifacts_uses_shell_output_fields(monkeypatch):
     assert "content" not in result["artifacts"][0]
 
 
+def test_persist_work_item_large_artifacts_uses_work_item_scope(monkeypatch):
+    written: dict = {}
+    job_params_hash = "sha256:" + "0" * 64
+    job = AIJob(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        job_type="novel_localization.step1_localize",
+        job_params_hash=job_params_hash,
+        runtime_ref={"oss_bucket": "runtime-bucket", "oss_key": "runtime/runtime.json", "oss_region": "runtime-region"},
+    )
+
+    def fake_write_text(*, bucket, key, region, content):
+        written.update({"bucket": bucket, "key": key, "region": region, "content": content})
+        return {"oss_bucket": bucket, "oss_key": key, "oss_region": region, "content_hash": "sha256:" + "0" * 64}
+
+    def fake_read_text(*, bucket, key, region):
+        assert (bucket, key, region) == ("runtime-bucket", "runtime/runtime.json", "runtime-region")
+        return json.dumps(
+            {
+                "schema_version": 1,
+                "job_type": "novel_localization.step1_localize",
+                "job_params_hash": job_params_hash,
+                "runtime_fields": {},
+                "output_target": {
+                    "type": "oss_prefix",
+                    "oss_bucket": "bucket",
+                    "oss_prefix": "ai-jobs/frozen-job/",
+                    "oss_region": "region",
+                },
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("app.services.jobs.storage.write_text", fake_write_text)
+    monkeypatch.setattr("app.services.job_runtime.storage.read_text", fake_read_text)
+
+    result = _persist_work_item_artifacts(
+        job,
+        kind="chunk",
+        chunk_index=1,
+        result={
+            "artifacts": [
+                {"key": "localized_text", "type": "text", "label": "本地化正文", "content": "分块正文"},
+                {"key": "work_note", "type": "work_note", "label": "工作注释", "content": "注释"},
+            ],
+            "signals": {},
+        },
+    )
+
+    assert written == {
+        "bucket": "bucket",
+        "key": "ai-jobs/frozen-job/work-items/chunk-1/localized_text.txt",
+        "region": "region",
+        "content": "分块正文",
+    }
+    assert result["artifacts"][0]["storage"] == "oss_object"
+    assert "content" not in result["artifacts"][0]
+    assert result["artifacts"][1]["content"] == "注释"
+
+
+def test_single_mode_large_artifact_uses_final_job_scope(monkeypatch):
+    written: list[dict] = []
+    job_params_hash = "sha256:" + "0" * 64
+    job = AIJob(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000003"),
+        job_type="novel_localization.step1_localize",
+        execution_plan={"execution_mode": "single"},
+        job_params_hash=job_params_hash,
+        runtime_ref={"oss_bucket": "runtime-bucket", "oss_key": "runtime/runtime.json", "oss_region": "runtime-region"},
+    )
+    item = AIJobWorkItem(
+        job_id=job.id,
+        name="whole",
+        kind="whole",
+        chunk_index=0,
+        result={
+            "artifacts": [
+                {"key": "localized_text", "type": "text", "label": "本地化正文", "content": "完整正文"}
+            ],
+            "signals": {},
+        },
+    )
+
+    def fake_write_text(*, bucket, key, region, content):
+        written.append({"bucket": bucket, "key": key, "region": region, "content": content})
+        return {"oss_bucket": bucket, "oss_key": key, "oss_region": region, "content_hash": "sha256:" + "0" * 64}
+
+    def fake_read_text(*, bucket, key, region):
+        assert (bucket, key, region) == ("runtime-bucket", "runtime/runtime.json", "runtime-region")
+        return json.dumps(
+            {
+                "schema_version": 1,
+                "job_type": "novel_localization.step1_localize",
+                "job_params_hash": job_params_hash,
+                "runtime_fields": {},
+                "output_target": {
+                    "type": "oss_prefix",
+                    "oss_bucket": "bucket",
+                    "oss_prefix": "ai-jobs/final-job/",
+                    "oss_region": "region",
+                },
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("app.services.jobs.storage.write_text", fake_write_text)
+    monkeypatch.setattr("app.services.job_runtime.storage.read_text", fake_read_text)
+
+    merged = merge_work_items(job, [item])
+    result = _persist_large_artifacts(job, merged)
+
+    assert written == [
+        {
+            "bucket": "bucket",
+            "key": "ai-jobs/final-job/localized_text.txt",
+            "region": "region",
+            "content": "完整正文",
+        }
+    ]
+    assert result["artifacts"][0]["oss_key"] == "ai-jobs/final-job/localized_text.txt"
+    assert "content" not in result["artifacts"][0]
+
+
+@pytest.mark.asyncio
+async def test_finalize_single_mode_rewrites_work_item_to_final_artifact_ref(monkeypatch):
+    written: list[dict] = []
+    job_params_hash = "sha256:" + "0" * 64
+    job_id = uuid.UUID("00000000-0000-0000-0000-000000000004")
+    job = AIJob(
+        id=job_id,
+        job_type="novel_localization.step1_localize",
+        execution_plan={"execution_mode": "single"},
+        celery_task_id="root-task",
+        job_params_hash=job_params_hash,
+        runtime_ref={"oss_bucket": "runtime-bucket", "oss_key": "runtime/runtime.json", "oss_region": "runtime-region"},
+    )
+    whole = AIJobWorkItem(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        name="whole",
+        kind="whole",
+        chunk_index=0,
+        status="succeeded",
+        result={
+            "artifacts": [
+                {"key": "localized_text", "type": "text", "label": "本地化正文", "content": "完整正文"}
+            ],
+            "signals": {},
+        },
+    )
+    captured: dict = {}
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_list_work_items(_db, _job_id):
+        return [whole]
+
+    async def fake_mark_work_item_succeeded(_db, _item_id, result):
+        captured["work_item_result"] = result
+        whole.result = result
+
+    async def fake_update_progress(*_args, **_kwargs):
+        pass
+
+    async def fake_mark_succeeded(_db, _job_id, *, celery_task_id, result, canonical_result, canonical_result_ref=None):
+        captured["job_result"] = result
+        captured["canonical_result"] = canonical_result
+        return True
+
+    async def fake_deliver_callback(_job_id):
+        return False
+
+    def fake_write_text(*, bucket, key, region, content):
+        written.append({"bucket": bucket, "key": key, "region": region, "content": content})
+        return {"oss_bucket": bucket, "oss_key": key, "oss_region": region, "content_hash": "sha256:" + "0" * 64}
+
+    def fake_read_text(*, bucket, key, region):
+        return json.dumps(
+            {
+                "schema_version": 1,
+                "job_type": "novel_localization.step1_localize",
+                "job_params_hash": job_params_hash,
+                "runtime_fields": {},
+                "output_target": {
+                    "type": "oss_prefix",
+                    "oss_bucket": "bucket",
+                    "oss_prefix": "ai-jobs/final-job/",
+                    "oss_region": "region",
+                },
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.list_work_items", fake_list_work_items)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_work_item_succeeded", fake_mark_work_item_succeeded)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.update_progress", fake_update_progress)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback)
+    monkeypatch.setattr("app.services.jobs.storage.write_text", fake_write_text)
+    monkeypatch.setattr("app.services.job_runtime.storage.read_text", fake_read_text)
+
+    finalized = await finalize_job(_FakeDB(), job_id)
+
+    assert finalized == {"job_id": str(job_id), "status": "succeeded"}
+    assert written[0]["key"] == "ai-jobs/final-job/localized_text.txt"
+    artifact = captured["work_item_result"]["artifacts"][0]
+    assert artifact["storage"] == "oss_object"
+    assert artifact["oss_key"] == "ai-jobs/final-job/localized_text.txt"
+    assert "content" not in artifact
+    assert captured["job_result"] == captured["canonical_result"] == captured["work_item_result"]
+
+
+def test_chunked_step1_merge_reads_externalized_chunk_artifact(monkeypatch):
+    job = AIJob(
+        job_type="novel_localization.step1_localize",
+        execution_plan={"execution_mode": "chunked"},
+    )
+    job_id = uuid.uuid4()
+    stored = {
+        "ai-jobs/job/work-items/chunk-0/localized_text.txt": "第一段",
+        "ai-jobs/job/work-items/chunk-1/localized_text.txt": "第二段",
+    }
+
+    def fake_read_text(*, bucket, key, region):
+        assert bucket == "bucket"
+        assert region == "region"
+        return stored[key]
+
+    monkeypatch.setattr("app.workflows.novel_localization.handler.storage.read_text", fake_read_text)
+
+    items = [
+        AIJobWorkItem(
+            job_id=job_id,
+            name="chunk-0",
+            kind="chunk",
+            chunk_index=0,
+            result={
+                "artifacts": [
+                    {
+                        "key": "localized_text",
+                        "type": "text",
+                        "label": "本地化正文",
+                        "storage": "oss_object",
+                        "oss_bucket": "bucket",
+                        "oss_key": "ai-jobs/job/work-items/chunk-0/localized_text.txt",
+                        "oss_region": "region",
+                    },
+                    {"key": "work_note", "type": "work_note", "label": "工作注释", "content": "第一段注释"},
+                ],
+                "signals": {},
+            },
+        ),
+        AIJobWorkItem(
+            job_id=job_id,
+            name="chunk-1",
+            kind="chunk",
+            chunk_index=1,
+            result={
+                "artifacts": [
+                    {
+                        "key": "localized_text",
+                        "type": "text",
+                        "label": "本地化正文",
+                        "storage": "oss_object",
+                        "oss_bucket": "bucket",
+                        "oss_key": "ai-jobs/job/work-items/chunk-1/localized_text.txt",
+                        "oss_region": "region",
+                    },
+                    {"key": "work_note", "type": "work_note", "label": "工作注释", "content": "第二段注释"},
+                ],
+                "signals": {},
+            },
+        ),
+    ]
+
+    result = merge_work_items(job, items)
+
+    assert _artifact(result, "localized_text").content == "第一段\n\n第二段"
+    assert _artifact(result, "work_note").content == "第一段注释\n\n第二段注释"
+
+
 def test_chunked_step2_merge_uses_work_note_artifact():
     job = AIJob(
         job_type="novel_localization.step2_review",
-        model_id="gpt-4.1",
-        execution_mode="chunked",
-        input_payload={},
-        output_payload={},
-        callback_payload={},
-        prompt_payload={},
+        execution_plan={"execution_mode": "chunked"},
     )
     job_id = uuid.uuid4()
     items = [
@@ -241,7 +539,7 @@ def test_chunked_step2_merge_uses_work_note_artifact():
             name="chunk-0",
             kind="chunk",
             chunk_index=0,
-            result_payload={
+            result={
                 "artifacts": [
                     {"key": "review_summary", "type": "text", "label": "校验结果", "content": "称呼不一致"},
                     {
@@ -268,19 +566,14 @@ def test_chunked_step2_merge_uses_work_note_artifact():
 def test_chunked_step2_passed_does_not_return_empty_work_note():
     job = AIJob(
         job_type="novel_localization.step2_review",
-        model_id="gpt-4.1",
-        execution_mode="chunked",
-        input_payload={},
-        output_payload={},
-        callback_payload={},
-        prompt_payload={},
+        execution_plan={"execution_mode": "chunked"},
     )
     item = AIJobWorkItem(
         job_id=uuid.uuid4(),
         name="chunk-0",
         kind="chunk",
         chunk_index=0,
-        result_payload={
+        result={
             "artifacts": [
                 {"key": "review_summary", "type": "text", "label": "校验结果", "content": "已满足"}
             ],

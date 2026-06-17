@@ -1,23 +1,36 @@
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from app.models.job import AIJob
 from app.repositories.job_repo import JobRepo
 
 
-class _Result:
+class _CleanupResult:
     rowcount = 3
+
+
+class _ScalarResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
 
 
 class _FakeDB:
     def __init__(self):
         self.statements = []
+        self.results = []
+        self.flushed = False
 
     async def execute(self, statement, *args, **kwargs):
         self.statements.append(statement)
-        return _Result()
+        if self.results:
+            return self.results.pop(0)
+        return _CleanupResult()
 
     async def flush(self):
-        pass
+        self.flushed = True
 
 
 def _compile(statement) -> str:
@@ -47,3 +60,36 @@ async def test_cleanup_expired_jobs_soft_deletes_only_settled_terminal_jobs():
     assert "UPDATE ai_job_work_items SET" in work_item_sql
     assert "ai_job_work_items.deleted_at IS NULL" in work_item_sql
     assert "ai_jobs.status IN" in work_item_sql
+
+
+@pytest.mark.asyncio
+async def test_mark_succeeded_persists_public_and_canonical_results():
+    import uuid
+
+    job = AIJob(
+        id=uuid.uuid4(),
+        job_type="generic.echo",
+        status="running",
+        celery_task_id="task-1",
+        progress_percent=30,
+        metadata_={},
+    )
+    db = _FakeDB()
+    db.results.append(_ScalarResult(job))
+
+    updated = await JobRepo.mark_succeeded(
+        db,
+        job.id,
+        celery_task_id="task-1",
+        result={"public": True},
+        canonical_result={"canonical": True},
+        canonical_result_ref={"oss_key": "result.json"},
+    )
+
+    assert updated is True
+    assert db.flushed is True
+    assert job.status == "succeeded"
+    assert job.result == {"public": True}
+    assert job.canonical_result == {"canonical": True}
+    assert job.canonical_result_ref == {"oss_key": "result.json"}
+    assert job.error is None

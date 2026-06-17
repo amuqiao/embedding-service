@@ -78,15 +78,10 @@ async def test_plan_job_reuses_existing_execution_plan(monkeypatch):
     job = AIJob(
         id=job_id,
         job_type="novel_localization.step1_localize",
-        model_id="gpt-4.1",
         status="running",
         progress_percent=10,
         celery_task_id="root-task",
         execution_plan=plan.model_dump(),
-        input_payload={"source": {"inline": {"text": "短文本"}}},
-        output_payload={},
-        callback_payload={},
-        prompt_payload={},
     )
     existing_items = [
         AIJobWorkItem(
@@ -95,7 +90,7 @@ async def test_plan_job_reuses_existing_execution_plan(monkeypatch):
             name=item.name,
             kind=item.kind,
             chunk_index=item.chunk_index,
-            input_payload=item.input_payload,
+            input_ref={"oss_bucket": "bucket", "oss_key": f"runtime/{item.kind}.json", "oss_region": "region"},
         )
         for item in plan.work_items
     ]
@@ -137,14 +132,10 @@ async def test_plan_job_allows_custom_plan_without_text_source(monkeypatch):
     job = AIJob(
         id=job_id,
         job_type="generic.custom",
-        model_id=None,
         status="running",
         progress_percent=5,
         celery_task_id="root-task",
-        input_payload={"job_params": {"input": {"value": 1}}},
-        output_payload={},
-        callback_payload={},
-        prompt_payload={},
+        job_params_ref={"oss_bucket": "bucket", "oss_key": "runtime/job_params.json", "oss_region": "region"},
     )
     plan = JobPlan(
         execution_mode="single",
@@ -155,7 +146,7 @@ async def test_plan_job_allows_custom_plan_without_text_source(monkeypatch):
                 name="generic.custom.whole",
                 kind="whole",
                 chunk_index=0,
-                input_payload={"value": 1},
+                input_data={"value": 1},
             )
         ],
     )
@@ -165,10 +156,12 @@ async def test_plan_job_allows_custom_plan_without_text_source(monkeypatch):
         name="generic.custom.whole",
         kind="whole",
         chunk_index=0,
-        input_payload={"value": 1},
+        input_ref={"oss_bucket": "bucket", "oss_key": "runtime/whole.json", "oss_region": "region"},
     )
 
     class CustomHandler:
+        large_artifact_keys = frozenset()
+
         def build_execution_plan(self, received_job):
             assert received_job.id == job_id
             return plan
@@ -215,15 +208,10 @@ async def test_finalize_waits_for_pending_work_items(monkeypatch):
     job = AIJob(
         id=job_id,
         job_type="novel_localization.step1_localize",
-        model_id="gpt-4.1",
         status="running",
         progress_percent=50,
         celery_task_id="root-task",
-        execution_mode="chunked",
-        input_payload={},
-        output_payload={},
-        callback_payload={},
-        prompt_payload={},
+        execution_plan={"execution_mode": "chunked"},
     )
     chunk = AIJobWorkItem(
         id=uuid.uuid4(),
@@ -272,14 +260,10 @@ async def test_execute_work_item_allows_custom_runtime_without_model(monkeypatch
     job = AIJob(
         id=job_id,
         job_type="generic.custom",
-        model_id=None,
         status="running",
         progress_percent=10,
         celery_task_id="root-task",
-        input_payload={"job_params": {"value": 1}},
-        output_payload={},
-        callback_payload={},
-        prompt_payload={},
+        job_params_ref={"oss_bucket": "bucket", "oss_key": "runtime/job_params.json", "oss_region": "region"},
     )
     item = AIJobWorkItem(
         id=item_id,
@@ -288,12 +272,13 @@ async def test_execute_work_item_allows_custom_runtime_without_model(monkeypatch
         kind="whole",
         chunk_index=0,
         status="queued",
-        input_payload={"value": 1},
+        input_ref={"oss_bucket": "bucket", "oss_key": "runtime/whole.json", "oss_region": "region"},
     )
     succeeded = {}
 
     class CustomHandler:
         canvas_pattern = "single"
+        large_artifact_keys = frozenset()
 
         async def execute_standard_item(self, received_item, received_job, _db):
             assert received_item.id == item_id
@@ -312,8 +297,8 @@ async def test_execute_work_item_allows_custom_runtime_without_model(monkeypatch
     async def fake_update_progress(*_args, **_kwargs):
         pass
 
-    async def fake_mark_succeeded(_db, _item_id, result_payload):
-        succeeded["payload"] = result_payload
+    async def fake_mark_succeeded(_db, _item_id, result):
+        succeeded["result"] = result
 
     monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
     monkeypatch.setattr("app.services.job_workflow.JobRepo.get_work_item", fake_get_work_item)
@@ -329,4 +314,4 @@ async def test_execute_work_item_allows_custom_runtime_without_model(monkeypatch
     result = await execute_work_item(FakeDB(), job_id=job_id, item_id=item_id, celery_task_id="task-1")
 
     assert result == {"work_item_id": str(item_id), "kind": "whole", "chunk_index": 0}
-    assert succeeded["payload"] == {"artifacts": [], "signals": {"custom": True}}
+    assert succeeded["result"] == {"artifacts": [], "signals": {"custom": True}}

@@ -28,8 +28,9 @@ class WorkflowHandler:
     chunking_enabled: bool = False
     max_single_chars: int = 20000
     chunk_size: int = 3000
+    expose_result_in_job_view: bool = True
     # Keys of artifacts whose content should be written to OSS (large outputs).
-    # Artifacts not in this set keep their content inline in result_payload.
+    # Artifacts not in this set keep their content inline in the public result.
     large_artifact_keys: frozenset[str] = frozenset()
 
     def parse_output(self, text: str) -> JobResult:
@@ -78,6 +79,10 @@ class WorkflowHandler:
     def build_execution_plan(self, job: AIJob) -> JobPlan | None:
         """Build a custom execution plan. Return None to use text chunk planning."""
         return None
+
+    def public_result(self, canonical_result: dict[str, Any]) -> dict[str, Any] | None:
+        """Return the JobView.result value for a completed job."""
+        return canonical_result if self.expose_result_in_job_view else None
 
 
 _registry: dict[str, WorkflowHandler] = {}

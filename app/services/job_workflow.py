@@ -15,23 +15,27 @@ from app.services.job_context import (
 )
 from app.services.executor import run_ai_job
 from app.services.job_planner import JobPlan, build_job_plan, job_plan_from_payload
-from app.services.job_runtime import prompt_payload_from_job, work_item_payload, write_runtime_json
-from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404
+from app.services.job_runtime import model_id_from_job, prompt_payload_from_job, work_item_payload, write_runtime_json
+from app.services.jobs import _load_input_text, _persist_large_artifacts, _persist_work_item_artifacts, get_job_or_404
+
+
+def _job_execution_mode(job: AIJob) -> str | None:
+    return (job.execution_plan or {}).get("execution_mode")
 
 
 
 def _first_result_value(items: list[AIJobWorkItem], kind: str, key: str) -> Any:
     for item in sorted(items, key=lambda item: item.chunk_index):
-        if item.kind == kind and item.result_payload:
-            return item.result_payload.get(key)
+        if item.kind == kind and item.result:
+            return item.result.get(key)
     return None
 
 
 
 def merge_work_items(job: AIJob, items: list[AIJobWorkItem]) -> JobResult:
-    if job.execution_mode == "single":
+    if _job_execution_mode(job) == "single":
         whole = next(item for item in items if item.kind == "whole")
-        return JobResult.model_validate(whole.result_payload)
+        return JobResult.model_validate(whole.result)
     from app.core import workflow_registry
     handler = workflow_registry.get(job.job_type)
     # Pass all non-administrative items so the handler can use both chunks and scan results.
@@ -44,8 +48,8 @@ async def create_work_items(db: AsyncSession, job: AIJob, plan: JobPlan) -> dict
     item_ids: dict[str, uuid.UUID] = {}
     for item in plan.work_items:
         input_ref = item.input_ref
-        if input_ref is None and item.input_payload is not None:
-            input_ref = write_runtime_json(job, f"work-items/{item.kind}-{item.chunk_index}", item.input_payload)
+        if input_ref is None and item.input_data is not None:
+            input_ref = write_runtime_json(job, f"work-items/{item.kind}-{item.chunk_index}", item.input_data)
         created = await JobRepo.create_work_item(
             db,
             job_id=job.id,
@@ -89,7 +93,6 @@ async def plan_job(db: AsyncSession, job_id: uuid.UUID) -> tuple[AIJob, JobPlan,
     await JobRepo.set_execution_plan(
         db,
         job_id,
-        execution_mode=plan.execution_mode,
         execution_plan=plan.model_dump(),
     )
     await JobRepo.update_progress(
@@ -125,44 +128,45 @@ async def execute_work_item(
     await JobRepo.update_progress(db, job_id, progress_percent=30, progress_text=f"正在执行 {item.kind}")
     await db.commit()
 
-    item_payload = work_item_payload(item)
-    input_text = item_payload.get("text") or ""
     from app.core import workflow_registry
     handler = workflow_registry.get(job.job_type)
     if item.kind in ("memory", "scan"):
-        result_payload = await handler.execute_special_item(item, job, db)
+        item_result = await handler.execute_special_item(item, job, db)
     else:
         custom_result = await handler.execute_standard_item(item, job, db)
         if custom_result is not None:
-            result_payload = custom_result
-            await JobRepo.mark_work_item_succeeded(db, item_id, result_payload)
-            await db.commit()
-            return {"work_item_id": str(item_id), "kind": item.kind, "chunk_index": item.chunk_index}
-        if not job.model_id:
-            raise AppError(
-                "JOB_RUNTIME_NOT_SUPPORTED",
-                "job_type 未配置可执行运行时",
-                status_code=500,
-                details={"job_type": job.job_type},
-            )
-        prompt_payload = prompt_payload_from_job(job)
-        if item.kind == "chunk":
-            memory = project_memory_from_job(job)
-            if handler.canvas_pattern == "memory_fanout":
-                memory = (
-                    _first_result_value(await JobRepo.list_work_items(db, job_id), "memory", "project_memory")
-                    or memory
+            item_result = custom_result
+        else:
+            model_id = model_id_from_job(job)
+            if not model_id:
+                raise AppError(
+                    "JOB_RUNTIME_NOT_SUPPORTED",
+                    "job_type 未配置可执行运行时",
+                    status_code=500,
+                    details={"job_type": job.job_type},
                 )
-            context_text = build_chunk_context(
-                memory=memory,
-                chunk_index=item.chunk_index,
-                chunk_count=(job.execution_plan or {}).get("chunk_count") or 1,
-            )
-            prompt_payload = append_context_to_prompt(job, context_text)
-        result = await run_ai_job(job.job_type, job.model_id, prompt_payload, input_text)
-        result_payload = result.model_dump()
+            prompt_payload = prompt_payload_from_job(job)
+            item_payload = work_item_payload(item)
+            input_text = item_payload.get("text") or ""
+            if item.kind == "chunk":
+                memory = project_memory_from_job(job)
+                if handler.canvas_pattern == "memory_fanout":
+                    memory = (
+                        _first_result_value(await JobRepo.list_work_items(db, job_id), "memory", "project_memory")
+                        or memory
+                    )
+                context_text = build_chunk_context(
+                    memory=memory,
+                    chunk_index=item.chunk_index,
+                    chunk_count=(job.execution_plan or {}).get("chunk_count") or 1,
+                )
+                prompt_payload = append_context_to_prompt(job, context_text)
+            result = await run_ai_job(job.job_type, model_id, prompt_payload, input_text)
+            item_result = result.model_dump()
 
-    await JobRepo.mark_work_item_succeeded(db, item_id, result_payload)
+    if _job_execution_mode(job) != "single":
+        item_result = _persist_work_item_artifacts(job, kind=item.kind, chunk_index=item.chunk_index, result=item_result)
+    await JobRepo.mark_work_item_succeeded(db, item_id, item_result)
     await db.commit()
     return {"work_item_id": str(item_id), "kind": item.kind, "chunk_index": item.chunk_index}
 
@@ -193,8 +197,15 @@ async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
             "pending_items": [str(item.id) for item in pending],
         }
 
-    result = merge_work_items(job, items)
-    result_payload = _persist_large_artifacts(job, result)
+    merged_result = merge_work_items(job, items)
+    canonical_result = _persist_large_artifacts(job, merged_result)
+    from app.core import workflow_registry
+    handler = workflow_registry.get(job.job_type)
+    public_result = handler.public_result(canonical_result)
+    if _job_execution_mode(job) == "single":
+        whole = next((item for item in items if item.kind == "whole"), None)
+        if whole is not None:
+            await JobRepo.mark_work_item_succeeded(db, whole.id, canonical_result)
     for item in items:
         if item.kind == "merge" and item.status in ("queued", "running"):
             await JobRepo.mark_work_item_succeeded(
@@ -202,13 +213,19 @@ async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
                 item.id,
                 {
                     "merged": True,
-                    "artifact_keys": [artifact.key for artifact in result.artifacts],
+                    "artifact_keys": [artifact.key for artifact in merged_result.artifacts],
                 },
             )
     await JobRepo.update_progress(db, job_id, progress_percent=90, progress_text="正在写入最终结果")
     if not job.celery_task_id:
         raise RuntimeError(f"job has no celery_task_id: {job_id}")
-    await JobRepo.mark_succeeded(db, job_id, celery_task_id=job.celery_task_id, result_payload=result_payload)
+    await JobRepo.mark_succeeded(
+        db,
+        job_id,
+        celery_task_id=job.celery_task_id,
+        result=public_result,
+        canonical_result=canonical_result,
+    )
     await db.commit()
     await db.refresh(job)
     from app.tasks.jobs import deliver_callback_for_job
@@ -221,12 +238,12 @@ async def fail_job(
     *,
     job_id: uuid.UUID,
     item_id: uuid.UUID | None,
-    error_payload: dict[str, Any],
+    error: dict[str, Any],
 ) -> None:
     if item_id:
-        await JobRepo.mark_work_item_failed(db, item_id, error_payload)
+        await JobRepo.mark_work_item_failed(db, item_id, error)
     job = await get_job_or_404(db, job_id)
-    await JobRepo.mark_failed(db, job_id, error_payload, celery_task_id=job.celery_task_id)
+    await JobRepo.mark_failed(db, job_id, error, celery_task_id=job.celery_task_id)
     await db.commit()
     from app.tasks.jobs import deliver_callback_for_job
     await deliver_callback_for_job(job_id)

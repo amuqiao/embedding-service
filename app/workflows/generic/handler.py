@@ -42,7 +42,7 @@ class GenericEchoHandler(WorkflowHandler):
                     name=f"{self.job_type}.whole",
                     kind="whole",
                     chunk_index=0,
-                    input_payload=params,
+                    input_data=params,
                 )
             ],
         )

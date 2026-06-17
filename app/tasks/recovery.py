@@ -81,12 +81,12 @@ async def _run_recovery(db) -> dict:
             limit=settings.JOB_RECOVERY_BATCH_SIZE,
         )
         for job in stale:
-            error_payload = {
+            error = {
                 "code": "JOB_TIMEOUT",
                 "message": "任务长时间未完成，已强制终止",
                 "details": {"started_at": job.started_at.isoformat() if job.started_at else None},
             }
-            claimed = await JobRepo.mark_failed_if_running(db, job.id, error_payload)
+            claimed = await JobRepo.mark_failed_if_running(db, job.id, error)
             await db.commit()
             if claimed:
                 failed += 1

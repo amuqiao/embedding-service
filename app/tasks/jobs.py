@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.repositories.job_repo import JobRepo
 from app.services.callbacks import deliver_callback
 from app.services.executor import run_ai_job
-from app.services.job_runtime import prompt_payload_from_job
+from app.services.job_runtime import model_id_from_job, prompt_payload_from_job
 from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404
 from app.tasks.celery_app import celery_app
 
@@ -152,7 +152,8 @@ async def _process(job_id: str, celery_task_id: str) -> dict[str, Any]:
                 job_id, celery_task_id, job.celery_task_id, job.status,
             )
             return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
-        logger.info("job_started job_id=%s job_type=%s model_id=%s", job_id, job.job_type, job.model_id)
+        model_id = model_id_from_job(job)
+        logger.info("job_started job_id=%s job_type=%s model_id=%s", job_id, job.job_type, model_id)
         if job.status == "queued":
             claimed = await JobRepo.mark_running_if_queued(db, job.id, celery_task_id=celery_task_id)
             if not claimed:
@@ -170,7 +171,7 @@ async def _process(job_id: str, celery_task_id: str) -> dict[str, Any]:
         await db.commit()
 
         input_text = _load_input_text(job)
-        if not job.model_id:
+        if not model_id:
             raise AppError(
                 "JOB_RUNTIME_NOT_SUPPORTED",
                 "job_type 未配置可执行运行时",
@@ -178,12 +179,20 @@ async def _process(job_id: str, celery_task_id: str) -> dict[str, Any]:
                 details={"job_type": job.job_type},
             )
         result = await asyncio.wait_for(
-                    run_ai_job(job.job_type, job.model_id, prompt_payload_from_job(job), input_text),
+                    run_ai_job(job.job_type, model_id, prompt_payload_from_job(job), input_text),
                     timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
                 )
         result_data = _persist_large_artifacts(job, result)
+        from app.core import workflow_registry
+        handler = workflow_registry.get(job.job_type)
 
-        succeeded = await JobRepo.mark_succeeded(db, job.id, celery_task_id=celery_task_id, result_payload=result_data)
+        succeeded = await JobRepo.mark_succeeded(
+            db,
+            job.id,
+            celery_task_id=celery_task_id,
+            result=handler.public_result(result_data),
+            canonical_result=result_data,
+        )
         await db.commit()
         if not succeeded:
             logger.warning("job_success_state_lost job_id=%s", job_id)
@@ -205,10 +214,10 @@ async def _process(job_id: str, celery_task_id: str) -> dict[str, Any]:
 async def _fail(job_id: str, _work_item_id: str | None, exc: Exception, celery_task_id: str) -> None:
     if isinstance(exc, AppError):
         logger.error("job_failed job_id=%s error_code=%s", job_id, exc.code)
-        error_payload = {"code": exc.code, "message": exc.message, "details": exc.details}
+        error = {"code": exc.code, "message": exc.message, "details": exc.details}
     else:
         logger.error("job_failed job_id=%s error_type=%s", job_id, type(exc).__name__, exc_info=True)
-        error_payload = {
+        error = {
             "code": "MODEL_CALL_FAILED",
             "message": "模型调用失败或内部处理失败",
             "details": {"type": type(exc).__name__, "message": str(exc)[:500]},
@@ -216,7 +225,7 @@ async def _fail(job_id: str, _work_item_id: str | None, exc: Exception, celery_t
 
     async def run(db):
         job_uuid = uuid.UUID(job_id)
-        marked = await JobRepo.mark_failed(db, job_uuid, error_payload, celery_task_id=celery_task_id)
+        marked = await JobRepo.mark_failed(db, job_uuid, error, celery_task_id=celery_task_id)
         await db.commit()
         return marked
 
@@ -232,8 +241,8 @@ async def _mark_timeout(job_id: str, celery_task_id: str) -> None:
 
     async def run(db):
         job_uuid = uuid.UUID(job_id)
-        error_payload = {"code": "JOB_TIMEOUT", "message": "任务执行超时", "details": {}}
-        marked = await JobRepo.mark_failed(db, job_uuid, error_payload, celery_task_id=celery_task_id)
+        error = {"code": "JOB_TIMEOUT", "message": "任务执行超时", "details": {}}
+        marked = await JobRepo.mark_failed(db, job_uuid, error, celery_task_id=celery_task_id)
         await db.commit()
         return marked
 
@@ -305,9 +314,9 @@ def execute_work_item_task(self, job_id: str, item_id: str) -> dict:
     except Exception as exc:
         try:
             if isinstance(exc, AppError):
-                error_payload = {"code": exc.code, "message": exc.message, "details": exc.details}
+                error = {"code": exc.code, "message": exc.message, "details": exc.details}
             else:
-                error_payload = {
+                error = {
                     "code": "WORK_ITEM_FAILED",
                     "message": str(exc)[:500],
                     "details": {"type": type(exc).__name__},
@@ -318,7 +327,7 @@ def execute_work_item_task(self, job_id: str, item_id: str) -> dict:
                     db,
                     job_id=uuid.UUID(job_id),
                     item_id=uuid.UUID(item_id),
-                    error_payload=error_payload,
+                    error=error,
                 )
             asyncio.run(_with_db(fail))
         except Exception:

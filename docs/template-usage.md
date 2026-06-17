@@ -78,7 +78,7 @@ class MyJobHandler(WorkflowHandler):
         return {}
 
     def build_execution_plan(self, job):
-        # 非 LLM / 非文本 source workflow 在这里基于 job.input_payload["job_params"]
+        # 非 LLM / 非文本 source workflow 在这里基于 job_params_from_job(job)
         # 创建自己的 work_items。返回 None 会回到默认文本 source 分块计划。
         return None
 
@@ -235,8 +235,8 @@ Callback 只在终态事件触发，body 是事件 envelope，内部 `job` 字�
 如果设置 `chunking_enabled=True`，还需要确保：
 
 - `parse_output()` 能解析单个 chunk 的模型输出。
-- `merge_chunks()` 能把多个 chunk 的 `result_payload` 合并成最终 `JobResult`。
-- 大文本 artifact 应通过 handler 的 `large_artifact_keys` 写入对象存储，避免把正文直接塞进 JSON 响应。
+- `merge_chunks()` 能把多个 chunk work item 的 `result` 合并成最终 `JobResult`。
+- 大文本 artifact 应通过 handler 的 `large_artifact_keys` 写入对象存储；该规则同时作用于 work item 中间结果和最终 Job 结果，避免把正文直接塞进数据库或 JSON 响应。
 
 ## job_params 参数
 
@@ -260,7 +260,7 @@ def normalize_job_params(self, job_params: dict) -> dict:
     return params.model_dump()
 ```
 
-`job_params` 会存入 `AIJob.input_payload["job_params"]`。当前内置 `novel_localization` 为了复用现有 LLM 执行器，会通过 `runtime_job_fields()` 把 `job_params.model_id` 和 `job_params.prompt` 映射为运行时字段；这不是通用 Job 创建层的要求。
+`job_params` 会被规范化后写入运行时对象，并在 `AIJob.job_params_ref` 中保存引用；`AIJob.job_params_hash` 用于执行前校验引用内容没有漂移。创建 Job 时还会写入 `runtime_ref`，保存 handler 当时派生出的 `runtime_fields` 和输出目标引用。当前内置 `novel_localization` 为了复用现有 LLM 执行器，会通过 `runtime_job_fields()` 把 `job_params.model_id` 和 `job_params.prompt` 映射为运行时字段；这不是通用 Job 创建层的要求。
 
 ## 新实例配置
 

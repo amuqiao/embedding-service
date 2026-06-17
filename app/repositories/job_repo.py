@@ -24,7 +24,7 @@ class JobRepo:
         client_request_id: str,
     ) -> AIJob | None:
         since = datetime.now(timezone.utc) - timedelta(hours=24)
-        result = await db.execute(
+        query_result = await db.execute(
             select(AIJob)
             .where(
                 AIJob.caller_id == caller_id,
@@ -35,7 +35,7 @@ class JobRepo:
             .order_by(AIJob.created_at.asc())
             .limit(1)
         )
-        return result.scalar_one_or_none()
+        return query_result.scalar_one_or_none()
 
     @staticmethod
     async def create(
@@ -44,51 +44,31 @@ class JobRepo:
         caller_id: str,
         client_request_id: str | None,
         job_type: str,
-        model_id: str | None,
-        input_payload: dict[str, Any],
-        output_payload: dict[str, Any],
-        callback_payload: dict[str, Any],
-        prompt_payload: dict[str, Any],
         request_fingerprint: str | None = None,
-        public_metadata: dict[str, Any] | None = None,
-        options_payload: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
         priority: str = "normal",
         timeout_seconds: int | None = None,
-        input_ref: dict[str, Any] | None = None,
-        runtime_ref: dict[str, Any] | None = None,
-        prompt_ref: dict[str, Any] | None = None,
+        job_params_ref: dict[str, Any] | None = None,
+        job_params_hash: str | None = None,
         callback_url: str | None = None,
         callback_events: list[str] | None = None,
-        output_oss_bucket: str | None = None,
-        output_oss_prefix: str | None = None,
-        output_oss_region: str | None = None,
     ) -> AIJob:
         job = AIJob(
             caller_id=caller_id,
             client_request_id=client_request_id,
             request_fingerprint=request_fingerprint,
             job_type=job_type,
-            model_id=model_id,
             status="queued",
             progress_percent=0,
             progress_text="已排队",
             queued_at=datetime.now(timezone.utc),
             priority=priority,
             timeout_seconds=timeout_seconds,
-            public_metadata=public_metadata or {},
-            options_payload=options_payload,
-            input_ref=input_ref,
-            runtime_ref=runtime_ref,
-            prompt_ref=prompt_ref,
-            input_payload=input_payload,
-            output_payload=output_payload,
-            output_oss_bucket=output_oss_bucket,
-            output_oss_prefix=output_oss_prefix,
-            output_oss_region=output_oss_region,
-            callback_payload=callback_payload,
+            metadata_=metadata or {},
+            job_params_ref=job_params_ref,
+            job_params_hash=job_params_hash,
             callback_url=callback_url,
             callback_events=callback_events,
-            prompt_payload=prompt_payload,
         )
         db.add(job)
         await db.flush()
@@ -138,12 +118,10 @@ class JobRepo:
         db: AsyncSession,
         job_id: uuid.UUID,
         *,
-        execution_mode: str,
         execution_plan: dict[str, Any],
     ) -> None:
         job = await JobRepo.get(db, job_id)
         if job:
-            job.execution_mode = execution_mode
             job.execution_plan = execution_plan
             job.updated_at = datetime.now(timezone.utc)
             await db.flush()
@@ -183,7 +161,7 @@ class JobRepo:
         celery_task_id: str,
         progress_text: str = "正在处理文本",
     ) -> bool:
-        result = await db.execute(
+        query_result = await db.execute(
             select(AIJob)
             .where(
                 AIJob.id == job_id,
@@ -193,7 +171,7 @@ class JobRepo:
             )
             .with_for_update(skip_locked=True)
         )
-        job = result.scalar_one_or_none()
+        job = query_result.scalar_one_or_none()
         if not job:
             return False
         job.progress_percent = max(job.progress_percent or 0, 5)
@@ -226,9 +204,11 @@ class JobRepo:
         job_id: uuid.UUID,
         *,
         celery_task_id: str,
-        result_payload: dict[str, Any],
+        result: dict[str, Any] | None,
+        canonical_result: dict[str, Any] | None = None,
+        canonical_result_ref: dict[str, Any] | None = None,
     ) -> bool:
-        result = await db.execute(
+        query_result = await db.execute(
             select(AIJob)
             .where(
                 AIJob.id == job_id,
@@ -238,16 +218,17 @@ class JobRepo:
             )
             .with_for_update(skip_locked=True)
         )
-        job = result.scalar_one_or_none()
+        job = query_result.scalar_one_or_none()
         if not job:
             return False
         now = datetime.now(timezone.utc)
         job.status = "succeeded"
         job.progress_percent = 100
         job.progress_text = "已完成"
-        job.result_payload = result_payload
-        job.public_result_payload = result_payload
-        job.error_payload = None
+        job.result = result
+        job.canonical_result = canonical_result
+        job.canonical_result_ref = canonical_result_ref
+        job.error = None
         job.finished_at = now
         job.last_heartbeat_at = now
         job.updated_at = now
@@ -262,7 +243,7 @@ class JobRepo:
     async def mark_failed(
         db: AsyncSession,
         job_id: uuid.UUID,
-        error_payload: dict[str, Any],
+        error: dict[str, Any],
         *,
         celery_task_id: str | None = None,
     ) -> bool:
@@ -280,8 +261,8 @@ class JobRepo:
         now = datetime.now(timezone.utc)
         job.status = "failed"
         job.progress_text = "处理失败"
-        job.error_payload = error_payload
-        job.last_execution_error = error_payload
+        job.result = None
+        job.error = error
         job.finished_at = now
         job.last_heartbeat_at = now
         job.updated_at = now
@@ -293,7 +274,7 @@ class JobRepo:
         return True
 
     @staticmethod
-    async def mark_failed_if_running(db: AsyncSession, job_id: uuid.UUID, error_payload: dict[str, Any]) -> bool:
+    async def mark_failed_if_running(db: AsyncSession, job_id: uuid.UUID, error: dict[str, Any]) -> bool:
         """CAS 原子转移：仅在 status='running' 时标记 failed，防止并发 recovery 重复处理。"""
         result = await db.execute(
             select(AIJob)
@@ -306,8 +287,8 @@ class JobRepo:
         now = datetime.now(timezone.utc)
         job.status = "failed"
         job.progress_text = "处理失败"
-        job.error_payload = error_payload
-        job.last_execution_error = error_payload
+        job.result = None
+        job.error = error
         job.finished_at = now
         job.last_heartbeat_at = now
         job.callback_status = "pending"
@@ -326,7 +307,6 @@ class JobRepo:
         name: str,
         kind: str,
         chunk_index: int = 0,
-        input_payload: dict[str, Any] | None = None,
         input_ref: dict[str, Any] | None = None,
     ) -> AIJobWorkItem:
         item = AIJobWorkItem(
@@ -336,7 +316,6 @@ class JobRepo:
             chunk_index=chunk_index,
             status="queued",
             input_ref=input_ref,
-            input_payload=input_payload,
         )
         db.add(item)
         await db.flush()
@@ -410,14 +389,14 @@ class JobRepo:
     async def mark_work_item_succeeded(
         db: AsyncSession,
         item_id: uuid.UUID,
-        result_payload: dict[str, Any] | None,
+        result: dict[str, Any] | None,
     ) -> None:
         item = await JobRepo.get_work_item(db, item_id)
         if item:
             now = datetime.now(timezone.utc)
             item.status = "succeeded"
-            item.result_payload = result_payload
-            item.error_payload = None
+            item.result = result
+            item.error = None
             item.finished_at = now
             item.updated_at = now
             await db.flush()
@@ -426,13 +405,13 @@ class JobRepo:
     async def mark_work_item_failed(
         db: AsyncSession,
         item_id: uuid.UUID,
-        error_payload: dict[str, Any],
+        error: dict[str, Any],
     ) -> None:
         item = await JobRepo.get_work_item(db, item_id)
         if item:
             now = datetime.now(timezone.utc)
             item.status = "failed"
-            item.error_payload = error_payload
+            item.error = error
             item.finished_at = now
             item.updated_at = now
             await db.flush()
