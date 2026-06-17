@@ -511,4 +511,18 @@ def test_mock_data_examples_validate_against_job_contracts():
         (MOCK_DATA_DIR / "cpp_callback_request.succeeded.json").read_text(encoding="utf-8")
     )
     envelope = CallbackEnvelope.model_validate(callback_fixture["body"])
-    validate_job_status_payload(envelope.job.model_dump())
+    assert str(envelope.job_id) == "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1"
+    assert envelope.job_type == "short_drama.tagging.initial"
+    assert envelope.status == "succeeded"
+    assert envelope.error is None
+    assert envelope.data["t_book_id"] == "300000000300000279"
+    assert envelope.data["result_status"] == "success"
+    assert envelope.data["validation_issue_count"] == 0
+    assert envelope.data["validation_issues"] == []
+    assert envelope.data["reason_codes"] == []
+    assert envelope.data["subtitle_language"] == "zh"
+    assert envelope.data["requested_schema_language"] == "zh"
+    assert "business_scene" not in envelope.data
+    assert "job" not in callback_fixture["body"]
+    assert "result" not in callback_fixture["body"]
+    assert "callback" not in callback_fixture["body"]

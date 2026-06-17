@@ -7,6 +7,15 @@ from typing import Any
 from app.core.exceptions import AppError
 
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
+_MODEL_INTERNAL_OUTPUT_KEYS = {
+    "category_id",
+    "label_id",
+    "label_key",
+    "label_ids",
+    "mutex_label_ids",
+    "definition",
+    "标签释义",
+}
 
 
 def strip_srt_to_text(srt_text: str) -> str:
@@ -45,7 +54,6 @@ def compact_schema_for_prompt(tag_schema: dict[str, Any]) -> str:
     for category in tag_schema["categories"]:
         categories.append(
             {
-                "category_id": category["category_id"],
                 "name": category["name"],
                 "required": category["required"],
                 "min_items": category["min_items"],
@@ -62,6 +70,53 @@ def compact_schema_for_prompt(tag_schema: dict[str, Any]) -> str:
     return json.dumps(categories, ensure_ascii=False, indent=2)
 
 
+def compact_mutual_exclusion_rules_for_prompt(
+    tag_schema: dict[str, Any],
+    mutual_exclusion_rules: list[dict[str, Any]],
+) -> str:
+    labels_by_id: dict[str, dict[str, str]] = {}
+    for category in tag_schema["categories"]:
+        category_name = category["name"]
+        for label in category["labels"]:
+            labels_by_id[label["label_id"]] = {
+                "category": category_name,
+                "name": label["name"],
+                "definition": label["definition"],
+            }
+
+    rules: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for rule in mutual_exclusion_rules:
+        label_id = rule["label_id"]
+        for mutex_label_id in rule["mutex_label_ids"]:
+            pair = tuple(sorted((label_id, mutex_label_id)))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            rules.append(
+                {
+                    "rule": "do_not_select_together",
+                    "labels": [
+                        labels_by_id[label_id],
+                        labels_by_id[mutex_label_id],
+                    ],
+                }
+            )
+    return json.dumps(rules, ensure_ascii=False, indent=2)
+
+
+def strip_internal_model_fields(value: Any) -> Any:
+    if isinstance(value, list):
+        return [strip_internal_model_fields(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: strip_internal_model_fields(item)
+            for key, item in value.items()
+            if key not in _MODEL_INTERNAL_OUTPUT_KEYS
+        }
+    return value
+
+
 def stage_messages(
     stage: str,
     *,
@@ -73,6 +128,7 @@ def stage_messages(
     language = job_params["work_context"]["subtitle_language"]
     material_text = compact_material_for_prompt(job_params)
     schema_text = compact_schema_for_prompt(tag_schema)
+    mutual_exclusion_rules_text = compact_mutual_exclusion_rules_for_prompt(tag_schema, mutual_exclusion_rules)
     if stage == "story_overview":
         prompt = f"""You are a short-drama story analysis expert.
 
@@ -85,7 +141,8 @@ Short-drama material:
     elif stage == "candidate_tagging":
         prompt = f"""You are a short-drama tagging expert.
 
-Use subtitle_language={language} for all natural-language reasons. Choose tags only from the tag schema. Output category_id and tag names only; do not output label_id.
+Use subtitle_language={language} for all natural-language reasons. Choose tags only from the tag schema. Output category names and tag names only; do not output internal IDs.
+Apply mutual exclusion rules and category constraints when selecting candidates.
 Return JSON only. Required keys: t_book_id, category_decisions, raw_candidates, uncertainties.
 
 Short-drama material:
@@ -96,12 +153,15 @@ Story overview:
 
 Tag schema:
 {schema_text}
+
+Mutual exclusion rules:
+{mutual_exclusion_rules_text}
 """
     elif stage == "finalize":
         prompt = f"""You are a short-drama tag finalization system.
 
-Use subtitle_language={language} for all reasons. Output selected_tags keyed by category_id. Each tag item must contain only name/label_name/标签名, weight/权重, and reason/打标原因.
-Do not output label_id or definition; the service will resolve them from the RS tag schema.
+Use subtitle_language={language} for all reasons. Output selected_tags keyed by category name. Each tag item must contain only name/label_name/标签名, weight/权重, and reason/打标原因.
+Do not output internal IDs or definition; the service will resolve them from the RS tag schema.
 Apply mutual exclusion rules and category constraints. If evidence is insufficient, keep the available tags and leave tagging_detail notes explaining the issue.
 Return JSON only with exactly selected_tags and tagging_detail.
 
@@ -109,13 +169,13 @@ Tag schema:
 {schema_text}
 
 Mutual exclusion rules:
-{json.dumps(mutual_exclusion_rules, ensure_ascii=False, indent=2)}
+{mutual_exclusion_rules_text}
 
 Story overview:
 {json.dumps(artifacts['story_overview_result'], ensure_ascii=False, indent=2)}
 
 Candidate tags:
-{json.dumps(artifacts['candidate_tags'], ensure_ascii=False, indent=2)}
+{json.dumps(strip_internal_model_fields(artifacts['candidate_tags']), ensure_ascii=False, indent=2)}
 """
     else:
         raise ValueError(f"unknown short drama tagging stage: {stage}")

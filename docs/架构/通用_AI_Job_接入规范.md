@@ -43,7 +43,7 @@ AI Job 服务
 | Job 骨架 | `client_request_id`、`job_type`、`job_params`、`callback`、`metadata`、`options` | 长期稳定 |
 | 生命周期 | `queued`、`running`、`succeeded`、`failed` | 长期稳定 |
 | 查询视图 | `JobView` | 长期稳定 |
-| 终态回调 | `CallbackEnvelope`，其中 `job` 字段复用终态 `JobView` | 长期稳定 |
+| 终态回调 | `CallbackEnvelope`，公共 Job 事件字段加 `data` 扩展 | 长期稳定 |
 | 任务入参 | `job_params` 内部结构 | 由 `job_type` 定义 |
 | 任务结果 | `result.artifacts`、`result.signals` 的具体内容 | 由 `job_type` 定义 |
 
@@ -336,48 +336,41 @@ Callback 启用规则：
 - Callback 只通知终态，不通知 `queued` 或 `running`。
 - Callback 发送失败不改变 Job 终态，调用方仍应以轮询作为兜底。
 
-Callback 请求体是事件 envelope，其中 `job` 字段复用同一个 Job 在终态时的 `JobView` 结构。Callback 不定义第二套业务结果模型；业务结果仍只存在于 `job.result` 或 `job.error`。
+Callback 请求体由公共 Job 事件字段和 `data` 扩展组成，不嵌套 `JobView`。公共字段表达终态事件、Job 身份、状态、进度、错误和元数据；`data` 是当前 `job_type` 的 callback 扩展位。通用能力默认可把公开 `JobResult` 作为 `data`，特殊能力可以定义更小的 `data` 结构，但不能把内部运行时产物直接暴露出去。
 
 成功终态 Callback 请求体示例：
 
 ```json
 {
+  "schema_version": "v1",
   "event": "job.succeeded",
   "event_id": "8e6a3d4a-1d43-4f4a-a5f5-1efcb75e5a6d",
   "attempt": 1,
   "sent_at": "2026-06-15T10:01:01Z",
-  "job": {
-    "job_id": "7b5c2c62-9a3a-41b7-bd41-f24a5d34a099",
-    "client_request_id": "optional-idempotency-key",
-    "job_type": "capability.name",
-    "status": "succeeded",
-    "progress": {
-      "percent": 100,
-      "message": "已完成",
-      "stage": null
-    },
-    "result": {
-      "artifacts": [],
-      "signals": {}
-    },
-    "error": null,
-    "callback": {
-      "status": "delivering",
-      "attempts": 0,
-      "next_retry_at": "2026-06-15T10:04:00Z",
-      "last_error": null
-    },
-    "metadata": {},
-    "created_at": "2026-06-15T10:00:00Z",
-    "started_at": "2026-06-15T10:00:10Z",
-    "finished_at": "2026-06-15T10:01:00Z"
-  }
+  "job_id": "7b5c2c62-9a3a-41b7-bd41-f24a5d34a099",
+  "client_request_id": "optional-idempotency-key",
+  "job_type": "capability.name",
+  "status": "succeeded",
+  "progress": {
+    "percent": 100,
+    "message": "已完成",
+    "stage": null
+  },
+  "error": null,
+  "metadata": {},
+  "data": {
+    "artifacts": [],
+    "signals": {}
+  },
+  "created_at": "2026-06-15T10:00:00Z",
+  "started_at": "2026-06-15T10:00:10Z",
+  "finished_at": "2026-06-15T10:01:00Z"
 }
 ```
 
-Callback 正文里的 `job.callback` 是本次发送前的投递快照；发送完成后的 `delivered`、`failed` 或下一次重试时间，以之后的 `GET /jobs/{job_id}` 为准。
+Callback 正文不携带 callback 投递状态。发送完成后的 `delivered`、`failed` 或下一次重试时间，以之后的 `GET /jobs/{job_id}` 为准。
 
-调用方应按 `job.job_id + event` 做业务幂等消费，并在处理成功后返回任意 `2xx`。`event_id` 用于标识一次 Callback 投递事件，不能替代 `job.job_id` 作为业务幂等键。服务端收到非 `2xx` 响应时可按内部策略重试同一个终态 Job 的 Callback。
+调用方应按 `job_id + event` 做业务幂等消费，并在处理成功后返回任意 `2xx`。`event_id` 用于标识一次 Callback 投递事件，不能替代 `job_id` 作为业务幂等键。服务端收到非 `2xx` 响应时可按内部策略重试同一个终态 Job 的 Callback。
 
 Callback 请求头：
 
@@ -493,7 +486,7 @@ HTTP 错误统一返回：
 | 成功结果 | 成功时返回符合 `JobResult` 的 `artifacts` 和 `signals`。 |
 | 失败结果 | 失败时写入统一 `JobError`。 |
 | 大产物 | 大内容通过 artifact 的对象存储字段交付，不扩展 `JobView` 顶层。 |
-| Callback | Callback 请求体使用 `CallbackEnvelope`，其中 `job` 字段复用终态 `JobView`，不定义第二套业务结果模型。 |
+| Callback | Callback 请求体使用 `CallbackEnvelope`，由公共 Job 事件字段和 `data` 扩展组成。 |
 
 新增能力不得：
 
@@ -501,7 +494,7 @@ HTTP 错误统一返回：
 - 把能力专属字段提升到 Job 顶层。
 - 为错误参数添加 silent fallback。
 - 返回非 `JobResult` 形态的成功结果。
-- 让 Callback 使用另一套业务结果模型。
+- 绕过 `CallbackEnvelope.data` 另起一套 callback 顶层业务字段。
 
 内部执行计划、分片策略和具体 runtime 属于实现细节，不进入本文的外部接入合同。需要维护这些内容时，应放入单独的实现接入文档。
 
@@ -517,7 +510,7 @@ HTTP 错误统一返回：
 | 执行测试 | 能力运行后可以进入正确终态。 |
 | finalize 测试 | 最终结果符合 `JobResult`，失败时写入 `JobError`。 |
 | artifact 测试 | 大产物写入对象存储，小产物内联返回。 |
-| Callback 测试 | Callback 使用 `CallbackEnvelope`，且 `job` 字段与终态轮询 `JobView` 同形并来自同一份结果。 |
+| Callback 测试 | Callback 使用 `CallbackEnvelope`，公共字段与终态 Job 状态一致，`data` 来自该 `job_type` 明确的数据源。 |
 
 通用合同变化时，还应同步检查 OpenAPI、README、架构文档和 contract tests。
 
@@ -532,7 +525,7 @@ HTTP 错误统一返回：
 - 已生成稳定 `client_request_id`。
 - 已保存 `job_id`、`client_request_id`、`job_type` 与业务对象的映射。
 - 已实现 `GET /jobs/{job_id}` 轮询兜底。
-- 已实现 Callback 接收、按 `job.job_id + event` 幂等处理和签名校验。
+- 已实现 Callback 接收、按 `job_id + event` 幂等处理和签名校验。
 - 已按 `result.artifacts` 和 `result.signals` 消费结果。
 - 已处理 `failed` 终态和 HTTP 错误码。
 
@@ -542,5 +535,5 @@ HTTP 错误统一返回：
 - 同一幂等键、同一请求返回同一 Job。
 - 同一幂等键、不同请求返回 `409`。
 - Job 最终进入 `succeeded` 或 `failed`。
-- Callback envelope 中的 `job` 与轮询终态响应体同形，并来自同一份结果。
+- Callback 公共字段与轮询终态状态一致，`data` 符合该 `job_type` 的 callback 合同。
 - 大产物 artifact 可按对象存储字段读取并校验 hash。

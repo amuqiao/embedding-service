@@ -34,7 +34,7 @@ CPP 发起打标前至少确认：
 | 视频资源可追溯 | 视频可作为扩展素材传入；当前 POC 主要依赖字幕。 |
 | callback 地址可用 | 如 CPP 需要终态通知，则在创建 job 时传 `callback.url`。 |
 
-CPP 不需要传 `tag_schema_version`。AI 写 RS 时从本次 RS 标签体系响应中派生 `tag_schema_version`。
+CPP 不需要传 `tag_schema_version`。RS schema 当前不返回 version；AI 写 RS 时使用内部兼容常量填充 `tag_schema_version`。
 
 ## 任务类型
 

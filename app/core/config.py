@@ -1,4 +1,5 @@
 from functools import lru_cache
+import os
 from pathlib import Path
 
 from pydantic import Field, field_validator, model_validator
@@ -14,6 +15,17 @@ _CELERY_SOFT_TIMEOUT_BUFFER: int = 300   # time for L1 cleanup (job write + call
 _CELERY_HARD_TIMEOUT_BUFFER: int = 60    # time for soft-limit handler to finish before SIGKILL
 _JOB_STALE_RUNNING_BUFFER: int = 600     # recovery scan gap to avoid mis-classifying a recently killed job
 _CALLBACK_DELIVERY_CLAIM_GRACE: int = 175  # DB commit/recovery skew margin after one callback HTTP timeout
+
+_DEPRECATED_CONFIG_KEYS = frozenset(
+    {
+        "SHORT_DRAMA_RS_SCHEMA_SOURCE",
+        "SHORT_DRAMA_RS_RESULT_SINK",
+        "SHORT_DRAMA_RS_API_KEY",
+        "SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH",
+        "SHORT_DRAMA_RS_RESULT_RESPONSE_FIXTURE_PATH",
+        "SHORT_DRAMA_RS_TAG_SCHEMA_VERSION",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -102,11 +114,26 @@ class Settings(BaseSettings):
     SHORT_DRAMA_RS_RESULT_RESPONSE_MOCK_PATH: str = (
         "mock/short_drama_tagging/rs_write_result_response.success.json"
     )
-    SHORT_DRAMA_RS_TAG_SCHEMA_VERSION: str = "v1.1"
 
     LOG_LEVEL: str = Field(default="INFO")
 
     # ── Validators ────────────────────────────────────────────────────────────
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_deprecated_config_keys(cls, data):
+        if not isinstance(data, dict):
+            return data
+        deprecated = sorted(
+            {
+                str(key).upper()
+                for key in data
+                if str(key).upper() in _DEPRECATED_CONFIG_KEYS
+            }
+        )
+        if deprecated:
+            raise ValueError("deprecated config keys are not supported: " + ", ".join(deprecated))
+        return data
 
     @field_validator("STORAGE_BACKEND")
     @classmethod
@@ -170,8 +197,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "SHORT_DRAMA_RS_BASE_URL is required when short drama RS schema/result mock is disabled"
             )
-        if not self.SHORT_DRAMA_RS_TAG_SCHEMA_VERSION.strip():
-            raise ValueError("SHORT_DRAMA_RS_TAG_SCHEMA_VERSION must not be empty")
+        deprecated_env_keys = sorted(key for key in _DEPRECATED_CONFIG_KEYS if key in os.environ)
+        if deprecated_env_keys:
+            raise ValueError(
+                "deprecated config keys are not supported in environment: "
+                + ", ".join(deprecated_env_keys)
+            )
         return self
 
     # ── Derived: Celery timeout chain (L1 anchor + fixed buffers) ─────────────

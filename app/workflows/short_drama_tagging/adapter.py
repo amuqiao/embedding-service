@@ -5,6 +5,15 @@ from typing import Any
 from app.core.exceptions import AppError
 
 RS_AI_TAG_RESULTS_ARTIFACT_KEY = "rs_ai_tag_results_request"
+_SELECTED_TAG_ALLOWED_KEYS = {
+    "name",
+    "label_name",
+    "标签名",
+    "weight",
+    "权重",
+    "reason",
+    "打标原因",
+}
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -20,13 +29,74 @@ def _selected_tags_from_model_output(final_result: dict[str, Any]) -> dict[str, 
     return _require_object(final_tags.get("tags"), "finalize.final_tags.tags")
 
 
-def _schema_indexes(tag_schema: dict[str, Any]) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+def _schema_indexes(
+    tag_schema: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str], dict[str, dict[str, Any]]]:
     categories = {category["category_id"]: category for category in tag_schema["categories"]}
-    labels_by_name_by_category = {
-        category_id: {label["name"]: label for label in category["labels"]}
-        for category_id, category in categories.items()
-    }
-    return categories, labels_by_name_by_category
+    category_ids_by_name: dict[str, str] = {}
+    for category in tag_schema["categories"]:
+        category_name = category["name"]
+        if category_name in category_ids_by_name:
+            raise AppError(
+                "TAG_SCHEMA_INVALID",
+                "duplicate category name in tag schema",
+                status_code=502,
+                details={"category_name": category_name},
+            )
+        category_ids_by_name[category_name] = category["category_id"]
+    labels_by_name_by_category: dict[str, dict[str, Any]] = {}
+    for category_id, category in categories.items():
+        labels_by_name: dict[str, Any] = {}
+        for label in category["labels"]:
+            label_name = label["name"]
+            if label_name in labels_by_name:
+                raise AppError(
+                    "TAG_SCHEMA_INVALID",
+                    "duplicate label name in tag schema category",
+                    status_code=502,
+                    details={"category_id": category_id, "label_name": label_name},
+                )
+            labels_by_name[label_name] = label
+        labels_by_name_by_category[category_id] = labels_by_name
+    return categories, category_ids_by_name, labels_by_name_by_category
+
+
+def _normalize_selected_tags_by_category(
+    selected_tags: dict[str, Any],
+    *,
+    categories: dict[str, Any],
+    category_ids_by_name: dict[str, str],
+) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    unknown_category_keys: list[str] = []
+    duplicate_category_keys: list[str] = []
+    for category_key, items in selected_tags.items():
+        if category_key in categories:
+            category_id = category_key
+        else:
+            category_id = category_ids_by_name.get(category_key)
+        if category_id is None:
+            unknown_category_keys.append(category_key)
+            continue
+        if category_id in normalized:
+            duplicate_category_keys.append(category_key)
+            continue
+        normalized[category_id] = items
+    if unknown_category_keys:
+        raise AppError(
+            "MODEL_OUTPUT_INVALID",
+            "selected_tags contains unknown category",
+            status_code=502,
+            details={"category_keys": sorted(unknown_category_keys)},
+        )
+    if duplicate_category_keys:
+        raise AppError(
+            "MODEL_OUTPUT_INVALID",
+            "selected_tags contains duplicate category",
+            status_code=502,
+            details={"category_keys": sorted(duplicate_category_keys)},
+        )
+    return normalized
 
 
 def _selected_label_name(item: dict[str, Any]) -> str:
@@ -34,6 +104,17 @@ def _selected_label_name(item: dict[str, Any]) -> str:
     if not isinstance(label_name, str) or not label_name.strip():
         raise AppError("MODEL_OUTPUT_INVALID", "selected tag missing label name", status_code=502)
     return label_name
+
+
+def _validate_selected_tag_contract(item: dict[str, Any], field_path: str) -> None:
+    unsupported_fields = sorted(set(item) - _SELECTED_TAG_ALLOWED_KEYS)
+    if unsupported_fields:
+        raise AppError(
+            "MODEL_OUTPUT_INVALID",
+            "selected tag contains unsupported fields",
+            status_code=502,
+            details={"field_path": field_path, "fields": unsupported_fields},
+        )
 
 
 def _selected_weight(item: dict[str, Any]) -> float:
@@ -110,15 +191,12 @@ def build_rs_tagging_payload(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     selected_tags = _selected_tags_from_model_output(final_result)
     tagging_detail = _require_object(final_result.get("tagging_detail"), "finalize.tagging_detail")
-    categories, labels_by_name_by_category = _schema_indexes(tag_schema)
-    unknown_category_ids = sorted(set(selected_tags) - set(categories))
-    if unknown_category_ids:
-        raise AppError(
-            "MODEL_OUTPUT_INVALID",
-            "selected_tags contains unknown category_id",
-            status_code=502,
-            details={"category_ids": unknown_category_ids},
-        )
+    categories, category_ids_by_name, labels_by_name_by_category = _schema_indexes(tag_schema)
+    selected_tags = _normalize_selected_tags_by_category(
+        selected_tags,
+        categories=categories,
+        category_ids_by_name=category_ids_by_name,
+    )
 
     tags: dict[str, list[dict[str, Any]]] = {}
     validation_issues: list[dict[str, Any]] = []
@@ -170,8 +248,10 @@ def build_rs_tagging_payload(
             )
         labels_by_name = labels_by_name_by_category[category_id]
         tags[category_id] = []
-        for item in items:
-            item_obj = _require_object(item, f"selected_tags.{category_id}[]")
+        for item_index, item in enumerate(items):
+            field_path = f"selected_tags.{category_id}[{item_index}]"
+            item_obj = _require_object(item, field_path)
+            _validate_selected_tag_contract(item_obj, field_path)
             label_name = _selected_label_name(item_obj)
             label = labels_by_name.get(label_name)
             if label is None:

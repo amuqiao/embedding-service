@@ -92,16 +92,15 @@ Job running
 本地开发：
 
 ```
-SHORT_DRAMA_RS_SCHEMA_SOURCE=fixture
-SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH=docs/接口层/mock-data/short_drama_tagging/tag_schema_snapshot.{lang}.json
+SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED=true
 ```
 
 正式环境：
 
 ```
-SHORT_DRAMA_RS_SCHEMA_SOURCE=http
+SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED=false
+SHORT_DRAMA_RS_BASE_URL=https://v-adm-api.stardustgod.com/
 GET {SHORT_DRAMA_RS_BASE_URL}/api/v1/tag-schemas/default?lang={subtitle_language}
-Authorization: Bearer {SHORT_DRAMA_RS_API_KEY}
 ```
 
 provider 会校验 `categories`、`label_id`、`mutual_exclusion_rules` 等结构，不符合就失败。实现见 rs_client.py。
@@ -183,13 +182,14 @@ handler 先把这个兼容 payload 保存进 canonical result；Job 成功终态
 本地开发：
 
 ```
-SHORT_DRAMA_RS_RESULT_SINK=fixture
+SHORT_DRAMA_RS_RESULT_MOCK_ENABLED=true
 ```
 
 正式环境：
 
 ```
-SHORT_DRAMA_RS_RESULT_SINK=http
+SHORT_DRAMA_RS_RESULT_MOCK_ENABLED=false
+SHORT_DRAMA_RS_BASE_URL=https://v-adm-api.stardustgod.com/
 POST {SHORT_DRAMA_RS_BASE_URL}/api/v1/ai-tag-results
 ```
 

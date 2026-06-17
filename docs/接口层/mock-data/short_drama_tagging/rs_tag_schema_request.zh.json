@@ -5,7 +5,6 @@
     "lang": "zh"
   },
   "headers": {
-    "Authorization": "Bearer <SHORT_DRAMA_RS_API_KEY>",
     "X-AI-Service-Caller-ID": "ai"
   }
 }

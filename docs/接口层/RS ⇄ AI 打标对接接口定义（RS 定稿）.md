@@ -54,7 +54,6 @@ AI 打标前拉取当前**启用**的标签体系与互斥规则。
 
 |字段|层级|必需|说明|
 |---|---|---|---|
-|version|顶层|否|标签体系版本标识（展示用）|
 |generated\_at|顶层|是|生成时间戳（秒）|
 |category\_id|分类|是|6 位分类 id|
 |name|分类/标签|是|名称|
@@ -107,7 +106,7 @@ AI 打标完成后写入 `source=ai_auto` 的结果。
 |msg|顶层|否|兼容字段，无额外消息时为 `null`。|
 |t\_book\_id|顶层|是|作品对接键|
 |job\_id|顶层|是|AI 任务 id，RS 幂等键|
-|tag\_schema\_version|顶层|是|本次打标使用的 RS 标签体系版本，由 AI 从 RS 标签体系响应中派生。|
+|tag\_schema\_version|顶层|是|兼容字段；RS schema 当前不返回 version，AI 使用内部兼容常量填充。|
 |tags|顶层|是|打标结果，category\_id 为 key|
 |tags\.\{category\_id\}\[\]\.label\_id|标签|是|标签 id（= ai\_tag `_id`）|
 |tags\.\{category\_id\}\[\]\.name|标签|是|标签名（展示/排查用）|
@@ -121,7 +120,7 @@ AI 打标完成后写入 `source=ai_auto` 的结果。
 
 - 按 `job_id` 幂等：首次新增一条 `ai_tag_result` 流水（原样存 `tags`）并覆盖 `ai_work_tag` 的 ai\_auto 标签；重复 `job_id` 直接返回已有，不重复处理。
 
-- AI 写 RS 时透传本次使用的 `tag_schema_version`；RS 按 `job_id` 和本次 `tags` payload 处理。
+- AI 写 RS 时携带兼容 `tag_schema_version`；RS 按 `job_id` 和本次 `tags` payload 处理。
 
 - 无 `result_checksum`、无 initial/incremental 区分：每次按全量覆盖 ai\_auto 处理，人工（manual）标签保留。
 

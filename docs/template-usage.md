@@ -191,33 +191,26 @@ curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
 }
 ```
 
-Callback 只在终态事件触发，body 是事件 envelope，内部 `job` 字段复用同一份 JobView。Callback 正文里的 `job.callback` 是本次发送前的投递快照；发送完成后的 `delivered` / `failed` / `next_retry_at` 以之后的 `GET /jobs/{job_id}` 为准。
+Callback 只在终态事件触发，body 使用公共 Job 事件字段加 `data` 扩展，不嵌套 `JobView`。Callback 正文不携带投递状态；发送完成后的 `delivered` / `failed` / `next_retry_at` 以之后的 `GET /jobs/{job_id}` 为准。
 
 ```json
 {
+  "schema_version": "v1",
   "event": "job.succeeded",
   "event_id": "uuid",
   "attempt": 1,
   "sent_at": "2026-06-15T10:01:00Z",
-  "job": {
-    "job_id": "uuid",
-    "client_request_id": "optional-idempotency-key",
-    "job_type": "your_workflow.my_job",
-    "status": "succeeded",
-    "progress": {"percent": 100, "message": "已完成", "stage": null},
-    "result": {},
-    "error": null,
-    "callback": {
-      "status": "delivering",
-      "attempts": 0,
-      "next_retry_at": "2026-06-15T10:04:00Z",
-      "last_error": null
-    },
-    "metadata": {"caller_task_id": "task-1"},
-    "created_at": "2026-06-15T10:00:00Z",
-    "started_at": "2026-06-15T10:00:03Z",
-    "finished_at": "2026-06-15T10:01:00Z"
-  }
+  "job_id": "uuid",
+  "client_request_id": "optional-idempotency-key",
+  "job_type": "your_workflow.my_job",
+  "status": "succeeded",
+  "progress": {"percent": 100, "message": "已完成", "stage": null},
+  "error": null,
+  "metadata": {"caller_task_id": "task-1"},
+  "data": {},
+  "created_at": "2026-06-15T10:00:00Z",
+  "started_at": "2026-06-15T10:00:03Z",
+  "finished_at": "2026-06-15T10:01:00Z"
 }
 ```
 

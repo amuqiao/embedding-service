@@ -28,7 +28,8 @@ usage() {
   workflow-smoke      使用真实模型和放大输入验证内部自动分块、canvas 和 merge。
   e2e                 从 .data 读取 .txt，验证 meta、jobs、轮询、callback 和三阶段链路。
   oss                 校验 Aliyun OSS 读写删除连通性，参数透传给 check_aliyun_oss.py。
-  check               执行脚本语法检查和 pytest。
+  env-config          校验 env 文件键名；默认检查 .env.example 和已存在的本地/测试 env，可传文件路径。
+  check               执行脚本语法、env 配置检查和 pytest。
   help                显示帮助。
 
 成功标准：
@@ -96,6 +97,10 @@ case "$command" in
   oss)
     shift
     run_oss_check "$@"
+    ;;
+  env-config)
+    shift
+    run_env_config_check "$@"
     ;;
   check)
     run_check

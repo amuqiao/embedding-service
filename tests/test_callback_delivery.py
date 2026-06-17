@@ -5,6 +5,7 @@ import pytest
 
 from app.models.job import AIJob
 from app.services.callbacks import CallbackDeliveryResult, build_callback_body, deliver_callback
+from app.services.job_runtime import payload_hash, write_runtime_json
 from app.services.jobs import _job_to_response
 
 
@@ -27,26 +28,29 @@ def _job(callback_url: str | None = "https://example.com/callback") -> AIJob:
     )
 
 
-def test_build_callback_body_wraps_job_view():
+def test_build_callback_body_uses_public_fields():
     job = _job()
     body = build_callback_body(job)
 
+    assert body["schema_version"] == "v1"
     assert body["event"] == "job.succeeded"
     assert body["attempt"] == 1
     assert body["event_id"]
     assert body["sent_at"]
-    assert body["job"]["job_id"] == str(job.id)
-    assert body["job"]["job_type"] == "novel_localization.step1_localize"
-    assert body["job"] == _job_to_response(job).model_dump(mode="json")
-    assert body["job"]["progress"] == {"percent": 100, "message": None, "stage": None}
-    assert body["job"]["result"] == {"artifacts": [], "signals": {}}
-    assert body["job"]["callback"] == {
-        "status": "pending",
-        "attempts": 0,
-        "next_retry_at": None,
-        "last_error": None,
-    }
-    assert body["job"]["metadata"] == {"caller_task_id": "task-1"}
+    assert body["job_id"] == str(job.id)
+    assert body["client_request_id"] is None
+    assert body["job_type"] == "novel_localization.step1_localize"
+    assert body["status"] == "succeeded"
+    assert body["progress"] == {"percent": 100, "message": None, "stage": None}
+    assert body["error"] is None
+    assert body["metadata"] == {"caller_task_id": "task-1"}
+    assert body["data"] == {"artifacts": [], "signals": {}}
+    assert body["created_at"] == job.created_at.isoformat().replace("+00:00", "Z")
+    assert body["started_at"] is None
+    assert body["finished_at"] == job.finished_at.isoformat().replace("+00:00", "Z")
+    assert "job" not in body
+    assert "result" not in body
+    assert "callback" not in body
 
 
 def test_job_view_exposes_callback_delivery_state():
@@ -84,23 +88,80 @@ def test_job_view_uses_shell_result_and_metadata():
     }
 
 
-def test_build_callback_body_reuses_job_view_callback_state():
-    next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+def test_build_callback_body_uses_next_attempt_number():
     job = _job()
-    job.callback_status = "failed"
     job.callback_attempts = 2
-    job.callback_next_retry_at = next_retry_at
-    job.callback_last_error = {"code": "CALLBACK_HTTP_ERROR", "status_code": 503}
 
     body = build_callback_body(job)
 
     assert body["attempt"] == 3
-    assert body["job"]["callback"] == {
-        "status": "failed",
-        "attempts": 2,
-        "next_retry_at": _job_to_response(job).model_dump(mode="json")["callback"]["next_retry_at"],
-        "last_error": {"code": "CALLBACK_HTTP_ERROR", "status_code": 503},
+
+
+def test_build_callback_body_includes_short_drama_success_data():
+    params = {"t_book_id": "300000000300000279"}
+    job = _job()
+    job.job_type = "short_drama.tagging.initial"
+    job.client_request_id = "cpp:300000000300000279:initial:mock"
+    job.metadata_ = {"source_service": "cpp", "business_scene": "short_drama_tagging"}
+    job.job_params_ref = write_runtime_json(job, "job_params", params)
+    job.job_params_hash = payload_hash(params)
+    job.canonical_result = {
+        "artifacts": [],
+        "signals": {
+            "success": False,
+            "result_status": "partial_success",
+            "validation_issue_count": 1,
+            "validation_issues": [{"issue": "below_min_items"}],
+            "reason_codes": ["below_min_items"],
+            "t_book_id": "300000000300000279",
+            "subtitle_language": "zh",
+            "requested_schema_language": "zh",
+        },
     }
+
+    body = build_callback_body(job)
+
+    assert body["job_id"] == str(job.id)
+    assert body["client_request_id"] == "cpp:300000000300000279:initial:mock"
+    assert body["data"] == {
+        "t_book_id": "300000000300000279",
+        "result_status": "partial_success",
+        "validation_issue_count": 1,
+        "validation_issues": [{"issue": "below_min_items"}],
+        "reason_codes": ["below_min_items"],
+        "subtitle_language": "zh",
+        "requested_schema_language": "zh",
+    }
+
+
+def test_build_callback_body_includes_short_drama_failed_data_from_job_params():
+    params = {"t_book_id": "300000000300000279"}
+    job = _job()
+    job.job_type = "short_drama.tagging.initial"
+    job.status = "failed"
+    job.error = {"code": "MODEL_OUTPUT_INVALID", "message": "bad tags", "details": {}}
+    job.metadata_ = {"business_scene": "short_drama_tagging"}
+    job.job_params_ref = write_runtime_json(job, "job_params", params)
+    job.job_params_hash = payload_hash(params)
+
+    body = build_callback_body(job)
+
+    assert body["event"] == "job.failed"
+    assert body["status"] == "failed"
+    assert body["error"] == {"code": "MODEL_OUTPUT_INVALID", "message": "bad tags", "details": {}}
+    assert body["data"] == {"t_book_id": "300000000300000279"}
+
+
+def test_build_callback_body_rejects_short_drama_success_without_signals():
+    params = {"t_book_id": "300000000300000279"}
+    job = _job()
+    job.job_type = "short_drama.tagging.initial"
+    job.job_params_ref = write_runtime_json(job, "job_params", params)
+    job.job_params_hash = payload_hash(params)
+    job.canonical_result = None
+
+    with pytest.raises(ValueError, match="canonical_result.signals"):
+        build_callback_body(job)
 
 
 @pytest.mark.asyncio
@@ -124,7 +185,7 @@ async def test_deliver_callback_skips_invalid_url_with_error():
 @pytest.mark.asyncio
 async def test_deliver_callback_records_invalid_body_contract():
     job = _job()
-    job.result = {"artifacts": [{"key": "legacy"}], "signals": {}}
+    job.status = "running"
 
     result = await deliver_callback(job)
 
@@ -187,6 +248,7 @@ async def test_deliver_callback_uses_shell_callback_fields(monkeypatch):
         async def post(self, url, content, headers):
             posted["url"] = url
             posted["headers"] = headers
+            posted["body"] = content
             return _Response()
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
@@ -198,6 +260,8 @@ async def test_deliver_callback_uses_shell_callback_fields(monkeypatch):
     assert result.status == "delivered"
     assert posted["url"] == "https://shell.example.com/callback"
     assert posted["headers"]["X-AI-Service-Event"] == "job.succeeded"
+    assert b'"job_id"' in posted["body"]
+    assert b'"job"' not in posted["body"]
 
 
 @pytest.mark.asyncio

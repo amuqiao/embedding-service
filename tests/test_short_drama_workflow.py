@@ -16,6 +16,7 @@ from app.workflows.short_drama_tagging.adapter import (
     rs_ai_tag_results_payload_from_canonical_result,
 )
 from app.workflows.short_drama_tagging.handler import InitialShortDramaTaggingHandler
+from app.workflows.short_drama_tagging.prompts import stage_messages
 from app.workflows.short_drama_tagging.rs_client import (
     FixtureTagSchemaProvider,
     HttpTagSchemaProvider,
@@ -155,6 +156,251 @@ def test_rs_payload_adapter_uses_schema_text_and_keeps_partial_success():
     assert payload["tags"]["000006"] == []
     assert detail["result_status"] == "partial_success"
     assert detail["validation_issues"][0]["issue"] == "missing_required_category"
+
+
+def test_short_drama_prompts_render_human_readable_rules_without_ids():
+    schema = fixture_schema()
+    schema["categories"].append(
+        {
+            "category_id": "000003",
+            "name": "题材",
+            "required": True,
+            "min_items": 1,
+            "max_items": 3,
+            "labels": [
+                {"label_id": "lbl-topic-family", "name": "家庭伦理", "definition": "家庭冲突。"},
+                {"label_id": "lbl-topic-thriller", "name": "惊悚灵异", "definition": "惊悚刺激。"},
+            ],
+        }
+    )
+    schema["mutual_exclusion_rules"] = [
+        {"label_id": "lbl-topic-family", "mutex_label_ids": ["lbl-topic-thriller"]},
+        {"label_id": "lbl-topic-thriller", "mutex_label_ids": ["lbl-topic-family"]},
+    ]
+    bundle = normalize_tag_schema_response(schema)
+    artifacts = {
+        "story_overview_result": {
+            "t_book_id": "300000000300000279",
+            "analysis_status": "ok",
+            "characters": [],
+            "world_setting": {},
+            "plot_timeline": [],
+            "main_conflicts": [],
+            "uncertainties": [],
+        },
+        "candidate_tags": {
+            "t_book_id": "300000000300000279",
+            "category_decisions": [
+                {
+                    "category_id": "candidate-category-id",
+                    "category_name": "题材",
+                    "label_id": "candidate-label-id",
+                    "标签名": "家庭伦理",
+                    "definition": "candidate definition",
+                }
+            ],
+            "raw_candidates": [
+                {
+                    "mutex_label_ids": ["candidate-mutex-id"],
+                    "labels": [{"label_id": "nested-candidate-label-id", "name": "惊悚灵异"}],
+                }
+            ],
+            "uncertainties": [],
+        },
+    }
+
+    candidate_prompt = stage_messages(
+        "candidate_tagging",
+        job_params=tagging_params(),
+        tag_schema=bundle["tag_schema_snapshot"],
+        mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
+        artifacts={"story_overview_result": artifacts["story_overview_result"]},
+    )[0]["content"]
+    finalize_prompt = stage_messages(
+        "finalize",
+        job_params=tagging_params(),
+        tag_schema=bundle["tag_schema_snapshot"],
+        mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
+        artifacts=artifacts,
+    )[0]["content"]
+
+    for prompt in (candidate_prompt, finalize_prompt):
+        assert "家庭伦理" in prompt
+        assert "惊悚灵异" in prompt
+        assert "do_not_select_together" in prompt
+        assert "lbl-topic-family" not in prompt
+        assert "lbl-topic-thriller" not in prompt
+        assert "label_id" not in prompt
+        assert "mutex_label_ids" not in prompt
+        assert '"000003"' not in prompt
+        assert "category_id" not in prompt
+        assert "candidate-category-id" not in prompt
+        assert "candidate-label-id" not in prompt
+        assert "candidate-mutex-id" not in prompt
+        assert "nested-candidate-label-id" not in prompt
+        assert "candidate definition" not in prompt
+
+
+def test_rs_payload_adapter_accepts_category_names_and_resolves_ids():
+    bundle = normalize_tag_schema_response(fixture_schema())
+    payload, detail = build_rs_tagging_payload(
+        t_book_id="300000000300000279",
+        job_id="job-1",
+        tag_schema=bundle["tag_schema_snapshot"],
+        mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
+        final_result={
+            "selected_tags": {
+                "受众": [{"标签名": "女频", "权重": 1, "打标原因": "女性主角。"}],
+                "情绪": [{"标签名": "虐", "权重": 0.8, "打标原因": "压抑委屈。"}],
+            },
+            "tagging_detail": {"notes": []},
+        },
+    )
+
+    assert payload["tags"]["000001"][0]["label_id"] == "lbl-audience-female"
+    assert payload["tags"]["000006"][0]["label_id"] == "lbl-emotion-abuse"
+    assert "受众" not in payload["tags"]
+    assert detail["result_status"] == "success"
+
+
+def test_rs_payload_adapter_rejects_unknown_category_name():
+    bundle = normalize_tag_schema_response(fixture_schema())
+
+    with pytest.raises(AppError, match="unknown category"):
+        build_rs_tagging_payload(
+            t_book_id="300000000300000279",
+            job_id="job-1",
+            tag_schema=bundle["tag_schema_snapshot"],
+            mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
+            final_result={
+                "selected_tags": {
+                    "不存在分类": [{"标签名": "女频", "权重": 1, "打标原因": "女性主角。"}],
+                },
+                "tagging_detail": {"notes": []},
+            },
+        )
+
+
+def test_rs_payload_adapter_rejects_duplicate_category_keys():
+    bundle = normalize_tag_schema_response(fixture_schema())
+
+    with pytest.raises(AppError, match="duplicate category"):
+        build_rs_tagging_payload(
+            t_book_id="300000000300000279",
+            job_id="job-1",
+            tag_schema=bundle["tag_schema_snapshot"],
+            mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
+            final_result={
+                "selected_tags": {
+                    "000001": [{"标签名": "女频", "权重": 1, "打标原因": "女性主角。"}],
+                    "受众": [{"标签名": "女频", "权重": 0.8, "打标原因": "重复分类。"}],
+                    "情绪": [{"标签名": "虐", "权重": 0.8, "打标原因": "压抑委屈。"}],
+                },
+                "tagging_detail": {"notes": []},
+            },
+        )
+
+
+def test_rs_payload_adapter_rejects_unknown_label_name():
+    bundle = normalize_tag_schema_response(fixture_schema())
+
+    with pytest.raises(AppError, match="label name is not in schema"):
+        build_rs_tagging_payload(
+            t_book_id="300000000300000279",
+            job_id="job-1",
+            tag_schema=bundle["tag_schema_snapshot"],
+            mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
+            final_result={
+                "selected_tags": {
+                    "受众": [{"标签名": "女频", "权重": 1, "打标原因": "女性主角。"}],
+                    "情绪": [{"标签名": "不存在标签", "权重": 0.8, "打标原因": "错误标签。"}],
+                },
+                "tagging_detail": {"notes": []},
+            },
+        )
+
+
+def test_rs_payload_adapter_rejects_unsupported_selected_tag_fields():
+    bundle = normalize_tag_schema_response(fixture_schema())
+
+    with pytest.raises(AppError, match="unsupported fields") as exc_info:
+        build_rs_tagging_payload(
+            t_book_id="300000000300000279",
+            job_id="job-1",
+            tag_schema=bundle["tag_schema_snapshot"],
+            mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
+            final_result={
+                "selected_tags": {
+                    "受众": [
+                        {
+                            "标签名": "女频",
+                            "权重": 1,
+                            "打标原因": "女性主角。",
+                            "label_id": "lbl-audience-female",
+                            "category_id": "000001",
+                            "definition": "女性受众。",
+                            "标签释义": "女性受众。",
+                        }
+                    ],
+                    "情绪": [{"标签名": "虐", "权重": 0.8, "打标原因": "压抑委屈。"}],
+                },
+                "tagging_detail": {"notes": []},
+            },
+        )
+
+    assert exc_info.value.details["field_path"] == "selected_tags.000001[0]"
+    assert exc_info.value.details["fields"] == ["category_id", "definition", "label_id", "标签释义"]
+
+
+def test_rs_payload_adapter_keeps_quantity_issues_as_partial_success():
+    schema = fixture_schema()
+    schema["categories"][1]["max_items"] = 1
+    schema["categories"][1]["labels"].append(
+        {
+            "label_id": "lbl-emotion-revenge",
+            "name": "爽",
+            "definition": "畅快反击。",
+        }
+    )
+    bundle = normalize_tag_schema_response(schema)
+
+    below_payload, below_detail = build_rs_tagging_payload(
+        t_book_id="300000000300000279",
+        job_id="job-1",
+        tag_schema=bundle["tag_schema_snapshot"],
+        mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
+        final_result={
+            "selected_tags": {
+                "受众": [{"标签名": "女频", "权重": 1, "打标原因": "女性主角。"}],
+                "情绪": [],
+            },
+            "tagging_detail": {"notes": []},
+        },
+    )
+    above_payload, above_detail = build_rs_tagging_payload(
+        t_book_id="300000000300000279",
+        job_id="job-1",
+        tag_schema=bundle["tag_schema_snapshot"],
+        mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
+        final_result={
+            "selected_tags": {
+                "受众": [{"标签名": "女频", "权重": 1, "打标原因": "女性主角。"}],
+                "情绪": [
+                    {"标签名": "虐", "权重": 0.8, "打标原因": "压抑委屈。"},
+                    {"标签名": "爽", "weight": 0.7, "reason": "畅快反击。"},
+                ],
+            },
+            "tagging_detail": {"notes": []},
+        },
+    )
+
+    assert below_payload["tags"]["000006"] == []
+    assert below_detail["result_status"] == "partial_success"
+    assert below_detail["validation_issues"][0]["issue"] == "below_min_items"
+    assert above_payload["tags"]["000006"][0]["label_id"] == "lbl-emotion-abuse"
+    assert above_payload["tags"]["000006"][1]["label_id"] == "lbl-emotion-revenge"
+    assert above_detail["result_status"] == "partial_success"
+    assert above_detail["validation_issues"][0]["issue"] == "above_max_items"
 
 
 def test_rs_ai_tag_results_adapter_builds_compatibility_payload():

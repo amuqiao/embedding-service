@@ -13,6 +13,8 @@ from app.core.exceptions import AppError
 
 logger = logging.getLogger(__name__)
 
+RS_COMPAT_TAG_SCHEMA_VERSION = "v1.1"
+
 
 class TagSchemaProvider(Protocol):
     async def fetch(self, language: str) -> dict[str, Any]: ...
@@ -30,7 +32,7 @@ def rs_runtime_fields_from_settings() -> dict[str, Any]:
         "rs_timeout_seconds": settings.SHORT_DRAMA_RS_TIMEOUT_SECONDS,
         "rs_schema_mock_path": settings.SHORT_DRAMA_RS_SCHEMA_MOCK_PATH,
         "rs_result_response_mock_path": settings.SHORT_DRAMA_RS_RESULT_RESPONSE_MOCK_PATH,
-        "rs_tag_schema_version": settings.SHORT_DRAMA_RS_TAG_SCHEMA_VERSION,
+        "rs_tag_schema_version": RS_COMPAT_TAG_SCHEMA_VERSION,
     }
 
 

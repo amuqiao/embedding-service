@@ -104,9 +104,23 @@ def test_short_drama_rs_real_mode_requires_url_without_api_key():
     assert settings.SHORT_DRAMA_RS_RESULT_MOCK_ENABLED is False
 
 
-def test_short_drama_rs_compat_schema_version_must_not_be_empty():
+def test_short_drama_rs_rejects_deprecated_config_keys():
+    with pytest.raises(ValidationError, match="SHORT_DRAMA_RS_SCHEMA_SOURCE"):
+        Settings(**_settings_kwargs(SHORT_DRAMA_RS_SCHEMA_SOURCE="fixture"))
+
     with pytest.raises(ValidationError, match="SHORT_DRAMA_RS_TAG_SCHEMA_VERSION"):
-        Settings(**_settings_kwargs(SHORT_DRAMA_RS_TAG_SCHEMA_VERSION=" "))
+        Settings(**_settings_kwargs(SHORT_DRAMA_RS_TAG_SCHEMA_VERSION="v1.1"))
+
+
+def test_short_drama_rs_rejects_deprecated_environment_keys(monkeypatch):
+    monkeypatch.setenv("SHORT_DRAMA_RS_SCHEMA_SOURCE", "fixture")
+
+    with pytest.raises(ValidationError, match="SHORT_DRAMA_RS_SCHEMA_SOURCE"):
+        Settings(**_settings_kwargs())
+
+
+def test_short_drama_rs_compat_schema_version_is_internal():
+    assert "SHORT_DRAMA_RS_TAG_SCHEMA_VERSION" not in Settings.model_fields
 
 
 def test_mock_interfaces_can_be_disabled_by_config():

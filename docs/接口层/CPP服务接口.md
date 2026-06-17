@@ -46,7 +46,7 @@ X-AI-Service-Caller-ID: cpp
 | 打标任务入参 | `job_params` | `t_book_id`、作品上下文和素材资源都放在这里。 |
 | 打标成功结果 | RS `ai_auto` 结果 | AI 内部生成并写入 RS，CPP 不通过 JobView 获取标签 payload。 |
 | 打标失败信息 | `error` | 失败终态统一使用 `code`、`message`、`details`。 |
-| 终态通知 | `CallbackEnvelope` | Callback 请求体是事件 envelope，其中 `job` 字段复用轮询接口返回的成功或失败终态 `JobView`。 |
+| 终态通知 | `CallbackEnvelope` | Callback 请求体使用公共 Job 事件字段加 `data` 任务扩展，不嵌套 `JobView`。 |
 
 不得把 `t_book_id`、素材、标签结果、剧情分析或打标明细提升到 Job 顶层。
 
@@ -54,7 +54,7 @@ X-AI-Service-Caller-ID: cpp
 
 创建请求先校验通用 `CreateJobRequest`，再根据 `job_type=short_drama.tagging.initial` 或 `short_drama.tagging.incremental` 校验 `job_params` 是否满足 `ShortDramaTaggingParams`。`job_params` 校验通过后才会创建 Job。
 
-查询响应和 callback 中的 `job` 字段都使用同一套 `JobView` 状态组合校验：
+查询响应使用 `JobView` 状态组合校验：
 
 - `queued` / `running`：`result=null`，`error=null`。
 - `succeeded`：`result=null`，`error=null`。
@@ -73,7 +73,7 @@ metadata
 options
 ```
 
-查询响应统一使用 `JobView`。`JobView.result` 固定为 `null`，成功终态只表示 AI 已完成打标并生成可写入 RS 的 canonical result。如果 CPP 在创建请求中传入 `callback.url`，AI 只在 Job 进入 `succeeded` 或 `failed` 后发送 callback，且 callback 请求体中的 `job` 字段与同一 Job 的终态 `JobView` 同形。
+查询响应统一使用 `JobView`。`JobView.result` 固定为 `null`，成功终态只表示 AI 已完成打标并生成可写入 RS 的 canonical result。如果 CPP 在创建请求中传入 `callback.url`，AI 只在 Job 进入 `succeeded` 或 `failed` 后发送 callback。callback 请求体顶层携带公共 Job 事件字段，短剧打标相关的轻量信息放在 `data` 中。
 
 ## 创建打标 Job
 
@@ -325,43 +325,44 @@ timestamp + "." + raw_body
 
 ### Callback 请求体
 
-Callback 请求体是事件 envelope，其中 `job` 字段复用同一个 job 在 `GET /api/v1/ai-jobs/jobs/{job_id}` 查询接口中的终态 `JobView`。成功 callback 的 `job` 字段必须与同一 job 的成功终态轮询响应同形，且 `job.result` 为 `null`；失败 callback 的 `job` 字段必须与同一 job 的失败终态轮询响应同形并来自同一份错误。
+Callback 请求体由公共 Job 事件字段和 `data` 扩展组成，不再嵌套 `job`。公共字段表达这次终态事件、Job 身份、状态、进度、错误和元数据；`data` 只放当前 `job_type` 对调用方有用的任务数据。短剧打标成功或 `partial_success` 时，`data` 来自 AI 内部 canonical result 的 `signals`；失败时若没有 canonical result，`data.t_book_id` 来自已校验的 `job_params`。
 
 失败 callback 示例：
 
 ```json
 {
+  "schema_version": "v1",
   "event": "job.failed",
   "event_id": "8e6a3d4a-1d43-4f4a-a5f5-1efcb75e5a6d",
   "attempt": 1,
   "sent_at": "2026-06-15T10:03:01Z",
-  "job": {
-    "job_id": "7b5c2c62-9a3a-41b7-bd41-f24a5d34a099",
-    "client_request_id": "cpp:204200150000004872:initial:20260615",
-    "job_type": "short_drama.tagging.initial",
-    "status": "failed",
-    "progress": {
-      "percent": 100,
-      "message": "model output invalid",
-      "stage": "failed"
-    },
-    "result": null,
-    "error": {
-      "code": "MODEL_OUTPUT_INVALID",
-      "message": "AI generated tagging result is not valid for the RS tag schema.",
-      "details": {
-        "t_book_id": "204200150000004872",
-        "reason": "selected tag label name is not in schema"
-      }
-    },
-    "metadata": {
-      "source_service": "cpp",
-      "business_scene": "short_drama_tagging"
-    },
-    "created_at": "2026-06-15T10:00:00Z",
-    "started_at": "2026-06-15T10:00:05Z",
-    "finished_at": "2026-06-15T10:03:00Z"
-  }
+  "job_id": "7b5c2c62-9a3a-41b7-bd41-f24a5d34a099",
+  "client_request_id": "cpp:204200150000004872:initial:20260615",
+  "job_type": "short_drama.tagging.initial",
+  "status": "failed",
+  "progress": {
+    "percent": 100,
+    "message": "model output invalid",
+    "stage": "failed"
+  },
+  "error": {
+    "code": "MODEL_OUTPUT_INVALID",
+    "message": "AI generated tagging result is not valid for the RS tag schema.",
+    "details": {
+      "t_book_id": "204200150000004872",
+      "reason": "selected tag label name is not in schema"
+    }
+  },
+  "metadata": {
+    "source_service": "cpp",
+    "business_scene": "short_drama_tagging"
+  },
+  "data": {
+    "t_book_id": "204200150000004872"
+  },
+  "created_at": "2026-06-15T10:00:00Z",
+  "started_at": "2026-06-15T10:00:05Z",
+  "finished_at": "2026-06-15T10:03:00Z"
 }
 ```
 
@@ -371,23 +372,35 @@ Callback 请求体字段：
 
 | 字段 | 类型 | 必需性 | 说明 |
 | --- | --- | --- | --- |
+| `schema_version` | `string` | 必需 | Callback body schema 版本，当前为 `v1`。 |
 | `event` | `string` | 必需 | 终态事件，取值为 `job.succeeded` 或 `job.failed`。 |
 | `event_id` | `string` | 必需 | 本次 Callback 投递事件 id。 |
 | `attempt` | `number` | 必需 | 本次投递尝试序号。 |
 | `sent_at` | `string` | 必需 | 本次投递发送时间。 |
-| `job` | `object` | 必需 | 终态 `JobView`。成功时 `job.result` 为 `null`；失败原因从 `job.error` 读取。 |
+| `job_id` | `string` | 必需 | Job 唯一 id，CPP 业务幂等的主键之一。 |
+| `client_request_id` | `string \| null` | 可选 | CPP 创建任务时传入的幂等请求 id。 |
+| `job_type` | `string` | 必需 | Job 类型，短剧打标为 `short_drama.tagging.initial` 或 `short_drama.tagging.incremental`。 |
+| `status` | `string` | 必需 | 终态状态，只会是 `succeeded` 或 `failed`。 |
+| `progress` | `object` | 必需 | 终态进度快照。 |
+| `error` | `object \| null` | 必需 | 失败原因；成功时为 `null`。 |
+| `metadata` | `object` | 必需 | 创建任务时的 metadata 加 AI 侧补充的稳定元数据。 |
+| `data` | `object` | 必需 | 任务扩展数据。短剧打标成功时包含 `t_book_id`、`result_status`、`validation_issues` 等轻量字段；失败时至少尽量包含 `t_book_id`。 |
+| `created_at` | `string` | 必需 | Job 创建时间。 |
+| `started_at` | `string \| null` | 可选 | Job 开始执行时间。 |
+| `finished_at` | `string \| null` | 可选 | Job 终态时间。 |
 
-CPP 必须按 `job.job_id + event` 做业务幂等消费，并在处理成功后返回任意 `2xx`。`event_id` 用于标识一次 Callback 投递事件，不能替代 `job.job_id` 作为业务幂等键。AI 收到非 `2xx` 响应时可按内部策略重试同一个终态 Job 的 Callback。
+CPP 必须按 `job_id + event` 做业务幂等消费，并在处理成功后返回任意 `2xx`。`event_id` 用于标识一次 Callback 投递事件，不能替代 `job_id` 作为业务幂等键。AI 收到非 `2xx` 响应时可按内部策略重试同一个终态 Job 的 Callback。
 
 ## 一致性规则
 
 - `job_params` 是短剧打标任务唯一入参扩展位置。
 - `JobView.result` 固定为 `null`，不承载短剧打标成功出参。
-- 成功 callback 的 `job` 字段必须与轮询成功终态响应体同形。
-- 失败 callback 的 `job` 字段必须与轮询失败终态响应体同形，并来自同一份错误。
+- callback 顶层公共字段必须与同一 Job 的终态状态一致。
+- 成功 callback 的 `error` 必须为 `null`；失败 callback 的 `error` 必须存在，并来自同一份错误。
+- callback 的 `data` 只放任务扩展数据；短剧打标不在 callback 中携带完整标签结果。
 - AI 写 RS 的 payload 必须来自当前 job 的 canonical result，并由专用兼容 adapter 拼接，不允许另行生成一份不同的打标结果。
 - CPP callback 表示同一 job 的终态通知，不携带 canonical result。
-- Mock 接口中的创建请求、查询响应和 callback 样例只作为发送前数据和回复数据样例，也必须通过同一套 `CreateJobRequest + ShortDramaTaggingParams`、`JobView` 和 `CallbackEnvelope` 校验；mock 接口不维护独立的打标参数或 JobView 校验规则。
+- Mock 接口中的创建请求、查询响应和 callback 样例只作为发送前数据和回复数据样例，也必须通过同一套 `CreateJobRequest + ShortDramaTaggingParams`、`JobView` 和 `CallbackEnvelope` 校验；mock 接口不维护独立的打标参数或 callback 校验规则。
 
 ## 终态成功定义
 

@@ -198,17 +198,32 @@ class JobStatusResponse(JobView):
 
 
 class CallbackEnvelope(StrictBaseModel):
+    schema_version: Literal["v1"] = "v1"
     event: Literal["job.succeeded", "job.failed"]
     event_id: UUID
-    attempt: int
+    attempt: int = Field(ge=1)
     sent_at: datetime
-    job: JobView
+    job_id: UUID
+    client_request_id: str | None = None
+    job_type: str
+    status: JobStatus
+    progress: JobProgress
+    error: JobError | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
 
     @model_validator(mode="after")
     def validate_event_matches_job(self):
-        if self.job.status not in {"succeeded", "failed"}:
+        if self.status not in {"succeeded", "failed"}:
             raise ValueError("callback job must be terminal")
-        expected = "job.succeeded" if self.job.status == "succeeded" else "job.failed"
+        if self.status == "succeeded" and self.error is not None:
+            raise ValueError("error must be null when callback job succeeded")
+        if self.status == "failed" and self.error is None:
+            raise ValueError("error is required when callback job failed")
+        expected = "job.succeeded" if self.status == "succeeded" else "job.failed"
         if self.event != expected:
             raise ValueError("callback event must match job status")
         return self
