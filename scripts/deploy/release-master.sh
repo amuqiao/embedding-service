@@ -26,18 +26,18 @@ fi
 # 这几条命令都在主项目 test 目录执行。脚本内部会进入 tmp 发布目录处理 master。
 #
 # 推荐流程：
-#   1. ./scripts/release-master.sh          # test 目录发起；tmp 副本准备 master 合并
-#   2. ./scripts/release-master.sh status   # 同时查看 test 目录和 tmp 发布目录
-#   3. ./scripts/release-master.sh --push   # test 目录发起；tmp 副本提交并推送 master
+#   1. ./scripts/deploy/release-master.sh          # test 目录发起；tmp 副本准备 master 合并
+#   2. ./scripts/deploy/release-master.sh status   # 同时查看 test 目录和 tmp 发布目录
+#   3. ./scripts/deploy/release-master.sh --push   # test 目录发起；tmp 副本提交并推送 master
 #
 # 所有命令：
-#   ./scripts/release-master.sh             # 等同于 prepare
-#   ./scripts/release-master.sh prepare     # 准备生产发布
-#   ./scripts/release-master.sh --push      # 提交并推送，推荐第二次执行使用
-#   ./scripts/release-master.sh push        # --push 的等价写法
-#   ./scripts/release-master.sh -p          # --push 的短选项
-#   ./scripts/release-master.sh status      # 查看状态和发布判断
-#   ./scripts/release-master.sh --help      # 查看完整帮助
+#   ./scripts/deploy/release-master.sh             # 等同于 prepare
+#   ./scripts/deploy/release-master.sh prepare     # 准备生产发布
+#   ./scripts/deploy/release-master.sh --push      # 提交并推送，推荐第二次执行使用
+#   ./scripts/deploy/release-master.sh push        # --push 的等价写法
+#   ./scripts/deploy/release-master.sh -p          # --push 的短选项
+#   ./scripts/deploy/release-master.sh status      # 查看状态和发布判断
+#   ./scripts/deploy/release-master.sh --help      # 查看完整帮助
 #
 # 如果默认执行有问题，脚本会输出“告警”和“下一步”。不要跳过告警直接 push。
 ###############################################################################
@@ -69,9 +69,9 @@ fi
 #
 # 常规发布只需要改这里，或在命令前用环境变量临时覆盖。
 # 示例：
-#   SOURCE_REF=origin/feature-x ./scripts/release-master.sh
-#   BUILD_MODE=os ./scripts/release-master.sh --push   # 通常仅运维需要
-#   COMMIT_MESSAGE="[ci build] release tested changes to master" ./scripts/release-master.sh --push
+#   SOURCE_REF=origin/feature-x ./scripts/deploy/release-master.sh
+#   BUILD_MODE=os ./scripts/deploy/release-master.sh --push   # 通常仅运维需要
+#   COMMIT_MESSAGE="[ci build] release tested changes to master" ./scripts/deploy/release-master.sh --push
 ###############################################################################
 
 # 默认动作：prepare 只准备发布，不提交、不推送。
@@ -110,7 +110,7 @@ die() {
 usage() {
   cat <<'EOF'
 用法：
-  ./scripts/release-master.sh [prepare|push|--push|status]
+  ./scripts/deploy/release-master.sh [prepare|push|--push|status]
 
 执行位置：
   建议始终在主项目 test 目录执行。本脚本会自动进入 tmp 发布目录处理 master。
@@ -137,12 +137,12 @@ usage() {
   PROTECTED_FILES 合并时自动保留 master 版本的发版控制文件。
 
 示例：
-  ./scripts/release-master.sh
-  ./scripts/release-master.sh prepare
-  ./scripts/release-master.sh push
-  ./scripts/release-master.sh --push
-  BUILD_MODE=os ./scripts/release-master.sh --push
-  COMMIT_MESSAGE="[ci build] release tested changes to master" ./scripts/release-master.sh --push
+  ./scripts/deploy/release-master.sh
+  ./scripts/deploy/release-master.sh prepare
+  ./scripts/deploy/release-master.sh push
+  ./scripts/deploy/release-master.sh --push
+  BUILD_MODE=os ./scripts/deploy/release-master.sh --push
+  COMMIT_MESSAGE="[ci build] release tested changes to master" ./scripts/deploy/release-master.sh --push
 EOF
 }
 
@@ -211,12 +211,12 @@ ensure_main_ready_for_prepare() {
   log "说明：主项目目录只做检查和复制来源，不会切到 ${TARGET_BRANCH}。"
 
   [[ "$branch" == "test" ]] ||
-    stop_with_next_step "当前主目录必须在 test 分支，实际是：${branch}" "切回 test 后重新执行：git switch test && ./scripts/release-master.sh"
+    stop_with_next_step "当前主目录必须在 test 分支，实际是：${branch}" "切回 test 后重新执行：git switch test && ./scripts/deploy/release-master.sh"
 
   if [[ -n "$(git status --porcelain)" ]]; then
     warn "主 test 工作区不干净，prepare 不会继续执行。"
     git status --short
-    next_step "先提交或清理 test 工作区改动，然后重新执行：./scripts/release-master.sh"
+    next_step "先提交或清理 test 工作区改动，然后重新执行：./scripts/deploy/release-master.sh"
     exit 1
   fi
 
@@ -232,7 +232,7 @@ ensure_main_ready_for_prepare() {
     ahead="$(git rev-list --count origin/test..test)"
     behind="$(git rev-list --count test..origin/test)"
     if [[ "$ahead" != "0" ]]; then
-      stop_with_next_step "本地 test 领先 origin/test ${ahead} 个提交；脚本默认发布 origin/test，不会包含这些本地提交。" "先执行：git push origin test；然后重新执行：./scripts/release-master.sh"
+      stop_with_next_step "本地 test 领先 origin/test ${ahead} 个提交；脚本默认发布 origin/test，不会包含这些本地提交。" "先执行：git push origin test；然后重新执行：./scripts/deploy/release-master.sh"
     fi
     if [[ "$behind" != "0" ]]; then
       stop_with_next_step "本地 test 落后 origin/test ${behind} 个提交；脚本不会在旧 test 状态下发布。" "先同步 test 后重新执行，例如：git pull --ff-only origin test"
@@ -395,7 +395,7 @@ enter_existing_release_copy() {
   ensure_main_repo
   release_root="$(release_tmp_path)"
   [[ -e "$release_root" ]] ||
-    stop_with_next_step "tmp 发布目录不存在：${release_root}" "先执行默认准备流程：./scripts/release-master.sh"
+    stop_with_next_step "tmp 发布目录不存在：${release_root}" "先执行默认准备流程：./scripts/deploy/release-master.sh"
 
   git -C "$release_root" rev-parse --show-toplevel >/dev/null 2>&1 ||
     die "tmp 发布目录不是有效 Git 仓库：${release_root}"
@@ -473,42 +473,42 @@ show_release_decision() {
   if [[ "$tmp_exists" != "yes" ]]; then
     warn "push：不可执行，原因：tmp 发布目录尚未创建"
     if [[ -n "$main_reason" ]]; then
-      next_step "先处理 prepare 不可执行的原因，然后重新执行：./scripts/release-master.sh status"
+      next_step "先处理 prepare 不可执行的原因，然后重新执行：./scripts/deploy/release-master.sh status"
     else
-      next_step "执行默认准备流程：./scripts/release-master.sh"
+      next_step "执行默认准备流程：./scripts/deploy/release-master.sh"
     fi
     return
   fi
 
   if [[ "$tmp_branch" != "$TARGET_BRANCH" ]]; then
     warn "push：不可执行，原因：tmp 发布目录当前分支是 ${tmp_branch}，不是 ${TARGET_BRANCH}"
-    next_step "重新执行准备流程：./scripts/release-master.sh"
+    next_step "重新执行准备流程：./scripts/deploy/release-master.sh"
     return
   fi
 
   if [[ "$tmp_has_conflicts" == "yes" ]]; then
     warn "push：不可执行，原因：tmp 发布目录仍有未解决冲突"
-    next_step "进入 tmp 发布目录解决冲突并 git add，然后执行：./scripts/release-master.sh --push"
+    next_step "进入 tmp 发布目录解决冲突并 git add，然后执行：./scripts/deploy/release-master.sh --push"
     return
   fi
 
   if [[ "$tmp_has_merge" == "yes" ]]; then
     ok "push：可以执行"
-    next_step "检查 tmp 发布目录 diff 后执行：./scripts/release-master.sh --push"
+    next_step "检查 tmp 发布目录 diff 后执行：./scripts/deploy/release-master.sh --push"
     return
   fi
 
   if [[ "$tmp_has_changes" == "yes" ]]; then
     warn "push：不可执行，原因：tmp 发布目录有变更，但不是 prepare 产生的待发布 merge"
-    next_step "如确认废弃本次发布，可删除 tmp 发布目录后重新执行：./scripts/release-master.sh"
+    next_step "如确认废弃本次发布，可删除 tmp 发布目录后重新执行：./scripts/deploy/release-master.sh"
     return
   fi
 
   warn "push：不可执行，原因：tmp 发布目录干净，没有待提交 merge"
   if [[ -n "$main_reason" ]]; then
-    next_step "先处理 prepare 不可执行的原因，然后重新执行：./scripts/release-master.sh status"
+    next_step "先处理 prepare 不可执行的原因，然后重新执行：./scripts/deploy/release-master.sh status"
   else
-    next_step "如需发布，先执行默认准备流程：./scripts/release-master.sh"
+    next_step "如需发布，先执行默认准备流程：./scripts/deploy/release-master.sh"
   fi
 }
 
@@ -522,14 +522,14 @@ prepare_release() {
 
   if [[ -f "$(git rev-parse --git-path MERGE_HEAD)" ]]; then
     show_release_decision
-    stop_with_next_step "tmp 发布目录已经存在一个未完成的 merge，prepare 不会重复执行。" "先检查 tmp 发布目录；确认无误后执行：./scripts/release-master.sh --push"
+    stop_with_next_step "tmp 发布目录已经存在一个未完成的 merge，prepare 不会重复执行。" "先检查 tmp 发布目录；确认无误后执行：./scripts/deploy/release-master.sh --push"
   fi
 
   if [[ -n "$(git status --porcelain)" ]]; then
     warn "tmp 发布目录不干净，prepare 不会继续执行。"
     git status --short
     show_release_decision
-    next_step "确认废弃本次发布时，可删除 tmp 发布目录后重新执行：./scripts/release-master.sh"
+    next_step "确认废弃本次发布时，可删除 tmp 发布目录后重新执行：./scripts/deploy/release-master.sh"
     exit 1
   fi
 
@@ -545,12 +545,12 @@ prepare_release() {
       log "发版文件冲突已自动处理，当前没有未解决冲突；请检查 tmp 发布目录 diff。"
       show_release_status
       show_release_decision
-      next_step "./scripts/release-master.sh --push"
+      next_step "./scripts/deploy/release-master.sh --push"
       exit 0
     fi
     git status --short
     show_release_decision
-    stop_with_next_step "检测到合并冲突，脚本已停止在待人工处理状态。" "解决业务代码冲突并 git add 后，执行：./scripts/release-master.sh --push"
+    stop_with_next_step "检测到合并冲突，脚本已停止在待人工处理状态。" "解决业务代码冲突并 git add 后，执行：./scripts/deploy/release-master.sh --push"
   fi
 
   restore_protected_files_from_head
@@ -559,12 +559,12 @@ prepare_release() {
   show_release_status
   show_release_decision
   log "建议检查命令："
-  log "  ./scripts/release-master.sh status"
+  log "  ./scripts/deploy/release-master.sh status"
   log "  cd $(pwd)"
   log "  git diff --cached"
   log "  cd ${MAIN_REPO_ROOT}"
   log "下一步："
-  log "  ./scripts/release-master.sh --push"
+  log "  ./scripts/deploy/release-master.sh --push"
 }
 
 push_release() {
@@ -575,17 +575,17 @@ push_release() {
   branch="$(git branch --show-current)"
   [[ "$branch" == "${TARGET_BRANCH}" ]] || {
     show_release_decision
-    stop_with_next_step "当前分支必须是 ${TARGET_BRANCH}，实际是：${branch}" "先执行默认准备流程：./scripts/release-master.sh"
+    stop_with_next_step "当前分支必须是 ${TARGET_BRANCH}，实际是：${branch}" "先执行默认准备流程：./scripts/deploy/release-master.sh"
   }
   [[ -f "$(git rev-parse --git-path MERGE_HEAD)" ]] || {
     show_release_decision
-    stop_with_next_step "没有检测到待提交的 merge，不能直接 push。" "先执行默认准备流程：./scripts/release-master.sh"
+    stop_with_next_step "没有检测到待提交的 merge，不能直接 push。" "先执行默认准备流程：./scripts/deploy/release-master.sh"
   }
 
   if [[ -n "$(git diff --name-only --diff-filter=U)" ]]; then
     git status --short
     show_release_decision
-    stop_with_next_step "仍有未解决的合并冲突。" "解决冲突并 git add 后，再执行：./scripts/release-master.sh --push"
+    stop_with_next_step "仍有未解决的合并冲突。" "解决冲突并 git add 后，再执行：./scripts/deploy/release-master.sh --push"
   fi
 
   local meta_file
@@ -598,7 +598,7 @@ push_release() {
     [[ "$prepared_sha" == "$current_sha" ]] ||
       {
         show_release_decision
-        stop_with_next_step "${SOURCE_REF} 在 prepare 后发生变化，当前 tmp 发布内容可能不是最新代码。" "重新执行：./scripts/release-master.sh"
+        stop_with_next_step "${SOURCE_REF} 在 prepare 后发生变化，当前 tmp 发布内容可能不是最新代码。" "重新执行：./scripts/deploy/release-master.sh"
       }
   else
     warn "未找到 prepare 源提交记录，无法确认 ${SOURCE_REF} 是否在 prepare 后变化。"
@@ -607,7 +607,7 @@ push_release() {
   if [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
     git status --short
     show_release_decision
-    stop_with_next_step "存在未跟踪文件，脚本不会自动把它们带入发布提交。" "确认这些文件后，添加、删除或加入 .gitignore，再执行：./scripts/release-master.sh --push"
+    stop_with_next_step "存在未跟踪文件，脚本不会自动把它们带入发布提交。" "确认这些文件后，添加、删除或加入 .gitignore，再执行：./scripts/deploy/release-master.sh --push"
   fi
 
   if git diff --check && git diff --cached --check; then
