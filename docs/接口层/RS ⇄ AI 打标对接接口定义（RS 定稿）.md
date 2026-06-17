@@ -24,7 +24,7 @@
 
 AI 打标前拉取当前**启用**的标签体系与互斥规则。
 
-**请求**：`GET /api/v1/tag-schemas/default?lang=zh`（URL 前缀 / 鉴权待对齐）。入参 `lang`：语言代码, 单选必需, 取 language\-codes\.md 22 种之一\(如 zh/en/es/pt\), AI 按 cpp 传入语言拉对应语言标签体系, 标签 name/definition 按该语言返回, 非法或缺省回退基准 zh; 分类 name 暂无多语言固定人工填入内容。
+**请求**：`GET /api/v1/tag-schemas/default?lang=zh`（URL 前缀 / 鉴权待对齐）。入参 `lang`：三方业务语种合约代码，单选必需，取 `业务语种规范.md` / `language-codes.md` 22 种之一（如 `zh`/`en`/`es`/`pt`/`in`）。AI 按 CPP 传入语言拉对应语言标签体系，标签 `name` / `definition` 按该语言返回；非法或缺省语言应在调用侧校验失败，不在 AI 侧静默回退。分类 `name` 暂无多语言固定人工填入内容。
 
 **响应**：
 

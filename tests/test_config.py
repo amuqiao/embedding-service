@@ -88,3 +88,17 @@ def test_settings_rejects_negative_or_zero_control_values():
 
     with pytest.raises(ValidationError, match="MAX_ACTIVE_JOBS"):
         Settings(**_settings_kwargs(MAX_ACTIVE_JOBS=-1))
+
+
+def test_short_drama_rs_http_mode_requires_url_and_key():
+    with pytest.raises(ValidationError, match="SHORT_DRAMA_RS_BASE_URL"):
+        Settings(**_settings_kwargs(SHORT_DRAMA_RS_SCHEMA_SOURCE="http"))
+
+    settings = Settings(**_settings_kwargs(
+        SHORT_DRAMA_RS_SCHEMA_SOURCE="http",
+        SHORT_DRAMA_RS_RESULT_SINK="http",
+        SHORT_DRAMA_RS_BASE_URL="https://rs.example.com",
+        SHORT_DRAMA_RS_API_KEY="token",
+    ))
+
+    assert settings.SHORT_DRAMA_RS_SCHEMA_SOURCE == "http"

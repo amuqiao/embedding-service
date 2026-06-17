@@ -1,0 +1,30 @@
+{
+  "client_request_id": "cpp:300000000300000279:initial:mock",
+  "job_type": "short_drama.tagging.initial",
+  "job_params": {
+    "t_book_id": "300000000300000279",
+    "work_context": {
+      "title": "Mock Short Drama",
+      "synopsis": "A heroine is misunderstood and later clears her name.",
+      "subtitle_language": "zh",
+      "series_structure": "continuous_series",
+      "content_type": "短剧",
+      "episode_count": 1
+    },
+    "assets": [
+      {
+        "asset_type": "subtitle_srt",
+        "episode_no": 1,
+        "format": "srt",
+        "text": "1\n00:00:01,000 --> 00:00:03,000\n她被家人误解。\n\n2\n00:00:04,000 --> 00:00:06,000\n真相终于揭开。"
+      }
+    ]
+  },
+  "callback": {
+    "url": "https://cpp.example.com/ai-jobs/callback"
+  },
+  "metadata": {
+    "source_service": "cpp",
+    "business_scene": "short_drama_tagging"
+  }
+}

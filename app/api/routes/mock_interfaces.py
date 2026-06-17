@@ -5,12 +5,13 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, Query, status
-from pydantic import Field, field_validator
+from pydantic import Field, model_validator
 
 from app.core.exceptions import ValidationAppError
 from app.core.security import require_service_auth
 from app.schemas.common import StrictBaseModel
 from app.schemas.jobs import CallbackConfig, CreateJobRequest, CreateJobResponse, JobOptions, JobStatusResponse
+from app.workflows.short_drama_tagging.languages import SUPPORTED_BUSINESS_LANGUAGES, validate_business_language
 
 router = APIRouter(tags=["mock-interfaces"], dependencies=[Depends(require_service_auth)])
 
@@ -20,7 +21,7 @@ CPP_MOCK_JOB_TYPES = {
     "short_drama.tagging.incremental",
 }
 RS_MOCK_JOB_TYPES = {
-    "short_drama.tag_schema.translation",
+    "short_drama.tag_labels.translation",
 }
 MOCK_JOB_NAMESPACE = uuid.UUID("7f1e153a-98e2-4681-a883-52e827de7535")
 MOCK_CREATED_AT = datetime(2026, 6, 15, 10, 0, 0, tzinfo=UTC)
@@ -72,7 +73,7 @@ MockJobStatus = Literal["queued", "running", "succeeded", "failed"]
 MockJobType = Literal[
     "short_drama.tagging.initial",
     "short_drama.tagging.incremental",
-    "short_drama.tag_schema.translation",
+    "short_drama.tag_labels.translation",
 ]
 MockJobParams = dict[str, Any] | list[dict[str, Any]]
 
@@ -80,24 +81,16 @@ MockJobParams = dict[str, Any] | list[dict[str, Any]]
 class MockCreateJobRequest(StrictBaseModel):
     client_request_id: str | None = Field(default=None, max_length=255)
     job_type: str = Field(min_length=1)
-    job_params: list[dict[str, Any]] = Field(min_length=1)
+    job_params: dict[str, Any]
     callback: CallbackConfig | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     options: JobOptions | None = None
 
-    @field_validator("job_params")
-    @classmethod
-    def validate_list_job_params(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        for index, item in enumerate(value):
-            source_language = item.get("source_language")
-            if not isinstance(source_language, str) or not source_language.strip():
-                raise ValueError(f"job_params[{index}].source_language must be a non-empty string")
-            target_languages = item.get("target_languages")
-            if not isinstance(target_languages, list) or not target_languages:
-                raise ValueError(f"job_params[{index}].target_languages must be a non-empty list")
-            if any(not isinstance(language, str) or not language.strip() for language in target_languages):
-                raise ValueError(f"job_params[{index}].target_languages must contain only non-empty strings")
-        return value
+    @model_validator(mode="after")
+    def validate_mock_request(self):
+        if self.job_type == "short_drama.tag_labels.translation":
+            self.job_params = _validate_label_translation_params(self.job_params)
+        return self
 
 
 def mock_tag_schema() -> dict[str, Any]:
@@ -185,11 +178,11 @@ def _mock_job_path(mock_client: MockClient, job_id: uuid.UUID) -> str:
 
 
 def _business_scene_for_job_type(job_type: str) -> str:
-    return "tag_schema_translation" if job_type == "short_drama.tag_schema.translation" else "short_drama_tagging"
+    return "tag_labels_translation" if job_type == "short_drama.tag_labels.translation" else "short_drama_tagging"
 
 
 def _is_translation_job(job_type: str) -> bool:
-    return job_type == "short_drama.tag_schema.translation"
+    return job_type == "short_drama.tag_labels.translation"
 
 
 def _validate_mock_job_type(mock_client: MockClient, job_type: str) -> None:
@@ -231,9 +224,9 @@ def _translated_category(
     }
 
 
-def _translated_schemas() -> list[dict[str, Any]]:
-    return [
-        {
+def _translated_schema_by_language() -> dict[str, dict[str, Any]]:
+    return {
+        "en": {
             "language": "en",
             "categories": [
                 _translated_category(
@@ -289,7 +282,7 @@ def _translated_schemas() -> list[dict[str, Any]]:
                 ),
             ],
         },
-        {
+        "es": {
             "language": "es",
             "categories": [
                 _translated_category(
@@ -345,7 +338,7 @@ def _translated_schemas() -> list[dict[str, Any]]:
                 ),
             ],
         },
-        {
+        "pt": {
             "language": "pt",
             "categories": [
                 _translated_category(
@@ -401,30 +394,150 @@ def _translated_schemas() -> list[dict[str, Any]]:
                 ),
             ],
         },
-    ]
+    }
 
 
-def _translated_schema_result() -> dict[str, Any]:
-    zh_schema = mock_tag_schema()
-    translated_schemas = _translated_schemas()
+def _validate_label_translation_params(job_params: dict[str, Any]) -> dict[str, Any]:
+    labels = job_params.get("labels")
+    if not isinstance(labels, list) or not labels:
+        raise ValueError("job_params.labels must be a non-empty array")
+    normalized_labels: list[dict[str, Any]] = []
+    for index, label in enumerate(labels):
+        if not isinstance(label, dict):
+            raise ValueError(f"job_params.labels[{index}] must be an object")
+        label_id = label.get("label_id")
+        if not isinstance(label_id, str) or not label_id.strip():
+            raise ValueError(f"job_params.labels[{index}].label_id must be a non-empty string")
+        source_language = label.get("source_language")
+        if not isinstance(source_language, str):
+            raise ValueError(f"job_params.labels[{index}].source_language must be a string")
+        validate_business_language(source_language)
+        target_languages = label.get("target_languages")
+        if not isinstance(target_languages, list) or not target_languages:
+            raise ValueError(f"job_params.labels[{index}].target_languages must be a non-empty array")
+        for language in target_languages:
+            if not isinstance(language, str):
+                raise ValueError(f"job_params.labels[{index}].target_languages must contain strings")
+            validate_business_language(language)
+        if len(target_languages) != len(set(target_languages)):
+            raise ValueError(f"job_params.labels[{index}].target_languages must not contain duplicates")
+        expected = sorted(target_languages, key=SUPPORTED_BUSINESS_LANGUAGES.index)
+        if target_languages != expected:
+            raise ValueError(f"job_params.labels[{index}].target_languages must follow business language order")
+        display_name = label.get("display_name")
+        if not isinstance(display_name, str) or not display_name.strip():
+            raise ValueError(f"job_params.labels[{index}].display_name must be a non-empty string")
+        definition = label.get("definition")
+        if not isinstance(definition, str) or not definition.strip():
+            raise ValueError(f"job_params.labels[{index}].definition must be a non-empty string")
+        normalized_labels.append(
+            {
+                "label_id": label_id,
+                "source_language": source_language,
+                "target_languages": target_languages,
+                "display_name": display_name,
+                "definition": definition,
+            }
+        )
+    return {"labels": normalized_labels}
+
+
+def _default_translation_job_params() -> dict[str, Any]:
+    return {
+        "labels": [
+            {
+                "label_id": "65f0a1b2c3d4e5f6a7b8c901",
+                "source_language": "zh",
+                "target_languages": ["en", "es", "pt"],
+                "display_name": "男频",
+                "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心。",
+            },
+            {
+                "label_id": "65f0a1b2c3d4e5f6a7b8c902",
+                "source_language": "zh",
+                "target_languages": ["en", "es", "ko"],
+                "display_name": "女频",
+                "definition": "核心受众为女性群体，叙事视角、人物塑造、情感逻辑以女性主角为核心。",
+            },
+        ],
+    }
+
+
+def _translation_lookup(language: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    translated_schema = _translated_schema_by_language().get(language, {"categories": []})
+    categories_by_id = {
+        category["category_id"]: category
+        for category in translated_schema.get("categories", [])
+        if isinstance(category, dict) and isinstance(category.get("category_id"), str)
+    }
+    labels_by_id: dict[str, Any] = {}
+    for category in categories_by_id.values():
+        for label in category.get("labels", []):
+            if isinstance(label, dict) and isinstance(label.get("label_id"), str):
+                labels_by_id[label["label_id"]] = label
+    return categories_by_id, labels_by_id
+
+
+def _ko_label_translations() -> dict[str, dict[str, str]]:
+    return {
+        "65f0a1b2c3d4e5f6a7b8c901": {
+            "name": "남성향",
+            "definition": "핵심 독자는 남성이며, 서사 시점과 인물 전개가 남성 주인공을 중심으로 전개됩니다.",
+        },
+        "65f0a1b2c3d4e5f6a7b8c902": {
+            "name": "여성향",
+            "definition": "핵심 독자는 여성이며, 서사 시점과 인물 설정, 감정선이 여성 주인공을 중심으로 전개됩니다.",
+        },
+    }
+
+
+def _translation_labels(job_params: MockJobParams) -> list[dict[str, Any]]:
+    object_job_params = _object_job_params(job_params)
+    return object_job_params["labels"]
+
+
+def _translated_label_text(label: dict[str, Any], language: str) -> dict[str, str]:
+    if language == "ko":
+        translated = _ko_label_translations().get(label["label_id"])
+        if translated:
+            return translated
+    translated = _translation_lookup(language)[1].get(label["label_id"])
+    if translated:
+        return {"name": translated["name"], "definition": translated["definition"]}
+    return {"name": label["display_name"], "definition": label["definition"]}
+
+
+def _translated_labels(job_params: MockJobParams) -> list[dict[str, Any]]:
+    translated_labels: list[dict[str, Any]] = []
+    for label in _translation_labels(job_params):
+        translated_labels.append(
+            {
+                "label_id": label["label_id"],
+                "langs": {
+                    language: _translated_label_text(label, language)
+                    for language in label["target_languages"]
+                },
+            }
+        )
+    return translated_labels
+
+
+def _translated_label_result(job_params: MockJobParams) -> dict[str, Any]:
+    object_job_params = _object_job_params(job_params)
+    labels = _translation_labels(object_job_params)
+    translated_labels = _translated_labels(object_job_params)
     return {
         "artifacts": [
             {
-                "key": "translated_schemas",
+                "key": "translated_labels",
                 "type": "json",
-                "label": "翻译后的标签结构体",
-                "content": translated_schemas,
-            },
-            {
-                "key": "mutual_exclusion_rules",
-                "type": "json",
-                "label": "互斥标签结构体",
-                "content": zh_schema["mutual_exclusion_rules"],
+                "label": "翻译后的标签",
+                "content": translated_labels,
             },
         ],
         "signals": {
-            "source_schema_hash": _hash_json(zh_schema["categories"]),
-            "translated_schemas_hash": _hash_json(translated_schemas),
+            "source_schema_hash": _hash_json(labels),
+            "translated_schemas_hash": _hash_json(translated_labels),
         },
     }
 
@@ -447,38 +560,30 @@ def _object_job_params(job_params: MockJobParams) -> dict[str, Any]:
     return job_params
 
 
-def _translation_source_language(job_params: MockJobParams) -> str:
-    if isinstance(job_params, list):
-        if not job_params:
-            raise ValidationAppError("INVALID_INPUT", "RS mock job_params list must not be empty.", {})
-        return job_params[0]["source_language"]
-    source_language = job_params.get("source_language")
-    return source_language if isinstance(source_language, str) else "zh"
+def _translation_source_languages(job_params: MockJobParams) -> list[str]:
+    return sorted(
+        {label["source_language"] for label in _translation_labels(job_params)},
+        key=SUPPORTED_BUSINESS_LANGUAGES.index,
+    )
 
 
 def _translation_target_languages(job_params: MockJobParams) -> list[str]:
-    if not isinstance(job_params, list):
-        target_languages = job_params.get("target_languages")
-        return target_languages if isinstance(target_languages, list) else ["en", "es", "pt"]
-
-    if not job_params:
-        raise ValidationAppError("INVALID_INPUT", "RS mock job_params list must not be empty.", {})
-    languages: list[str] = []
-    for item in job_params:
-        for language in item["target_languages"]:
-            if language not in languages:
-                languages.append(language)
-    return languages
+    languages = {
+        language
+        for label in _translation_labels(job_params)
+        for language in label["target_languages"]
+    }
+    return sorted(languages, key=SUPPORTED_BUSINESS_LANGUAGES.index)
 
 
 def _mock_error(job_type: str, job_params: MockJobParams) -> dict[str, Any]:
     if _is_translation_job(job_type):
         return {
-            "code": "INVALID_SOURCE_SCHEMA",
-            "message": "source_schema contains duplicate label_id",
+            "code": "INVALID_LABEL_TRANSLATION_INPUT",
+            "message": "labels contains invalid translation input",
             "details": {
                 "label_id": "65f0a1b2c3d4e5f6a7b8c901",
-                "source_language": _translation_source_language(job_params),
+                "source_languages": _translation_source_languages(job_params),
                 "target_languages": _translation_target_languages(job_params),
             },
         }
@@ -511,10 +616,10 @@ def _mock_metadata(
     )
     if _is_translation_job(job_type):
         metadata["mock_translation"] = {
-            "source_language": _translation_source_language(job_params),
+            "source_languages": _translation_source_languages(job_params),
             "target_languages": _translation_target_languages(job_params),
-            "category_count": len(mock_tag_schema()["categories"]),
-            "artifact_keys": ["translated_schemas", "mutual_exclusion_rules"],
+            "label_count": len(_translation_labels(job_params)),
+            "artifact_keys": ["translated_labels"],
         }
     else:
         object_job_params = _object_job_params(job_params)
@@ -563,13 +668,13 @@ def _mock_job_view(
     else:
         _validate_mock_job_type(mock_client, job_type)
         client_request_id = f"mock:{mock_client}:{job_id}"
-        job_params = {}
+        job_params = _default_translation_job_params() if _is_translation_job(job_type) else {}
         request_metadata = {}
         has_callback = False
     progress = _mock_progress(job_type, job_status)
     result = None
     if job_status == "succeeded" and _is_translation_job(job_type):
-        result = _translated_schema_result()
+        result = _translated_label_result(job_params)
     error = None
     if job_status == "failed":
         error = _mock_error(job_type, job_params)
@@ -637,25 +742,10 @@ CPP_CREATE_REQUEST_EXAMPLE = {
 }
 
 RS_CREATE_REQUEST_EXAMPLE = {
-    "client_request_id": "rs:tag-schema-default:en,es,pt",
-    "job_type": "short_drama.tag_schema.translation",
-    "job_params": [
-        {
-            "label_id": "bihuihuigu76576585",
-            "source_language": "zh",
-            "target_languages": ["en", "es", "pt"],
-            "display_name": "男频",
-            "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心...",
-        },
-        {
-            "label_id": "bihuihuigu76576585211212",
-            "source_language": "zh",
-            "target_languages": ["en", "es", "kr"],
-            "display_name": "男频",
-            "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心...",
-        },
-    ],
-    "metadata": {"source_service": "rs", "business_scene": "tag_schema_translation"},
+    "client_request_id": "rs:tag-labels:batch:20260617",
+    "job_type": "short_drama.tag_labels.translation",
+    "job_params": _default_translation_job_params(),
+    "metadata": {"source_service": "rs", "business_scene": "tag_labels_translation"},
 }
 
 CPP_CREATE_RESPONSE_EXAMPLE = {
@@ -669,8 +759,8 @@ CPP_CREATE_RESPONSE_EXAMPLE = {
 
 RS_CREATE_RESPONSE_EXAMPLE = {
     "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
-    "client_request_id": "rs:tag-schema-default:en,es,pt",
-    "job_type": "short_drama.tag_schema.translation",
+    "client_request_id": "rs:tag-labels:batch:20260617",
+    "job_type": "short_drama.tag_labels.translation",
     "status": "queued",
     "status_url": "/api/v1/mock/rs/ai-jobs/jobs/0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
     "created_at": "2026-06-15T10:00:00Z",
@@ -702,22 +792,22 @@ CPP_STATUS_RESPONSE_EXAMPLE = {
 
 RS_STATUS_RESPONSE_EXAMPLE = {
     "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
-    "client_request_id": "rs:tag-schema-default:en,es,pt",
-    "job_type": "short_drama.tag_schema.translation",
+    "client_request_id": "rs:tag-labels:batch:20260617",
+    "job_type": "short_drama.tag_labels.translation",
     "status": "succeeded",
     "progress": {"percent": 100, "message": "finished", "stage": "finished"},
-    "result": _translated_schema_result(),
+    "result": _translated_label_result(RS_CREATE_REQUEST_EXAMPLE["job_params"]),
     "error": None,
     "callback": {"status": "not_configured", "attempts": 0, "next_retry_at": None, "last_error": None},
     "metadata": {
         "source_service": "rs",
-        "business_scene": "tag_schema_translation",
+        "business_scene": "tag_labels_translation",
         "api_version": "v1",
         "mock_translation": {
-            "source_language": "zh",
-            "target_languages": ["en", "es", "pt"],
-            "category_count": 3,
-            "artifact_keys": ["translated_schemas", "mutual_exclusion_rules"],
+            "source_languages": ["zh"],
+            "target_languages": ["en", "es", "pt", "ko"],
+            "label_count": 2,
+            "artifact_keys": ["translated_labels"],
         },
     },
     "created_at": "2026-06-15T10:00:00Z",
@@ -782,8 +872,8 @@ async def get_cpp_mock_ai_job(
 async def create_rs_mock_ai_job(
     payload: MockCreateJobRequest = Body(
         openapi_examples={
-            "rs_tag_schema_translation": {
-                "summary": "RS 标签体系翻译 mock",
+            "rs_tag_labels_translation": {
+                "summary": "RS 多标签翻译 mock",
                 "value": RS_CREATE_REQUEST_EXAMPLE,
             }
         }
@@ -806,4 +896,4 @@ async def get_rs_mock_ai_job(
     job_id: uuid.UUID,
     job_status: MockJobStatus = Query(default="succeeded", alias="status"),
 ):
-    return _mock_job_view(job_id, "rs", "short_drama.tag_schema.translation", job_status)
+    return _mock_job_view(job_id, "rs", "short_drama.tag_labels.translation", job_status)

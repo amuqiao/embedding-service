@@ -87,6 +87,8 @@ AI -> CPP callback
 
 为了避免 CPP 与 RS 结果分叉，AI 只有在 RS 接受写入后才把 job 标记为 `succeeded` 并发送成功 callback。若 RS 写入失败，job 进入 `failed`，错误码为 `RS_RESULT_WRITE_FAILED`，并 callback CPP 失败终态。
 
+当模型生成的结果可写入 RS，但存在缺失分类、低于数量约束等 `partial_success` 问题时，AI 仍写入 RS，Job 仍进入 `succeeded`。`partial_success` 的 `success=false` 信号和原因保存在 AI 内部 canonical result / RS 写入明细中，CPP callback 仍只携带 `result=null` 的终态 `JobView`。
+
 终态动作必须满足：
 
 ```text

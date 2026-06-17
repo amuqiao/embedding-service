@@ -128,7 +128,7 @@ Content-Type: application/json
 | `job_params.t_book_id` | 必需 | 作品主键。 |
 | `job_params.work_context.title` | 必需 | 剧名。 |
 | `job_params.work_context.synopsis` | 建议 | 剧情简介。没有简介时可为空字符串，但不能替代字幕。 |
-| `job_params.work_context.subtitle_language` | 必需 | BCP 47 语言代码，见 `language-codes.md`。 |
+| `job_params.work_context.subtitle_language` | 必需 | 三方业务语种合约代码，见 `业务语种规范.md` / `language-codes.md`；例如 `zh`、`en`、`es`、`pt`、`in`，不得把 `in` 改写为 `id`。 |
 | `job_params.work_context.series_structure` | 必需 | `continuous_series` 或 `unit_series`。 |
 | `job_params.assets` | 必需 | 素材资源列表，至少包含一个 `subtitle_srt`。 |
 | `callback` | 可选 | CPP 终态通知配置。不传时 CPP 只轮询。 |
@@ -385,6 +385,8 @@ AI 已生成 canonical result
 AI 已完成结果校验
 RS 已接受该 job_id 对应的 ai_auto 结果写入
 ```
+
+如果 AI 生成了可写入 RS 的部分结果，但存在缺失分类或低于数量约束等 `partial_success` 问题，Job 仍可进入 `succeeded`，AI 仍写入 RS 并向 CPP 发送成功 callback。该类问题只记录在 AI 内部 canonical result 和写 RS payload 相关明细中，对 CPP 的 `JobView.result` 仍保持 `null`。
 
 如果 AI 已生成结果但 RS 写入失败，job 必须进入 `failed`，错误码为 `RS_RESULT_WRITE_FAILED`，并向 CPP callback 失败终态。CPP 不需要额外判断 RS 是否落库。
 

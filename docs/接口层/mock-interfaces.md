@@ -100,7 +100,7 @@ CPP mock 在 `status=succeeded` 时返回 `result=null`，表示 AI 已完成打
 
 ## RS Mock Job
 
-RS mock 对应 [AI标签体系翻译接口.md](AI标签体系翻译接口.md)，用于模拟标签体系翻译 Job。
+RS mock 用于模拟 RS 调 AI 的多标签翻译 Job。
 
 ```http
 POST /api/v1/mock/rs/ai-jobs/jobs
@@ -111,118 +111,96 @@ GET  /api/v1/mock/rs/ai-jobs/jobs/{job_id}
 
 | job_type | 用途 |
 | --- | --- |
-| `short_drama.tag_schema.translation` | 标签体系翻译 mock。 |
+| `short_drama.tag_labels.translation` | 多标签翻译 mock。 |
+
+创建请求的 `job_params` 必须是对象，不再接受历史列表型 `job_params`。多标签列表放在 `job_params.labels`，每个标签项保持独立完整结构，包含 `label_id`、`source_language`、`target_languages`、`display_name` 和 `definition`。
+
+```json
+{
+  "client_request_id": "rs:tag-labels:batch:20260617",
+  "job_type": "short_drama.tag_labels.translation",
+  "job_params": {
+    "labels": [
+      {
+        "label_id": "65f0a1b2c3d4e5f6a7b8c901",
+        "source_language": "zh",
+        "target_languages": ["en", "es", "pt"],
+        "display_name": "男频",
+        "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心。"
+      },
+      {
+        "label_id": "65f0a1b2c3d4e5f6a7b8c902",
+        "source_language": "zh",
+        "target_languages": ["en", "es", "ko"],
+        "display_name": "女频",
+        "definition": "核心受众为女性群体，叙事视角、人物塑造、情感逻辑以女性主角为核心。"
+      }
+    ]
+  },
+  "metadata": {
+    "source_service": "rs",
+    "business_scene": "tag_labels_translation"
+  }
+}
+```
 
 创建响应中的 `status_url` 会返回同组 RS mock 查询路径：
 
 ```json
 {
   "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
-  "client_request_id": "rs:tag-schema-default:en",
-  "job_type": "short_drama.tag_schema.translation",
+  "client_request_id": "rs:tag-labels:batch:20260617",
+  "job_type": "short_drama.tag_labels.translation",
   "status": "queued",
   "status_url": "/api/v1/mock/rs/ai-jobs/jobs/0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
   "created_at": "2026-06-15T10:00:00Z"
 }
 ```
 
-RS mock 在 `status=succeeded` 时返回翻译结果。下面示例为节选；实际响应中 `en`、`es`、`pt` 每种语言都会返回 `000001`、`000003`、`000006` 三个分类。
+RS mock 在 `status=succeeded` 时返回翻译结果。结果兼容通用 `JobResult`：业务数组放在 `result.artifacts[0].content`。
 
 ```json
 {
   "result": {
     "artifacts": [
       {
-        "key": "translated_schemas",
+        "key": "translated_labels",
         "type": "json",
-        "label": "翻译后的标签结构体",
+        "label": "翻译后的标签",
         "content": [
           {
-            "language": "en",
-            "categories": [
-              {
-                "category_id": "000001",
-                "name": "Audience",
-                "required": true,
-                "min_items": 1,
-                "max_items": 1,
-                "labels": [
-                  {
-                    "label_id": "65f0a1b2c3d4e5f6a7b8c901",
-                    "name": "Male-oriented",
-                    "definition": "The story is primarily written for male audiences, with the narrative viewpoint and character arcs centered on a male lead."
-                  },
-                  {
-                    "label_id": "65f0a1b2c3d4e5f6a7b8c902",
-                    "name": "Female-oriented",
-                    "definition": "The story is primarily written for female audiences, with the narrative viewpoint, characterization, and emotional logic centered on a female lead."
-                  }
-                ]
+            "label_id": "65f0a1b2c3d4e5f6a7b8c901",
+            "langs": {
+              "en": {
+                "name": "Male-oriented",
+                "definition": "The story is primarily written for male audiences, with the narrative viewpoint and character arcs centered on a male lead."
+              },
+              "es": {
+                "name": "Orientado a hombres",
+                "definition": "La historia se dirige principalmente a una audiencia masculina, con el punto de vista narrativo y los arcos de personajes centrados en un protagonista masculino."
+              },
+              "pt": {
+                "name": "Voltado ao publico masculino",
+                "definition": "A historia e voltada principalmente ao publico masculino, com o ponto de vista narrativo e os arcos dos personagens centrados em um protagonista homem."
               }
-            ]
+            }
           },
           {
-            "language": "es",
-            "categories": [
-              {
-                "category_id": "000003",
-                "name": "Genero",
-                "required": true,
-                "min_items": 1,
-                "max_items": 3,
-                "labels": [
-                  {
-                    "label_id": "65f0a1b2c3d4e5f6a7b8c9f1",
-                    "name": "Etica familiar",
-                    "definition": "Se centra en relaciones, responsabilidades, conflictos, reconciliacion o traicion dentro de una familia comun."
-                  },
-                  {
-                    "label_id": "65f0a1b2c3d4e5f6a7b8c9f2",
-                    "name": "Suspenso sobrenatural",
-                    "definition": "Crea miedo y tension mediante sucesos extranos, historias de fantasmas, maldiciones o senales sobrenaturales."
-                  }
-                ]
+            "label_id": "65f0a1b2c3d4e5f6a7b8c902",
+            "langs": {
+              "en": {
+                "name": "Female-oriented",
+                "definition": "The story is primarily written for female audiences, with the narrative viewpoint, characterization, and emotional logic centered on a female lead."
+              },
+              "es": {
+                "name": "Orientado a mujeres",
+                "definition": "La historia se dirige principalmente a una audiencia femenina, con el punto de vista, la caracterización y la lógica emocional centrados en una protagonista femenina."
+              },
+              "ko": {
+                "name": "여성향",
+                "definition": "핵심 독자는 여성이며, 서사 시점과 인물 설정, 감정선이 여성 주인공을 중심으로 전개됩니다."
               }
-            ]
-          },
-          {
-            "language": "pt",
-            "categories": [
-              {
-                "category_id": "000006",
-                "name": "Emocao",
-                "required": true,
-                "min_items": 1,
-                "max_items": 3,
-                "labels": [
-                  {
-                    "label_id": "65f0a1b2c3d4e5f6a7b8ca01",
-                    "name": "Sofrimento",
-                    "definition": "Cria deliberadamente tristeza, repressao, injustica ou ferida emocional."
-                  },
-                  {
-                    "label_id": "65f0a1b2c3d4e5f6a7b8ca02",
-                    "name": "Vinganca satisfatoria",
-                    "definition": "Cria prazer por meio de contra-ataque, virada, punicao dos ofensores ou compensacao."
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "key": "mutual_exclusion_rules",
-        "type": "json",
-        "label": "互斥标签结构体",
-        "content": [
-          {
-            "label_id": "65f0a1b2c3d4e5f6a7b8c9f1",
-            "mutex_label_ids": ["65f0a1b2c3d4e5f6a7b8c9f2"]
-          },
-          {
-            "label_id": "65f0a1b2c3d4e5f6a7b8c9f2",
-            "mutex_label_ids": ["65f0a1b2c3d4e5f6a7b8c9f1"]
+            }
           }
         ]
       }
@@ -250,7 +228,7 @@ GET /api/v1/mock/cpp/ai-jobs/jobs/{job_id}?status=running
 GET /api/v1/mock/rs/ai-jobs/jobs/{job_id}?status=failed
 ```
 
-CPP mock `failed` 时返回 `RS_RESULT_WRITE_FAILED`，RS mock `failed` 时返回 `INVALID_SOURCE_SCHEMA`；不支持的 `job_type` 返回 `INVALID_JOB_TYPE`。
+CPP mock `failed` 时返回 `RS_RESULT_WRITE_FAILED`，RS mock `failed` 时返回 `INVALID_LABEL_TRANSLATION_INPUT`；不支持的 `job_type` 返回 `INVALID_JOB_TYPE`。
 
 ## 不再暴露的内部 Fixture
 
