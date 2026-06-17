@@ -358,7 +358,7 @@ MAX_ACTIVE_JOBS=50  # 灰度放量；生产排队目标可单独提高
 ### 基线检查
 
 ```bash
-./scripts/dev.sh check
+./scripts/verify.sh check
 ```
 
 ### 本地主链路
@@ -367,7 +367,7 @@ MAX_ACTIVE_JOBS=50  # 灰度放量；生产排队目标可单独提高
 ./scripts/dev.sh start
 curl -fsS http://127.0.0.1:8100/health
 curl -fsS http://127.0.0.1:8100/healthz
-./scripts/dev.sh smoke
+./scripts/verify.sh smoke
 ./scripts/dev.sh stop
 ```
 
@@ -377,12 +377,12 @@ curl -fsS http://127.0.0.1:8100/healthz
 
 ```bash
 ./scripts/dev.sh start
-./scripts/dev.sh e2e --input-file .data/test_novel.txt
+./scripts/verify.sh e2e --input-file .data/test_novel.txt
 ./scripts/dev.sh stop
 ```
 
 ### OSS 连通性
 
 ```bash
-./.venv/bin/python scripts/check_aliyun_oss.py --env-file .env.dev
+./scripts/verify.sh oss --env-file .env.dev
 ```

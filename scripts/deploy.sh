@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # deploy.sh - FastAPI AI Job Template 部署形态入口
 #
-# 维护的 3 种模式：
-#   local         宿主机运行 api/worker，docker compose 只提供 postgres/redis；入口是 scripts/dev.sh。
+# 作用域：只管理 docker compose 部署形态。
 #   compose-deps docker compose 只管理 postgres/redis 依赖服务。
 #   compose-full docker compose 管理 api/worker/postgres/redis，并在应用启动前执行 Alembic 迁移。
+# local 本地服务生命周期由 scripts/dev.sh 管理，不属于本入口命令面。
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-.env}"
-PROJECT_NAME="${COMPOSE_PROJECT_NAME:-fastapi-ai-job-template}"
+PROJECT_NAME="${COMPOSE_PROJECT_NAME:cms-story-tagger}"
 
 cd "$ROOT_DIR"
 
@@ -33,7 +33,7 @@ usage() {
   ./scripts/deploy.sh <command> [mode]
 
 命令：
-  modes                 展示本项目维护的 3 种部署模式。
+  modes                 展示本脚本管理的 compose 部署模式。
   check                 校验部署入口、Dockerfile 和 compose 配置。
   up compose-deps       启动 PostgreSQL / Redis 依赖服务。
   down compose-deps     停止 PostgreSQL / Redis 依赖服务。
@@ -46,7 +46,8 @@ usage() {
   运行时显式环境变量 > docker-compose.yml environment > ENV_FILE 指定文件 > .env > 应用默认值
 
 边界：
-  local 模式继续使用 ./scripts/dev.sh；本脚本不管理生产部署、远程数据库、K8s 或云平台资源。
+  本脚本只管理 compose-deps / compose-full。
+  不管理 local 本地服务生命周期、一次性验证任务、生产部署、远程数据库、K8s 或云平台资源。
 EOF
 }
 
@@ -73,9 +74,9 @@ require_env_file() {
 
 show_modes() {
   section "Deployment Modes"
-  event "MODE" "local" "api/worker 跑宿主机，postgres/redis 由 compose 提供；入口：./scripts/dev.sh"
   event "MODE" "compose-deps" "只启动 postgres/redis；适合给本地应用进程提供依赖"
   event "MODE" "compose-full" "api/worker/postgres/redis 全部由 compose 管理；启动前执行 Alembic 迁移"
+  event "INFO" "local" "不由 deploy.sh 管理；入口：./scripts/dev.sh"
 }
 
 check_deploy() {
@@ -100,8 +101,6 @@ check_deploy() {
   event "OK" "compose-full" "docker compose --profile app config"
 
   section "Scripts"
-  bash -n "$ROOT_DIR/scripts/dev.sh"
-  event "OK" "dev.sh" "syntax"
   bash -n "$ROOT_DIR/scripts/deploy.sh"
   event "OK" "deploy.sh" "syntax"
   sh -n "$ROOT_DIR/start-api.sh"

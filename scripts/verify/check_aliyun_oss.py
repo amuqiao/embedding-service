@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
+ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig

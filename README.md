@@ -14,15 +14,15 @@ FastAPI AI Job 执行后端模板。服务只负责模型执行、异步 Job、�
 
 `./scripts/dev.sh start` 会启动 PostgreSQL / Redis，执行 Alembic 迁移，并启动 FastAPI API 与 Celery worker。
 
-## 部署模式
+## 运行与部署模式
 
-本项目维护 3 种部署模式：
+本项目区分 1 个本地运行入口和 2 个 compose 部署入口：
 
 - `local`：宿主机运行 FastAPI API 和 Celery worker，`docker compose` 只提供 PostgreSQL / Redis。本地开发默认使用此模式，入口是 `./scripts/dev.sh`。
 - `compose-deps`：只启动 PostgreSQL / Redis 依赖服务，适合给宿主机上的应用进程提供依赖。
 - `compose-full`：API、worker、PostgreSQL、Redis 全部由 `docker compose` 管理，并在应用启动前执行 Alembic 迁移。
 
-部署入口：
+`deploy.sh` 只管理 compose 部署入口：
 
 ```bash
 ./scripts/deploy.sh modes
@@ -70,7 +70,7 @@ Authorization: Bearer dev-service-key
 ## 冒烟验证
 
 ```bash
-./scripts/dev.sh smoke
+./scripts/verify.sh smoke
 ```
 
 默认使用真实模型；需要在 `.env` 配置 `OPENAI_API_KEY`。对象存储默认使用本地后端，文件写入 `storage/objects/`。单次模型调用超时由 `MODEL_CALL_TIMEOUT_SECONDS` 控制，e2e 脚本的 `--timeout-seconds` 只控制脚本轮询等待时间。
@@ -91,7 +91,7 @@ OSS_PUBLIC_ENDPOINT=
 运行连通性测试：
 
 ```bash
-./.venv/bin/python scripts/check_aliyun_oss.py --env-file .env.dev
+./scripts/verify.sh oss --env-file .env.dev
 ```
 
 脚本会在 `OSS_PROJECT_ROOT` 下写入一个临时对象，验证 `PUT`、`GET`、`HEAD` 后默认删除。服务运行时要使用阿里云 OSS 时，将本地 `.env` 中的 `STORAGE_BACKEND` 设为 `aliyun_oss`，并配置同一组 `OSS_*` 环境变量。
@@ -99,6 +99,7 @@ OSS_PUBLIC_ENDPOINT=
 ## 开发脚本
 
 ```bash
+./scripts/dev.sh bootstrap
 ./scripts/dev.sh start
 ./scripts/dev.sh start api
 ./scripts/dev.sh restart worker
@@ -109,15 +110,11 @@ OSS_PUBLIC_ENDPOINT=
 ./scripts/dev.sh logs api
 ./scripts/dev.sh logs worker
 ./scripts/dev.sh migrate
-./scripts/dev.sh test
-./scripts/dev.sh smoke
-./scripts/dev.sh workflow-smoke
-./scripts/dev.sh e2e --input-file .data/test_novel.txt
-./scripts/dev.sh check
+./scripts/dev.sh ports --format json --ports 3000,5173,8000-8010
 ./scripts/dev.sh --help
 ```
 
-`dev.sh` 是本服务的本地总控脚本：
+`dev.sh` 是本服务的本地服务总控脚本：
 
 - `bootstrap`：缺少 `.env` 时从 `.env.example` 生成，并执行 `uv sync`。
 - `start [api|worker]`：启动指定服务；不传服务名时启动 PostgreSQL、Redis、执行数据库迁移、启动 API 和 worker，并检查 `/health`。
@@ -126,21 +123,58 @@ OSS_PUBLIC_ENDPOINT=
 - `status [api|worker]`：展示指定服务状态；不传服务名时展示依赖容器、应用进程 PID、日志路径和健康状态。
 - `logs api|worker`：跟随查看 API 或 worker 日志。
 - `migrate`：显式执行 Alembic 迁移。
+- `ports [port ...]`：扫描本地可用端口，支持 AI 可读 JSON 输出和运行时参数，适合多个本地项目避免端口冲突。
+
+端口检测示例：
+
+```bash
+./scripts/dev.sh ports
+./scripts/dev.sh ports --format json
+./scripts/dev.sh ports 3000 5173 8100
+./scripts/dev.sh ports --ports 3000,5173,8000-8010 --format json
+./scripts/dev.sh ports --ports 3000-3020 --count 3
+```
+
+`ports` 默认扫描一组常见本地开发端口；也可以通过位置参数或 `--ports` 传入端口和范围。JSON 输出包含 `schema_version`、`kind`、`ok`、`recommended_ports`、`free_ports`、`busy_ports` 和逐端口 `checks`，适合 AI 或自动化脚本直接读取。常用运行时参数包括 `--format text|json`、`--host`、`--ports`、`--count`、`--allow-busy`。
+
+验证类命令统一由 `verify.sh` 承接：
+
+```bash
+./scripts/verify.sh test
+./scripts/verify.sh smoke
+./scripts/verify.sh mock-smoke
+./scripts/verify.sh workflow-smoke
+./scripts/verify.sh e2e --input-file .data/test_novel.txt
+./scripts/verify.sh oss --env-file .env.dev
+./scripts/verify.sh check
+./scripts/verify.sh --help
+```
+
 - `test`：运行本地 pytest。
 - `smoke`：对已运行 API 执行真实模型短链路验证。
+- `mock-smoke`：使用 Mock OpenAI 和本地存储验证完整任务流程，不调用真实模型；会临时停止已运行的 worker，并在结束时仅恢复原本处于运行状态的 worker。
 - `workflow-smoke`：使用真实模型和放大输入验证服务内部自动分块、Celery canvas 和 merge。
 - `e2e`：从 `.data` 读取 `.txt`，使用真实模型模拟调用方请求，枚举 `health`、`models`、`prompt-templates`、`jobs`、轮询和 callback，并用内置 `novel_localization` 示例 workflow 验证 artifact 契约。
+- `oss`：校验 Aliyun OSS 读写删除连通性。
 - `check`：运行脚本语法检查和 pytest。
 
-脚本只面向本地开发环境，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
+脚本入口采用“中控脚本 + 子目录原子脚本”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/deploy.sh` 只调度 compose 部署能力，公共 shell 工具位于 `scripts/lib/`。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
 
-`deploy.sh` 只面向本项目已验收的本地/compose 部署形态，不负责生产部署、远程数据库、K8s、云平台 Secrets 或 CI/CD 发布流水线。
+入口脚本约束：
+
+- 外层入口脚本只做参数分发、帮助说明和稳定命令面，不承载具体业务实现。
+- 具体能力下沉到职责对应的子目录原子脚本；公共 shell 能力放在 `scripts/lib/`。
+- `scripts/dev.sh` 只管理本地服务生命周期和本地开发端口探测；验证、对象存储连通性等一次性任务放在 `scripts/verify.sh`。
+- `scripts/deploy.sh` 只管理 `compose-deps` 和 `compose-full`，不管理 `local` 本地服务生命周期。
+- 不新增 silent fallback、默认吞错或跨职责兼容别名；命令不满足前置条件时应直接报错。
+
+`deploy.sh` 只面向本项目已验收的 compose 部署形态，不负责本地服务生命周期、生产部署、远程数据库、K8s、云平台 Secrets 或 CI/CD 发布流水线。
 
 真实模型端到端验证需要 `.env` 已配置 `OPENAI_API_KEY`，且 `.data/` 下存在至少一个 `.txt` 输入文件：
 
 ```bash
 ./scripts/dev.sh start
-./scripts/dev.sh e2e --input-file .data/test_novel.txt
+./scripts/verify.sh e2e --input-file .data/test_novel.txt
 ./scripts/dev.sh stop
 ```
 
@@ -150,7 +184,7 @@ OSS_PUBLIC_ENDPOINT=
 
 ```bash
 ./scripts/dev.sh start
-./scripts/dev.sh workflow-smoke
+./scripts/verify.sh workflow-smoke
 ./scripts/dev.sh stop
 ```
 

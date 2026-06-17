@@ -4,13 +4,13 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: ai_jobs
+      POSTGRES_DB: ${POSTGRES_DB:-cms_story_tagger}
     ports:
-      - "25432:5432"
+      - "${POSTGRES_HOST_PORT:-25432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_jobs"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -18,7 +18,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "26379:6379"
+      - "${REDIS_HOST_PORT:-26379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -32,7 +32,7 @@ services:
     env_file:
       - ${ENV_FILE:-.env}
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_jobs
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_story_tagger}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
     command: ["alembic", "upgrade", "head"]
@@ -50,13 +50,13 @@ services:
       - ${ENV_FILE:-.env}
     command: ["/app/start-api.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_jobs
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_story_tagger}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
       API_HOST: 0.0.0.0
       API_PORT: "8100"
     ports:
-      - "8100:8100"
+      - "${API_HOST_PORT:-8100}:8100"
     volumes:
       - object_storage:/app/storage/objects
     healthcheck:
@@ -86,7 +86,7 @@ services:
       - ${ENV_FILE:-.env}
     command: ["/app/start-worker.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_jobs
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_story_tagger}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
     volumes:

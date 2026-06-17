@@ -187,7 +187,7 @@ JOB_STALE_RUNNING_BUFFER_SECONDS >= 600
 7. 如果启用 `CELERY_MAX_RETRIES`，同步评估调用方等待时间和模型费用。
 8. 确认 `JOB_ORPHAN_TIMEOUT_SECONDS` 不会在长队列或慢投递场景下过早触发恢复扫描。
 9. compose-full 下确认 `docker-compose.yml environment` 是否覆盖了目标 env 文件中的 worker 并发配置。
-10. 修改后至少运行 `./scripts/dev.sh check`；修改部署或 compose 配置时运行 `./scripts/deploy.sh check`。
+10. 修改后至少运行 `./scripts/verify.sh check`；修改部署或 compose 配置时运行 `./scripts/deploy.sh check`。
 
 ## 常见现象速查
 

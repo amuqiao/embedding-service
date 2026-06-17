@@ -124,7 +124,7 @@ Content-Type: application/json
 | 字段 | 必需性 | 说明 |
 | --- | --- | --- |
 | `client_request_id` | 可选 | CPP 幂等键。重试创建同一业务任务时必须复用。 |
-| `job_type` | 必需 | `short_drama.tagging.initial` 或 `short_drama.tagging.incremental`。 |
+| `job_type` | 必需 | `short_drama.tagging.initial` |
 | `job_params.t_book_id` | 必需 | 作品主键。 |
 | `job_params.work_context.title` | 必需 | 剧名。 |
 | `job_params.work_context.synopsis` | 建议 | 剧情简介。没有简介时可为空字符串，但不能替代字幕。 |

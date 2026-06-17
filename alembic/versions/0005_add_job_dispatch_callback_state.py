@@ -10,7 +10,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0005_add_job_dispatch_callback_state"
+revision: str = "0005_dispatch_callback"
 down_revision: Union[str, None] = "0004_drop_metadata_payload"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

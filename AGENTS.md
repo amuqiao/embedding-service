@@ -18,9 +18,9 @@
 - 包管理：`uv`
 - 本地依赖服务：`docker compose`
 
-## 部署模式
+## 运行与部署模式
 
-本项目维护 3 种部署模式：
+本项目区分 1 个本地运行入口和 2 个 compose 部署入口：
 
 - `local`：宿主机运行 API/worker，`docker compose` 只提供 PostgreSQL/Redis；入口是 `./scripts/dev.sh`。
 - `compose-deps`：只启动 PostgreSQL/Redis 依赖服务；入口是 `./scripts/deploy.sh up compose-deps`。
@@ -54,11 +54,11 @@
 ./scripts/dev.sh bootstrap
 ./scripts/dev.sh start
 ./scripts/dev.sh status
-./scripts/dev.sh smoke
-./scripts/dev.sh workflow-smoke
-./scripts/dev.sh e2e
-./scripts/dev.sh check
 ./scripts/dev.sh stop
+./scripts/verify.sh smoke
+./scripts/verify.sh workflow-smoke
+./scripts/verify.sh e2e
+./scripts/verify.sh check
 ./scripts/deploy.sh check
 ```
 
@@ -70,29 +70,29 @@
 ./scripts/dev.sh status api
 ```
 
-不要绕过 `scripts/dev.sh` 直接拼散命令，除非是在排查脚本本身。
+不要绕过 `scripts/dev.sh` 直接拼散本地服务命令，除非是在排查脚本本身。一次性验证任务使用 `scripts/verify.sh`。
 
 ## 验证要求
 
 修改代码后，优先运行：
 
 ```bash
-./scripts/dev.sh check
+./scripts/verify.sh check
 ```
 
 修改服务启动、任务执行、数据库迁移、对象存储或 Job 流程后，还应运行：
 
 ```bash
 ./scripts/dev.sh start
-./scripts/dev.sh smoke
+./scripts/verify.sh smoke
 ./scripts/dev.sh stop
 ```
 
-修改 Job 内部执行、Celery workflow、分块或 merge 后，优先运行可重复的 mock 长文本验证：
+修改 Job 内部执行、Celery workflow、分块或 merge 后，优先运行可重复的长文本验证：
 
 ```bash
 ./scripts/dev.sh start
-./scripts/dev.sh workflow-smoke
+./scripts/verify.sh workflow-smoke
 ./scripts/dev.sh stop
 ```
 
@@ -100,7 +100,7 @@
 
 ```bash
 ./scripts/dev.sh start
-./scripts/dev.sh e2e
+./scripts/verify.sh e2e
 ./scripts/dev.sh stop
 ```
 

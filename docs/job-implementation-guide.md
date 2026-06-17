@@ -265,4 +265,4 @@ T0+24h 后        → Worker recovery loop 删除 expires_at <= now() 的记录
 | 模型输出 `MODEL_OUTPUT_INVALID` | 检查 `prompts.yaml` 的 output_contract 标记是否与 `executor.py` 解析规则一致 |
 | OSS 写入失败 | 检查 `OSS_BUCKET`、`OSS_ACCESS_KEY_ID/SECRET`、endpoint 配置；确认 bucket 权限 |
 | Worker 重启后任务重跑 | 正常行为（路径 A，`acks_late` + `reject_on_worker_lost`）；检查 `terminationGracePeriodSeconds` ≥ 派生的 `celery_time_limit` + 60s |
-| 测试验证 | `./scripts/dev.sh check`（语法+pytest）；完整链路：`./scripts/dev.sh mock-smoke` |
+| 测试验证 | `./scripts/verify.sh check`（语法+pytest）；完整链路：`./scripts/verify.sh mock-smoke` |

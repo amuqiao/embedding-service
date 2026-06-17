@@ -6,7 +6,7 @@ from app.models.job import AIJob, AIJobWorkItem
 from app.services.job_planner import JobPlan, PlannedWorkItem, build_job_plan
 from app.services.job_workflow import execute_work_item, finalize_job, plan_job
 from app.tasks.jobs import fanout_after_mapping_task
-from scripts.e2e_backend_call import Config, api_path
+from scripts.verify.e2e_backend_call import Config, api_path
 
 
 class FakeDB:

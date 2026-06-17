@@ -6,7 +6,7 @@
   step3_translate → 纯英文译文
 
 用法：
-  python scripts/mock_openai_server.py [port]   # 默认 18200
+  python scripts/verify/mock_openai_server.py [port]   # 默认 18200
 """
 from __future__ import annotations
 
