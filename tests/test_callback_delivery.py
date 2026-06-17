@@ -6,9 +6,18 @@ import pytest
 
 from app.models.job import AIJob
 from app.schemas.jobs import CallbackResponseEnvelope
-from app.services.callbacks import CallbackDeliveryResult, build_callback_body, deliver_callback
+from app.services.callbacks import (
+    CallbackDeliveryResult,
+    build_callback_body,
+    deliver_callback,
+    validate_callback_response_payload,
+)
 from app.services.job_runtime import payload_hash, write_runtime_json
 from app.services.jobs import _job_to_response
+from app.workflows.register import register_all_workflows
+
+
+register_all_workflows()
 
 
 def _job(callback_url: str | None = "https://example.com/callback") -> AIJob:
@@ -69,6 +78,13 @@ def test_job_view_exposes_callback_delivery_state():
     assert view.callback.attempts == 2
     assert view.callback.next_retry_at == next_retry_at
     assert view.callback.last_error == {"code": "CALLBACK_HTTP_ERROR", "status_code": 503}
+
+
+def test_job_view_marks_missing_callback_not_configured():
+    view = _job_to_response(_job(None))
+
+    assert view.callback.status == "not_configured"
+    assert view.callback.attempts == 0
 
 
 def test_job_view_uses_shell_result_and_metadata():
@@ -166,9 +182,9 @@ def test_build_callback_body_rejects_short_drama_success_without_signals():
         build_callback_body(job)
 
 
-def test_callback_response_rejects_short_drama_data_without_acceptance_flags():
+def test_callback_response_handler_rejects_short_drama_data_without_acceptance_flags():
     with pytest.raises(ValueError, match="data.accepted"):
-        CallbackResponseEnvelope.model_validate(
+        validate_callback_response_payload(
             {
                 "schema_version": "v1",
                 "event": "job.succeeded",
@@ -411,10 +427,106 @@ async def test_deliver_callback_does_not_treat_malformed_v1_as_legacy(monkeypatc
 
     result = await deliver_callback(_job())
 
-    assert result.status == "delivered"
-    assert result.response["format"] == "v1"
-    assert result.response["valid"] is False
-    assert "schema_version" in result.response["error"]
+    assert result.status == "failed"
+    assert result.attempts == 1
+    assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
+    assert result.last_error["response"]["format"] == "v1"
+    assert result.last_error["response"]["valid"] is False
+    assert "schema_version" in result.last_error["response"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_does_not_treat_partial_v1_with_data_as_json_success(monkeypatch):
+    class _Response:
+        status_code = 200
+        text = '{"status":"succeeded","msg":null,"metadata":{},"data":{}}'
+
+    class _Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, content, headers):
+            return _Response()
+
+    monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
+
+    result = await deliver_callback(_job())
+
+    assert result.status == "failed"
+    assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
+    assert result.last_error["response"]["format"] == "v1"
+    assert result.last_error["response"]["valid"] is False
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_rejects_short_drama_v1_response_with_invalid_data(monkeypatch):
+    class _Response:
+        status_code = 200
+
+        def __init__(self, request_body):
+            self.text = json.dumps(
+                {
+                    "schema_version": "v1",
+                    "event": request_body["event"],
+                    "event_id": request_body["event_id"],
+                    "job_id": request_body["job_id"],
+                    "client_request_id": request_body["client_request_id"],
+                    "job_type": request_body["job_type"],
+                    "status": request_body["status"],
+                    "msg": None,
+                    "metadata": request_body["metadata"],
+                    "data": {"t_book_id": request_body["data"]["t_book_id"]},
+                }
+            )
+
+    class _Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, content, headers):
+            return _Response(json.loads(content.decode("utf-8")))
+
+    monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
+    params = {"t_book_id": "300000000300000279"}
+    job = _job()
+    job.job_type = "short_drama.tagging.initial"
+    job.client_request_id = "cpp:300000000300000279:initial:mock"
+    job.metadata_ = {"source_service": "cpp", "business_scene": "short_drama_tagging"}
+    job.job_params_ref = write_runtime_json(job, "job_params", params)
+    job.job_params_hash = payload_hash(params)
+    job.canonical_result = {
+        "artifacts": [],
+        "signals": {
+            "success": True,
+            "result_status": "success",
+            "validation_issue_count": 0,
+            "validation_issues": [],
+            "reason_codes": [],
+            "t_book_id": "300000000300000279",
+            "subtitle_language": "zh",
+            "requested_schema_language": "zh",
+        },
+    }
+
+    result = await deliver_callback(job)
+
+    assert result.status == "failed"
+    assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
+    assert result.last_error["response"]["format"] == "v1"
+    assert result.last_error["response"]["valid"] is False
+    assert "data.accepted" in result.last_error["response"]["error"]
 
 
 @pytest.mark.asyncio

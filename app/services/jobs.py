@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppError, NotFoundAppError, ValidationAppError
+from app.core.exceptions import AppError, InternalAppError, NotFoundAppError, ValidationAppError
 from app.core.config import settings
 from app.core.model_registry import get_enabled_model
 from app.core.prompt_templates import get_template
@@ -51,6 +51,7 @@ def _request_fingerprint(payload: CreateJobRequest, job_params: dict[str, Any]) 
 
 
 def _job_to_response(job: AIJob) -> JobStatusResponse:
+    callback_status = job.callback_status if job.callback_url else "not_configured"
     try:
         return validate_job_status_payload(
             {
@@ -66,7 +67,7 @@ def _job_to_response(job: AIJob) -> JobStatusResponse:
                 "result": job.result,
                 "error": job.error,
                 "callback": {
-                    "status": job.callback_status,
+                    "status": callback_status,
                     "attempts": job.callback_attempts,
                     "next_retry_at": job.callback_next_retry_at,
                     "last_error": job.callback_last_error,
@@ -121,6 +122,8 @@ def _is_private_host(hostname: str) -> bool:
 def _normalize_job_params(payload: CreateJobRequest, handler: Any) -> dict[str, Any]:
     try:
         params = handler.normalize_job_params(payload.job_params)
+    except AppError:
+        raise
     except Exception as exc:
         raise ValidationAppError(
             "INVALID_INPUT",
@@ -179,10 +182,18 @@ def _validate_create_request(payload: CreateJobRequest) -> tuple[Any, dict[str, 
     handler, job_params = validate_create_contract(payload)
     try:
         handler.validate_normalized_job_params(job_params)
-    except Exception as exc:
+    except AppError:
+        raise
+    except ValueError as exc:
         raise ValidationAppError(
             "INVALID_INPUT",
             "job_params does not match job_type schema",
+            {"job_type": payload.job_type},
+        ) from exc
+    except Exception as exc:
+        raise InternalAppError(
+            "JOB_PREREQUISITE_CHECK_FAILED",
+            "job_type runtime prerequisite check failed",
             {"job_type": payload.job_type},
         ) from exc
     try:

@@ -14,6 +14,7 @@ from app.services.job_context import (
     project_memory_from_job,
 )
 from app.services.executor import run_ai_job
+from app.services.job_lifecycle import SUCCESS_SIDE_EFFECT_DONE_STAGE, SUCCESS_SIDE_EFFECT_STAGE
 from app.services.job_planner import JobPlan, build_job_plan, job_plan_from_payload
 from app.services.job_runtime import model_id_from_job, prompt_payload_from_job, work_item_payload, write_runtime_json
 from app.services.jobs import _load_input_text, _persist_large_artifacts, _persist_work_item_artifacts, get_job_or_404
@@ -38,6 +39,15 @@ def _artifact_identifier(artifact: Any) -> str | None:
     value = getattr(artifact, "key", None)
     return value if isinstance(value, str) else None
 
+
+def _job_error_from_exception(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, AppError):
+        return {"code": exc.code, "message": exc.message, "details": exc.details}
+    return {
+        "code": "WORKFLOW_AFTER_SUCCESS_FAILED",
+        "message": str(exc)[:500],
+        "details": {"type": type(exc).__name__},
+    }
 
 
 def merge_work_items(job: AIJob, items: list[AIJobWorkItem]) -> JobResult:
@@ -228,21 +238,56 @@ async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
                     ],
                 },
             )
-    await JobRepo.update_progress(db, job_id, progress_percent=90, progress_text="正在写入最终结果")
     if not job.celery_task_id:
         raise RuntimeError(f"job has no celery_task_id: {job_id}")
-    await JobRepo.mark_succeeded(
+    if job.progress_stage != SUCCESS_SIDE_EFFECT_DONE_STAGE:
+        await JobRepo.update_progress(
+            db,
+            job_id,
+            progress_percent=90,
+            progress_text="正在执行成功前副作用",
+            progress_stage=SUCCESS_SIDE_EFFECT_STAGE,
+        )
+        await db.commit()
+        try:
+            await handler.run_success_side_effect(job, canonical_result, db)
+        except Exception as exc:
+            await JobRepo.mark_failed(
+                db,
+                job_id,
+                _job_error_from_exception(exc),
+                celery_task_id=job.celery_task_id,
+            )
+            await db.commit()
+            from app.tasks.jobs import deliver_callback_for_job
+            await deliver_callback_for_job(job_id)
+            return {"job_id": str(job_id), "status": "failed"}
+        await JobRepo.update_progress(
+            db,
+            job_id,
+            progress_percent=95,
+            progress_text="成功前副作用已完成",
+            progress_stage=SUCCESS_SIDE_EFFECT_DONE_STAGE,
+        )
+        await db.commit()
+    succeeded = await JobRepo.mark_succeeded(
         db,
         job_id,
         celery_task_id=job.celery_task_id,
         result=public_result,
         canonical_result=canonical_result,
     )
+    if not succeeded:
+        raise AppError(
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "job could not be marked succeeded after success side effect",
+            status_code=500,
+            details={"job_id": str(job_id), "celery_task_id": job.celery_task_id},
+        )
     await db.commit()
     await db.refresh(job)
     from app.tasks.jobs import deliver_callback_for_job
     await deliver_callback_for_job(job_id)
-    await handler.after_success_callback(job, canonical_result, db)
     return {"job_id": str(job_id), "status": "succeeded"}
 
 

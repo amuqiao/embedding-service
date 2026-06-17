@@ -569,8 +569,12 @@ def test_short_drama_create_validation_checks_schema_mock_language_before_queue(
         str(tmp_path / "schema.{lang}.json"),
     )
 
-    with pytest.raises(AppError, match="job_params does not match job_type schema"):
+    with pytest.raises(AppError) as exc:
         _validate_create_request(request)
+
+    assert exc.value.code == "TAG_SCHEMA_UNAVAILABLE"
+    assert exc.value.status_code == 500
+    assert exc.value.details["requested_language"] == "en"
 
 
 @pytest.mark.asyncio
@@ -636,7 +640,7 @@ async def test_short_drama_handler_builds_rs_payload_without_writing(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_short_drama_after_success_callback_writes_rs_payload(monkeypatch):
+async def test_short_drama_success_side_effect_writes_rs_payload(monkeypatch):
     handler = InitialShortDramaTaggingHandler()
     job_id = uuid.uuid4()
     job = AIJob(id=job_id, job_type="short_drama.tagging.initial")
@@ -664,7 +668,7 @@ async def test_short_drama_after_success_callback_writes_rs_payload(monkeypatch)
     monkeypatch.setattr("app.workflows.short_drama_tagging.handler.runtime_fields_from_job", lambda _job: runtime_fields())
     monkeypatch.setattr("app.workflows.short_drama_tagging.handler.get_tagging_result_writer", lambda _runtime_fields: Writer())
 
-    await handler.after_success_callback(job, canonical_result, FakeDB())
+    await handler.run_success_side_effect(job, canonical_result, FakeDB())
 
     assert written["payload"] == payload
 

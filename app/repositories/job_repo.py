@@ -190,12 +190,17 @@ class JobRepo:
         *,
         progress_percent: int,
         progress_text: str,
+        progress_stage: str | None = None,
     ) -> None:
         job = await JobRepo.get(db, job_id)
         if job:
+            now = datetime.now(timezone.utc)
             job.progress_percent = max(0, min(100, progress_percent))
             job.progress_text = progress_text
-            job.updated_at = datetime.now(timezone.utc)
+            if progress_stage is not None:
+                job.progress_stage = progress_stage
+            job.last_heartbeat_at = now
+            job.updated_at = now
             await db.flush()
 
     @staticmethod
@@ -225,6 +230,7 @@ class JobRepo:
         job.status = "succeeded"
         job.progress_percent = 100
         job.progress_text = "已完成"
+        job.progress_stage = "succeeded"
         job.result = result
         job.canonical_result = canonical_result
         job.canonical_result_ref = canonical_result_ref
@@ -261,6 +267,7 @@ class JobRepo:
         now = datetime.now(timezone.utc)
         job.status = "failed"
         job.progress_text = "处理失败"
+        job.progress_stage = "failed"
         job.result = None
         job.error = error
         job.finished_at = now
@@ -287,6 +294,7 @@ class JobRepo:
         now = datetime.now(timezone.utc)
         job.status = "failed"
         job.progress_text = "处理失败"
+        job.progress_stage = "failed"
         job.result = None
         job.error = error
         job.finished_at = now
@@ -295,6 +303,34 @@ class JobRepo:
         job.callback_attempts = 0
         job.callback_next_retry_at = None
         job.callback_last_error = None
+        job.updated_at = now
+        await db.flush()
+        return True
+
+    @staticmethod
+    async def mark_success_side_effect_recovery_dispatched(
+        db: AsyncSession,
+        job_id: uuid.UUID,
+        *,
+        progress_stage: str,
+    ) -> bool:
+        result = await db.execute(
+            select(AIJob)
+            .where(
+                AIJob.id == job_id,
+                AIJob.status == "running",
+                AIJob.progress_stage == progress_stage,
+                AIJob.deleted_at.is_(None),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        job = result.scalar_one_or_none()
+        if not job:
+            return False
+        now = datetime.now(timezone.utc)
+        job.progress_percent = max(job.progress_percent or 0, 90)
+        job.progress_text = "正在恢复成功前副作用"
+        job.last_heartbeat_at = now
         job.updated_at = now
         await db.flush()
         return True
@@ -565,7 +601,7 @@ class JobRepo:
             select(AIJob).where(
                 AIJob.status == "running",
                 AIJob.started_at.is_not(None),
-                AIJob.started_at < started_before,
+                or_(AIJob.last_heartbeat_at.is_(None), AIJob.last_heartbeat_at < started_before),
                 AIJob.deleted_at.is_(None),
             )
             .order_by(AIJob.started_at.asc())

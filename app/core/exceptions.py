@@ -42,3 +42,8 @@ class ValidationAppError(AppError):
 class NotFoundAppError(AppError):
     def __init__(self, code: str, message: str):
         super().__init__(code, message, status_code=404)
+
+
+class InternalAppError(AppError):
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None):
+        super().__init__(code, message, status_code=500, details=details)

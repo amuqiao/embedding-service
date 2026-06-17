@@ -8,6 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.routes import health, jobs, meta
@@ -88,6 +89,36 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
                 "details": {"errors": exc.errors()},
             }
         }),
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    code = {
+        404: "NOT_FOUND",
+        405: "METHOD_NOT_ALLOWED",
+    }.get(exc.status_code, "HTTP_ERROR")
+    message = exc.detail if isinstance(exc.detail, str) else "HTTP error"
+    details = {} if isinstance(exc.detail, str) else {"detail": exc.detail}
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=jsonable_encoder({
+            "error": {
+                "code": code,
+                "message": message,
+                "details": details,
+            }
+        }),
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("unhandled_exception method=%s path=%s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": "INTERNAL_ERROR", "message": "Internal server error", "details": {}}},
     )
 
 

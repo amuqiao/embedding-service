@@ -10,6 +10,7 @@ from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.repositories.job_repo import JobRepo
+from app.services.job_lifecycle import SUCCESS_SIDE_EFFECT_STAGES
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,26 @@ async def _run_recovery(db) -> dict:
             limit=settings.JOB_RECOVERY_BATCH_SIZE,
         )
         for job in stale:
+            if job.progress_stage in SUCCESS_SIDE_EFFECT_STAGES:
+                from app.tasks.jobs import finalize_job_task  # 延迟导入避免循环依赖
+
+                claimed = await JobRepo.mark_success_side_effect_recovery_dispatched(
+                    db,
+                    job.id,
+                    progress_stage=job.progress_stage,
+                )
+                await db.commit()
+                if not claimed:
+                    logger.info("recovery: success side effect job %s already handled by peer, skipping", job.id)
+                    continue
+                finalize_job_task.apply_async(args=[None, str(job.id)])
+                recovered += 1
+                logger.warning(
+                    "recovery: re-dispatched stale success side effect job %s stage=%s",
+                    job.id,
+                    job.progress_stage,
+                )
+                continue
             error = {
                 "code": "JOB_TIMEOUT",
                 "message": "任务长时间未完成，已强制终止",

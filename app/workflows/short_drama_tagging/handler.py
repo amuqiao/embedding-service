@@ -35,6 +35,18 @@ from app.workflows.short_drama_tagging.translation import parse_translation_outp
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from app.models.job import AIJob, AIJobWorkItem
+    from app.schemas.jobs import CallbackResponseEnvelope
+
+
+_SHORT_DRAMA_SUCCESS_SIGNAL_KEYS = (
+    "t_book_id",
+    "result_status",
+    "validation_issue_count",
+    "validation_issues",
+    "reason_codes",
+    "subtitle_language",
+    "requested_schema_language",
+)
 
 
 def _oss_text_from_uri(uri: str, expected_hash: str | None) -> str:
@@ -69,6 +81,52 @@ def _hydrate_subtitle_texts(job_params: dict[str, Any]) -> dict[str, Any]:
     return hydrated
 
 
+def _canonical_signals(job: AIJob) -> dict[str, Any] | None:
+    canonical_result = job.canonical_result
+    if not isinstance(canonical_result, dict):
+        return None
+    signals = canonical_result.get("signals")
+    return signals if isinstance(signals, dict) else None
+
+
+def _short_drama_success_data_from_signals(signals: dict[str, Any]) -> dict[str, Any]:
+    missing = [key for key in _SHORT_DRAMA_SUCCESS_SIGNAL_KEYS if key not in signals]
+    if missing:
+        raise ValueError(f"short drama callback signals missing keys: {', '.join(missing)}")
+    if not isinstance(signals["t_book_id"], str) or not signals["t_book_id"]:
+        raise ValueError("short drama callback signal t_book_id must be a non-empty string")
+    if signals["result_status"] not in {"success", "partial_success"}:
+        raise ValueError("short drama callback signal result_status must be success or partial_success")
+    if not isinstance(signals["validation_issue_count"], int) or signals["validation_issue_count"] < 0:
+        raise ValueError("short drama callback signal validation_issue_count must be a non-negative integer")
+    if not isinstance(signals["validation_issues"], list):
+        raise ValueError("short drama callback signal validation_issues must be an array")
+    if not isinstance(signals["reason_codes"], list):
+        raise ValueError("short drama callback signal reason_codes must be an array")
+    if not isinstance(signals["subtitle_language"], str) or not signals["subtitle_language"]:
+        raise ValueError("short drama callback signal subtitle_language must be a non-empty string")
+    if not isinstance(signals["requested_schema_language"], str) or not signals["requested_schema_language"]:
+        raise ValueError("short drama callback signal requested_schema_language must be a non-empty string")
+    return {key: signals[key] for key in _SHORT_DRAMA_SUCCESS_SIGNAL_KEYS}
+
+
+def _short_drama_callback_data(job: AIJob) -> dict[str, Any]:
+    signals = _canonical_signals(job)
+    if job.status == "succeeded":
+        if signals is None:
+            raise ValueError("short drama callback requires canonical_result.signals when job succeeded")
+        return _short_drama_success_data_from_signals(signals)
+
+    data: dict[str, Any] = {}
+    t_book_id = signals.get("t_book_id") if signals is not None else None
+    if not isinstance(t_book_id, str) or not t_book_id:
+        params = job_params_from_job(job)
+        t_book_id = params.get("t_book_id")
+    if isinstance(t_book_id, str) and t_book_id:
+        data["t_book_id"] = t_book_id
+    return data
+
+
 class ShortDramaTaggingHandler(WorkflowHandler):
     params_schema = ShortDramaTaggingParams
     canonical_result_schema = JobResult
@@ -90,6 +148,18 @@ class ShortDramaTaggingHandler(WorkflowHandler):
             "model_id": settings.DEFAULT_MODEL_ID,
             **rs_runtime_fields_from_settings(),
         }
+
+    def build_callback_data(self, job: AIJob) -> dict[str, Any]:
+        return _short_drama_callback_data(job)
+
+    def validate_callback_response(self, response: CallbackResponseEnvelope) -> None:
+        t_book_id = response.data.get("t_book_id")
+        if not isinstance(t_book_id, str) or not t_book_id:
+            raise ValueError("callback response data.t_book_id must be a non-empty string")
+        if not isinstance(response.data.get("accepted"), bool):
+            raise ValueError("callback response data.accepted must be a boolean")
+        if not isinstance(response.data.get("duplicate"), bool):
+            raise ValueError("callback response data.duplicate must be a boolean")
 
     def build_execution_plan(self, job: AIJob) -> JobPlan:
         params = job_params_from_job(job)
@@ -187,7 +257,7 @@ class ShortDramaTaggingHandler(WorkflowHandler):
             },
         ).model_dump()
 
-    async def after_success_callback(
+    async def run_success_side_effect(
         self,
         job: AIJob,
         canonical_result: dict[str, Any],

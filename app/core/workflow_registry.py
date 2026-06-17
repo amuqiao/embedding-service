@@ -7,7 +7,7 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from app.models.job import AIJob, AIJobWorkItem
-    from app.schemas.jobs import JobResult
+    from app.schemas.jobs import CallbackResponseEnvelope, JobResult
     from app.services.job_planner import JobPlan
 
 CanvasPattern = str  # "single" | "memory_fanout" | "plain_chord" | "scan_chord"
@@ -70,13 +70,30 @@ class WorkflowHandler:
         """
         return None
 
+    async def run_success_side_effect(
+        self,
+        job: AIJob,
+        canonical_result: dict[str, Any],
+        db: AsyncSession,
+    ) -> None:
+        """Run idempotent workflow-specific side effects before the job is marked succeeded."""
+
+        await self.after_success_callback(job, canonical_result, db)
+
     async def after_success_callback(
         self,
         job: AIJob,
         canonical_result: dict[str, Any],
         db: AsyncSession,
     ) -> None:
-        """Run workflow-specific side effects after the succeeded callback step."""
+        """Deprecated compatibility hook. New handlers should override run_success_side_effect()."""
+
+    def build_callback_data(self, job: AIJob) -> dict[str, Any]:
+        """Return job-type-specific callback envelope data."""
+        return job.result if isinstance(job.result, dict) else {}
+
+    def validate_callback_response(self, response: CallbackResponseEnvelope) -> None:
+        """Validate job-type-specific callback response data."""
 
     def validate_extra(self, extra: dict[str, Any] | None) -> None:
         """Validate legacy job-type-specific extra params. Prefer normalize_job_params()."""

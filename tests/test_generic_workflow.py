@@ -7,8 +7,13 @@ from app.models.job import AIJob, AIJobWorkItem
 from app.core.workflow_registry import WorkflowHandler
 from app.schemas.jobs import CreateJobRequest, JobResult
 from app.services.job_runtime import payload_hash
+from app.services.job_lifecycle import SUCCESS_SIDE_EFFECT_DONE_STAGE
 from app.services.jobs import _validate_create_request
 from app.services.job_workflow import execute_work_item, finalize_job, plan_job
+from app.workflows.register import register_all_workflows
+
+
+register_all_workflows()
 
 
 class FakeDB:
@@ -181,7 +186,7 @@ async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_finalize_runs_handler_hook_after_success_callback(monkeypatch):
+async def test_finalize_runs_handler_hook_before_success_callback(monkeypatch):
     job_id = uuid.uuid4()
     job = AIJob(
         id=job_id,
@@ -210,10 +215,10 @@ async def test_finalize_runs_handler_hook_after_success_callback(monkeypatch):
         public_result_schema = JobResult
         large_artifact_keys = frozenset()
 
-        async def after_success_callback(self, received_job, canonical_result, _db):
+        async def run_success_side_effect(self, received_job, canonical_result, _db):
             assert received_job.id == job_id
             assert canonical_result["signals"] == {"echoed": True}
-            calls.append("after_success_callback")
+            calls.append("run_success_side_effect")
 
     async def fake_get_job_or_404(_db, _job_id):
         return job
@@ -248,4 +253,146 @@ async def test_finalize_runs_handler_hook_after_success_callback(monkeypatch):
     finalized = await finalize_job(FakeDB(), job_id)
 
     assert finalized == {"job_id": str(job_id), "status": "succeeded"}
-    assert calls == ["callback", "after_success_callback"]
+    assert calls == ["run_success_side_effect", "callback"]
+
+
+@pytest.mark.asyncio
+async def test_finalize_marks_failed_when_handler_hook_fails(monkeypatch):
+    from app.core.exceptions import AppError
+
+    job_id = uuid.uuid4()
+    job = AIJob(
+        id=job_id,
+        job_type="generic.echo",
+        status="running",
+        celery_task_id="root-task",
+        execution_plan={"execution_mode": "single"},
+    )
+    whole = AIJobWorkItem(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        name="generic.echo.whole",
+        kind="whole",
+        chunk_index=0,
+        status="succeeded",
+        result={
+            "artifacts": [{"key": "echo", "type": "json", "label": "Echo", "content": {"ok": True}}],
+            "signals": {"echoed": True},
+        },
+    )
+    calls: list[str] = []
+    recorded: dict = {}
+
+    class Handler(WorkflowHandler):
+        job_type = "generic.echo"
+        canonical_result_schema = JobResult
+        public_result_schema = JobResult
+        large_artifact_keys = frozenset()
+
+        async def run_success_side_effect(self, _job, _canonical_result, _db):
+            calls.append("run_success_side_effect")
+            raise AppError("RS_RESULT_WRITE_FAILED", "RS rejected", status_code=502)
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_list_work_items(_db, _job_id):
+        return [whole]
+
+    async def fake_mark_work_item_succeeded(_db, _item_id, result):
+        whole.result = result
+
+    async def fake_update_progress(*_args, **_kwargs):
+        pass
+
+    async def fake_mark_failed(_db, _job_id, error, *, celery_task_id=None):
+        assert _job_id == job_id
+        assert celery_task_id == "root-task"
+        job.status = "failed"
+        job.error = error
+        recorded["error"] = error
+        return True
+
+    async def fake_mark_succeeded(*_args, **_kwargs):
+        raise AssertionError("failed hook must not mark job succeeded")
+
+    async def fake_deliver_callback(_job_id):
+        calls.append("callback")
+        return True
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.list_work_items", fake_list_work_items)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_work_item_succeeded", fake_mark_work_item_succeeded)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.update_progress", fake_update_progress)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_failed", fake_mark_failed)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: Handler())
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback)
+
+    finalized = await finalize_job(FakeDB(), job_id)
+
+    assert finalized == {"job_id": str(job_id), "status": "failed"}
+    assert recorded["error"] == {"code": "RS_RESULT_WRITE_FAILED", "message": "RS rejected", "details": {}}
+    assert calls == ["run_success_side_effect", "callback"]
+    assert job.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_finalize_raises_when_succeeded_state_transition_fails(monkeypatch):
+    job_id = uuid.uuid4()
+    job = AIJob(
+        id=job_id,
+        job_type="generic.echo",
+        status="running",
+        celery_task_id="root-task",
+        execution_plan={"execution_mode": "single"},
+        progress_stage=SUCCESS_SIDE_EFFECT_DONE_STAGE,
+    )
+    whole = AIJobWorkItem(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        name="generic.echo.whole",
+        kind="whole",
+        chunk_index=0,
+        status="succeeded",
+        result={
+            "artifacts": [{"key": "echo", "type": "json", "label": "Echo", "content": {"ok": True}}],
+            "signals": {"echoed": True},
+        },
+    )
+
+    class Handler(WorkflowHandler):
+        job_type = "generic.echo"
+        canonical_result_schema = JobResult
+        public_result_schema = JobResult
+        large_artifact_keys = frozenset()
+
+        async def run_success_side_effect(self, *_args, **_kwargs):
+            raise AssertionError("done side-effect stage should not rerun side effect")
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_list_work_items(_db, _job_id):
+        return [whole]
+
+    async def fake_mark_work_item_succeeded(_db, _item_id, result):
+        whole.result = result
+
+    async def fake_mark_succeeded(*_args, **_kwargs):
+        return False
+
+    async def fake_deliver_callback(*_args, **_kwargs):
+        raise AssertionError("state transition failure must not deliver success callback")
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.list_work_items", fake_list_work_items)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_work_item_succeeded", fake_mark_work_item_succeeded)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: Handler())
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback)
+
+    with pytest.raises(Exception) as exc:
+        await finalize_job(FakeDB(), job_id)
+
+    assert getattr(exc.value, "code", None) == "JOB_STATE_TRANSITION_CONFLICT"

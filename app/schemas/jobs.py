@@ -9,6 +9,7 @@ from app.schemas.common import StrictBaseModel
 
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
+CallbackDeliveryStatus = Literal["not_configured", "pending", "delivering", "delivered", "failed", "skipped"]
 
 
 class OSSReference(StrictBaseModel):
@@ -155,7 +156,7 @@ class JobProgress(StrictBaseModel):
 
 
 class CallbackDeliveryView(StrictBaseModel):
-    status: str
+    status: CallbackDeliveryStatus
     attempts: int
     next_retry_at: datetime | None = None
     last_error: dict[str, Any] | None = None
@@ -248,12 +249,4 @@ class CallbackResponseEnvelope(StrictBaseModel):
         expected = "job.succeeded" if self.status == "succeeded" else "job.failed"
         if self.event != expected:
             raise ValueError("callback response event must match job status")
-        if self.job_type in {"short_drama.tagging.initial", "short_drama.tagging.incremental"}:
-            t_book_id = self.data.get("t_book_id")
-            if not isinstance(t_book_id, str) or not t_book_id:
-                raise ValueError("callback response data.t_book_id must be a non-empty string")
-            if not isinstance(self.data.get("accepted"), bool):
-                raise ValueError("callback response data.accepted must be a boolean")
-            if not isinstance(self.data.get("duplicate"), bool):
-                raise ValueError("callback response data.duplicate must be a boolean")
         return self

@@ -17,15 +17,6 @@ from app.schemas.jobs import CallbackEnvelope, CallbackResponseEnvelope
 
 logger = logging.getLogger(__name__)
 
-_SHORT_DRAMA_SUCCESS_SIGNAL_KEYS = (
-    "t_book_id",
-    "result_status",
-    "validation_issue_count",
-    "validation_issues",
-    "reason_codes",
-    "subtitle_language",
-    "requested_schema_language",
-)
 _CALLBACK_RESPONSE_V1_HINT_KEYS = {
     "schema_version",
     "event",
@@ -33,6 +24,8 @@ _CALLBACK_RESPONSE_V1_HINT_KEYS = {
     "job_id",
     "client_request_id",
     "job_type",
+    "metadata",
+    "data",
 }
 _CALLBACK_RESPONSE_LEGACY_KEYS = {"status", "msg"}
 
@@ -64,58 +57,18 @@ def _validate_callback_url(url: str) -> None:
     raise ValueError("callback.url must be HTTPS")
 
 
-def _canonical_signals(job: AIJob) -> dict[str, Any] | None:
-    canonical_result = job.canonical_result
-    if not isinstance(canonical_result, dict):
-        return None
-    signals = canonical_result.get("signals")
-    return signals if isinstance(signals, dict) else None
-
-
-def _short_drama_success_data_from_signals(signals: dict[str, Any]) -> dict[str, Any]:
-    missing = [key for key in _SHORT_DRAMA_SUCCESS_SIGNAL_KEYS if key not in signals]
-    if missing:
-        raise ValueError(f"short drama callback signals missing keys: {', '.join(missing)}")
-    if not isinstance(signals["t_book_id"], str) or not signals["t_book_id"]:
-        raise ValueError("short drama callback signal t_book_id must be a non-empty string")
-    if signals["result_status"] not in {"success", "partial_success"}:
-        raise ValueError("short drama callback signal result_status must be success or partial_success")
-    if not isinstance(signals["validation_issue_count"], int) or signals["validation_issue_count"] < 0:
-        raise ValueError("short drama callback signal validation_issue_count must be a non-negative integer")
-    if not isinstance(signals["validation_issues"], list):
-        raise ValueError("short drama callback signal validation_issues must be an array")
-    if not isinstance(signals["reason_codes"], list):
-        raise ValueError("short drama callback signal reason_codes must be an array")
-    if not isinstance(signals["subtitle_language"], str) or not signals["subtitle_language"]:
-        raise ValueError("short drama callback signal subtitle_language must be a non-empty string")
-    if not isinstance(signals["requested_schema_language"], str) or not signals["requested_schema_language"]:
-        raise ValueError("short drama callback signal requested_schema_language must be a non-empty string")
-    return {key: signals[key] for key in _SHORT_DRAMA_SUCCESS_SIGNAL_KEYS}
-
-
-def _short_drama_callback_data(job: AIJob) -> dict[str, Any]:
-    from app.services.job_runtime import job_params_from_job
-
-    signals = _canonical_signals(job)
-    if job.status == "succeeded":
-        if signals is None:
-            raise ValueError("short drama callback requires canonical_result.signals when job succeeded")
-        return _short_drama_success_data_from_signals(signals)
-
-    data: dict[str, Any] = {}
-    t_book_id = signals.get("t_book_id") if signals is not None else None
-    if not isinstance(t_book_id, str) or not t_book_id:
-        params = job_params_from_job(job)
-        t_book_id = params.get("t_book_id")
-    if isinstance(t_book_id, str) and t_book_id:
-        data["t_book_id"] = t_book_id
-    return data
-
-
 def _callback_data(job: AIJob) -> dict[str, Any]:
-    if job.job_type in {"short_drama.tagging.initial", "short_drama.tagging.incremental"}:
-        return _short_drama_callback_data(job)
-    return job.result if isinstance(job.result, dict) else {}
+    from app.core import workflow_registry
+
+    return workflow_registry.get(job.job_type).build_callback_data(job)
+
+
+def validate_callback_response_payload(payload: dict[str, Any]) -> CallbackResponseEnvelope:
+    from app.core import workflow_registry
+
+    envelope = CallbackResponseEnvelope.model_validate(payload)
+    workflow_registry.get(envelope.job_type).validate_callback_response(envelope)
+    return envelope
 
 
 def build_callback_body(job: AIJob) -> dict:
@@ -160,17 +113,18 @@ def _callback_response_summary(response_text: str, callback_body: dict[str, Any]
     has_v1_hint = any(key in parsed for key in _CALLBACK_RESPONSE_V1_HINT_KEYS)
     if parsed.get("schema_version") == "v1":
         try:
-            envelope = CallbackResponseEnvelope.model_validate(parsed)
+            envelope = validate_callback_response_payload(parsed)
         except Exception as exc:
             return {
                 "format": "v1",
                 "valid": False,
                 "error": str(exc)[:500],
             }
+        dump = envelope.model_dump(mode="json")
         mismatches: list[dict[str, Any]] = []
         for key in ("event", "event_id", "job_id", "client_request_id", "job_type", "status"):
             expected = callback_body.get(key)
-            actual = envelope.model_dump(mode="json").get(key)
+            actual = dump.get(key)
             if actual != expected:
                 mismatches.append({"field": key, "expected": expected, "actual": actual})
         return {
@@ -255,11 +209,17 @@ async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
                 response_summary = _callback_response_summary(response.text, callback_body)
                 if 200 <= response.status_code < 300:
                     if response_summary and response_summary.get("format") == "v1" and not response_summary.get("valid"):
+                        last_error = {
+                            "code": "CALLBACK_RESPONSE_CONTRACT_INVALID",
+                            "message": "callback endpoint returned invalid v1 response",
+                            "response": response_summary,
+                        }
                         logger.warning(
                             "callback_response_contract_mismatch job_id=%s summary=%s",
                             job.id,
                             response_summary,
                         )
+                        continue
                     elif response_summary:
                         logger.info(
                             "callback_response_received job_id=%s summary=%s",

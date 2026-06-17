@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.core.config import settings
+from app.core.exceptions import AppError
 from app.core.prompt_templates import get_template
 from app.core.security import require_service_auth
 from app.main import app
@@ -185,6 +186,63 @@ def test_create_job_validation_allows_non_model_runtime(monkeypatch):
     assert runtime_fields == {}
 
 
+def test_create_job_validation_preserves_runtime_app_error(monkeypatch):
+    class RuntimeHandler:
+        allow_callback = True
+
+        def normalize_job_params(self, job_params):
+            return job_params
+
+        def validate_normalized_job_params(self, job_params):
+            raise AppError("RUNTIME_CONFIG_MISSING", "runtime config missing", status_code=500)
+
+        def runtime_job_fields(self, job_params):
+            return {}
+
+    payload = CreateJobRequest.model_validate(
+        {
+            "job_type": "generic.runtime_app_error",
+            "job_params": {"input": {"value": 1}},
+        }
+    )
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda job_type: RuntimeHandler())
+
+    with pytest.raises(AppError) as exc:
+        _validate_create_request(payload)
+
+    assert exc.value.code == "RUNTIME_CONFIG_MISSING"
+    assert exc.value.status_code == 500
+
+
+def test_create_job_validation_wraps_unexpected_prerequisite_errors(monkeypatch):
+    class RuntimeHandler:
+        allow_callback = True
+
+        def normalize_job_params(self, job_params):
+            return job_params
+
+        def validate_normalized_job_params(self, job_params):
+            raise RuntimeError("mock path unreadable")
+
+        def runtime_job_fields(self, job_params):
+            return {}
+
+    payload = CreateJobRequest.model_validate(
+        {
+            "job_type": "generic.runtime_crash",
+            "job_params": {"input": {"value": 1}},
+        }
+    )
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda job_type: RuntimeHandler())
+
+    with pytest.raises(AppError) as exc:
+        _validate_create_request(payload)
+
+    assert exc.value.code == "JOB_PREREQUISITE_CHECK_FAILED"
+    assert exc.value.status_code == 500
+    assert exc.value.details == {"job_type": "generic.runtime_crash"}
+
+
 @pytest.mark.asyncio
 async def test_service_auth_uses_caller_id_header(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
@@ -297,3 +355,41 @@ def test_health_endpoints():
     # /healthz 是 readiness probe，检查 DB/Redis；测试环境无真实依赖，返回状态可为 200 或 503
     assert healthz.status_code in (200, 503)
     assert "status" in healthz.json()
+
+
+def test_unknown_route_uses_unified_error_envelope():
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+    response = client.get("/definitely-not-found")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {
+            "code": "NOT_FOUND",
+            "message": "Not Found",
+            "details": {},
+        }
+    }
+
+
+def test_unhandled_exception_uses_unified_error_envelope():
+    from fastapi.testclient import TestClient
+
+    route_path = "/__test__/unhandled-error"
+    if not any(getattr(route, "path", "") == route_path for route in app.routes):
+        @app.get(route_path, include_in_schema=False)
+        async def raise_unhandled_error():
+            raise RuntimeError("boom")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get(route_path)
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {
+            "code": "INTERNAL_ERROR",
+            "message": "Internal server error",
+            "details": {},
+        }
+    }
