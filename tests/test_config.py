@@ -8,6 +8,11 @@ from app.core.config import (
     _CELERY_SOFT_TIMEOUT_BUFFER,
     _JOB_STALE_RUNNING_BUFFER,
 )
+from scripts.verify.env_config_check import (
+    DEPLOYMENT_OR_SCRIPT_KEYS,
+    check_file,
+    settings_keys_from_config,
+)
 
 
 def _settings_kwargs(**overrides):
@@ -104,19 +109,31 @@ def test_short_drama_rs_real_mode_requires_url_without_api_key():
     assert settings.SHORT_DRAMA_RS_RESULT_MOCK_ENABLED is False
 
 
-def test_short_drama_rs_rejects_deprecated_config_keys():
-    with pytest.raises(ValidationError, match="SHORT_DRAMA_RS_SCHEMA_SOURCE"):
+def test_short_drama_rs_rejects_deprecated_init_config_keys():
+    with pytest.raises(ValueError, match="SHORT_DRAMA_RS_SCHEMA_SOURCE"):
         Settings(**_settings_kwargs(SHORT_DRAMA_RS_SCHEMA_SOURCE="fixture"))
 
-    with pytest.raises(ValidationError, match="SHORT_DRAMA_RS_TAG_SCHEMA_VERSION"):
-        Settings(**_settings_kwargs(SHORT_DRAMA_RS_TAG_SCHEMA_VERSION="v1.1"))
+    with pytest.raises(ValueError, match="SHORT_DRAMA_RS_TAG_SCHEMA_VERSION"):
+        Settings(**_settings_kwargs(SHORT_DRAMA_RS_TAG_SCHEMA_VERSION="legacy-version"))
 
 
-def test_short_drama_rs_rejects_deprecated_environment_keys(monkeypatch):
+def test_short_drama_rs_deprecated_environment_keys_do_not_block_startup(monkeypatch):
     monkeypatch.setenv("SHORT_DRAMA_RS_SCHEMA_SOURCE", "fixture")
+    monkeypatch.setenv("SHORT_DRAMA_RS_RESULT_RESPONSE_FIXTURE_PATH", "legacy.json")
 
-    with pytest.raises(ValidationError, match="SHORT_DRAMA_RS_SCHEMA_SOURCE"):
-        Settings(**_settings_kwargs())
+    settings = Settings(**_settings_kwargs())
+
+    assert settings.SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED is True
+    assert settings.SHORT_DRAMA_RS_RESULT_MOCK_ENABLED is True
+
+
+def test_env_config_check_rejects_deprecated_rs_keys(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("SHORT_DRAMA_RS_SCHEMA_SOURCE=fixture\n", encoding="utf-8")
+
+    issues = check_file(env_file, settings_keys_from_config() | DEPLOYMENT_OR_SCRIPT_KEYS)
+
+    assert any("deprecated or unsupported config key: SHORT_DRAMA_RS_SCHEMA_SOURCE" in issue for issue in issues)
 
 
 def test_short_drama_rs_compat_schema_version_is_internal():

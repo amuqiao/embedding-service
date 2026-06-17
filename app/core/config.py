@@ -1,5 +1,4 @@
 from functools import lru_cache
-import os
 from pathlib import Path
 
 from pydantic import Field, field_validator, model_validator
@@ -15,8 +14,7 @@ _CELERY_SOFT_TIMEOUT_BUFFER: int = 300   # time for L1 cleanup (job write + call
 _CELERY_HARD_TIMEOUT_BUFFER: int = 60    # time for soft-limit handler to finish before SIGKILL
 _JOB_STALE_RUNNING_BUFFER: int = 600     # recovery scan gap to avoid mis-classifying a recently killed job
 _CALLBACK_DELIVERY_CLAIM_GRACE: int = 175  # DB commit/recovery skew margin after one callback HTTP timeout
-
-_DEPRECATED_CONFIG_KEYS = frozenset(
+_DEPRECATED_INIT_CONFIG_KEYS = frozenset(
     {
         "SHORT_DRAMA_RS_SCHEMA_SOURCE",
         "SHORT_DRAMA_RS_RESULT_SINK",
@@ -27,13 +25,24 @@ _DEPRECATED_CONFIG_KEYS = frozenset(
     }
 )
 
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(ROOT_DIR / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    def __init__(self, **values):
+        deprecated = sorted(
+            {
+                str(key).upper()
+                for key in values
+                if str(key).upper() in _DEPRECATED_INIT_CONFIG_KEYS
+            }
+        )
+        if deprecated:
+            raise ValueError("deprecated config keys are not supported: " + ", ".join(deprecated))
+        super().__init__(**values)
 
     # ── Infrastructure credentials ────────────────────────────────────────────
     SERVICE_NAME: str = "ai-job-service"
@@ -119,22 +128,6 @@ class Settings(BaseSettings):
 
     # ── Validators ────────────────────────────────────────────────────────────
 
-    @model_validator(mode="before")
-    @classmethod
-    def reject_deprecated_config_keys(cls, data):
-        if not isinstance(data, dict):
-            return data
-        deprecated = sorted(
-            {
-                str(key).upper()
-                for key in data
-                if str(key).upper() in _DEPRECATED_CONFIG_KEYS
-            }
-        )
-        if deprecated:
-            raise ValueError("deprecated config keys are not supported: " + ", ".join(deprecated))
-        return data
-
     @field_validator("STORAGE_BACKEND")
     @classmethod
     def validate_storage_backend(cls, value: str) -> str:
@@ -196,12 +189,6 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "SHORT_DRAMA_RS_BASE_URL is required when short drama RS schema/result mock is disabled"
-            )
-        deprecated_env_keys = sorted(key for key in _DEPRECATED_CONFIG_KEYS if key in os.environ)
-        if deprecated_env_keys:
-            raise ValueError(
-                "deprecated config keys are not supported in environment: "
-                + ", ".join(deprecated_env_keys)
             )
         return self
 
