@@ -88,10 +88,12 @@ async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch
 
     async def fake_create_work_item(*_args, **kwargs):
         marked["planned"] = True
-        assert kwargs["input_payload"] == {"value": {"hello": "world"}, "label": "Echo"}
+        assert "input_payload" not in kwargs
+        assert kwargs["input_ref"]["payload_snapshot"] == {"value": {"hello": "world"}, "label": "Echo"}
         return created_item
 
     async def fake_set_execution_plan(_db, _job_id, *, execution_mode, execution_plan):
+        assert "input_payload" not in execution_plan["work_items"][0]
         job.execution_mode = execution_mode
         job.execution_plan = execution_plan
 
@@ -116,6 +118,9 @@ async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch
     async def fake_deliver_callback(_job_id):
         return True
 
+    def fake_write_runtime_json(_job, _name, payload):
+        return {"storage": "oss_object", "type": "json", "payload_snapshot": payload}
+
     monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
     monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_running", fake_mark_running)
     monkeypatch.setattr("app.services.job_workflow.JobRepo.list_work_items", fake_list_work_items)
@@ -134,6 +139,7 @@ async def test_generic_echo_workflow_runs_without_llm_or_text_source(monkeypatch
         "app.services.job_workflow.run_ai_job",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("generic.echo should not call LLM")),
     )
+    monkeypatch.setattr("app.services.job_workflow.write_runtime_json", fake_write_runtime_json)
     monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback)
 
     _job, plan, item_ids = await plan_job(FakeDB(), job_id)

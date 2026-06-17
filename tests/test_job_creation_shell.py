@@ -53,10 +53,21 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     async def fake_get_recent(*_args, **_kwargs):
         return None
 
+    def fake_write_runtime_json(job, name, payload):
+        return {
+            "storage": "oss_object",
+            "type": "json",
+            "oss_bucket": job.output_oss_bucket,
+            "oss_key": f"{job.output_oss_prefix}runtime/{name}.json",
+            "oss_region": job.output_oss_region,
+            "payload_snapshot": payload,
+        }
+
     monkeypatch.setattr("app.services.jobs.settings.MAX_ACTIVE_JOBS", 0)
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
     monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fake_create)
+    monkeypatch.setattr("app.services.jobs.write_runtime_json", fake_write_runtime_json)
 
     payload = CreateJobRequest.model_validate(
         {
@@ -74,7 +85,8 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     assert created is True
     assert job.request_fingerprint.startswith("sha256:")
     assert captured["request_fingerprint"] == job.request_fingerprint
-    assert captured["input_payload"] == {"job_params": {"value": {"hello": "world"}, "label": "Echo"}}
+    assert captured["input_payload"] == {}
+    assert captured["prompt_payload"] == {}
     assert captured["output_payload"] == {}
     assert captured["callback_payload"] == {}
     assert captured["public_metadata"] == {"caller_task_id": "task-1"}
@@ -84,6 +96,8 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     assert captured["callback_url"] == "https://example.com/callback"
     assert captured["callback_events"] == ["job.succeeded", "job.failed"]
     assert job.output_oss_prefix.endswith(f"{job.id}/")
+    assert job.input_ref["payload_snapshot"] == {"value": {"hello": "world"}, "label": "Echo"}
+    assert job.runtime_ref["job_params_ref"] == job.input_ref
 
 
 @pytest.mark.asyncio

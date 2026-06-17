@@ -15,6 +15,7 @@ from app.services.job_context import (
 )
 from app.services.executor import run_ai_job
 from app.services.job_planner import JobPlan, build_job_plan, job_plan_from_payload
+from app.services.job_runtime import prompt_payload_from_job, work_item_payload, write_runtime_json
 from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404
 
 
@@ -42,13 +43,16 @@ def merge_work_items(job: AIJob, items: list[AIJobWorkItem]) -> JobResult:
 async def create_work_items(db: AsyncSession, job: AIJob, plan: JobPlan) -> dict[str, uuid.UUID]:
     item_ids: dict[str, uuid.UUID] = {}
     for item in plan.work_items:
+        input_ref = item.input_ref
+        if input_ref is None and item.input_payload is not None:
+            input_ref = write_runtime_json(job, f"work-items/{item.kind}-{item.chunk_index}", item.input_payload)
         created = await JobRepo.create_work_item(
             db,
             job_id=job.id,
             name=item.name,
             kind=item.kind,
             chunk_index=item.chunk_index,
-            input_payload=item.input_payload,
+            input_ref=input_ref,
         )
         item_ids[f"{item.kind}:{item.chunk_index}"] = created.id
     return item_ids
@@ -121,7 +125,8 @@ async def execute_work_item(
     await JobRepo.update_progress(db, job_id, progress_percent=30, progress_text=f"正在执行 {item.kind}")
     await db.commit()
 
-    input_text = (item.input_payload or {}).get("text") or ""
+    item_payload = work_item_payload(item)
+    input_text = item_payload.get("text") or ""
     from app.core import workflow_registry
     handler = workflow_registry.get(job.job_type)
     if item.kind in ("memory", "scan"):
@@ -140,7 +145,7 @@ async def execute_work_item(
                 status_code=500,
                 details={"job_type": job.job_type},
             )
-        prompt_payload = job.prompt_payload
+        prompt_payload = prompt_payload_from_job(job)
         if item.kind == "chunk":
             memory = project_memory_from_job(job)
             if handler.canvas_pattern == "memory_fanout":

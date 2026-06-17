@@ -11,6 +11,7 @@ class PlannedWorkItem:
     kind: str
     chunk_index: int
     input_payload: dict[str, Any] | None = None
+    input_ref: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -20,20 +21,24 @@ class JobPlan:
     work_items: list[PlannedWorkItem]
     chunk_registry: list[dict[str, Any]]
 
-    def model_dump(self) -> dict[str, Any]:
+    def model_dump(self, *, include_payload: bool = False) -> dict[str, Any]:
+        work_items: list[dict[str, Any]] = []
+        for item in self.work_items:
+            item_data = {
+                "name": item.name,
+                "kind": item.kind,
+                "chunk_index": item.chunk_index,
+            }
+            if item.input_ref is not None:
+                item_data["input_ref"] = item.input_ref
+            if include_payload and item.input_payload is not None:
+                item_data["input_payload"] = item.input_payload
+            work_items.append(item_data)
         return {
             "execution_mode": self.execution_mode,
             "chunk_count": self.chunk_count,
-            "chunk_registry": self.chunk_registry,
-            "work_items": [
-                {
-                    "name": item.name,
-                    "kind": item.kind,
-                    "chunk_index": item.chunk_index,
-                    "input_payload": item.input_payload,
-                }
-                for item in self.work_items
-            ],
+            "chunk_registry": self.chunk_registry if include_payload else _strip_chunk_text(self.chunk_registry),
+            "work_items": work_items,
         }
 
 
@@ -48,10 +53,18 @@ def job_plan_from_payload(payload: dict[str, Any]) -> JobPlan:
                 kind=item["kind"],
                 chunk_index=item["chunk_index"],
                 input_payload=item.get("input_payload"),
+                input_ref=item.get("input_ref"),
             )
             for item in payload["work_items"]
         ],
     )
+
+
+def _strip_chunk_text(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {key: value for key, value in chunk.items() if key != "text"}
+        for chunk in chunks
+    ]
 
 
 def _count_chars(text: str) -> int:

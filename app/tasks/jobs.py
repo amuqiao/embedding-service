@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.repositories.job_repo import JobRepo
 from app.services.callbacks import deliver_callback
 from app.services.executor import run_ai_job
+from app.services.job_runtime import prompt_payload_from_job
 from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404
 from app.tasks.celery_app import celery_app
 
@@ -177,7 +178,7 @@ async def _process(job_id: str, celery_task_id: str) -> dict[str, Any]:
                 details={"job_type": job.job_type},
             )
         result = await asyncio.wait_for(
-                    run_ai_job(job.job_type, job.model_id, job.prompt_payload, input_text),
+                    run_ai_job(job.job_type, job.model_id, prompt_payload_from_job(job), input_text),
                     timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
                 )
         result_data = _persist_large_artifacts(job, result)

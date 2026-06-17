@@ -4,6 +4,7 @@ from typing import Any
 
 from app.integrations.ai_gateway import TextGenerationResult
 from app.models.job import AIJob
+from app.services.job_runtime import prompt_payload_from_job
 
 
 EMPTY_PROJECT_MEMORY: dict[str, Any] = {
@@ -62,7 +63,7 @@ def project_memory_from_generation(result: TextGenerationResult) -> dict[str, An
 
 
 def project_memory_from_job(job: AIJob) -> dict[str, Any] | None:
-    work_note = prompt_block_content(job.prompt_payload, "work_note")
+    work_note = prompt_block_content(prompt_payload_from_job(job), "work_note")
     parsed = extract_tagged_json(work_note, "project_memory") or extract_tagged_json(work_note, "mapping_table")
     if parsed:
         return normalize_project_memory(parsed)
@@ -86,9 +87,9 @@ def extract_tagged_json(text: str, tag: str) -> dict[str, Any] | None:
 
 def append_context_to_prompt(job: AIJob, context_text: str) -> dict[str, Any]:
     if not context_text.strip():
-        return job.prompt_payload
+        return prompt_payload_from_job(job)
 
-    payload = json.loads(json.dumps(job.prompt_payload, ensure_ascii=False))
+    payload = json.loads(json.dumps(prompt_payload_from_job(job), ensure_ascii=False))
     for block in payload.get("blocks") or []:
         if block.get("key") == "system":
             block["content"] = f"{context_text.strip()}\n\n{block.get('content') or ''}"
@@ -129,4 +130,3 @@ def build_chunk_context(
     if next_summary:
         parts.append(f"【下一分块摘要】\n{next_summary}")
     return "\n\n".join(parts)
-

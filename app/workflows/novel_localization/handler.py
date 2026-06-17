@@ -13,6 +13,7 @@ from typing import Any, TYPE_CHECKING
 
 from app.core.workflow_registry import WorkflowHandler, register
 from app.schemas.jobs import NovelLocalizationJobParams
+from app.services.job_runtime import prompt_payload_from_job, work_item_payload
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -183,11 +184,12 @@ class Step1LocalizeHandler(NovelLocalizationHandler):
         from app.integrations.ai_gateway import generate_text
         from app.services.job_context import project_memory_from_generation
 
+        prompt_payload = prompt_payload_from_job(job)
         system = next(
-            (block["content"] for block in job.prompt_payload.get("blocks", []) if block.get("key") == "system"),
+            (block["content"] for block in prompt_payload.get("blocks", []) if block.get("key") == "system"),
             "你是一位小说本地化编辑。",
         )
-        chunks = (item.input_payload or {}).get("chunks") or []
+        chunks = work_item_payload(item).get("chunks") or []
         chunk_text = "\n\n".join(
             f"【分块 {chunk.get('chunk_index')}】\n{chunk.get('text', '')}"
             for chunk in chunks
@@ -279,8 +281,9 @@ class Step3TranslateHandler(NovelLocalizationHandler):
         chunk_items = [i for i in all_items if i.kind == "chunk"]
         translated = _merge_texts(chunk_items, "translated_text")
         memory = project_memory_from_job(job)
+        prompt_payload = prompt_payload_from_job(job)
         system = next(
-            (block["content"] for block in job.prompt_payload.get("blocks", []) if block.get("key") == "system"),
+            (block["content"] for block in prompt_payload.get("blocks", []) if block.get("key") == "system"),
             "你是一位小说英文终稿编辑。",
         )
         scan_prompt = (

@@ -16,6 +16,7 @@ from app.integrations.storage import sha256_digest, storage
 from app.models.job import AIJob
 from app.repositories.job_repo import JobRepo
 from app.schemas.jobs import CreateJobRequest, JobResult, JobStatusResponse
+from app.services.job_runtime import job_params_from_job, write_runtime_json
 
 
 def _status_url(job_id: uuid.UUID) -> str:
@@ -210,9 +211,8 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
 
     options_payload = payload.options.model_dump() if payload.options else None
     final_output_payload = _job_output_payload(uuid.uuid4())
-    input_payload_data = {
-        "job_params": job_params,
-    }
+    input_payload_data: dict[str, Any] = {}
+    prompt_payload = runtime_fields.get("prompt_payload") or {}
     job = await JobRepo.create(
         db,
         caller_id=caller_id,
@@ -222,7 +222,7 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
         input_payload=input_payload_data,
         output_payload={},
         callback_payload={},
-        prompt_payload=runtime_fields.get("prompt_payload") or {},
+        prompt_payload={},
         request_fingerprint=request_fingerprint,
         public_metadata=payload.metadata,
         options_payload=options_payload,
@@ -239,6 +239,14 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
     job.output_oss_bucket = final_output_payload["oss_bucket"]
     job.output_oss_prefix = final_output_payload["oss_prefix"]
     job.output_oss_region = final_output_payload["oss_region"]
+    job.input_ref = write_runtime_json(job, "job_params", job_params)
+    if prompt_payload:
+        job.prompt_ref = write_runtime_json(job, "prompt", prompt_payload)
+    runtime_ref = dict(job.runtime_ref or {})
+    runtime_ref["job_params_ref"] = job.input_ref
+    if job.prompt_ref:
+        runtime_ref["prompt_ref"] = job.prompt_ref
+    job.runtime_ref = runtime_ref
     await db.flush()
     return job, True
 
@@ -269,7 +277,7 @@ def create_job_response(job: AIJob) -> dict[str, Any]:
 
 
 def _load_input_text(job: AIJob) -> str:
-    input_payload = (job.input_payload or {}).get("job_params") or job.input_payload
+    input_payload = job_params_from_job(job)
 
     # Inline source: text stored directly
     source_payload = input_payload.get("source") or input_payload

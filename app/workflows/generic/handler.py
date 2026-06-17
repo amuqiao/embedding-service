@@ -7,6 +7,7 @@ from pydantic import Field
 from app.core.workflow_registry import WorkflowHandler, register
 from app.schemas.common import StrictBaseModel
 from app.services.job_planner import JobPlan, PlannedWorkItem
+from app.services.job_runtime import job_params_from_job, work_item_payload
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +32,7 @@ class GenericEchoHandler(WorkflowHandler):
         return {}
 
     def build_execution_plan(self, job: AIJob) -> JobPlan:
-        params = (job.input_payload or {}).get("job_params") or {}
+        params = job_params_from_job(job)
         return JobPlan(
             execution_mode="single",
             chunk_count=1,
@@ -54,7 +55,7 @@ class GenericEchoHandler(WorkflowHandler):
     ) -> dict[str, Any] | None:
         from app.schemas.jobs import JobResult
 
-        params = GenericEchoParams.model_validate(item.input_payload or {})
+        params = GenericEchoParams.model_validate(work_item_payload(item))
         return JobResult(
             artifacts=[
                 {"key": "echo", "type": "json", "label": params.label, "content": params.value}
