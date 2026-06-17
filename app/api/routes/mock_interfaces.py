@@ -80,18 +80,14 @@ MockJobParams = dict[str, Any] | list[dict[str, Any]]
 class MockCreateJobRequest(StrictBaseModel):
     client_request_id: str | None = Field(default=None, max_length=255)
     job_type: str = Field(min_length=1)
-    job_params: MockJobParams = Field(default_factory=dict)
+    job_params: list[dict[str, Any]] = Field(min_length=1)
     callback: CallbackConfig | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     options: JobOptions | None = None
 
     @field_validator("job_params")
     @classmethod
-    def validate_list_job_params(cls, value: MockJobParams) -> MockJobParams:
-        if not isinstance(value, list):
-            return value
-        if not value:
-            raise ValueError("job_params list must not be empty")
+    def validate_list_job_params(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for index, item in enumerate(value):
             source_language = item.get("source_language")
             if not isinstance(source_language, str) or not source_language.strip():

@@ -120,6 +120,30 @@ def test_rs_mock_ai_job_create_and_translation_status(monkeypatch):
     }
 
 
+def test_rs_mock_rejects_object_job_params(monkeypatch):
+    monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/mock/rs/ai-jobs/jobs",
+        headers=_headers(),
+        json={
+            "client_request_id": "rs:tag-schema-default:en,es,pt",
+            "job_type": "short_drama.tag_schema.translation",
+            "job_params": {
+                "source_language": "zh",
+                "target_languages": ["en", "es", "pt"],
+                "source_schema": {"categories": []},
+                "source_mutual_exclusion_rules": [],
+            },
+            "metadata": {"source_service": "rs"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_INPUT"
+
+
 def test_cpp_mock_failed_status_returns_contract_error_details(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
     client = TestClient(app)
@@ -229,7 +253,15 @@ def test_rs_mock_rejects_cpp_tagging_job_type(monkeypatch):
         headers=_headers(),
         json={
             "job_type": "short_drama.tagging.initial",
-            "job_params": {},
+            "job_params": [
+                {
+                    "label_id": "bihuihuigu76576585",
+                    "source_language": "zh",
+                    "target_languages": ["en", "es", "pt"],
+                    "display_name": "男频",
+                    "definition": "核心受众为男性群体，叙事视角、人物塑造、价值观以男性主角为核心...",
+                }
+            ],
         },
     )
 
