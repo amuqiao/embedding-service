@@ -3,7 +3,7 @@ set -e
 
 ROOT_DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 WORKER_LOGLEVEL="${WORKER_LOGLEVEL:-info}"
-WORKER_POOL="${WORKER_POOL:-solo}"
+WORKER_POOL="${WORKER_POOL:-threads}"
 
 if [ -x "$ROOT_DIR/.venv/bin/celery" ]; then
   CELERY="$ROOT_DIR/.venv/bin/celery"
