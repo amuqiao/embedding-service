@@ -447,6 +447,12 @@ def main() -> int:
         print("health:", health.json())
 
         models = client.get(api_path(config, "/models"), headers=headers)
+        if models.status_code == 401:
+            print(
+                "authentication failed on /models: pass the target environment key with --service-api-key",
+                file=sys.stderr,
+            )
+            return 1
         models.raise_for_status()
         models_body = models.json()
         print("default_model_id:", models_body.get("default_model_id"))

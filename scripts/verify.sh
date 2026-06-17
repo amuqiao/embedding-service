@@ -42,6 +42,7 @@ rs-translation-smoke 常用参数：
   --list-cases          列出内置用例。
   --case <name>         运行指定内置用例；可重复传入。--case all 运行全部内置用例。
   --cases-file <path>   从 JSON 文件读取自定义用例列表。
+  --service-api-key <key> 运行时指定目标环境鉴权 key。
   --keep-going          单个用例失败后继续执行剩余用例。
 EOF
 }

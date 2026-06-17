@@ -74,6 +74,15 @@ class ShortDramaTaggingHandler(WorkflowHandler):
     chunking_enabled = False
 
     def validate_normalized_job_params(self, job_params: dict[str, Any]) -> None:
+        if not settings.ENABLE_MOCK_INTERFACES and (
+            settings.SHORT_DRAMA_RS_SCHEMA_SOURCE == "fixture" or settings.SHORT_DRAMA_RS_RESULT_SINK == "fixture"
+        ):
+            raise AppError(
+                "SHORT_DRAMA_RS_MOCK_DISABLED",
+                "SHORT_DRAMA_RS_SCHEMA_SOURCE and SHORT_DRAMA_RS_RESULT_SINK must be http "
+                "when ENABLE_MOCK_INTERFACES is false",
+                status_code=500,
+            )
         if settings.SHORT_DRAMA_RS_SCHEMA_SOURCE == "fixture":
             assert_schema_fixture_available(
                 settings.SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH,

@@ -227,6 +227,7 @@ def test_short_drama_create_validation_uses_registered_handler(monkeypatch):
     payload = CreateJobRequest.model_validate(
         {"job_type": "short_drama.tagging.initial", "job_params": tagging_params()}
     )
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.ENABLE_MOCK_INTERFACES", True)
     monkeypatch.setattr("app.services.jobs.get_enabled_model", lambda model_id: object())
 
     handler, normalized, runtime_fields = _validate_create_request(payload)
@@ -237,12 +238,23 @@ def test_short_drama_create_validation_uses_registered_handler(monkeypatch):
     assert handler.public_result({"artifacts": [], "signals": {}}) is None
 
 
+def test_short_drama_handler_rejects_rs_fixture_when_mock_disabled(monkeypatch):
+    handler = InitialShortDramaTaggingHandler()
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.ENABLE_MOCK_INTERFACES", False)
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.SHORT_DRAMA_RS_SCHEMA_SOURCE", "fixture")
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.SHORT_DRAMA_RS_RESULT_SINK", "fixture")
+
+    with pytest.raises(AppError, match="must be http when ENABLE_MOCK_INTERFACES is false"):
+        handler.validate_normalized_job_params(tagging_params())
+
+
 def test_short_drama_create_validation_checks_fixture_language_before_queue(monkeypatch, tmp_path):
     payload = tagging_params()
     payload["work_context"]["subtitle_language"] = "en"
     request = CreateJobRequest.model_validate(
         {"job_type": "short_drama.tagging.initial", "job_params": payload}
     )
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.ENABLE_MOCK_INTERFACES", True)
     monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.SHORT_DRAMA_RS_SCHEMA_SOURCE", "fixture")
     monkeypatch.setattr(
         "app.workflows.short_drama_tagging.handler.settings.SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH",

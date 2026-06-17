@@ -50,27 +50,27 @@ def _validate_output_target(target: Any) -> dict[str, Any]:
     return target
 
 
-def _runtime_prefix(output_target: dict[str, Any]) -> str:
-    prefix = output_target["oss_prefix"]
-    return f"{prefix.strip('/')}/runtime"
-
-
 def write_runtime_json(job: AIJob, name: str, payload: dict[str, Any]) -> dict[str, Any]:
-    output_target = output_target_from_job(job) if job.runtime_ref else configured_output_target(job.id)
-    key = f"{_runtime_prefix(output_target)}/{name.strip('/')}.json"
     content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    stored = storage.write_text(
-        bucket=output_target["oss_bucket"],
-        key=key,
-        region=output_target["oss_region"],
-        content=content,
-    )
-    return {"storage": "oss_object", "type": "json", **stored}
+    data = content.encode("utf-8")
+    return {
+        "storage": "db_inline",
+        "type": "json",
+        "name": name.strip("/"),
+        "payload": payload,
+        "content_hash": "sha256:" + hashlib.sha256(data).hexdigest(),
+        "content_size_bytes": len(data),
+    }
 
 
 def read_runtime_json(ref: dict[str, Any] | None) -> dict[str, Any]:
     if not ref:
         raise AppError("RUNTIME_REF_MISSING", "运行时引用不存在", status_code=500)
+    if ref.get("storage") == "db_inline":
+        value = ref.get("payload")
+        if not isinstance(value, dict):
+            raise AppError("RUNTIME_REF_INVALID", "运行时内联引用必须包含 JSON object payload", status_code=500)
+        return value
     try:
         text = storage.read_text(bucket=ref["oss_bucket"], key=ref["oss_key"], region=ref["oss_region"])
         value = json.loads(text)
