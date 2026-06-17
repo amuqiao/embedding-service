@@ -1,5 +1,6 @@
 import yaml
 import pytest
+from datetime import UTC, datetime
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.core.config import settings
@@ -8,7 +9,8 @@ from app.core.security import require_service_auth
 from app.main import app
 from app.schemas.jobs import CreateJobRequest, JobResult, NovelLocalizationJobParams
 from app.services.executor import _prompt_messages
-from app.services.jobs import _validate_create_request
+from app.services.job_runtime import payload_hash
+from app.services.jobs import _validate_create_request, validate_job_status_payload
 
 
 def _valid_payload() -> dict:
@@ -161,6 +163,9 @@ def test_create_job_validation_allows_non_model_runtime(monkeypatch):
         def validate_extra(self, extra):
             pass
 
+        def validate_normalized_job_params(self, job_params):
+            pass
+
     payload = CreateJobRequest.model_validate(
         {
             "job_type": "generic.no_model",
@@ -215,6 +220,56 @@ def test_job_result_rejects_legacy_artifact_target():
         assert "target" in str(exc)
     else:
         raise AssertionError("legacy artifact target should be rejected")
+
+
+def _job_view_payload(*, job_type: str, status: str, result=None, error=None) -> dict:
+    return {
+        "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
+        "client_request_id": "contract-test",
+        "job_type": job_type,
+        "status": status,
+        "progress": {"percent": 100 if status in {"succeeded", "failed"} else 10, "message": "test", "stage": status},
+        "result": result,
+        "error": error,
+        "callback": {"status": "not_configured", "attempts": 0},
+        "metadata": {},
+        "created_at": datetime(2026, 6, 15, 10, 0, 0, tzinfo=UTC),
+        "started_at": datetime(2026, 6, 15, 10, 0, 5, tzinfo=UTC) if status != "queued" else None,
+        "finished_at": datetime(2026, 6, 15, 10, 1, 0, tzinfo=UTC) if status in {"succeeded", "failed"} else None,
+    }
+
+
+def test_job_view_status_and_result_contracts():
+    translation_result = {
+        "artifacts": [
+            {
+                "label_id": "label-1",
+                "langs": {"en": {"name": "Name", "definition": "Definition"}},
+            }
+        ],
+        "signals": {
+            "source_schema_hash": payload_hash({"labels": ["label-1"]}),
+            "translated_schemas_hash": payload_hash({"artifacts": ["label-1"]}),
+        },
+    }
+
+    validate_job_status_payload(
+        _job_view_payload(
+            job_type="short_drama.tag_schema.translation",
+            status="succeeded",
+            result=translation_result,
+        )
+    )
+    validate_job_status_payload(_job_view_payload(job_type="short_drama.tagging.initial", status="succeeded"))
+
+    with pytest.raises(Exception, match="result must be null"):
+        validate_job_status_payload(_job_view_payload(job_type="short_drama.tagging.initial", status="queued", result={}))
+    with pytest.raises(Exception, match="error is required"):
+        validate_job_status_payload(_job_view_payload(job_type="short_drama.tagging.initial", status="failed"))
+    with pytest.raises(Exception, match="public result must be null"):
+        validate_job_status_payload(_job_view_payload(job_type="short_drama.tagging.initial", status="succeeded", result={}))
+    with pytest.raises(Exception, match="succeeded result is required"):
+        validate_job_status_payload(_job_view_payload(job_type="short_drama.tag_schema.translation", status="succeeded"))
 
 
 def test_openapi_declares_bearer_auth_for_protected_routes():

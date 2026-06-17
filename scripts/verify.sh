@@ -22,7 +22,8 @@ usage() {
 
 命令：
   test                运行 pytest。
-  smoke               对已运行 API 执行真实模型 Job 冒烟验证。
+  smoke               对已运行 API/worker 执行真实模型 Job 冒烟验证。
+  rs-translation-smoke 对已运行 API/worker 执行真实模型 + 正式 jobs 路由的 RS 标签翻译冒烟验证。
   mock-smoke          不调用真实模型，用 Mock OpenAI + 本地存储验证完整任务流程。
   workflow-smoke      使用真实模型和放大输入验证内部自动分块、canvas 和 merge。
   e2e                 从 .data 读取 .txt，验证 meta、jobs、轮询、callback 和三阶段链路。
@@ -32,9 +33,16 @@ usage() {
 
 成功标准：
   smoke 成功 = 真实模型 localization job 进入 succeeded 状态。
+  rs-translation-smoke 成功 = 真实模型 short_drama.tag_schema.translation job 进入 succeeded 状态并通过结果校验。
   mock-smoke 成功 = Mock AI step1_localize job 进入 succeeded 状态，全程不调用真实模型。
   workflow-smoke 成功 = 真实模型长文本触发内部 workflow，localized.txt 和 translated.txt 存在且非空。
   e2e 成功 = meta 契约、错误请求预检、三个 Job、轮询结果、callback 和核心 artifact 均通过校验。
+
+rs-translation-smoke 常用参数：
+  --list-cases          列出内置用例。
+  --case <name>         运行指定内置用例；可重复传入。--case all 运行全部内置用例。
+  --cases-file <path>   从 JSON 文件读取自定义用例列表。
+  --keep-going          单个用例失败后继续执行剩余用例。
 EOF
 }
 
@@ -48,6 +56,10 @@ case "$command" in
     ;;
   smoke)
     run_smoke
+    ;;
+  rs-translation-smoke)
+    shift
+    run_rs_translation_smoke "$@"
     ;;
   mock-smoke)
     run_mock_smoke

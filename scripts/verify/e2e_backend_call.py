@@ -39,7 +39,15 @@ from app.integrations.storage import storage as object_storage
 DEFAULT_BASE_URL = "http://127.0.0.1:8100"
 DEFAULT_DATA_DIR = ROOT_DIR / ".data"
 DEFAULT_STORAGE_DIR = ROOT_DIR / "storage" / "objects"
-PREFERRED_OPENAI_MODELS = ("gpt-4o-mini", "gpt-4o", "gpt-4.1")
+PREFERRED_OPENAI_MODELS = (
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4.1",
+)
 
 
 @dataclass(frozen=True)

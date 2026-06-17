@@ -4,7 +4,8 @@ import uuid
 import pytest
 
 from app.models.job import AIJob, AIJobWorkItem
-from app.schemas.jobs import CreateJobRequest
+from app.core.workflow_registry import WorkflowHandler
+from app.schemas.jobs import CreateJobRequest, JobResult
 from app.services.job_runtime import payload_hash
 from app.services.jobs import _validate_create_request
 from app.services.job_workflow import execute_work_item, finalize_job, plan_job
@@ -203,12 +204,11 @@ async def test_finalize_runs_handler_hook_after_success_callback(monkeypatch):
     )
     calls: list[str] = []
 
-    class Handler:
-        expose_result_in_job_view = True
+    class Handler(WorkflowHandler):
+        job_type = "generic.echo"
+        canonical_result_schema = JobResult
+        public_result_schema = JobResult
         large_artifact_keys = frozenset()
-
-        def public_result(self, canonical_result):
-            return canonical_result
 
         async def after_success_callback(self, received_job, canonical_result, _db):
             assert received_job.id == job_id

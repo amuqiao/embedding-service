@@ -1,11 +1,33 @@
-import hashlib
 import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.api.routes import mock_interfaces as mock_routes
 from app.main import app
+from app.schemas.jobs import CallbackEnvelope, CreateJobRequest
+from app.services.job_runtime import payload_hash
+from app.services.jobs import validate_create_contract, validate_job_status_payload
 
 RS_TRANSLATION_JOB_TYPE = "short_drama.tag_schema.translation"
+MOCK_DATA_DIR = Path("docs/接口层/mock-data/short_drama_tagging")
+
+
+def _ensure_mock_routes() -> None:
+    if any(getattr(route, "path", "") == "/api/v1/mock/cpp/ai-jobs/jobs" for route in app.routes):
+        return
+    app.include_router(mock_routes.router)
+    app.openapi_schema = None
+
+
+def _mock_client() -> TestClient:
+    _ensure_mock_routes()
+    return TestClient(app)
+
+
+def _mock_openapi() -> dict:
+    _ensure_mock_routes()
+    return app.openapi()
 
 
 def _headers() -> dict[str, str]:
@@ -38,29 +60,46 @@ def _rs_translation_job_params(target_languages: list[str] | None = None) -> dic
     }
 
 
-def _hash_json(value) -> str:
-    raw = json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    return "sha256:" + hashlib.sha256(raw).hexdigest()
+def _cpp_tagging_request(
+    *,
+    job_type: str = "short_drama.tagging.initial",
+    client_request_id: str = "cpp:204200150000004872:initial:20260615",
+) -> dict:
+    return {
+        "client_request_id": client_request_id,
+        "job_type": job_type,
+        "job_params": {
+            "t_book_id": "204200150000004872",
+            "work_context": {
+                "title": "Acting for Real-He Fell First",
+                "synopsis": "To change her fate and pay off her debts, the heroine enters a staged wedding conflict.",
+                "subtitle_language": "en",
+                "series_structure": "continuous_series",
+                "content_type": "短剧",
+                "episode_count": 1,
+            },
+            "assets": [
+                {
+                    "asset_type": "subtitle_srt",
+                    "episode_no": 1,
+                    "format": "srt",
+                    "text": "1\n00:00:01,000 --> 00:00:03,000\nI will not let them decide my life.",
+                }
+            ],
+        },
+        "callback": {"url": "https://cpp.example.com/ai-jobs/callback"},
+        "metadata": {"source_service": "cpp"},
+    }
 
 
 def test_cpp_mock_ai_job_create_and_status(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
 
     create_response = client.post(
         "/api/v1/mock/cpp/ai-jobs/jobs",
         headers=_headers(),
-        json={
-            "client_request_id": "cpp:204200150000004872:initial:20260615",
-            "job_type": "short_drama.tagging.initial",
-            "job_params": {
-                "t_book_id": "204200150000004872",
-                "work_context": {"title": "Acting for Real-He Fell First"},
-                "assets": [{"asset_type": "subtitle_srt", "format": "srt", "text": "1\nHello."}],
-            },
-            "callback": {"url": "https://cpp.example.com/ai-jobs/callback"},
-            "metadata": {"source_service": "cpp"},
-        },
+        json=_cpp_tagging_request(),
     )
 
     assert create_response.status_code == 202
@@ -92,7 +131,7 @@ def test_cpp_mock_ai_job_create_and_status(monkeypatch):
 
 def test_rs_mock_ai_job_create_and_translation_status(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
 
     create_response = client.post(
         "/api/v1/mock/rs/ai-jobs/jobs",
@@ -139,7 +178,7 @@ def test_rs_mock_ai_job_create_and_translation_status(monkeypatch):
 
 def test_rs_mock_translation_result_is_derived_from_request_schema(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
     job_params = {
         "labels": [
             {
@@ -167,13 +206,13 @@ def test_rs_mock_translation_result_is_derived_from_request_schema(monkeypatch):
     assert artifact["label_id"] == "custom-label"
     assert artifact["langs"]["en"]["name"] == "自定义标签"
     assert artifact["langs"]["en"]["definition"] == "自定义释义。"
-    assert body["result"]["signals"]["source_schema_hash"] == _hash_json({"labels": job_params["labels"]})
+    assert body["result"]["signals"]["source_schema_hash"] == payload_hash({"labels": job_params["labels"]})
     assert body["metadata"]["mock_translation"]["label_count"] == 1
 
 
 def test_rs_mock_translation_accepts_schema_translation_languages(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
     response = client.post(
         "/api/v1/mock/rs/ai-jobs/jobs",
         headers=_headers(),
@@ -189,7 +228,7 @@ def test_rs_mock_translation_accepts_schema_translation_languages(monkeypatch):
 
 def test_rs_mock_rejects_list_job_params(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
 
     response = client.post(
         "/api/v1/mock/rs/ai-jobs/jobs",
@@ -208,7 +247,7 @@ def test_rs_mock_rejects_list_job_params(monkeypatch):
 
 def test_rs_mock_reuses_translation_param_validation(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
 
     bad_language_order = client.post(
         "/api/v1/mock/rs/ai-jobs/jobs",
@@ -237,18 +276,45 @@ def test_rs_mock_reuses_translation_param_validation(monkeypatch):
     assert bad_language.json()["error"]["code"] == "INVALID_INPUT"
 
 
+def test_cpp_mock_reuses_tagging_param_validation(monkeypatch):
+    monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
+    client = _mock_client()
+    payload = _cpp_tagging_request()
+    payload["job_params"]["work_context"].pop("subtitle_language")
+
+    response = client.post("/api/v1/mock/cpp/ai-jobs/jobs", headers=_headers(), json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_INPUT"
+
+
+def test_rs_mock_rejects_callback_by_translation_contract(monkeypatch):
+    monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
+    client = _mock_client()
+
+    response = client.post(
+        "/api/v1/mock/rs/ai-jobs/jobs",
+        headers=_headers(),
+        json={
+            "client_request_id": "rs:callback-not-supported",
+            "job_type": RS_TRANSLATION_JOB_TYPE,
+            "job_params": _rs_translation_job_params(),
+            "callback": {"url": "https://rs.example.com/callback"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_INPUT"
+
+
 def test_cpp_mock_failed_status_returns_contract_error_details(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
 
     create_response = client.post(
         "/api/v1/mock/cpp/ai-jobs/jobs",
         headers=_headers(),
-        json={
-            "client_request_id": "cpp:failed",
-            "job_type": "short_drama.tagging.initial",
-            "job_params": {"t_book_id": "204200150000004872"},
-        },
+        json=_cpp_tagging_request(client_request_id="cpp:failed"),
     )
     created = create_response.json()
 
@@ -271,7 +337,7 @@ def test_cpp_mock_failed_status_returns_contract_error_details(monkeypatch):
 
 def test_rs_mock_failed_status_returns_contract_error_details(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
 
     create_response = client.post(
         "/api/v1/mock/rs/ai-jobs/jobs",
@@ -301,7 +367,7 @@ def test_rs_mock_failed_status_returns_contract_error_details(monkeypatch):
 
 def test_cpp_mock_rejects_rs_translation_job_type(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
 
     response = client.post(
         "/api/v1/mock/cpp/ai-jobs/jobs",
@@ -323,7 +389,7 @@ def test_cpp_mock_rejects_rs_translation_job_type(monkeypatch):
 
 def test_rs_mock_rejects_cpp_tagging_job_type(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
 
     response = client.post(
         "/api/v1/mock/rs/ai-jobs/jobs",
@@ -342,16 +408,15 @@ def test_rs_mock_rejects_cpp_tagging_job_type(monkeypatch):
 
 def test_mock_job_query_rejects_cross_prefix_job_id(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
 
     create_response = client.post(
         "/api/v1/mock/cpp/ai-jobs/jobs",
         headers=_headers(),
-        json={
-            "client_request_id": "cpp:cross-prefix",
-            "job_type": "short_drama.tagging.incremental",
-            "job_params": {},
-        },
+        json=_cpp_tagging_request(
+            job_type="short_drama.tagging.incremental",
+            client_request_id="cpp:cross-prefix",
+        ),
     )
     created = create_response.json()
     wrong_status_url = created["status_url"].replace("/mock/cpp/", "/mock/rs/")
@@ -364,7 +429,7 @@ def test_mock_job_query_rejects_cross_prefix_job_id(monkeypatch):
 
 def test_mock_job_query_rejects_unknown_status(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
 
     response = client.get(
         "/api/v1/mock/cpp/ai-jobs/jobs/0a9be3fb-f01b-4f5d-90b5-4148c4a61df1?status=done",
@@ -377,7 +442,7 @@ def test_mock_job_query_rejects_unknown_status(monkeypatch):
 
 def test_old_mock_fixture_routes_are_not_exposed(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    client = TestClient(app)
+    client = _mock_client()
 
     assert client.get("/api/v1/mock/tag-schemas/default", headers=_headers()).status_code == 404
     assert client.post("/api/v1/mock/ai-tag-results", headers=_headers(), json={}).status_code == 404
@@ -385,7 +450,7 @@ def test_old_mock_fixture_routes_are_not_exposed(monkeypatch):
 
 
 def test_openapi_declares_cpp_and_rs_mock_job_interfaces():
-    schema = app.openapi()
+    schema = _mock_openapi()
 
     assert "/api/v1/mock/cpp/ai-jobs/jobs" in schema["paths"]
     assert "/api/v1/mock/cpp/ai-jobs/jobs/{job_id}" in schema["paths"]
@@ -397,7 +462,7 @@ def test_openapi_declares_cpp_and_rs_mock_job_interfaces():
 
 
 def test_openapi_provides_mock_request_and_response_examples():
-    schema = app.openapi()
+    schema = _mock_openapi()
 
     cpp_post = schema["paths"]["/api/v1/mock/cpp/ai-jobs/jobs"]["post"]
     cpp_request_example = cpp_post["requestBody"]["content"]["application/json"]["examples"][
@@ -427,3 +492,23 @@ def test_openapi_provides_mock_request_and_response_examples():
     assert cpp_get_example["metadata"]["mock_tagging"]["rs_write"]["label_count"] == 4
     assert rs_get_example["result"]["artifacts"][0]["label_id"] == "65f0a1b2c3d4e5f6a7b8c901"
     assert rs_get_example["result"]["artifacts"][0]["langs"]["en"]["name"] == "Male-oriented"
+
+
+def test_mock_data_examples_validate_against_job_contracts():
+    cpp_create = CreateJobRequest.model_validate(
+        json.loads((MOCK_DATA_DIR / "cpp_create_tagging_job_request.json").read_text(encoding="utf-8"))
+    )
+    rs_create = CreateJobRequest.model_validate(
+        json.loads((MOCK_DATA_DIR / "rs_create_tag_schema_translation_job_request.json").read_text(encoding="utf-8"))
+    )
+
+    validate_create_contract(cpp_create)
+    validate_create_contract(rs_create)
+    validate_job_status_payload(mock_routes.CPP_STATUS_RESPONSE_EXAMPLE)
+    validate_job_status_payload(mock_routes.RS_STATUS_RESPONSE_EXAMPLE)
+
+    callback_fixture = json.loads(
+        (MOCK_DATA_DIR / "cpp_callback_request.succeeded.json").read_text(encoding="utf-8")
+    )
+    envelope = CallbackEnvelope.model_validate(callback_fixture["body"])
+    validate_job_status_payload(envelope.job.model_dump())

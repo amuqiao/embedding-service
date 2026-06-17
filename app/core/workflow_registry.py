@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING
 
+from pydantic import BaseModel
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from app.models.job import AIJob, AIJobWorkItem
@@ -28,7 +30,10 @@ class WorkflowHandler:
     chunking_enabled: bool = False
     max_single_chars: int = 20000
     chunk_size: int = 3000
-    expose_result_in_job_view: bool = True
+    allow_callback: bool = True
+    params_schema: type[BaseModel] | None = None
+    canonical_result_schema: type[BaseModel] | None = None
+    public_result_schema: type[BaseModel] | None = None
     # Keys of artifacts whose content should be written to OSS (large outputs).
     # Artifacts not in this set keep their content inline in the public result.
     large_artifact_keys: frozenset[str] = frozenset()
@@ -78,7 +83,12 @@ class WorkflowHandler:
 
     def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         """Validate and normalize CreateJobRequest.job_params for this job_type."""
+        if self.params_schema is not None:
+            return self.params_schema.model_validate(job_params).model_dump()
         return job_params
+
+    def validate_normalized_job_params(self, job_params: dict[str, Any]) -> None:
+        """Validate runtime prerequisites derived from already-normalized params."""
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         """Return fields required by the current executor/storage runtime."""
@@ -90,7 +100,23 @@ class WorkflowHandler:
 
     def public_result(self, canonical_result: dict[str, Any]) -> dict[str, Any] | None:
         """Return the JobView.result value for a completed job."""
-        return canonical_result if self.expose_result_in_job_view else None
+        if self.public_result_schema is None:
+            return self.validate_public_result(None)
+        return self.validate_public_result(canonical_result)
+
+    def validate_canonical_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        if self.canonical_result_schema is None:
+            return result
+        return self.canonical_result_schema.model_validate(result).model_dump(exclude_none=True)
+
+    def validate_public_result(self, result: dict[str, Any] | None) -> dict[str, Any] | None:
+        if result is None:
+            if self.public_result_schema is None:
+                return None
+            raise ValueError(f"{self.job_type} succeeded result is required")
+        if self.public_result_schema is None:
+            raise ValueError(f"{self.job_type} public result must be null")
+        return self.public_result_schema.model_validate(result).model_dump(exclude_none=True)
 
 
 _registry: dict[str, WorkflowHandler] = {}
@@ -109,3 +135,14 @@ def get(job_type: str) -> WorkflowHandler:
 
 def all_job_types() -> list[str]:
     return list(_registry.keys())
+
+
+def validate_job_view_payload(payload: dict[str, Any]):
+    from app.schemas.jobs import JobStatusResponse
+
+    job_view = JobStatusResponse.model_validate(payload)
+    handler = get(job_view.job_type)
+    data = job_view.model_dump()
+    if job_view.status == "succeeded":
+        data["result"] = handler.validate_public_result(data["result"])
+    return JobStatusResponse.model_validate(data)

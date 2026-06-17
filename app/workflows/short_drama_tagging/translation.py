@@ -6,6 +6,7 @@ from typing import Any
 from app.core.exceptions import AppError
 from app.services.job_runtime import payload_hash
 from app.workflows.short_drama_tagging.prompts import parse_model_json
+from app.workflows.short_drama_tagging.schemas import TagSchemaTranslationResult
 
 
 def translation_messages(params: dict[str, Any]) -> list[dict[str, str]]:
@@ -111,13 +112,13 @@ def validate_translation_artifacts(params: dict[str, Any], model_output: dict[st
 
 
 def build_translation_result(params: dict[str, Any], artifacts: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
+    return TagSchemaTranslationResult.model_validate({
         "artifacts": artifacts,
         "signals": {
             "source_schema_hash": payload_hash({"labels": params["labels"]}),
             "translated_schemas_hash": payload_hash({"artifacts": artifacts}),
         },
-    }
+    }).model_dump()
 
 
 def parse_translation_output(text: str, params: dict[str, Any]) -> dict[str, Any]:

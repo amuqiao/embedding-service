@@ -51,29 +51,39 @@ def _request_fingerprint(payload: CreateJobRequest, job_params: dict[str, Any]) 
 
 
 def _job_to_response(job: AIJob) -> JobStatusResponse:
-    return JobStatusResponse(
-        job_id=job.id,
-        client_request_id=job.client_request_id,
-        job_type=job.job_type,
-        status=job.status,
-        progress={
-            "percent": job.progress_percent,
-            "message": job.progress_text,
-            "stage": job.progress_stage,
-        },
-        result=job.result,
-        error=job.error,
-        callback={
-            "status": job.callback_status,
-            "attempts": job.callback_attempts,
-            "next_retry_at": job.callback_next_retry_at,
-            "last_error": job.callback_last_error,
-        },
-        metadata=job.metadata_ or {},
-        created_at=job.created_at,
-        started_at=job.started_at,
-        finished_at=job.finished_at,
-    )
+    try:
+        return validate_job_status_payload(
+            {
+                "job_id": job.id,
+                "client_request_id": job.client_request_id,
+                "job_type": job.job_type,
+                "status": job.status,
+                "progress": {
+                    "percent": job.progress_percent,
+                    "message": job.progress_text,
+                    "stage": job.progress_stage,
+                },
+                "result": job.result,
+                "error": job.error,
+                "callback": {
+                    "status": job.callback_status,
+                    "attempts": job.callback_attempts,
+                    "next_retry_at": job.callback_next_retry_at,
+                    "last_error": job.callback_last_error,
+                },
+                "metadata": job.metadata_ or {},
+                "created_at": job.created_at,
+                "started_at": job.started_at,
+                "finished_at": job.finished_at,
+            }
+        )
+    except Exception as exc:
+        raise AppError(
+            "JOB_VIEW_CONTRACT_INVALID",
+            "stored job view does not match job_type contract",
+            status_code=500,
+            details={"job_id": str(job.id), "job_type": job.job_type},
+        ) from exc
 
 
 def _validate_prompt(job_type: str, prompt_payload: dict[str, Any]) -> None:
@@ -142,13 +152,39 @@ def _validate_callback(callback: Any) -> None:
         raise ValidationAppError("INVALID_INPUT", "callback.url must not target private network addresses")
 
 
-def _validate_create_request(payload: CreateJobRequest) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+def validate_create_contract(payload: CreateJobRequest) -> tuple[Any, dict[str, Any]]:
     from app.core import workflow_registry
     try:
         handler = workflow_registry.get(payload.job_type)
     except KeyError:
         raise ValidationAppError("INVALID_JOB_TYPE", f"不支持的 job_type: {payload.job_type}")
     job_params = _normalize_job_params(payload, handler)
+    if payload.callback is not None and not handler.allow_callback:
+        raise ValidationAppError(
+            "INVALID_INPUT",
+            "callback is not supported for this job_type",
+            {"job_type": payload.job_type},
+        )
+    _validate_callback(payload.callback)
+    return handler, job_params
+
+
+def validate_job_status_payload(payload: dict[str, Any]) -> JobStatusResponse:
+    from app.core.workflow_registry import validate_job_view_payload
+
+    return validate_job_view_payload(payload)
+
+
+def _validate_create_request(payload: CreateJobRequest) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+    handler, job_params = validate_create_contract(payload)
+    try:
+        handler.validate_normalized_job_params(job_params)
+    except Exception as exc:
+        raise ValidationAppError(
+            "INVALID_INPUT",
+            "job_params does not match job_type schema",
+            {"job_type": payload.job_type},
+        ) from exc
     try:
         runtime_fields = handler.runtime_job_fields(job_params)
     except NotImplementedError as exc:
@@ -166,7 +202,6 @@ def _validate_create_request(payload: CreateJobRequest) -> tuple[Any, dict[str, 
         if not isinstance(prompt_payload, dict):
             raise ValidationAppError("INVALID_INPUT", "job_type runtime fields must include prompt_payload")
         _validate_prompt(payload.job_type, prompt_payload)
-    _validate_callback(payload.callback)
     return handler, job_params, runtime_fields
 
 

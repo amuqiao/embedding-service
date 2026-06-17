@@ -69,13 +69,19 @@ def test_job_view_uses_shell_result_and_metadata():
     job = _job()
     job.progress_stage = "finalize"
     job.metadata_ = {"visible": "metadata"}
-    job.result = {"artifacts": [{"key": "public"}], "signals": {"public": True}}
+    job.result = {
+        "artifacts": [{"key": "public", "type": "json", "label": "Public"}],
+        "signals": {"public": True},
+    }
 
     view = _job_to_response(job)
 
     assert view.progress.stage == "finalize"
     assert view.metadata == {"visible": "metadata"}
-    assert view.result == {"artifacts": [{"key": "public"}], "signals": {"public": True}}
+    assert view.result == {
+        "artifacts": [{"key": "public", "type": "json", "label": "Public"}],
+        "signals": {"public": True},
+    }
 
 
 def test_build_callback_body_reuses_job_view_callback_state():
@@ -113,6 +119,18 @@ async def test_deliver_callback_skips_invalid_url_with_error():
     assert result.status == "skipped"
     assert result.attempts == 0
     assert result.last_error["code"] == "CALLBACK_URL_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_records_invalid_body_contract():
+    job = _job()
+    job.result = {"artifacts": [{"key": "legacy"}], "signals": {}}
+
+    result = await deliver_callback(job)
+
+    assert result.status == "failed"
+    assert result.attempts == 1
+    assert result.last_error["code"] == "CALLBACK_BODY_INVALID"
 
 
 @pytest.mark.asyncio

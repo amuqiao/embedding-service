@@ -50,6 +50,18 @@ X-AI-Service-Caller-ID: cpp
 
 不得把 `t_book_id`、素材、标签结果、剧情分析或打标明细提升到 Job 顶层。
 
+### Schema 合同
+
+创建请求先校验通用 `CreateJobRequest`，再根据 `job_type=short_drama.tagging.initial` 或 `short_drama.tagging.incremental` 校验 `job_params` 是否满足 `ShortDramaTaggingParams`。`job_params` 校验通过后才会创建 Job。
+
+查询响应和 callback 中的 `job` 字段都使用同一套 `JobView` 状态组合校验：
+
+- `queued` / `running`：`result=null`，`error=null`。
+- `succeeded`：`result=null`，`error=null`。
+- `failed`：`result=null`，`error` 必须存在。
+
+短剧打标的 canonical result 是 AI 内部产物，用于成功 callback 后写入 RS；它不是 CPP 接口的公开 result。CPP 面向的成功 result schema 因此固定为 `null`。
+
 创建请求顶层只使用：
 
 ```text
@@ -375,6 +387,7 @@ CPP 必须按 `job.job_id + event` 做业务幂等消费，并在处理成功后
 - 失败 callback 的 `job` 字段必须与轮询失败终态响应体同形，并来自同一份错误。
 - AI 写 RS 的 payload 必须来自当前 job 的 canonical result，并由专用兼容 adapter 拼接，不允许另行生成一份不同的打标结果。
 - CPP callback 表示同一 job 的终态通知，不携带 canonical result。
+- Mock 接口中的创建请求、查询响应和 callback 样例只作为发送前数据和回复数据样例，也必须通过同一套 `CreateJobRequest + ShortDramaTaggingParams`、`JobView` 和 `CallbackEnvelope` 校验；mock 接口不维护独立的打标参数或 JobView 校验规则。
 
 ## 终态成功定义
 

@@ -2,10 +2,11 @@ import celery
 import pytest
 import uuid
 
+from app.core import workflow_registry
 from app.models.job import AIJob, AIJobWorkItem
 from app.services.job_planner import JobPlan, PlannedWorkItem, build_job_plan
 from app.services.job_workflow import execute_work_item, finalize_job, plan_job
-from app.tasks.jobs import fanout_after_mapping_task
+from app.tasks.jobs import _ensure_workflows_registered, fanout_after_mapping_task
 from scripts.verify.e2e_backend_call import Config, api_path
 
 
@@ -15,6 +16,22 @@ class FakeDB:
 
     async def refresh(self, _obj):
         pass
+
+
+def test_task_entrypoint_registration_restores_short_drama_translation_handler():
+    previous = dict(workflow_registry._registry)
+    try:
+        workflow_registry._registry.clear()
+        with pytest.raises(KeyError):
+            workflow_registry.get("short_drama.tag_schema.translation")
+
+        _ensure_workflows_registered()
+
+        handler = workflow_registry.get("short_drama.tag_schema.translation")
+        assert handler.job_type == "short_drama.tag_schema.translation"
+    finally:
+        workflow_registry._registry.clear()
+        workflow_registry._registry.update(previous)
 
 
 def test_memory_fanout_dispatches_finalize_chord(monkeypatch):

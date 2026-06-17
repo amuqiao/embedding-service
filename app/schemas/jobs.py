@@ -8,6 +8,7 @@ from pydantic import Field, field_validator, model_validator
 from app.schemas.common import StrictBaseModel
 
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+JobStatus = Literal["queued", "running", "succeeded", "failed"]
 
 
 class OSSReference(StrictBaseModel):
@@ -99,7 +100,7 @@ class CreateJobResponse(StrictBaseModel):
     job_id: UUID
     client_request_id: str | None = None
     job_type: str
-    status: str
+    status: JobStatus
     status_url: str
     created_at: datetime
 
@@ -148,7 +149,7 @@ class JobError(StrictBaseModel):
 
 
 class JobProgress(StrictBaseModel):
-    percent: int
+    percent: int = Field(ge=0, le=100)
     message: str | None = None
     stage: str | None = None
 
@@ -164,7 +165,7 @@ class JobView(StrictBaseModel):
     job_id: UUID
     client_request_id: str | None = None
     job_type: str
-    status: str
+    status: JobStatus
     progress: JobProgress
     result: dict[str, Any] | None = None
     error: JobError | None = None
@@ -173,6 +174,23 @@ class JobView(StrictBaseModel):
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_status_payload(self):
+        if self.status in {"queued", "running"}:
+            if self.result is not None:
+                raise ValueError("result must be null while job is not terminal")
+            if self.error is not None:
+                raise ValueError("error must be null while job is not terminal")
+        elif self.status == "succeeded":
+            if self.error is not None:
+                raise ValueError("error must be null when job succeeded")
+        elif self.status == "failed":
+            if self.result is not None:
+                raise ValueError("result must be null when job failed")
+            if self.error is None:
+                raise ValueError("error is required when job failed")
+        return self
 
 
 class JobStatusResponse(JobView):
@@ -185,3 +203,12 @@ class CallbackEnvelope(StrictBaseModel):
     attempt: int
     sent_at: datetime
     job: JobView
+
+    @model_validator(mode="after")
+    def validate_event_matches_job(self):
+        if self.job.status not in {"succeeded", "failed"}:
+            raise ValueError("callback job must be terminal")
+        expected = "job.succeeded" if self.job.status == "succeeded" else "job.failed"
+        if self.event != expected:
+            raise ValueError("callback event must match job status")
+        return self

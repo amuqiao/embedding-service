@@ -3,6 +3,7 @@ from typing import Any, Literal
 from pydantic import Field, field_validator, model_validator
 
 from app.schemas.common import StrictBaseModel
+from app.schemas.jobs import HASH_RE
 from app.workflows.short_drama_tagging.languages import validate_business_language
 from app.workflows.short_drama_tagging.languages import SUPPORTED_BUSINESS_LANGUAGES
 
@@ -129,3 +130,37 @@ class TagSchemaTranslationParams(StrictBaseModel):
                 raise ValueError(f"duplicate label_id: {label.label_id}")
             label_ids.add(label.label_id)
         return self
+
+
+class TagSchemaTranslatedText(StrictBaseModel):
+    name: str = Field(min_length=1)
+    definition: str = Field(min_length=1)
+
+
+class TagSchemaTranslationArtifact(StrictBaseModel):
+    label_id: str = Field(min_length=1)
+    langs: dict[str, TagSchemaTranslatedText] = Field(min_length=1)
+
+    @field_validator("langs")
+    @classmethod
+    def validate_lang_keys(cls, value: dict[str, TagSchemaTranslatedText]) -> dict[str, TagSchemaTranslatedText]:
+        for language in value:
+            validate_business_language(language)
+        return value
+
+
+class TagSchemaTranslationSignals(StrictBaseModel):
+    source_schema_hash: str
+    translated_schemas_hash: str
+
+    @field_validator("source_schema_hash", "translated_schemas_hash")
+    @classmethod
+    def validate_hash(cls, value: str) -> str:
+        if not HASH_RE.fullmatch(value):
+            raise ValueError("hash must match sha256:<64 lowercase hex>")
+        return value
+
+
+class TagSchemaTranslationResult(StrictBaseModel):
+    artifacts: list[TagSchemaTranslationArtifact] = Field(min_length=1)
+    signals: TagSchemaTranslationSignals

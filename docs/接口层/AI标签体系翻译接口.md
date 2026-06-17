@@ -21,6 +21,20 @@ AI 负责：
 
 AI 不负责保存、分发或切换 RS 标签库。本接口只通过轮询获取结果，不使用 callback。
 
+## Schema 合同
+
+本接口接入统一 AI Job 壳。公共 Job 壳只负责 `client_request_id`、`job_type`、`metadata`、`options`、状态、进度、错误和时间字段；标签翻译专属结构只允许放在：
+
+| 数据类型 | 位置 | Schema |
+| --- | --- | --- |
+| 创建任务参数 | `job_params` | `TagSchemaTranslationParams` |
+| 成功结果 | `JobView.result` | `TagSchemaTranslationResult` |
+| 失败信息 | `JobView.error` | 通用 `JobError` |
+
+创建请求先校验通用 `CreateJobRequest`，再根据 `job_type=short_drama.tag_schema.translation` 校验 `job_params`。查询响应先校验通用 `JobView` 状态组合，再在 `succeeded` 状态下校验 `result` 是否满足 `TagSchemaTranslationResult`。
+
+本任务不支持 callback。即使请求外壳支持 `callback` 字段，标签体系翻译 job 也必须拒绝 callback 配置。
+
 ## 基础接口
 
 | 方法 | 路径 | 用途 |
@@ -176,8 +190,8 @@ GET /api/v1/ai-jobs/jobs/{job_id}
       }
     ],
     "signals": {
-      "source_schema_hash": "sha256:source-schema",
-      "translated_schemas_hash": "sha256:translated-schemas"
+      "source_schema_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "translated_schemas_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     }
   },
   "error": null,
@@ -215,6 +229,8 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 - 每个 artifact 的 `label_id` 必须与同位置请求标签一致。
 - 每个 artifact 的 `langs` 必须刚好包含该标签请求的 `target_languages`。
 - AI 不得新增、删除、替换或重写 `label_id`。
+
+Mock 接口中的请求示例和查询响应示例只作为发送前数据和回复数据样例，也必须通过同一套 `CreateJobRequest + TagSchemaTranslationParams`、`JobView + TagSchemaTranslationResult` 校验；mock 接口不维护独立的标签翻译校验规则。
 
 ## 幂等
 

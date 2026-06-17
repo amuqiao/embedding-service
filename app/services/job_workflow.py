@@ -205,10 +205,10 @@ async def finalize_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any]:
             "pending_items": [str(item.id) for item in pending],
         }
 
-    merged_result = merge_work_items(job, items)
-    canonical_result = _persist_large_artifacts(job, merged_result)
     from app.core import workflow_registry
     handler = workflow_registry.get(job.job_type)
+    merged_result = merge_work_items(job, items)
+    canonical_result = handler.validate_canonical_result(_persist_large_artifacts(job, merged_result))
     public_result = handler.public_result(canonical_result)
     if _job_execution_mode(job) == "single":
         whole = next((item for item in items if item.kind == "whole"), None)

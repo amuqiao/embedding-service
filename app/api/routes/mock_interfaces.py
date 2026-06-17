@@ -1,17 +1,15 @@
-import hashlib
 import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, Query, status
-from pydantic import Field, model_validator
 
 from app.core.exceptions import ValidationAppError
 from app.core.security import require_service_auth
-from app.schemas.common import StrictBaseModel
-from app.schemas.jobs import CallbackConfig, CreateJobRequest, CreateJobResponse, JobOptions, JobStatusResponse
-from app.workflows.short_drama_tagging.schemas import TagSchemaTranslationParams
+from app.schemas.jobs import CreateJobRequest, CreateJobResponse, JobStatusResponse
+from app.services.jobs import validate_create_contract, validate_job_status_payload
+from app.workflows.short_drama_tagging.translation import build_translation_result
 
 router = APIRouter(tags=["mock-interfaces"], dependencies=[Depends(require_service_auth)])
 
@@ -78,21 +76,6 @@ MockJobType = Literal[
     "short_drama.tag_schema.translation",
 ]
 MockJobParams = dict[str, Any] | list[dict[str, Any]]
-
-
-class MockCreateJobRequest(StrictBaseModel):
-    client_request_id: str | None = Field(default=None, max_length=255)
-    job_type: str = Field(min_length=1)
-    job_params: dict[str, Any]
-    callback: CallbackConfig | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    options: JobOptions | None = None
-
-    @model_validator(mode="after")
-    def validate_mock_request(self):
-        if self.job_type == RS_TRANSLATION_JOB_TYPE:
-            self.job_params = _validate_schema_translation_params(self.job_params)
-        return self
 
 
 def mock_tag_schema() -> dict[str, Any]:
@@ -197,14 +180,9 @@ def _validate_mock_job_type(mock_client: MockClient, job_type: str) -> None:
         )
 
 
-def _job_id_for_payload(mock_client: MockClient, payload: CreateJobRequest | MockCreateJobRequest) -> uuid.UUID:
+def _job_id_for_payload(mock_client: MockClient, payload: CreateJobRequest) -> uuid.UUID:
     fingerprint = json.dumps(payload.model_dump(mode="json"), sort_keys=True, ensure_ascii=False)
     return uuid.uuid5(MOCK_JOB_NAMESPACE, f"{MOCK_API_VERSION}:{mock_client}:{fingerprint}")
-
-
-def _hash_json(value: Any) -> str:
-    raw = json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
 def _translated_category(
@@ -399,10 +377,6 @@ def _translated_schema_by_language() -> dict[str, dict[str, Any]]:
     }
 
 
-def _validate_schema_translation_params(job_params: dict[str, Any]) -> dict[str, Any]:
-    return TagSchemaTranslationParams.model_validate(job_params).model_dump()
-
-
 def _default_translation_job_params() -> dict[str, Any]:
     source = mock_tag_schema()
     audience_labels = source["categories"][0]["labels"]
@@ -485,13 +459,7 @@ def _translated_schema_result(job_params: MockJobParams) -> dict[str, Any]:
         }
         for label in _translation_labels(object_job_params)
     ]
-    return {
-        "artifacts": artifacts,
-        "signals": {
-            "source_schema_hash": _hash_json({"labels": object_job_params["labels"]}),
-            "translated_schemas_hash": _hash_json({"artifacts": artifacts}),
-        },
-    }
+    return build_translation_result(object_job_params, artifacts)
 
 
 def _mock_progress(job_type: str, job_status: str) -> dict[str, Any]:
@@ -592,7 +560,10 @@ def _mock_metadata(
 
 
 def _mock_callback(job_type: str, job_status: str, has_callback: bool) -> dict[str, Any]:
-    if not has_callback or _is_translation_job(job_type):
+    from app.core import workflow_registry
+
+    handler = workflow_registry.get(job_type)
+    if not has_callback or not handler.allow_callback:
         return {"status": "not_configured", "attempts": 0}
     if job_status in {"succeeded", "failed"}:
         return {"status": "delivered", "attempts": 1}
@@ -631,7 +602,7 @@ def _mock_job_view(
     error = None
     if job_status == "failed":
         error = _mock_error(job_type, job_params)
-    return {
+    return validate_job_status_payload({
         "job_id": job_id,
         "client_request_id": client_request_id,
         "job_type": job_type,
@@ -644,24 +615,26 @@ def _mock_job_view(
         "created_at": MOCK_CREATED_AT,
         "started_at": MOCK_STARTED_AT if job_status != "queued" else None,
         "finished_at": MOCK_FINISHED_AT if job_status in {"succeeded", "failed"} else None,
-    }
+    })
 
 
-def _create_mock_ai_job(mock_client: MockClient, payload: CreateJobRequest | MockCreateJobRequest) -> dict[str, Any]:
+def _create_mock_ai_job(mock_client: MockClient, payload: CreateJobRequest) -> dict[str, Any]:
     _validate_mock_job_type(mock_client, payload.job_type)
-    job_id = _job_id_for_payload(mock_client, payload)
+    _handler, normalized_job_params = validate_create_contract(payload)
+    normalized_payload = payload.model_copy(update={"job_params": normalized_job_params})
+    job_id = _job_id_for_payload(mock_client, normalized_payload)
     MOCK_JOBS[job_id] = {
         "mock_client": mock_client,
-        "client_request_id": payload.client_request_id,
-        "job_type": payload.job_type,
-        "job_params": payload.job_params,
-        "metadata": payload.metadata,
-        "has_callback": payload.callback is not None,
+        "client_request_id": normalized_payload.client_request_id,
+        "job_type": normalized_payload.job_type,
+        "job_params": normalized_payload.job_params,
+        "metadata": normalized_payload.metadata,
+        "has_callback": normalized_payload.callback is not None,
     }
     return {
         "job_id": job_id,
-        "client_request_id": payload.client_request_id,
-        "job_type": payload.job_type,
+        "client_request_id": normalized_payload.client_request_id,
+        "job_type": normalized_payload.job_type,
         "status": "queued",
         "status_url": _mock_job_path(mock_client, job_id),
         "created_at": MOCK_CREATED_AT,
@@ -823,7 +796,7 @@ async def get_cpp_mock_ai_job(
     },
 )
 async def create_rs_mock_ai_job(
-    payload: MockCreateJobRequest = Body(
+    payload: CreateJobRequest = Body(
         openapi_examples={
             "rs_tag_schema_translation": {
                 "summary": "RS 标签体系翻译 mock",

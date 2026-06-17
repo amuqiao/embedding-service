@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     # ── AI provider ───────────────────────────────────────────────────────────
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = ""
-    DEFAULT_MODEL_ID: str = "gpt-4.1"
+    DEFAULT_MODEL_ID: str = "gpt-5.5"
     MODEL_CONFIG_PATH: str = "app/core/models.yaml"
     # L1 anchor: asyncio.wait_for hard cut on AI call; L3–L5 are derived automatically.
     MODEL_CALL_TIMEOUT_SECONDS: int = 300

@@ -13,7 +13,7 @@ from typing import Any, TYPE_CHECKING
 
 from app.core.workflow_registry import WorkflowHandler, register
 from app.integrations.storage import storage
-from app.schemas.jobs import NovelLocalizationJobParams
+from app.schemas.jobs import JobResult, NovelLocalizationJobParams
 from app.services.job_runtime import model_id_from_job, prompt_payload_from_job, work_item_payload
 
 if TYPE_CHECKING:
@@ -146,8 +146,9 @@ def _merge_review(items: list[AIJobWorkItem]) -> JobResult:
 # ── Step1 handler ─────────────────────────────────────────────────────────────
 
 class NovelLocalizationHandler(WorkflowHandler):
-    def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
-        return NovelLocalizationJobParams.model_validate(job_params).model_dump()
+    params_schema = NovelLocalizationJobParams
+    canonical_result_schema = JobResult
+    public_result_schema = JobResult
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         return {

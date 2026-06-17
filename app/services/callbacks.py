@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.models.job import AIJob
+from app.schemas.jobs import CallbackEnvelope
 from app.services.jobs import _job_to_response
 
 logger = logging.getLogger(__name__)
@@ -46,13 +47,14 @@ def _validate_callback_url(url: str) -> None:
 def build_callback_body(job: AIJob) -> dict:
     event = "job.succeeded" if job.status == "succeeded" else "job.failed"
     sent_at = datetime.now(timezone.utc)
-    return {
+    envelope = CallbackEnvelope.model_validate({
         "event": event,
         "event_id": str(uuid.uuid4()),
         "attempt": (job.callback_attempts or 0) + 1,
         "sent_at": sent_at.isoformat(),
         "job": _job_to_response(job).model_dump(mode="json"),
-    }
+    })
+    return envelope.model_dump(mode="json")
 
 
 async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
@@ -73,7 +75,19 @@ async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
     if event not in events:
         return CallbackDeliveryResult(status="skipped")
 
-    body = json.dumps(build_callback_body(job), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    try:
+        body = json.dumps(build_callback_body(job), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    except Exception as exc:
+        logger.error("callback_body_invalid job_id=%s error_type=%s", job.id, type(exc).__name__, exc_info=True)
+        return CallbackDeliveryResult(
+            status="failed",
+            attempts=1,
+            last_error={
+                "code": "CALLBACK_BODY_INVALID",
+                "type": type(exc).__name__,
+                "message": str(exc)[:500],
+            },
+        )
     delays = [0]
     attempts = 0
     last_error: dict | None = None

@@ -6,6 +6,7 @@ from pydantic import Field
 
 from app.core.workflow_registry import WorkflowHandler, register
 from app.schemas.common import StrictBaseModel
+from app.schemas.jobs import JobResult
 from app.services.job_planner import JobPlan, PlannedWorkItem
 from app.services.job_runtime import job_params_from_job, work_item_payload
 
@@ -22,11 +23,11 @@ class GenericEchoParams(StrictBaseModel):
 
 class GenericEchoHandler(WorkflowHandler):
     job_type = "generic.echo"
+    params_schema = GenericEchoParams
+    canonical_result_schema = JobResult
+    public_result_schema = JobResult
     canvas_pattern = "single"
     chunking_enabled = False
-
-    def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
-        return GenericEchoParams.model_validate(job_params).model_dump()
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         return {}

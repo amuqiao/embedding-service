@@ -22,6 +22,12 @@ from app.tasks.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+def _ensure_workflows_registered() -> None:
+    from app.workflows.register import register_all_workflows
+
+    register_all_workflows()
+
+
 def _session_factory():
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     return engine, async_sessionmaker(engine, expire_on_commit=False)
@@ -39,6 +45,7 @@ async def _with_db(coro):
 @celery_app.task(name="jobs.dispatch", bind=True, acks_late=True)
 def dispatch_job_task(self, job_id: str) -> dict[str, Any]:
     """Plan a job and dispatch its workflow canvas."""
+    _ensure_workflows_registered()
     set_request_id(job_id)
     try:
         return asyncio.run(_dispatch(job_id, self.request.id))
@@ -104,6 +111,7 @@ async def _dispatch(job_id: str, celery_task_id: str) -> dict[str, Any]:
 
 @celery_app.task(name="jobs.process", bind=True, acks_late=True)
 def process_job_task(self, job_id: str):
+    _ensure_workflows_registered()
     set_request_id(job_id)
     try:
         return asyncio.run(_process(job_id, self.request.id))
@@ -182,9 +190,9 @@ async def _process(job_id: str, celery_task_id: str) -> dict[str, Any]:
                     run_ai_job(job.job_type, model_id, prompt_payload_from_job(job), input_text),
                     timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
                 )
-        result_data = _persist_large_artifacts(job, result)
         from app.core import workflow_registry
         handler = workflow_registry.get(job.job_type)
+        result_data = handler.validate_canonical_result(_persist_large_artifacts(job, result))
 
         succeeded = await JobRepo.mark_succeeded(
             db,
@@ -300,6 +308,7 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
 @celery_app.task(name="jobs.execute_work_item", bind=True, acks_late=True)
 def execute_work_item_task(self, job_id: str, item_id: str) -> dict:
     """Execute a single work item (chunk, memory, scan, or whole)."""
+    _ensure_workflows_registered()
     set_request_id(f"{job_id}:{item_id}")
     try:
         async def run(db):
@@ -338,6 +347,7 @@ def execute_work_item_task(self, job_id: str, item_id: str) -> dict:
 @celery_app.task(name="jobs.fanout_after_mapping", acks_late=True)
 def fanout_after_mapping_task(memory_result: dict, job_id: str, chunk_item_ids: list[str]) -> dict[str, Any]:
     """After memory mapping completes, dispatch chunks and finalize when all chunks finish."""
+    _ensure_workflows_registered()
     from celery import chord as celery_chord
     from celery import group as celery_group
 
@@ -351,6 +361,7 @@ def fanout_after_mapping_task(memory_result: dict, job_id: str, chunk_item_ids: 
 @celery_app.task(name="jobs.finalize_job", acks_late=True)
 def finalize_job_task(prev_result, job_id: str) -> dict:
     """Finalize a job after all work items complete."""
+    _ensure_workflows_registered()
     set_request_id(job_id)
     async def run(db):
         from app.services.job_workflow import finalize_job

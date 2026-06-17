@@ -22,22 +22,16 @@ from app.workflows.short_drama_tagging.rs_client import (
     get_tag_schema_provider,
     get_tagging_result_writer,
 )
-from app.workflows.short_drama_tagging.schemas import ShortDramaTaggingParams, TagSchemaTranslationParams
+from app.workflows.short_drama_tagging.schemas import (
+    ShortDramaTaggingParams,
+    TagSchemaTranslationParams,
+    TagSchemaTranslationResult,
+)
 from app.workflows.short_drama_tagging.translation import parse_translation_output, translation_messages
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from app.models.job import AIJob, AIJobWorkItem
-
-
-def _normalize_job_params(job_params: dict[str, Any]) -> dict[str, Any]:
-    params = ShortDramaTaggingParams.model_validate(job_params).model_dump()
-    if settings.SHORT_DRAMA_RS_SCHEMA_SOURCE == "fixture":
-        assert_schema_fixture_available(
-            settings.SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH,
-            params["work_context"]["subtitle_language"],
-        )
-    return params
 
 
 def _oss_text_from_uri(uri: str, expected_hash: str | None) -> str:
@@ -73,12 +67,18 @@ def _hydrate_subtitle_texts(job_params: dict[str, Any]) -> dict[str, Any]:
 
 
 class ShortDramaTaggingHandler(WorkflowHandler):
+    params_schema = ShortDramaTaggingParams
+    canonical_result_schema = JobResult
+    public_result_schema = None
     canvas_pattern = "single"
     chunking_enabled = False
-    expose_result_in_job_view = False
 
-    def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
-        return _normalize_job_params(job_params)
+    def validate_normalized_job_params(self, job_params: dict[str, Any]) -> None:
+        if settings.SHORT_DRAMA_RS_SCHEMA_SOURCE == "fixture":
+            assert_schema_fixture_available(
+                settings.SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH,
+                job_params["work_context"]["subtitle_language"],
+            )
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -204,11 +204,12 @@ class IncrementalShortDramaTaggingHandler(ShortDramaTaggingHandler):
 
 class TagSchemaTranslationHandler(WorkflowHandler):
     job_type = "short_drama.tag_schema.translation"
+    params_schema = TagSchemaTranslationParams
+    canonical_result_schema = TagSchemaTranslationResult
+    public_result_schema = TagSchemaTranslationResult
+    allow_callback = False
     canvas_pattern = "single"
     chunking_enabled = False
-
-    def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
-        return TagSchemaTranslationParams.model_validate(job_params).model_dump()
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         return {"model_id": settings.DEFAULT_MODEL_ID}

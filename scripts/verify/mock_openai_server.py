@@ -54,7 +54,7 @@ def _make_completion(content: str) -> bytes:
     return json.dumps({
         "id": "mock-chatcmpl-001",
         "object": "chat.completion",
-        "model": "gpt-4.1",
+        "model": "gpt-5.5",
         "choices": [{
             "index": 0,
             "message": {"role": "assistant", "content": content},
@@ -76,7 +76,7 @@ class MockHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        body = json.dumps({"data": [{"id": "gpt-4.1", "object": "model"}]}).encode()
+        body = json.dumps({"data": [{"id": "gpt-5.5", "object": "model"}]}).encode()
         self._send_json(body)
 
     def do_POST(self):

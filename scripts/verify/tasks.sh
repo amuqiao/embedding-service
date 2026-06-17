@@ -17,6 +17,15 @@ run_smoke() {
   "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/verify/smoke_job.py"
 }
 
+run_rs_translation_smoke() {
+  guard_local_env
+  section "RS Translation Smoke"
+  require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
+  PYTHONUNBUFFERED=1 "$ROOT_DIR/.venv/bin/python" \
+    "$ROOT_DIR/scripts/verify/rs_tag_schema_translation_job.py" \
+    "$@"
+}
+
 run_e2e() {
   guard_local_env
   section "E2E"
@@ -130,6 +139,7 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/verify/check_aliyun_oss.py" \
     "$ROOT_DIR/scripts/verify/e2e_backend_call.py" \
     "$ROOT_DIR/scripts/verify/mock_openai_server.py" \
+    "$ROOT_DIR/scripts/verify/rs_tag_schema_translation_job.py" \
     "$ROOT_DIR/scripts/verify/smoke_job.py"
   event "OK" "dev/check_ports.py" "py_compile"
   event "OK" "verify/*.py" "py_compile"
