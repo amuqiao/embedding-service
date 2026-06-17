@@ -10,7 +10,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-.env}"
-PROJECT_NAME="${COMPOSE_PROJECT_NAME:cms-story-tagger}"
+PROJECT_NAME="${COMPOSE_PROJECT_NAME:-cms-story-tagger}"
 
 cd "$ROOT_DIR"
 
