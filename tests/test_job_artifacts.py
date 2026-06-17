@@ -6,8 +6,10 @@ import pytest
 from app.core.exceptions import AppError
 from app.integrations.ai_gateway import TextGenerationResult
 from app.models.job import AIJob, AIJobWorkItem
+from app.schemas.jobs import JobResult
 from app.services.executor import run_ai_job
 from app.services.job_workflow import merge_work_items
+from app.services.jobs import _persist_large_artifacts
 
 
 def _prompt_payload() -> dict:
@@ -181,6 +183,45 @@ def test_chunked_step1_merge_uses_work_note_artifact():
     assert result.signals == {}
     assert work_note.apply_mode == "replace"
     assert work_note.content == "第一段注释\n\n第二段注释"
+
+
+def test_persist_large_artifacts_uses_shell_output_fields(monkeypatch):
+    written: dict = {}
+    job = AIJob(
+        job_type="novel_localization.step1_localize",
+        model_id="gpt-4.1",
+        output_payload={},
+        callback_payload={},
+        prompt_payload={},
+        output_oss_bucket="bucket",
+        output_oss_prefix="ai-jobs/job-1/",
+        output_oss_region="region",
+    )
+
+    def fake_write_text(*, bucket, key, region, content):
+        written.update({"bucket": bucket, "key": key, "region": region, "content": content})
+        return {"oss_bucket": bucket, "oss_key": key, "oss_region": region, "content_hash": "sha256:" + "0" * 64}
+
+    monkeypatch.setattr("app.services.jobs.storage.write_text", fake_write_text)
+
+    result = _persist_large_artifacts(
+        job,
+        JobResult(
+            artifacts=[
+                {"key": "localized_text", "type": "text", "label": "本地化正文", "content": "正文"}
+            ],
+            signals={},
+        ),
+    )
+
+    assert written == {
+        "bucket": "bucket",
+        "key": "ai-jobs/job-1/localized_text.txt",
+        "region": "region",
+        "content": "正文",
+    }
+    assert result["artifacts"][0]["storage"] == "oss_object"
+    assert "content" not in result["artifacts"][0]
 
 
 def test_chunked_step2_merge_uses_work_note_artifact():

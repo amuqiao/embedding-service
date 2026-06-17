@@ -209,13 +209,9 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
             )
 
     options_payload = payload.options.model_dump() if payload.options else None
-    callback_payload = payload.callback.model_dump() if payload.callback else {}
-    output_payload = _job_output_payload(uuid.uuid4())
+    final_output_payload = _job_output_payload(uuid.uuid4())
     input_payload_data = {
         "job_params": job_params,
-        "request_fingerprint": request_fingerprint,
-        "metadata": payload.metadata,
-        "options": options_payload,
     }
     job = await JobRepo.create(
         db,
@@ -224,8 +220,8 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
         job_type=payload.job_type,
         model_id=runtime_fields.get("model_id"),
         input_payload=input_payload_data,
-        output_payload=output_payload,
-        callback_payload=callback_payload,
+        output_payload={},
+        callback_payload={},
         prompt_payload=runtime_fields.get("prompt_payload") or {},
         request_fingerprint=request_fingerprint,
         public_metadata=payload.metadata,
@@ -235,12 +231,11 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
         runtime_ref={"model_id": runtime_fields.get("model_id")} if runtime_fields.get("model_id") else None,
         callback_url=payload.callback.url if payload.callback else None,
         callback_events=payload.callback.events if payload.callback else None,
-        output_oss_bucket=output_payload["oss_bucket"],
-        output_oss_prefix=output_payload["oss_prefix"],
-        output_oss_region=output_payload["oss_region"],
+        output_oss_bucket=final_output_payload["oss_bucket"],
+        output_oss_prefix=final_output_payload["oss_prefix"],
+        output_oss_region=final_output_payload["oss_region"],
     )
     final_output_payload = _job_output_payload(job.id)
-    job.output_payload = final_output_payload
     job.output_oss_bucket = final_output_payload["oss_bucket"]
     job.output_oss_prefix = final_output_payload["oss_prefix"]
     job.output_oss_region = final_output_payload["oss_region"]
