@@ -1,9 +1,11 @@
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from app.models.job import AIJob
+from app.schemas.jobs import CallbackResponseEnvelope
 from app.services.callbacks import CallbackDeliveryResult, build_callback_body, deliver_callback
 from app.services.job_runtime import payload_hash, write_runtime_json
 from app.services.jobs import _job_to_response
@@ -164,6 +166,40 @@ def test_build_callback_body_rejects_short_drama_success_without_signals():
         build_callback_body(job)
 
 
+def test_callback_response_rejects_short_drama_data_without_acceptance_flags():
+    with pytest.raises(ValueError, match="data.accepted"):
+        CallbackResponseEnvelope.model_validate(
+            {
+                "schema_version": "v1",
+                "event": "job.succeeded",
+                "event_id": str(uuid.uuid4()),
+                "job_id": str(uuid.uuid4()),
+                "client_request_id": "cpp:300000000300000279:initial:mock",
+                "job_type": "short_drama.tagging.initial",
+                "status": "succeeded",
+                "msg": None,
+                "metadata": {"source_service": "cpp", "business_scene": "short_drama_tagging"},
+                "data": {"t_book_id": "300000000300000279"},
+            }
+        )
+
+
+def test_callback_response_requires_common_extension_fields():
+    with pytest.raises(ValueError, match="metadata"):
+        CallbackResponseEnvelope.model_validate(
+            {
+                "schema_version": "v1",
+                "event": "job.succeeded",
+                "event_id": str(uuid.uuid4()),
+                "job_id": str(uuid.uuid4()),
+                "job_type": "novel_localization.step1_localize",
+                "status": "succeeded",
+                "msg": None,
+                "data": {},
+            }
+        )
+
+
 @pytest.mark.asyncio
 async def test_deliver_callback_skips_missing_url():
     result = await deliver_callback(_job(None))
@@ -200,7 +236,7 @@ async def test_deliver_callback_tries_once_on_http_failure(monkeypatch):
 
     class _Response:
         status_code = 503
-        text = "unavailable"
+        text = '{"schema_version":"v1","event":"job.succeeded","event_id":"00000000-0000-0000-0000-000000000000","job_id":"00000000-0000-0000-0000-000000000000","job_type":"novel_localization.step1_localize","status":"succeeded","msg":"temporary failure","metadata":{},"data":{}}'
 
     class _Client:
         def __init__(self, timeout):
@@ -225,6 +261,8 @@ async def test_deliver_callback_tries_once_on_http_failure(monkeypatch):
     assert result.status == "failed"
     assert result.attempts == 1
     assert result.last_error["code"] == "CALLBACK_HTTP_ERROR"
+    assert result.last_error["response"]["format"] == "v1"
+    assert result.last_error["response"]["valid"] is False
 
 
 @pytest.mark.asyncio
@@ -262,6 +300,121 @@ async def test_deliver_callback_uses_shell_callback_fields(monkeypatch):
     assert posted["headers"]["X-AI-Service-Event"] == "job.succeeded"
     assert b'"job_id"' in posted["body"]
     assert b'"job"' not in posted["body"]
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_records_v1_response_summary(monkeypatch):
+    class _Response:
+        status_code = 200
+
+        def __init__(self, request_body):
+            self.text = json.dumps(
+                {
+                    "schema_version": "v1",
+                    "event": request_body["event"],
+                    "event_id": request_body["event_id"],
+                    "job_id": request_body["job_id"],
+                    "client_request_id": request_body["client_request_id"],
+                    "job_type": request_body["job_type"],
+                    "status": request_body["status"],
+                    "msg": None,
+                    "metadata": request_body["metadata"],
+                    "data": {"accepted": True, "duplicate": False},
+                    "received_at": request_body["sent_at"],
+                    "processed_at": request_body["sent_at"],
+                }
+            )
+
+    class _Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, content, headers):
+            return _Response(json.loads(content.decode("utf-8")))
+
+    monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
+
+    result = await deliver_callback(_job())
+
+    assert result.status == "delivered"
+    assert result.response["format"] == "v1"
+    assert result.response["valid"] is True
+    assert result.response["mismatches"] == []
+    assert result.response["data"] == {"accepted": True, "duplicate": False}
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_keeps_legacy_response_compatible(monkeypatch):
+    class _Response:
+        status_code = 200
+        text = '{"status":"success","msg":null}'
+
+    class _Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, content, headers):
+            return _Response()
+
+    monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
+
+    result = await deliver_callback(_job())
+
+    assert result.status == "delivered"
+    assert result.response == {"format": "legacy", "status": "success", "msg": None}
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_does_not_treat_malformed_v1_as_legacy(monkeypatch):
+    class _Response:
+        status_code = 200
+
+        def __init__(self, request_body):
+            self.text = json.dumps(
+                {
+                    "event": request_body["event"],
+                    "event_id": request_body["event_id"],
+                    "job_id": request_body["job_id"],
+                    "client_request_id": request_body["client_request_id"],
+                    "job_type": request_body["job_type"],
+                    "status": request_body["status"],
+                    "msg": None,
+                }
+            )
+
+    class _Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, content, headers):
+            return _Response(json.loads(content.decode("utf-8")))
+
+    monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
+
+    result = await deliver_callback(_job())
+
+    assert result.status == "delivered"
+    assert result.response["format"] == "v1"
+    assert result.response["valid"] is False
+    assert "schema_version" in result.response["error"]
 
 
 @pytest.mark.asyncio

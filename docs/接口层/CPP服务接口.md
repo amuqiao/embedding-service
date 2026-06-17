@@ -391,6 +391,83 @@ Callback 请求体字段：
 
 CPP 必须按 `job_id + event` 做业务幂等消费，并在处理成功后返回任意 `2xx`。`event_id` 用于标识一次 Callback 投递事件，不能替代 `job_id` 作为业务幂等键。AI 收到非 `2xx` 响应时可按内部策略重试同一个终态 Job 的 Callback。
 
+### Callback 响应体
+
+CPP 成功接收并处理 callback 后，应返回 `2xx`。响应体同样使用公共字段和 `data` 扩展：公共字段回显本次 callback 的 Job 身份和终态事件；`data` 表达 CPP 对本次 callback 的接收结果。`status` 仍表示 AI Job 终态，只能是 `succeeded` 或 `failed`，不得改成 `success`、`accepted` 等接收状态。
+
+成功接收响应示例：
+
+```json
+{
+  "schema_version": "v1",
+  "event": "job.failed",
+  "event_id": "8e6a3d4a-1d43-4f4a-a5f5-1efcb75e5a6d",
+  "job_id": "7b5c2c62-9a3a-41b7-bd41-f24a5d34a099",
+  "client_request_id": "cpp:204200150000004872:initial:20260615",
+  "job_type": "short_drama.tagging.initial",
+  "status": "failed",
+  "msg": null,
+  "metadata": {
+    "source_service": "cpp",
+    "business_scene": "short_drama_tagging"
+  },
+  "data": {
+    "t_book_id": "204200150000004872",
+    "accepted": true,
+    "duplicate": false
+  },
+  "received_at": "2026-06-15T10:03:02Z",
+  "processed_at": "2026-06-15T10:03:02Z"
+}
+```
+
+重复 callback 也应返回 `2xx`，并通过 `data.duplicate=true` 表示幂等命中：
+
+```json
+{
+  "schema_version": "v1",
+  "event": "job.failed",
+  "event_id": "8e6a3d4a-1d43-4f4a-a5f5-1efcb75e5a6d",
+  "job_id": "7b5c2c62-9a3a-41b7-bd41-f24a5d34a099",
+  "client_request_id": "cpp:204200150000004872:initial:20260615",
+  "job_type": "short_drama.tagging.initial",
+  "status": "failed",
+  "msg": null,
+  "metadata": {
+    "source_service": "cpp",
+    "business_scene": "short_drama_tagging"
+  },
+  "data": {
+    "t_book_id": "204200150000004872",
+    "accepted": true,
+    "duplicate": true
+  },
+  "received_at": "2026-06-15T10:03:02Z",
+  "processed_at": "2026-06-15T10:05:10Z"
+}
+```
+
+CPP 因鉴权、签名或请求体非法等原因拒绝 callback 时，应返回非 `2xx`，响应体可以沿用同一结构，并在 `msg` 与 `data.reason` 中说明原因。
+
+Callback 响应体字段：
+
+| 字段 | 类型 | 必需性 | 说明 |
+| --- | --- | --- | --- |
+| `schema_version` | `string` | 必需 | Callback 响应体 schema 版本，当前为 `v1`。 |
+| `event` | `string` | 必需 | 回显本次 callback 请求的终态事件，取值为 `job.succeeded` 或 `job.failed`。 |
+| `event_id` | `string` | 必需 | 回显本次 callback 请求的投递事件 id。 |
+| `job_id` | `string` | 必需 | 回显 Job 唯一 id。 |
+| `client_request_id` | `string \| null` | 可选 | 回显 CPP 创建任务时传入的幂等请求 id。 |
+| `job_type` | `string` | 必需 | 回显 Job 类型。 |
+| `status` | `string` | 必需 | 回显 AI Job 终态，只能是 `succeeded` 或 `failed`。 |
+| `msg` | `string \| null` | 必需 | CPP 处理说明；正常接收时为 `null`。 |
+| `metadata` | `object` | 必需 | 回显 callback 请求中的 metadata，必要时可补充 CPP 侧稳定元数据。 |
+| `data` | `object` | 必需 | CPP 处理扩展数据。短剧打标至少包含 `t_book_id`、`accepted`、`duplicate`。 |
+| `received_at` | `string \| null` | 可选 | CPP 收到 callback 的时间。 |
+| `processed_at` | `string \| null` | 可选 | CPP 完成幂等处理的时间。 |
+
+AI 侧以 HTTP `2xx` 判断 callback 投递成功。响应体用于日志、排查和双方对账；当前 AI 兼容旧响应体 `{ "status": "success", "msg": null }`，但新接入应使用上面的 `v1` 响应体。
+
 ## 一致性规则
 
 - `job_params` 是短剧打标任务唯一入参扩展位置。

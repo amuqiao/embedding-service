@@ -79,6 +79,28 @@ def callback_envelope(job_view: dict[str, Any], signals: dict[str, Any]) -> dict
     return build_callback_body(job)
 
 
+def callback_response(callback_request: dict[str, Any]) -> dict[str, Any]:
+    processed_at = datetime.now(UTC).isoformat()
+    return {
+        "schema_version": "v1",
+        "event": callback_request["event"],
+        "event_id": callback_request["event_id"],
+        "job_id": callback_request["job_id"],
+        "client_request_id": callback_request.get("client_request_id"),
+        "job_type": callback_request["job_type"],
+        "status": callback_request["status"],
+        "msg": None,
+        "metadata": callback_request.get("metadata") or {},
+        "data": {
+            "t_book_id": (callback_request.get("data") or {}).get("t_book_id"),
+            "accepted": True,
+            "duplicate": False,
+        },
+        "received_at": processed_at,
+        "processed_at": processed_at,
+    }
+
+
 def main() -> int:
     create_request = load_json(REQUEST_PATH)
     language = create_request["job_params"]["work_context"]["subtitle_language"]
@@ -123,6 +145,7 @@ def main() -> int:
         "started_at": now,
         "finished_at": now,
     }
+    callback_request = callback_envelope(job_view, callback_signals)
     output = {
         "cpp_create_request": create_request,
         "rs_schema_request": {
@@ -134,7 +157,8 @@ def main() -> int:
         "rs_write_request": rs_payload,
         "tagging_detail": tagging_detail,
         "job_status_response": job_view,
-        "cpp_callback_request": callback_envelope(job_view, callback_signals),
+        "cpp_callback_request": callback_request,
+        "cpp_callback_response": callback_response(callback_request),
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0

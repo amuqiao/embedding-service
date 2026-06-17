@@ -227,3 +227,33 @@ class CallbackEnvelope(StrictBaseModel):
         if self.event != expected:
             raise ValueError("callback event must match job status")
         return self
+
+
+class CallbackResponseEnvelope(StrictBaseModel):
+    schema_version: Literal["v1"] = "v1"
+    event: Literal["job.succeeded", "job.failed"]
+    event_id: UUID
+    job_id: UUID
+    client_request_id: str | None = None
+    job_type: str
+    status: Literal["succeeded", "failed"]
+    msg: str | None
+    metadata: dict[str, Any]
+    data: dict[str, Any]
+    received_at: datetime | None = None
+    processed_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_response_contract(self):
+        expected = "job.succeeded" if self.status == "succeeded" else "job.failed"
+        if self.event != expected:
+            raise ValueError("callback response event must match job status")
+        if self.job_type in {"short_drama.tagging.initial", "short_drama.tagging.incremental"}:
+            t_book_id = self.data.get("t_book_id")
+            if not isinstance(t_book_id, str) or not t_book_id:
+                raise ValueError("callback response data.t_book_id must be a non-empty string")
+            if not isinstance(self.data.get("accepted"), bool):
+                raise ValueError("callback response data.accepted must be a boolean")
+            if not isinstance(self.data.get("duplicate"), bool):
+                raise ValueError("callback response data.duplicate must be a boolean")
+        return self

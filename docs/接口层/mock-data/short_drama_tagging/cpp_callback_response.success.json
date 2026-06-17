@@ -1,7 +1,24 @@
 {
   "status_code": 200,
   "body": {
-    "status": "success",
-    "msg": null
+    "schema_version": "v1",
+    "event": "job.succeeded",
+    "event_id": "7b5c2c62-9a3a-41b7-bd41-f24a5d34a099",
+    "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
+    "client_request_id": "cpp:300000000300000279:initial:mock",
+    "job_type": "short_drama.tagging.initial",
+    "status": "succeeded",
+    "msg": null,
+    "metadata": {
+      "source_service": "cpp",
+      "business_scene": "short_drama_tagging"
+    },
+    "data": {
+      "t_book_id": "300000000300000279",
+      "accepted": true,
+      "duplicate": false
+    },
+    "received_at": "2026-06-17T10:01:31Z",
+    "processed_at": "2026-06-17T10:01:31Z"
   }
 }

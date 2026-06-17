@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.models.job import AIJob
-from app.schemas.jobs import CallbackEnvelope
+from app.schemas.jobs import CallbackEnvelope, CallbackResponseEnvelope
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +26,22 @@ _SHORT_DRAMA_SUCCESS_SIGNAL_KEYS = (
     "subtitle_language",
     "requested_schema_language",
 )
+_CALLBACK_RESPONSE_V1_HINT_KEYS = {
+    "schema_version",
+    "event",
+    "event_id",
+    "job_id",
+    "client_request_id",
+    "job_type",
+}
+_CALLBACK_RESPONSE_LEGACY_KEYS = {"status", "msg"}
 
 
 class CallbackDeliveryResult(BaseModel):
     status: str
     attempts: int = 0
     last_error: dict | None = None
+    response: dict[str, Any] | None = None
 
 
 def _sign(timestamp: str, body: bytes) -> str | None:
@@ -136,6 +146,60 @@ def build_callback_body(job: AIJob) -> dict:
     return envelope.model_dump(mode="json")
 
 
+def _callback_response_summary(response_text: str, callback_body: dict[str, Any]) -> dict[str, Any] | None:
+    text = response_text.strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {"format": "text", "message": text[:500]}
+    if not isinstance(parsed, dict):
+        return {"format": "json", "body": parsed}
+
+    has_v1_hint = any(key in parsed for key in _CALLBACK_RESPONSE_V1_HINT_KEYS)
+    if parsed.get("schema_version") == "v1":
+        try:
+            envelope = CallbackResponseEnvelope.model_validate(parsed)
+        except Exception as exc:
+            return {
+                "format": "v1",
+                "valid": False,
+                "error": str(exc)[:500],
+            }
+        mismatches: list[dict[str, Any]] = []
+        for key in ("event", "event_id", "job_id", "client_request_id", "job_type", "status"):
+            expected = callback_body.get(key)
+            actual = envelope.model_dump(mode="json").get(key)
+            if actual != expected:
+                mismatches.append({"field": key, "expected": expected, "actual": actual})
+        return {
+            "format": "v1",
+            "valid": not mismatches,
+            "mismatches": mismatches,
+            "event": envelope.event,
+            "job_id": str(envelope.job_id),
+            "status": envelope.status,
+            "msg": envelope.msg,
+            "data": envelope.data,
+        }
+
+    if has_v1_hint:
+        return {
+            "format": "v1",
+            "valid": False,
+            "error": "callback response looks like v1 but schema_version is missing or unsupported",
+        }
+
+    if set(parsed).issubset(_CALLBACK_RESPONSE_LEGACY_KEYS) and ("status" in parsed or "msg" in parsed):
+        return {
+            "format": "legacy",
+            "status": parsed.get("status"),
+            "msg": parsed.get("msg"),
+        }
+    return {"format": "json", "body": parsed}
+
+
 async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
     url = job.callback_url
     if not url:
@@ -155,7 +219,8 @@ async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
         return CallbackDeliveryResult(status="skipped")
 
     try:
-        body = json.dumps(build_callback_body(job), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        callback_body = build_callback_body(job)
+        body = json.dumps(callback_body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     except Exception as exc:
         logger.error("callback_body_invalid job_id=%s error_type=%s", job.id, type(exc).__name__, exc_info=True)
         return CallbackDeliveryResult(
@@ -187,12 +252,30 @@ async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
             try:
                 attempts += 1
                 response = await client.post(url, content=body, headers=headers)
+                response_summary = _callback_response_summary(response.text, callback_body)
                 if 200 <= response.status_code < 300:
-                    return CallbackDeliveryResult(status="delivered", attempts=attempts)
+                    if response_summary and response_summary.get("format") == "v1" and not response_summary.get("valid"):
+                        logger.warning(
+                            "callback_response_contract_mismatch job_id=%s summary=%s",
+                            job.id,
+                            response_summary,
+                        )
+                    elif response_summary:
+                        logger.info(
+                            "callback_response_received job_id=%s summary=%s",
+                            job.id,
+                            response_summary,
+                        )
+                    return CallbackDeliveryResult(
+                        status="delivered",
+                        attempts=attempts,
+                        response=response_summary,
+                    )
                 last_error = {
                     "code": "CALLBACK_HTTP_ERROR",
                     "status_code": response.status_code,
                     "message": response.text[:500],
+                    "response": response_summary,
                 }
                 logger.warning(
                     "callback attempt %d failed for job %s: status=%d",

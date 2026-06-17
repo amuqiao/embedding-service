@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.api.routes import mock_interfaces as mock_routes
 from app.main import app
-from app.schemas.jobs import CallbackEnvelope, CreateJobRequest
+from app.schemas.jobs import CallbackEnvelope, CallbackResponseEnvelope, CreateJobRequest
 from app.services.job_runtime import payload_hash
 from app.services.jobs import validate_create_contract, validate_job_status_payload
 
@@ -526,3 +526,19 @@ def test_mock_data_examples_validate_against_job_contracts():
     assert "job" not in callback_fixture["body"]
     assert "result" not in callback_fixture["body"]
     assert "callback" not in callback_fixture["body"]
+
+    callback_response_fixture = json.loads(
+        (MOCK_DATA_DIR / "cpp_callback_response.success.json").read_text(encoding="utf-8")
+    )
+    callback_response = CallbackResponseEnvelope.model_validate(callback_response_fixture["body"])
+    assert callback_response_fixture["status_code"] == 200
+    assert callback_response.event == envelope.event
+    assert callback_response.event_id == envelope.event_id
+    assert callback_response.job_id == envelope.job_id
+    assert callback_response.client_request_id == envelope.client_request_id
+    assert callback_response.job_type == envelope.job_type
+    assert callback_response.status == envelope.status
+    assert callback_response.msg is None
+    assert callback_response.data["t_book_id"] == envelope.data["t_book_id"]
+    assert callback_response.data["accepted"] is True
+    assert callback_response.data["duplicate"] is False
