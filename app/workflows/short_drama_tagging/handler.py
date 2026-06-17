@@ -10,7 +10,7 @@ from app.core.workflow_registry import WorkflowHandler, register
 from app.integrations.storage import sha256_digest, storage
 from app.schemas.jobs import JobResult
 from app.services.job_planner import JobPlan, PlannedWorkItem
-from app.services.job_runtime import job_params_from_job, model_id_from_job, payload_hash, work_item_payload
+from app.services.job_runtime import job_params_from_job, model_id_from_job, payload_hash, runtime_fields_from_job, work_item_payload
 from app.workflows.short_drama_tagging.adapter import (
     RS_AI_TAG_RESULTS_ARTIFACT_KEY,
     build_rs_ai_tag_results_payload,
@@ -18,9 +18,12 @@ from app.workflows.short_drama_tagging.adapter import (
 )
 from app.workflows.short_drama_tagging.prompts import parse_model_json, stage_messages
 from app.workflows.short_drama_tagging.rs_client import (
-    assert_schema_fixture_available,
+    assert_result_response_mock_available,
+    assert_schema_mock_available,
     get_tag_schema_provider,
     get_tagging_result_writer,
+    rs_runtime_fields_from_settings,
+    tag_schema_version_from_runtime,
 )
 from app.workflows.short_drama_tagging.schemas import (
     ShortDramaTaggingParams,
@@ -74,26 +77,18 @@ class ShortDramaTaggingHandler(WorkflowHandler):
     chunking_enabled = False
 
     def validate_normalized_job_params(self, job_params: dict[str, Any]) -> None:
-        if not settings.ENABLE_MOCK_INTERFACES and (
-            settings.SHORT_DRAMA_RS_SCHEMA_SOURCE == "fixture" or settings.SHORT_DRAMA_RS_RESULT_SINK == "fixture"
-        ):
-            raise AppError(
-                "SHORT_DRAMA_RS_MOCK_DISABLED",
-                "SHORT_DRAMA_RS_SCHEMA_SOURCE and SHORT_DRAMA_RS_RESULT_SINK must be http "
-                "when ENABLE_MOCK_INTERFACES is false",
-                status_code=500,
-            )
-        if settings.SHORT_DRAMA_RS_SCHEMA_SOURCE == "fixture":
-            assert_schema_fixture_available(
-                settings.SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH,
+        if settings.SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED:
+            assert_schema_mock_available(
+                settings.SHORT_DRAMA_RS_SCHEMA_MOCK_PATH,
                 job_params["work_context"]["subtitle_language"],
             )
+        if settings.SHORT_DRAMA_RS_RESULT_MOCK_ENABLED:
+            assert_result_response_mock_available(settings.SHORT_DRAMA_RS_RESULT_RESPONSE_MOCK_PATH)
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         return {
             "model_id": settings.DEFAULT_MODEL_ID,
-            "rs_schema_source": settings.SHORT_DRAMA_RS_SCHEMA_SOURCE,
-            "rs_result_sink": settings.SHORT_DRAMA_RS_RESULT_SINK,
+            **rs_runtime_fields_from_settings(),
         }
 
     def build_execution_plan(self, job: AIJob) -> JobPlan:
@@ -122,10 +117,11 @@ class ShortDramaTaggingHandler(WorkflowHandler):
         from app.repositories.job_repo import JobRepo
 
         params = ShortDramaTaggingParams.model_validate(work_item_payload(item)).model_dump()
+        runtime_fields = runtime_fields_from_job(job)
         language = params["work_context"]["subtitle_language"]
         await JobRepo.update_progress(db, job.id, progress_percent=35, progress_text="正在获取 RS 标签体系")
         await db.commit()
-        rs_default_tag_bundle = await get_tag_schema_provider().fetch(language)
+        rs_default_tag_bundle = await get_tag_schema_provider(runtime_fields).fetch(language)
         tag_schema = rs_default_tag_bundle["tag_schema_snapshot"]
         mutual_exclusion_rules = rs_default_tag_bundle["mutual_exclusion_rules"]
         params = _hydrate_subtitle_texts(params)
@@ -155,6 +151,7 @@ class ShortDramaTaggingHandler(WorkflowHandler):
         rs_payload, tagging_detail = build_rs_ai_tag_results_payload(
             t_book_id=params["t_book_id"],
             job_id=str(job.id),
+            tag_schema_version=tag_schema_version_from_runtime(runtime_fields),
             tag_schema=tag_schema,
             mutual_exclusion_rules=mutual_exclusion_rules,
             final_result=artifacts["final_result"],
@@ -196,8 +193,9 @@ class ShortDramaTaggingHandler(WorkflowHandler):
         canonical_result: dict[str, Any],
         db: AsyncSession,
     ) -> None:
+        runtime_fields = runtime_fields_from_job(job)
         rs_payload = rs_ai_tag_results_payload_from_canonical_result(canonical_result)
-        await get_tagging_result_writer().write(rs_payload)
+        await get_tagging_result_writer(runtime_fields).write(rs_payload)
 
     def parse_output(self, text: str) -> JobResult:
         raise NotImplementedError("short drama tagging uses execute_standard_item")

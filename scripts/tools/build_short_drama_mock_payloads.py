@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 
 from app.core.config import ROOT_DIR, settings
 from app.workflows.short_drama_tagging.adapter import build_rs_ai_tag_results_payload
-from app.workflows.short_drama_tagging.rs_client import normalize_tag_schema_response, schema_fixture_path_for_language
+from app.workflows.short_drama_tagging.rs_client import normalize_tag_schema_response, schema_mock_path_for_language
 
 REQUEST_PATH = ROOT_DIR / "docs/接口层/mock-data/short_drama_tagging/cpp_create_tagging_job_request.json"
 
@@ -56,13 +56,14 @@ def callback_envelope(job_view: dict[str, Any]) -> dict[str, Any]:
 def main() -> int:
     create_request = load_json(REQUEST_PATH)
     language = create_request["job_params"]["work_context"]["subtitle_language"]
-    schema_path = schema_fixture_path_for_language(settings.SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH, language)
+    schema_path = schema_mock_path_for_language(settings.SHORT_DRAMA_RS_SCHEMA_MOCK_PATH, language)
     bundle = normalize_tag_schema_response(load_json(schema_path))
     job_id = str(uuid.uuid4())
     final_result = build_mock_model_final_result(bundle["tag_schema_snapshot"])
     rs_payload, tagging_detail = build_rs_ai_tag_results_payload(
         t_book_id=create_request["job_params"]["t_book_id"],
         job_id=job_id,
+        tag_schema_version=settings.SHORT_DRAMA_RS_TAG_SCHEMA_VERSION,
         tag_schema=bundle["tag_schema_snapshot"],
         mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
         final_result=final_result,

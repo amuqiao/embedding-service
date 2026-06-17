@@ -90,18 +90,19 @@ class Settings(BaseSettings):
     PROMPT_CONFIG_PATH: str = "app/workflows/novel_localization/prompts.yaml"
 
     # ── Short drama tagging RS integration ───────────────────────────────────
-    # Local development uses fixtures; production should switch both to "http".
-    SHORT_DRAMA_RS_SCHEMA_SOURCE: str = "fixture"
-    SHORT_DRAMA_RS_RESULT_SINK: str = "fixture"
+    # RS test data is not always available. Keep schema fetch and result write
+    # mockable independently so the CPP-facing tagging flow can still be tested.
+    SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED: bool = True
+    SHORT_DRAMA_RS_RESULT_MOCK_ENABLED: bool = True
     SHORT_DRAMA_RS_BASE_URL: str = ""
-    SHORT_DRAMA_RS_API_KEY: str = ""
     SHORT_DRAMA_RS_TIMEOUT_SECONDS: int = 10
-    SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH: str = (
-        "docs/接口层/mock-data/short_drama_tagging/tag_schema_snapshot.{lang}.json"
+    SHORT_DRAMA_RS_SCHEMA_MOCK_PATH: str = (
+        "mock/short_drama_tagging/tag_schema_snapshot.{lang}.json"
     )
-    SHORT_DRAMA_RS_RESULT_RESPONSE_FIXTURE_PATH: str = (
-        "docs/接口层/mock-data/short_drama_tagging/rs_write_result_response.success.json"
+    SHORT_DRAMA_RS_RESULT_RESPONSE_MOCK_PATH: str = (
+        "mock/short_drama_tagging/rs_write_result_response.success.json"
     )
+    SHORT_DRAMA_RS_TAG_SCHEMA_VERSION: str = "v1.1"
 
     LOG_LEVEL: str = Field(default="INFO")
 
@@ -163,16 +164,14 @@ class Settings(BaseSettings):
             _log.warning(
                 "CALLBACK_SIGNING_SECRET is not configured — callback HMAC signatures will be invalid"
             )
-        if self.SHORT_DRAMA_RS_SCHEMA_SOURCE not in {"fixture", "http"}:
-            raise ValueError("SHORT_DRAMA_RS_SCHEMA_SOURCE must be fixture or http")
-        if self.SHORT_DRAMA_RS_RESULT_SINK not in {"fixture", "http"}:
-            raise ValueError("SHORT_DRAMA_RS_RESULT_SINK must be fixture or http")
-        if (self.SHORT_DRAMA_RS_SCHEMA_SOURCE == "http" or self.SHORT_DRAMA_RS_RESULT_SINK == "http") and (
-            not self.SHORT_DRAMA_RS_BASE_URL or not self.SHORT_DRAMA_RS_API_KEY
+        if (not self.SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED or not self.SHORT_DRAMA_RS_RESULT_MOCK_ENABLED) and (
+            not self.SHORT_DRAMA_RS_BASE_URL
         ):
             raise ValueError(
-                "SHORT_DRAMA_RS_BASE_URL and SHORT_DRAMA_RS_API_KEY are required when short drama RS integration uses http"
+                "SHORT_DRAMA_RS_BASE_URL is required when short drama RS schema/result mock is disabled"
             )
+        if not self.SHORT_DRAMA_RS_TAG_SCHEMA_VERSION.strip():
+            raise ValueError("SHORT_DRAMA_RS_TAG_SCHEMA_VERSION must not be empty")
         return self
 
     # ── Derived: Celery timeout chain (L1 anchor + fixed buffers) ─────────────

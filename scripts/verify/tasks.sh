@@ -137,6 +137,7 @@ run_python_syntax() {
   "$ROOT_DIR/.venv/bin/python" -m py_compile \
     "$ROOT_DIR/scripts/dev/check_ports.py" \
     "$ROOT_DIR/scripts/verify/check_aliyun_oss.py" \
+    "$ROOT_DIR/scripts/verify/cpp_short_drama_tagging_job.py" \
     "$ROOT_DIR/scripts/verify/e2e_backend_call.py" \
     "$ROOT_DIR/scripts/verify/mock_openai_server.py" \
     "$ROOT_DIR/scripts/verify/rs_tag_schema_translation_job.py" \

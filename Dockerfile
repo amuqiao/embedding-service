@@ -24,6 +24,7 @@ RUN uv sync --frozen --no-dev
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
+COPY mock ./mock
 COPY start-api.sh start-worker.sh ./
 
 RUN mkdir -p /app/storage/objects

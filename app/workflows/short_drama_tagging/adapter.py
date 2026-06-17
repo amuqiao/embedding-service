@@ -29,13 +29,6 @@ def _schema_indexes(tag_schema: dict[str, Any]) -> tuple[dict[str, Any], dict[st
     return categories, labels_by_name_by_category
 
 
-def _tag_schema_version(tag_schema: dict[str, Any]) -> str:
-    version = tag_schema.get("version")
-    if not isinstance(version, str) or not version.strip():
-        raise AppError("TAG_SCHEMA_INVALID", "tag schema missing version", status_code=502)
-    return version
-
-
 def _selected_label_name(item: dict[str, Any]) -> str:
     label_name = item.get("标签名", item.get("label_name", item.get("name")))
     if not isinstance(label_name, str) or not label_name.strip():
@@ -223,14 +216,34 @@ def build_rs_tagging_payload(
     )
 
 
+def _validation_issues_msg(validation_issues: list[dict[str, Any]]) -> str | None:
+    if not validation_issues:
+        return None
+    parts: list[str] = []
+    for issue in validation_issues:
+        if not isinstance(issue, dict):
+            raise AppError("MODEL_OUTPUT_INVALID", "validation issue must be an object", status_code=502)
+        category = issue.get("category_name") or issue.get("category_id") or "unknown_category"
+        issue_code = issue.get("issue") or "validation_issue"
+        message = issue.get("message")
+        if isinstance(message, str) and message.strip():
+            parts.append(f"{category}:{issue_code}: {message}")
+        else:
+            parts.append(f"{category}:{issue_code}")
+    return "partial_success: " + "; ".join(parts)
+
+
 def build_rs_ai_tag_results_payload(
     *,
     t_book_id: str,
     job_id: str,
+    tag_schema_version: str,
     tag_schema: dict[str, Any],
     mutual_exclusion_rules: list[dict[str, Any]],
     final_result: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not isinstance(tag_schema_version, str) or not tag_schema_version.strip():
+        raise AppError("RS_RESULT_WRITE_FAILED", "tag_schema_version must not be empty", status_code=500)
     base_payload, tagging_detail = build_rs_tagging_payload(
         t_book_id=t_book_id,
         job_id=job_id,
@@ -241,10 +254,10 @@ def build_rs_ai_tag_results_payload(
     return (
         {
             "status": "success",
-            "msg": None,
+            "msg": _validation_issues_msg(tagging_detail.get("validation_issues") or []),
             "t_book_id": base_payload["t_book_id"],
             "job_id": base_payload["job_id"],
-            "tag_schema_version": _tag_schema_version(tag_schema),
+            "tag_schema_version": tag_schema_version.strip(),
             "tags": base_payload["tags"],
         },
         tagging_detail,

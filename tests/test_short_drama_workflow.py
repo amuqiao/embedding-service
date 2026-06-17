@@ -18,7 +18,12 @@ from app.workflows.short_drama_tagging.adapter import (
 from app.workflows.short_drama_tagging.handler import InitialShortDramaTaggingHandler
 from app.workflows.short_drama_tagging.rs_client import (
     FixtureTagSchemaProvider,
+    HttpTagSchemaProvider,
+    HttpTaggingResultWriter,
+    MockTaggingResultWriter,
     assert_rs_write_accepted,
+    get_tag_schema_provider,
+    get_tagging_result_writer,
     normalize_tag_schema_response,
 )
 from app.workflows.short_drama_tagging.schemas import ShortDramaTaggingParams, TagSchemaTranslationParams
@@ -104,7 +109,7 @@ def test_short_drama_tagging_params_validate_business_language():
 
 
 @pytest.mark.asyncio
-async def test_fixture_schema_provider_normalizes_rs_bundle(tmp_path):
+async def test_mock_schema_provider_normalizes_rs_bundle(tmp_path):
     path = tmp_path / "schema.zh.json"
     path.write_text(json.dumps(fixture_schema(), ensure_ascii=False), encoding="utf-8")
     path_template = str(tmp_path / "schema.{lang}.json")
@@ -115,7 +120,7 @@ async def test_fixture_schema_provider_normalizes_rs_bundle(tmp_path):
     assert bundle["mutual_exclusion_rules"] == []
     assert bundle["source"]["requested_language"] == "zh"
 
-    with pytest.raises(AppError, match="fixture not found"):
+    with pytest.raises(AppError, match="mock tag schema not found"):
         await FixtureTagSchemaProvider(path_template).fetch("en")
 
 
@@ -153,10 +158,13 @@ def test_rs_payload_adapter_uses_schema_text_and_keeps_partial_success():
 
 
 def test_rs_ai_tag_results_adapter_builds_compatibility_payload():
-    bundle = normalize_tag_schema_response(fixture_schema())
+    schema = fixture_schema()
+    schema.pop("version")
+    bundle = normalize_tag_schema_response(schema)
     payload, detail = build_rs_ai_tag_results_payload(
         t_book_id="300000000300000279",
         job_id="0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
+        tag_schema_version="v1.1",
         tag_schema=bundle["tag_schema_snapshot"],
         mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
         final_result={
@@ -173,6 +181,61 @@ def test_rs_ai_tag_results_adapter_builds_compatibility_payload():
     assert payload["tag_schema_version"] == "v1.1"
     assert payload["tags"]["000001"][0]["label_id"] == "lbl-audience-female"
     assert detail["result_status"] == "success"
+
+
+def runtime_fields(**overrides) -> dict:
+    fields = {
+        "model_id": "fake",
+        "rs_schema_mock_enabled": True,
+        "rs_result_mock_enabled": True,
+        "rs_base_url": "",
+        "rs_timeout_seconds": 10,
+        "rs_schema_mock_path": "mock/short_drama_tagging/tag_schema_snapshot.{lang}.json",
+        "rs_result_response_mock_path": "mock/short_drama_tagging/rs_write_result_response.success.json",
+        "rs_tag_schema_version": "v1.1",
+    }
+    fields.update(overrides)
+    return fields
+
+
+def test_rs_runtime_factories_support_split_mock_modes():
+    schema_mock_result_http = runtime_fields(
+        rs_schema_mock_enabled=True,
+        rs_result_mock_enabled=False,
+        rs_base_url="https://rs.example.com/",
+    )
+    assert isinstance(get_tag_schema_provider(schema_mock_result_http), FixtureTagSchemaProvider)
+    assert isinstance(get_tagging_result_writer(schema_mock_result_http), HttpTaggingResultWriter)
+
+    schema_http_result_mock = runtime_fields(
+        rs_schema_mock_enabled=False,
+        rs_result_mock_enabled=True,
+        rs_base_url="https://rs.example.com/",
+    )
+    assert isinstance(get_tag_schema_provider(schema_http_result_mock), HttpTagSchemaProvider)
+    assert isinstance(get_tagging_result_writer(schema_http_result_mock), MockTaggingResultWriter)
+
+
+def test_rs_ai_tag_results_adapter_writes_partial_success_msg():
+    bundle = normalize_tag_schema_response(fixture_schema())
+    payload, detail = build_rs_ai_tag_results_payload(
+        t_book_id="300000000300000279",
+        job_id="0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
+        tag_schema_version="v1.1",
+        tag_schema=bundle["tag_schema_snapshot"],
+        mutual_exclusion_rules=bundle["mutual_exclusion_rules"],
+        final_result={
+            "selected_tags": {
+                "000001": [{"标签名": "女频", "权重": 1, "打标原因": "剧情以女主视角展开。"}],
+            },
+            "tagging_detail": {"notes": []},
+        },
+    )
+
+    assert payload["status"] == "success"
+    assert payload["msg"].startswith("partial_success:")
+    assert "missing_required_category" in payload["msg"]
+    assert detail["result_status"] == "partial_success"
 
 
 def test_rs_payload_adapter_rejects_mutual_exclusion_conflicts():
@@ -238,26 +301,25 @@ def test_short_drama_create_validation_uses_registered_handler(monkeypatch):
     assert handler.public_result({"artifacts": [], "signals": {}}) is None
 
 
-def test_short_drama_handler_rejects_rs_fixture_when_mock_disabled(monkeypatch):
+def test_short_drama_handler_allows_rs_mock_when_public_mock_interfaces_disabled(monkeypatch):
     handler = InitialShortDramaTaggingHandler()
     monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.ENABLE_MOCK_INTERFACES", False)
-    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.SHORT_DRAMA_RS_SCHEMA_SOURCE", "fixture")
-    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.SHORT_DRAMA_RS_RESULT_SINK", "fixture")
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED", True)
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.SHORT_DRAMA_RS_RESULT_MOCK_ENABLED", True)
 
-    with pytest.raises(AppError, match="must be http when ENABLE_MOCK_INTERFACES is false"):
-        handler.validate_normalized_job_params(tagging_params())
+    handler.validate_normalized_job_params(tagging_params())
 
 
-def test_short_drama_create_validation_checks_fixture_language_before_queue(monkeypatch, tmp_path):
+def test_short_drama_create_validation_checks_schema_mock_language_before_queue(monkeypatch, tmp_path):
     payload = tagging_params()
     payload["work_context"]["subtitle_language"] = "en"
     request = CreateJobRequest.model_validate(
         {"job_type": "short_drama.tagging.initial", "job_params": payload}
     )
     monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.ENABLE_MOCK_INTERFACES", True)
-    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.SHORT_DRAMA_RS_SCHEMA_SOURCE", "fixture")
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.settings.SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED", True)
     monkeypatch.setattr(
-        "app.workflows.short_drama_tagging.handler.settings.SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH",
+        "app.workflows.short_drama_tagging.handler.settings.SHORT_DRAMA_RS_SCHEMA_MOCK_PATH",
         str(tmp_path / "schema.{lang}.json"),
     )
 
@@ -308,9 +370,10 @@ async def test_short_drama_handler_builds_rs_payload_without_writing(monkeypatch
         pass
 
     monkeypatch.setattr("app.workflows.short_drama_tagging.handler.work_item_payload", lambda _item: tagging_params())
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.runtime_fields_from_job", lambda _job: runtime_fields())
     monkeypatch.setattr("app.workflows.short_drama_tagging.handler.model_id_from_job", lambda _job: "fake")
-    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.get_tag_schema_provider", lambda: Provider())
-    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.get_tagging_result_writer", lambda: Writer())
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.get_tag_schema_provider", lambda _runtime_fields: Provider())
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.get_tagging_result_writer", lambda _runtime_fields: Writer())
     monkeypatch.setattr("app.integrations.ai_gateway.generate_text", fake_generate_text)
     monkeypatch.setattr("app.repositories.job_repo.JobRepo.update_progress", fake_update_progress)
 
@@ -319,6 +382,7 @@ async def test_short_drama_handler_builds_rs_payload_without_writing(monkeypatch
     rs_payload = rs_ai_tag_results_payload_from_canonical_result(result)
     assert rs_payload["job_id"] == str(job_id)
     assert rs_payload["tag_schema_version"] == "v1.1"
+    assert rs_payload["msg"].startswith("partial_success:")
     assert rs_payload["tags"]["000006"] == []
     assert result["signals"]["success"] is False
     assert result["signals"]["result_status"] == "partial_success"
@@ -351,7 +415,8 @@ async def test_short_drama_after_success_callback_writes_rs_payload(monkeypatch)
             written["payload"] = rs_payload
             return {"code": 0, "msg": "ok", "data": {"saved": True}}
 
-    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.get_tagging_result_writer", lambda: Writer())
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.runtime_fields_from_job", lambda _job: runtime_fields())
+    monkeypatch.setattr("app.workflows.short_drama_tagging.handler.get_tagging_result_writer", lambda _runtime_fields: Writer())
 
     await handler.after_success_callback(job, canonical_result, FakeDB())
 

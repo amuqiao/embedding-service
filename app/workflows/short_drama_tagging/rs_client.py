@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urljoin
@@ -9,6 +10,8 @@ import httpx
 
 from app.core.config import ROOT_DIR, settings
 from app.core.exceptions import AppError
+
+logger = logging.getLogger(__name__)
 
 
 class TagSchemaProvider(Protocol):
@@ -19,6 +22,50 @@ class TaggingResultWriter(Protocol):
     async def write(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
 
+def rs_runtime_fields_from_settings() -> dict[str, Any]:
+    return {
+        "rs_schema_mock_enabled": settings.SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED,
+        "rs_result_mock_enabled": settings.SHORT_DRAMA_RS_RESULT_MOCK_ENABLED,
+        "rs_base_url": settings.SHORT_DRAMA_RS_BASE_URL,
+        "rs_timeout_seconds": settings.SHORT_DRAMA_RS_TIMEOUT_SECONDS,
+        "rs_schema_mock_path": settings.SHORT_DRAMA_RS_SCHEMA_MOCK_PATH,
+        "rs_result_response_mock_path": settings.SHORT_DRAMA_RS_RESULT_RESPONSE_MOCK_PATH,
+        "rs_tag_schema_version": settings.SHORT_DRAMA_RS_TAG_SCHEMA_VERSION,
+    }
+
+
+def _runtime_bool(runtime_fields: dict[str, Any], key: str) -> bool:
+    value = runtime_fields.get(key)
+    if not isinstance(value, bool):
+        raise AppError("RUNTIME_REF_INVALID", f"runtime field {key} must be boolean", status_code=500)
+    return value
+
+
+def _runtime_str(runtime_fields: dict[str, Any], key: str) -> str:
+    value = runtime_fields.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise AppError("RUNTIME_REF_INVALID", f"runtime field {key} must be a non-empty string", status_code=500)
+    return value.strip()
+
+
+def _runtime_optional_str(runtime_fields: dict[str, Any], key: str) -> str:
+    value = runtime_fields.get(key, "")
+    if not isinstance(value, str):
+        raise AppError("RUNTIME_REF_INVALID", f"runtime field {key} must be a string", status_code=500)
+    return value.strip()
+
+
+def _runtime_positive_int(runtime_fields: dict[str, Any], key: str) -> int:
+    value = runtime_fields.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AppError("RUNTIME_REF_INVALID", f"runtime field {key} must be a positive integer", status_code=500)
+    return value
+
+
+def tag_schema_version_from_runtime(runtime_fields: dict[str, Any]) -> str:
+    return _runtime_str(runtime_fields, "rs_tag_schema_version")
+
+
 def _resolve_path(value: str) -> Path:
     path = Path(value)
     if not path.is_absolute():
@@ -26,47 +73,74 @@ def _resolve_path(value: str) -> Path:
     return path
 
 
-def _load_json_file(path: Path) -> Any:
+def _load_json_file(
+    path: Path,
+    *,
+    unavailable_code: str = "TAG_SCHEMA_UNAVAILABLE",
+    invalid_code: str = "TAG_SCHEMA_INVALID",
+    missing_message: str = "mock JSON file not found",
+    invalid_message: str = "mock JSON file is not valid JSON",
+) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise AppError("TAG_SCHEMA_UNAVAILABLE", f"mock fixture not found: {path}", status_code=500) from exc
+        raise AppError(unavailable_code, f"{missing_message}: {path}", status_code=500) from exc
     except json.JSONDecodeError as exc:
-        raise AppError("TAG_SCHEMA_INVALID", f"mock fixture is not valid JSON: {path}", status_code=500) from exc
+        raise AppError(invalid_code, f"{invalid_message}: {path}", status_code=500) from exc
 
 
-def _fixture_path_matches_language(path: Path, language: str) -> bool:
+def _mock_schema_path_matches_language(path: Path, language: str) -> bool:
     return path.name == f"{language}.json" or f".{language}." in path.name
 
 
-def _resolve_fixture_path(path_template: str, language: str) -> Path:
+def _resolve_mock_schema_path(path_template: str, language: str) -> Path:
     if "{lang}" in path_template:
         return _resolve_path(path_template.replace("{lang}", language))
     path = _resolve_path(path_template)
-    if not _fixture_path_matches_language(path, language):
+    if not _mock_schema_path_matches_language(path, language):
         raise AppError(
             "TAG_SCHEMA_UNAVAILABLE",
-            "mock tag schema fixture path does not match requested language",
+            "mock tag schema path does not match requested language",
             status_code=500,
             details={"requested_language": language, "path": str(path), "expected_token": "{lang}"},
         )
     return path
 
 
-def schema_fixture_path_for_language(path_template: str, language: str) -> Path:
-    return _resolve_fixture_path(path_template, language)
+def schema_mock_path_for_language(path_template: str, language: str) -> Path:
+    return _resolve_mock_schema_path(path_template, language)
 
 
-def assert_schema_fixture_available(path_template: str, language: str) -> Path:
-    path = schema_fixture_path_for_language(path_template, language)
+def assert_schema_mock_available(path_template: str, language: str) -> Path:
+    path = schema_mock_path_for_language(path_template, language)
     if not path.is_file():
         raise AppError(
             "TAG_SCHEMA_UNAVAILABLE",
-            "mock tag schema fixture not found for requested language",
+            "mock tag schema not found for requested language",
             status_code=500,
             details={"requested_language": language, "path": str(path)},
         )
     return path
+
+
+def schema_fixture_path_for_language(path_template: str, language: str) -> Path:
+    return schema_mock_path_for_language(path_template, language)
+
+
+def assert_schema_fixture_available(path_template: str, language: str) -> Path:
+    return assert_schema_mock_available(path_template, language)
+
+
+def assert_result_response_mock_available(path: str) -> Path:
+    resolved = _resolve_path(path)
+    if not resolved.is_file():
+        raise AppError(
+            "RS_RESULT_WRITE_FAILED",
+            "mock RS write response not found",
+            status_code=500,
+            details={"path": str(resolved)},
+        )
+    return resolved
 
 
 def assert_rs_write_accepted(response: dict[str, Any]) -> None:
@@ -153,34 +227,38 @@ def validate_tag_schema_bundle(bundle: dict[str, Any]) -> None:
                 raise AppError("TAG_SCHEMA_INVALID", "mutex rule references unknown mutex_label_id", status_code=422)
 
 
-class FixtureTagSchemaProvider:
+class MockTagSchemaProvider:
     def __init__(self, path_template: str):
         self.path_template = path_template
 
     async def fetch(self, language: str) -> dict[str, Any]:
-        path = assert_schema_fixture_available(self.path_template, language)
+        path = assert_schema_mock_available(self.path_template, language)
         payload = _load_json_file(path)
         bundle = normalize_tag_schema_response(payload)
         bundle["source"] = {
-            "type": "fixture",
+            "type": "mock",
             "path": str(path),
             "requested_language": language,
         }
+        logger.info("rs_tag_schema_mock_loaded language=%s path=%s", language, path)
         return bundle
 
 
+FixtureTagSchemaProvider = MockTagSchemaProvider
+
+
 class HttpTagSchemaProvider:
-    def __init__(self, base_url: str, api_key: str, timeout_seconds: int):
+    def __init__(self, base_url: str, timeout_seconds: int):
         self.base_url = base_url.rstrip("/") + "/"
-        self.api_key = api_key
         self.timeout_seconds = timeout_seconds
 
     async def fetch(self, language: str) -> dict[str, Any]:
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Accept": "application/json",
             "X-AI-Service-Caller-ID": "ai",
         }
         url = urljoin(self.base_url, "api/v1/tag-schemas/default")
+        logger.info("rs_tag_schema_request method=GET url=%s language=%s", url, language)
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             try:
                 response = await client.get(url, params={"lang": language}, headers=headers)
@@ -199,34 +277,59 @@ class HttpTagSchemaProvider:
             raise AppError("TAG_SCHEMA_INVALID", "RS tag schema response is not valid JSON", status_code=502) from exc
         bundle = normalize_tag_schema_response(body)
         bundle["source"] = {"type": "http", "requested_language": language}
+        logger.info("rs_tag_schema_response status_code=%d language=%s", response.status_code, language)
         return bundle
 
 
-class FixtureTaggingResultWriter:
+class MockTaggingResultWriter:
     def __init__(self, response_path: str):
         self.response_path = _resolve_path(response_path)
 
     async def write(self, payload: dict[str, Any]) -> dict[str, Any]:
-        response = _load_json_file(self.response_path)
+        response = _load_json_file(
+            self.response_path,
+            unavailable_code="RS_RESULT_WRITE_FAILED",
+            invalid_code="RS_RESULT_WRITE_FAILED",
+            missing_message="mock RS write response not found",
+            invalid_message="mock RS write response is not valid JSON",
+        )
         if not isinstance(response, dict):
             raise AppError("RS_RESULT_WRITE_FAILED", "mock RS write response must be an object", status_code=500)
         assert_rs_write_accepted(response)
+        logger.info(
+            "rs_result_write_mocked t_book_id=%s job_id=%s status=%s msg=%s response_code=%s response_msg=%s",
+            payload.get("t_book_id"),
+            payload.get("job_id"),
+            payload.get("status"),
+            payload.get("msg"),
+            response.get("code"),
+            response.get("msg"),
+        )
         return response
 
 
+FixtureTaggingResultWriter = MockTaggingResultWriter
+
+
 class HttpTaggingResultWriter:
-    def __init__(self, base_url: str, api_key: str, timeout_seconds: int):
+    def __init__(self, base_url: str, timeout_seconds: int):
         self.base_url = base_url.rstrip("/") + "/"
-        self.api_key = api_key
         self.timeout_seconds = timeout_seconds
 
     async def write(self, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
             "X-AI-Service-Caller-ID": "ai",
             "Content-Type": "application/json",
         }
         url = urljoin(self.base_url, "api/v1/ai-tag-results")
+        logger.info(
+            "rs_result_write_request method=POST url=%s t_book_id=%s job_id=%s status=%s msg=%s",
+            url,
+            payload.get("t_book_id"),
+            payload.get("job_id"),
+            payload.get("status"),
+            payload.get("msg"),
+        )
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             try:
                 response = await client.post(url, json=payload, headers=headers)
@@ -246,24 +349,38 @@ class HttpTaggingResultWriter:
         if not isinstance(body, dict):
             raise AppError("RS_RESULT_WRITE_FAILED", "RS write response must be an object", status_code=502)
         assert_rs_write_accepted(body)
+        logger.info(
+            "rs_result_write_response status_code=%d t_book_id=%s job_id=%s response_code=%s response_msg=%s",
+            response.status_code,
+            payload.get("t_book_id"),
+            payload.get("job_id"),
+            body.get("code"),
+            body.get("msg"),
+        )
         return body
 
 
-def get_tag_schema_provider() -> TagSchemaProvider:
-    if settings.SHORT_DRAMA_RS_SCHEMA_SOURCE == "fixture":
-        return FixtureTagSchemaProvider(settings.SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH)
+def get_tag_schema_provider(runtime_fields: dict[str, Any] | None = None) -> TagSchemaProvider:
+    fields = runtime_fields or rs_runtime_fields_from_settings()
+    if _runtime_bool(fields, "rs_schema_mock_enabled"):
+        return MockTagSchemaProvider(_runtime_str(fields, "rs_schema_mock_path"))
+    base_url = _runtime_optional_str(fields, "rs_base_url")
+    if not base_url:
+        raise AppError("RUNTIME_REF_INVALID", "runtime field rs_base_url is required when schema mock is disabled", status_code=500)
     return HttpTagSchemaProvider(
-        settings.SHORT_DRAMA_RS_BASE_URL,
-        settings.SHORT_DRAMA_RS_API_KEY,
-        settings.SHORT_DRAMA_RS_TIMEOUT_SECONDS,
+        base_url,
+        _runtime_positive_int(fields, "rs_timeout_seconds"),
     )
 
 
-def get_tagging_result_writer() -> TaggingResultWriter:
-    if settings.SHORT_DRAMA_RS_RESULT_SINK == "fixture":
-        return FixtureTaggingResultWriter(settings.SHORT_DRAMA_RS_RESULT_RESPONSE_FIXTURE_PATH)
+def get_tagging_result_writer(runtime_fields: dict[str, Any] | None = None) -> TaggingResultWriter:
+    fields = runtime_fields or rs_runtime_fields_from_settings()
+    if _runtime_bool(fields, "rs_result_mock_enabled"):
+        return MockTaggingResultWriter(_runtime_str(fields, "rs_result_response_mock_path"))
+    base_url = _runtime_optional_str(fields, "rs_base_url")
+    if not base_url:
+        raise AppError("RUNTIME_REF_INVALID", "runtime field rs_base_url is required when result mock is disabled", status_code=500)
     return HttpTaggingResultWriter(
-        settings.SHORT_DRAMA_RS_BASE_URL,
-        settings.SHORT_DRAMA_RS_API_KEY,
-        settings.SHORT_DRAMA_RS_TIMEOUT_SECONDS,
+        base_url,
+        _runtime_positive_int(fields, "rs_timeout_seconds"),
     )
