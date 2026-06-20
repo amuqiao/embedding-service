@@ -328,6 +328,58 @@ def test_unknown_route_uses_unified_error_envelope():
     assert isinstance(body["server_time"], int)
 
 
+def test_unauthorized_route_uses_unified_error_envelope():
+    from fastapi.testclient import TestClient
+    from app.core.config import settings
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get(f"{settings.SERVICE_API_PREFIX}/models")
+
+    assert response.status_code == 401
+    body = response.json()
+    assert body["code"] == 401001
+    assert body["data"]["error"]["reason"] == "UNAUTHORIZED"
+    assert body["request_id"]
+    assert isinstance(body["server_time"], int)
+
+
+def test_method_not_allowed_uses_unified_error_envelope():
+    from fastapi.testclient import TestClient
+    from app.core.config import settings
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.post(f"{settings.SERVICE_API_PREFIX}/models")
+
+    assert response.status_code == 405
+    body = response.json()
+    assert body["code"] == 405001
+    assert body["data"]["error"]["reason"] == "METHOD_NOT_ALLOWED"
+    assert body["request_id"]
+    assert isinstance(body["server_time"], int)
+
+
+def test_generic_http_exception_uses_unified_error_envelope():
+    from fastapi.testclient import TestClient
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    route_path = "/__test__/http-error"
+    if not any(getattr(route, "path", "") == route_path for route in app.routes):
+        @app.get(route_path, include_in_schema=False)
+        async def raise_http_error():
+            raise StarletteHTTPException(status_code=418, detail={"reason": "teapot"})
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get(route_path)
+
+    assert response.status_code == 418
+    body = response.json()
+    assert body["code"] == 400002
+    assert body["data"]["error"]["reason"] == "HTTP_ERROR"
+    assert body["data"]["error"]["details"] == {"detail": {"reason": "teapot"}}
+    assert body["request_id"]
+    assert isinstance(body["server_time"], int)
+
+
 def test_unhandled_exception_uses_unified_error_envelope():
     from fastapi.testclient import TestClient
 

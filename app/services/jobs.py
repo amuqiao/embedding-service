@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError, InternalAppError, NotFoundAppError, ValidationAppError
 from app.core.config import settings
+from app.core.error_registry import get_error_spec
 from app.core.model_registry import get_enabled_model
 from app.core.prompt_templates import get_template
 from app.integrations.storage import sha256_digest, storage
@@ -60,8 +61,7 @@ def _job_error_detail(error: dict[str, Any] | None) -> dict[str, Any] | None:
     for key, value in error.items():
         if key not in {"code", "reason", "message", "details"}:
             details[key] = value
-    retryable = reason in {"QUEUE_FULL", "BROKER_UNAVAILABLE", "AI_PROVIDER_FAILED", "MODEL_CALL_TIMEOUT"}
-    return ErrorDetail(reason=reason, details=details, retryable=retryable).model_dump()
+    return ErrorDetail(reason=reason, details=details, retryable=get_error_spec(reason).retryable).model_dump()
 
 
 def _callback_state(job: AIJob) -> dict[str, Any]:

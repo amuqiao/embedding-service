@@ -20,22 +20,22 @@ usage() {
 
 命令：
   test                运行 pytest。
-  smoke               无内置 job_type 时不可用；新增正式能力后再恢复。
-  mock-smoke          无内置 job_type 时不可用；新增正式能力后再恢复。
-  workflow-smoke      无内置 job_type 时不可用；新增正式能力后再恢复。
-  e2e                 无内置 job_type 时不可用；新增正式能力后再恢复。
+  smoke               无正式 job_type 时不可用；新增正式能力后再恢复。
+  mock-smoke          无正式 job_type 时不可用；新增正式能力后再恢复。
+  workflow-smoke      无正式 job_type 时不可用；新增正式能力后再恢复。
+  e2e                 无正式 job_type 时不可用；新增正式能力后再恢复。
   oss                 校验 Aliyun OSS 读写删除连通性，参数透传给 check_aliyun_oss.py。
   env-config          校验 env 文件键名；默认检查 .env.example 和已存在的本地/测试 env，可传文件路径。
-  check               执行脚本语法、env 配置检查和 pytest。
+  check               执行脚本语法、env 配置、registry consistency 和 pytest。
   help                显示帮助。
 
 成功标准：
-  check 成功 = 脚本语法、env 配置和 pytest 均通过。
+  check 成功 = 脚本语法、env 配置、registry consistency 和 pytest 均通过。
 EOF
 }
 
 no_builtin_job_types() {
-  echo "当前项目未注册任何内置 job_type；该验证命令需要新增正式能力后再恢复。" >&2
+  echo "当前项目只有测试示例 job_type；该验证命令需要新增正式能力后再恢复。" >&2
   exit 2
 }
 

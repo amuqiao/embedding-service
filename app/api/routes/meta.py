@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Request
 
+from app.api.operations import OperationID
 from app.core.security import require_service_auth
 from app.core.model_registry import list_models_response
 from app.core.prompt_templates import list_prompt_templates
@@ -9,11 +10,19 @@ from app.schemas.meta import ModelsResponse, PromptTemplatesResponse
 router = APIRouter(tags=["meta"], dependencies=[Depends(require_service_auth)])
 
 
-@router.get("/models", response_model=ResponseEnvelope[ModelsResponse])
+@router.get(
+    "/models",
+    response_model=ResponseEnvelope[ModelsResponse],
+    operation_id=OperationID.LIST_MODELS,
+)
 async def list_models(request: Request):
     return success_envelope(list_models_response(), request)
 
 
-@router.get("/prompt-templates", response_model=ResponseEnvelope[PromptTemplatesResponse])
+@router.get(
+    "/prompt-templates",
+    response_model=ResponseEnvelope[PromptTemplatesResponse],
+    operation_id=OperationID.LIST_PROMPT_TEMPLATES,
+)
 async def prompt_templates(request: Request):
     return success_envelope(list_prompt_templates(), request)

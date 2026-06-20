@@ -1,0 +1,33 @@
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+from app.schemas.jobs import (
+    CreateJobRequest,
+    JobResponseData,
+    JobTestAddParams,
+    JobTestAddResult,
+    JobTestAddRuntimeFields,
+)
+from app.schemas.meta import ModelsResponse, PromptTemplatesResponse
+
+_SCHEMAS: dict[str, type[BaseModel]] = {
+    schema.__name__: schema
+    for schema in (
+        CreateJobRequest,
+        JobResponseData,
+        JobTestAddParams,
+        JobTestAddRuntimeFields,
+        JobTestAddResult,
+        ModelsResponse,
+        PromptTemplatesResponse,
+    )
+}
+
+
+def get_schema(name: str) -> type[BaseModel]:
+    return _SCHEMAS[name]
+
+
+def all_schema_names() -> set[str]:
+    return set(_SCHEMAS)

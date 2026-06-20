@@ -46,9 +46,16 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/dev/check_ports.py" \
     "$ROOT_DIR/scripts/verify/check_aliyun_oss.py" \
     "$ROOT_DIR/scripts/verify/env_config_check.py" \
-    "$ROOT_DIR/scripts/verify/mock_openai_server.py"
+    "$ROOT_DIR/scripts/verify/mock_openai_server.py" \
+    "$ROOT_DIR/scripts/verify/registry_check.py"
   event "OK" "dev/check_ports.py" "py_compile"
   event "OK" "verify/*.py" "py_compile"
+}
+
+run_registry_check() {
+  section "Registry"
+  require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
+  "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/verify/registry_check.py"
 }
 
 run_env_config_check() {
@@ -62,5 +69,6 @@ run_check() {
   run_cli_smoke
   run_python_syntax
   run_env_config_check "$ROOT_DIR/.env.example"
+  run_registry_check
   run_tests
 }

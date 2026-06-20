@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
 
 from pydantic import BaseModel
@@ -12,6 +13,26 @@ if TYPE_CHECKING:
     from app.services.job_planner import JobPlan
 
 CanvasPattern = str  # "single" | "memory_fanout" | "plain_chord" | "scan_chord"
+
+
+@dataclass(frozen=True)
+class JobTypeSpec:
+    job_type: str
+    params_schema: str
+    runtime_fields_schema: str
+    canonical_result_schema: str
+    public_result_schema: str
+    callback_envelope_schema: str
+    allow_callback: bool
+    canvas_pattern: CanvasPattern
+    chunking_enabled: bool
+    large_artifact_keys: frozenset[str]
+    error_codes: frozenset[str]
+    log_events: tuple[str, ...]
+
+
+def _schema_name(schema: type[BaseModel] | None) -> str:
+    return schema.__name__ if schema is not None else "null"
 
 
 class WorkflowHandler:
@@ -35,6 +56,21 @@ class WorkflowHandler:
     params_schema: type[BaseModel] | None = None
     canonical_result_schema: type[BaseModel] | None = None
     public_result_schema: type[BaseModel] | None = None
+    runtime_fields_schema_name: str = "dict"
+    allowed_error_codes: frozenset[str] = frozenset(
+        {
+            "INVALID_INPUT",
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "WORK_ITEM_FAILED",
+            "WORKFLOW_AFTER_SUCCESS_FAILED",
+            "JOB_RUNTIME_NOT_SUPPORTED",
+            "MODEL_CALL_FAILED",
+            "MODEL_OUTPUT_INVALID",
+            "MODEL_CALL_TIMEOUT",
+            "JOB_TIMEOUT",
+        }
+    )
+    log_events: tuple[str, ...] = ()
     # Keys of artifacts whose content should be written to OSS (large outputs).
     # Artifacts not in this set keep their content inline in the public result.
     large_artifact_keys: frozenset[str] = frozenset()
@@ -136,6 +172,22 @@ class WorkflowHandler:
             raise ValueError(f"{self.job_type} public result must be null")
         return self.public_result_schema.model_validate(result).model_dump(exclude_none=True)
 
+    def job_type_spec(self) -> JobTypeSpec:
+        return JobTypeSpec(
+            job_type=self.job_type,
+            params_schema=_schema_name(self.params_schema),
+            runtime_fields_schema=self.runtime_fields_schema_name,
+            canonical_result_schema=_schema_name(self.canonical_result_schema),
+            public_result_schema=_schema_name(self.public_result_schema),
+            callback_envelope_schema="CallbackEnvelope[JobEnvelope]",
+            allow_callback=self.allow_callback,
+            canvas_pattern=self.canvas_pattern,
+            chunking_enabled=self.chunking_enabled,
+            large_artifact_keys=self.large_artifact_keys,
+            error_codes=self.allowed_error_codes,
+            log_events=self.log_events,
+        )
+
 
 _registry: dict[str, WorkflowHandler] = {}
 
@@ -143,6 +195,8 @@ _registry: dict[str, WorkflowHandler] = {}
 def register(handler: WorkflowHandler) -> None:
     if not handler.job_type:
         raise ValueError("workflow handler must declare job_type")
+    if handler.job_type in _registry:
+        raise ValueError(f"duplicate workflow handler job_type: {handler.job_type}")
     _registry[handler.job_type] = handler
 
 
@@ -155,6 +209,14 @@ def get(job_type: str) -> WorkflowHandler:
 
 def all_job_types() -> list[str]:
     return list(_registry.keys())
+
+
+def get_job_type_spec(job_type: str) -> JobTypeSpec:
+    return get(job_type).job_type_spec()
+
+
+def all_job_type_specs() -> dict[str, JobTypeSpec]:
+    return {job_type: handler.job_type_spec() for job_type, handler in _registry.items()}
 
 
 def validate_job_view_payload(payload: dict[str, Any]):

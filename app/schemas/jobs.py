@@ -166,6 +166,10 @@ class JobTestAddParams(StrictBaseModel):
         return value
 
 
+class JobTestAddRuntimeFields(StrictBaseModel):
+    operation: Literal["add"]
+
+
 class JobTestAddResult(StrictBaseModel):
     a: NumberValue
     b: NumberValue

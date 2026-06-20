@@ -24,7 +24,7 @@
 
 ## 二、Job 类型
 
-本项目通过 `WorkflowHandler` 注册表支持多个 `job_type`。当前仓库不注册任何内置 `job_type`；新增正式能力前，应先在 `docs/架构/project-standards.md` 定义标准输入、标准输出、错误码、callback envelope 和 job result schema，再落地代码。
+本项目通过 `WorkflowHandler` 注册表支持多个 `job_type`。当前仓库只注册 `job_test_add` 作为测试示例能力；新增正式能力前，应先在 `docs/架构/project-standards.md` 和 `docs/架构/job-type-extension-standard.md` 定义标准输入、标准输出、错误码、callback envelope 和 job result schema，再落地代码。
 
 新增能力的最小落地项：
 

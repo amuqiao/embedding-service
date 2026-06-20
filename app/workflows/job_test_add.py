@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.workflow_registry import WorkflowHandler
-from app.schemas.jobs import JobResult, JobTestAddParams, JobTestAddResult
+from app.schemas.jobs import JobResult, JobTestAddParams, JobTestAddResult, JobTestAddRuntimeFields
 from app.services.job_planner import JobPlan, PlannedWorkItem
 from app.services.job_runtime import job_params_from_job, work_item_payload
 
@@ -11,11 +11,22 @@ from app.services.job_runtime import job_params_from_job, work_item_payload
 class JobTestAddWorkflow(WorkflowHandler):
     job_type = "job_test_add"
     params_schema = JobTestAddParams
+    runtime_fields_schema_name = "JobTestAddRuntimeFields"
+    canonical_result_schema = JobTestAddResult
     public_result_schema = JobTestAddResult
     allow_callback = True
+    allowed_error_codes = frozenset(
+        {
+            "INVALID_INPUT",
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "WORK_ITEM_FAILED",
+            "WORKFLOW_AFTER_SUCCESS_FAILED",
+            "JOB_RUNTIME_NOT_SUPPORTED",
+        }
+    )
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
-        return {"operation": "add"}
+        return JobTestAddRuntimeFields(operation="add").model_dump()
 
     def build_execution_plan(self, job) -> JobPlan:
         params = JobTestAddParams.model_validate(job_params_from_job(job))

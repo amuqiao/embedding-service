@@ -4,7 +4,7 @@
 
 本模板提供的是通用 Job 执行层：FastAPI API、Celery 异步任务、对象存储产物、状态轮询、Callback、模型配置和 workflow 注册机制。它不负责用户系统、项目管理、前端状态、业务流程编排或生产部署。
 
-Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata` 和 `options`。具体任务入参由 `job_type` 自己的 `job_params` schema 定义；具体任务出参由 `job_type` 自己的 `result` schema 定义。当前仓库不注册任何内置 `job_type`。
+Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata` 和 `options`。具体任务入参由 `job_type` 自己的 `job_params` schema 定义；具体任务出参由 `job_type` 自己的 `result` schema 定义。当前仓库只注册 `job_test_add` 作为测试示例 `job_type`。
 
 规范先行重构期间，长期合同、目录骨架和注册真源以 [AI Job 服务项目规范与骨架](架构/project-standards.md) 为准。新 `job_type` 的目标注册入口是 `app/jobs/registry.py`，Prompt YAML、README 示例和 mock fixture 都不是注册事实源。
 

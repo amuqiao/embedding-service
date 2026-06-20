@@ -57,7 +57,7 @@ FastAPI AI Job 执行后端模板。服务只负责模型执行、异步 Job、�
 
 API 前缀由 `SERVICE_API_PREFIX` 配置，默认是 `/api/v1/ai-jobs`。
 
-Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts.yaml`。当前项目不注册任何内置 `job_type`，该 YAML 只声明空模板集合；新增正式能力时再按项目规范补充 Prompt 模板和 workflow 注册。
+Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts.yaml`。当前项目只注册 `job_test_add` 作为测试示例 `job_type`，该 YAML 只声明空模板集合；新增正式能力时再按项目规范补充 Prompt 模板和 workflow 注册。
 
 模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML，配置项包括对外 `model_id`、LiteLLM model id、上下文窗口、所需环境变量和模型调用参数。
 
@@ -148,7 +148,7 @@ OSS_PUBLIC_ENDPOINT=
 ```
 
 - `test`：运行本地 pytest。
-- `smoke` / `mock-smoke` / `workflow-smoke` / `e2e`：当前无内置 `job_type`，新增正式能力后再恢复对应验证。
+- `smoke` / `mock-smoke` / `workflow-smoke` / `e2e`：当前只有测试示例 `job_type`，新增正式能力后再恢复对应验证。
 - `oss`：校验 Aliyun OSS 读写删除连通性。
 - `check`：运行脚本语法检查和 pytest。
 
