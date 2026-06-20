@@ -7,7 +7,8 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from app.models.job import AIJob, AIJobWorkItem
-    from app.schemas.jobs import CallbackResponseEnvelope, JobResult
+    from app.schemas.callbacks import CallbackResponseEnvelope
+    from app.schemas.jobs import JobEnvelope, JobResult
     from app.services.job_planner import JobPlan
 
 CanvasPattern = str  # "single" | "memory_fanout" | "plain_chord" | "scan_chord"
@@ -140,6 +141,8 @@ _registry: dict[str, WorkflowHandler] = {}
 
 
 def register(handler: WorkflowHandler) -> None:
+    if not handler.job_type:
+        raise ValueError("workflow handler must declare job_type")
     _registry[handler.job_type] = handler
 
 
@@ -155,11 +158,11 @@ def all_job_types() -> list[str]:
 
 
 def validate_job_view_payload(payload: dict[str, Any]):
-    from app.schemas.jobs import JobStatusResponse
+    from app.schemas.jobs import JobEnvelope
 
-    job_view = JobStatusResponse.model_validate(payload)
+    job_view = JobEnvelope.model_validate(payload)
     handler = get(job_view.job_type)
     data = job_view.model_dump()
-    if job_view.status == "succeeded":
-        data["result"] = handler.validate_public_result(data["result"])
-    return JobStatusResponse.model_validate(data)
+    if job_view.job_status == "succeeded":
+        data["job_result"] = handler.validate_public_result(data["job_result"])
+    return JobEnvelope.model_validate(data)

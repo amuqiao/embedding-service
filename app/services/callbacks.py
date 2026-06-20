@@ -13,21 +13,10 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.models.job import AIJob
-from app.schemas.jobs import CallbackEnvelope, CallbackResponseEnvelope
+from app.schemas.callbacks import CallbackEnvelope, CallbackResponseEnvelope
+from app.services.jobs import _job_payload, trigger_request_id_from_job
 
 logger = logging.getLogger(__name__)
-
-_CALLBACK_RESPONSE_V1_HINT_KEYS = {
-    "schema_version",
-    "event",
-    "event_id",
-    "job_id",
-    "client_request_id",
-    "job_type",
-    "metadata",
-    "data",
-}
-_CALLBACK_RESPONSE_LEGACY_KEYS = {"status", "msg"}
 
 
 class CallbackDeliveryResult(BaseModel):
@@ -57,45 +46,24 @@ def _validate_callback_url(url: str) -> None:
     raise ValueError("callback.url must be HTTPS")
 
 
-def _callback_data(job: AIJob) -> dict[str, Any]:
-    from app.core import workflow_registry
-
-    return workflow_registry.get(job.job_type).build_callback_data(job)
-
-
 def validate_callback_response_payload(payload: dict[str, Any]) -> CallbackResponseEnvelope:
-    from app.core import workflow_registry
-
-    envelope = CallbackResponseEnvelope.model_validate(payload)
-    workflow_registry.get(envelope.job_type).validate_callback_response(envelope)
-    return envelope
+    return CallbackResponseEnvelope.model_validate(payload)
 
 
 def build_callback_body(job: AIJob) -> dict:
     event = "job.succeeded" if job.status == "succeeded" else "job.failed"
     sent_at = datetime.now(timezone.utc)
-    envelope = CallbackEnvelope.model_validate({
-        "schema_version": "v1",
-        "event": event,
-        "event_id": str(uuid.uuid4()),
-        "attempt": (job.callback_attempts or 0) + 1,
-        "sent_at": sent_at.isoformat(),
-        "job_id": job.id,
-        "client_request_id": job.client_request_id,
-        "job_type": job.job_type,
-        "status": job.status,
-        "progress": {
-            "percent": job.progress_percent,
-            "message": job.progress_text,
-            "stage": job.progress_stage,
-        },
-        "error": job.error,
-        "metadata": job.metadata_ or {},
-        "data": _callback_data(job),
-        "created_at": job.created_at,
-        "started_at": job.started_at,
-        "finished_at": job.finished_at,
-    })
+    envelope = CallbackEnvelope.model_validate(
+        {
+            "event": event,
+            "event_id": str(uuid.uuid4()),
+            "attempt": (job.callback_attempts or 0) + 1,
+            "sent_at": sent_at.isoformat(),
+            "trigger_request_id": trigger_request_id_from_job(job),
+            "caller_id": job.caller_id,
+            "job": _job_payload(job),
+        }
+    )
     return envelope.model_dump(mode="json")
 
 
@@ -106,52 +74,24 @@ def _callback_response_summary(response_text: str, callback_body: dict[str, Any]
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        return {"format": "text", "message": text[:500]}
+        return {"format": "ack", "valid": False, "error": "callback response must be JSON acknowledgment"}
     if not isinstance(parsed, dict):
-        return {"format": "json", "body": parsed}
-
-    has_v1_hint = any(key in parsed for key in _CALLBACK_RESPONSE_V1_HINT_KEYS)
-    if parsed.get("schema_version") == "v1":
-        try:
-            envelope = validate_callback_response_payload(parsed)
-        except Exception as exc:
-            return {
-                "format": "v1",
-                "valid": False,
-                "error": str(exc)[:500],
-            }
-        dump = envelope.model_dump(mode="json")
-        mismatches: list[dict[str, Any]] = []
-        for key in ("event", "event_id", "job_id", "client_request_id", "job_type", "status"):
-            expected = callback_body.get(key)
-            actual = dump.get(key)
-            if actual != expected:
-                mismatches.append({"field": key, "expected": expected, "actual": actual})
+        return {"format": "ack", "valid": False, "error": "callback response acknowledgment must be an object"}
+    try:
+        envelope = validate_callback_response_payload(parsed)
+    except Exception as exc:
         return {
-            "format": "v1",
-            "valid": not mismatches,
-            "mismatches": mismatches,
-            "event": envelope.event,
-            "job_id": str(envelope.job_id),
-            "status": envelope.status,
-            "msg": envelope.msg,
-            "data": envelope.data,
-        }
-
-    if has_v1_hint:
-        return {
-            "format": "v1",
+            "format": "ack",
             "valid": False,
-            "error": "callback response looks like v1 but schema_version is missing or unsupported",
+            "error": str(exc)[:500],
         }
-
-    if set(parsed).issubset(_CALLBACK_RESPONSE_LEGACY_KEYS) and ("status" in parsed or "msg" in parsed):
-        return {
-            "format": "legacy",
-            "status": parsed.get("status"),
-            "msg": parsed.get("msg"),
-        }
-    return {"format": "json", "body": parsed}
+    return {
+        "format": "ack",
+        "valid": True,
+        "accepted": envelope.accepted,
+        "msg": envelope.msg,
+        "details": envelope.details,
+    }
 
 
 async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
@@ -208,10 +148,10 @@ async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
                 response = await client.post(url, content=body, headers=headers)
                 response_summary = _callback_response_summary(response.text, callback_body)
                 if 200 <= response.status_code < 300:
-                    if response_summary and response_summary.get("format") == "v1" and not response_summary.get("valid"):
+                    if response_summary and response_summary.get("format") == "ack" and not response_summary.get("valid"):
                         last_error = {
                             "code": "CALLBACK_RESPONSE_CONTRACT_INVALID",
-                            "message": "callback endpoint returned invalid v1 response",
+                            "message": "callback endpoint returned invalid acknowledgment response",
                             "response": response_summary,
                         }
                         logger.warning(

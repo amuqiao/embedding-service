@@ -259,14 +259,14 @@
 
 ## 阶段 7：Integration 与副作用规范化
 
-目标：外部服务、Callback、RS 写回、对象存储全部通过 adapter 和注册错误码收口。
+目标：外部服务、Callback、对象存储和具体 workflow 副作用全部通过 adapter 和注册错误码收口。
 
 范围：
 
 - `integrations/ai` 管模型 provider。
 - `integrations/storage` 管对象存储读写。
 - `integrations/callback` 管 Callback 投递、签名、重试。
-- `integrations/rs` 管短剧 RS schema 拉取和写回。
+- workflow 专属外部系统如需接入，必须先定义独立 integration 边界、错误映射和幂等语义。
 - 外部错误转换为注册错误码或 Job error。
 - 副作用声明幂等键、恢复策略和失败收敛。
 
@@ -280,7 +280,7 @@
 
 - Callback HMAC、retry、非标准 callback ack 显式失败、失败不改 Job 终态。
 - `job_params` / `job_result` 中对象存储引用的 hash、大小和过期。
-- RS mock / real mode 配置校验。
+- workflow 专属 integration 的 mock / real mode 配置校验。
 - AI provider 超时、限流、结构化输出非法测试。
 
 ## 阶段 8：文档、OpenAPI 和 Mock Fixture 收口
@@ -343,8 +343,8 @@
 | Settings / env | `tests/test_config.py`、env config check、敏感字段保护测试、deprecated / unknown key 失败矩阵 |
 | Logging / metrics | 日志字段测试、非法 request id 和敏感字段负向测试、metrics 标签禁区测试 |
 | API route | contract tests、mock interface tests、OpenAPI/schema 快照、envelope allowlist 检查 |
-| Job / workflow schema | workflow dispatch、callback delivery、short drama workflow tests、Job envelope round-trip、`job_result` 一致性测试 |
+| Job / workflow schema | workflow dispatch、callback delivery、workflow contract tests、Job envelope round-trip、`job_result` 一致性测试 |
 | DB / ORM / Repository | job repo、migration、recovery、CAS 状态迁移测试 |
-| Integration | callback、对象存储、AI provider、RS client 相关测试、外部错误转换注册检查 |
+| Integration | callback、对象存储、AI provider、workflow 专属 integration 相关测试、外部错误转换注册检查 |
 
 如果 `./scripts/verify.sh check` 暴露既有顺序污染或环境问题，应先记录并单独定位；不得因为规范重构需要通过验证而修改无关业务逻辑。

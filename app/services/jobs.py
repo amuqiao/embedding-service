@@ -15,13 +15,15 @@ from app.core.prompt_templates import get_template
 from app.integrations.storage import sha256_digest, storage
 from app.models.job import AIJob
 from app.repositories.job_repo import JobRepo
-from app.schemas.jobs import CreateJobRequest, JobResult, JobStatusResponse
+from app.schemas.errors import ErrorDetail
+from app.schemas.jobs import CreateJobRequest, CreateJobResponse, JobResult, JobStatusResponse
 from app.services.job_runtime import (
     build_runtime_snapshot,
     configured_output_target,
     job_params_from_job,
     output_target_from_job,
     payload_hash,
+    runtime_fields_from_job,
     write_runtime_json,
 )
 
@@ -50,34 +52,93 @@ def _request_fingerprint(payload: CreateJobRequest, job_params: dict[str, Any]) 
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def _job_to_response(job: AIJob) -> JobStatusResponse:
-    callback_status = job.callback_status if job.callback_url else "not_configured"
+def _job_error_detail(error: dict[str, Any] | None) -> dict[str, Any] | None:
+    if error is None:
+        return None
+    reason = str(error.get("code") or "INTERNAL_ERROR")
+    details = dict(error.get("details")) if isinstance(error.get("details"), dict) else {}
+    for key, value in error.items():
+        if key not in {"code", "reason", "message", "details"}:
+            details[key] = value
+    retryable = reason in {"QUEUE_FULL", "BROKER_UNAVAILABLE", "AI_PROVIDER_FAILED", "MODEL_CALL_TIMEOUT"}
+    return ErrorDetail(reason=reason, details=details, retryable=retryable).model_dump()
+
+
+def _callback_state(job: AIJob) -> dict[str, Any]:
+    if not job.callback_url:
+        return {
+            "status": "not_configured",
+            "attempt": 0,
+            "last_error": None,
+            "next_retry_at": None,
+        }
+    status = job.callback_status
+    if status == "failed" and job.callback_next_retry_at is not None:
+        status = "retrying"
+    if status == "skipped":
+        status = "failed"
+    return {
+        "status": status,
+        "attempt": job.callback_attempts or 0,
+        "last_error": _job_error_detail(job.callback_last_error),
+        "next_retry_at": job.callback_next_retry_at,
+    }
+
+
+def _progress_stage(job: AIJob) -> str:
+    if job.status == "queued":
+        return "accepted"
+    if job.status == "succeeded":
+        return "completed"
+    if job.status == "failed":
+        return "failed"
+    stage = (job.progress_stage or "").strip().lower()
+    stage_map = {
+        "accepted": "accepted",
+        "planning": "planning",
+        "calling_model": "calling_model",
+        "merging": "merging",
+        "writing_result": "writing_result",
+        "delivering_callback": "delivering_callback",
+        "completed": "completed",
+        "failed": "failed",
+        "success_side_effect": "writing_result",
+        "success_side_effect_done": "writing_result",
+        "succeeded": "completed",
+    }
+    if stage in stage_map:
+        return stage_map[stage]
+    if job.progress_percent < 15:
+        return "planning"
+    if job.progress_percent < 85:
+        return "calling_model"
+    if job.progress_percent < 100:
+        return "merging"
+    return "calling_model"
+
+
+def _job_payload(job: AIJob) -> dict[str, Any]:
     try:
         return validate_job_status_payload(
             {
                 "job_id": job.id,
-                "client_request_id": job.client_request_id,
+                "client_request_id": job.client_request_id or "",
                 "job_type": job.job_type,
-                "status": job.status,
-                "progress": {
-                    "percent": job.progress_percent,
-                    "message": job.progress_text,
-                    "stage": job.progress_stage,
+                "job_status": job.status,
+                "job_progress": {
+                    "percent": job.progress_percent or 0,
+                    "message": job.progress_text or _progress_stage(job),
+                    "stage": _progress_stage(job),
                 },
-                "result": job.result,
-                "error": job.error,
-                "callback": {
-                    "status": callback_status,
-                    "attempts": job.callback_attempts,
-                    "next_retry_at": job.callback_next_retry_at,
-                    "last_error": job.callback_last_error,
-                },
-                "metadata": job.metadata_ or {},
+                "job_result": job.result,
+                "job_error": _job_error_detail(job.error),
+                "callback": _callback_state(job),
+                "status_url": _status_url(job.id),
                 "created_at": job.created_at,
-                "started_at": job.started_at,
+                "updated_at": job.updated_at or job.created_at,
                 "finished_at": job.finished_at,
             }
-        )
+        ).model_dump(mode="json")
     except Exception as exc:
         raise AppError(
             "JOB_VIEW_CONTRACT_INVALID",
@@ -85,6 +146,10 @@ def _job_to_response(job: AIJob) -> JobStatusResponse:
             status_code=500,
             details={"job_id": str(job.id), "job_type": job.job_type},
         ) from exc
+
+
+def _job_to_response(job: AIJob, request_id: str = "-") -> JobStatusResponse:
+    return JobStatusResponse.model_validate(_job_payload(job))
 
 
 def _validate_prompt(job_type: str, prompt_payload: dict[str, Any]) -> None:
@@ -172,7 +237,7 @@ def validate_create_contract(payload: CreateJobRequest) -> tuple[Any, dict[str, 
     return handler, job_params
 
 
-def validate_job_status_payload(payload: dict[str, Any]) -> JobStatusResponse:
+def validate_job_status_payload(payload: dict[str, Any]):
     from app.core.workflow_registry import validate_job_view_payload
 
     return validate_job_view_payload(payload)
@@ -216,23 +281,43 @@ def _validate_create_request(payload: CreateJobRequest) -> tuple[Any, dict[str, 
     return handler, job_params, runtime_fields
 
 
-async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str) -> tuple[AIJob, bool]:
+async def create_job(
+    db: AsyncSession,
+    payload: CreateJobRequest,
+    caller_id: str,
+    *,
+    trigger_request_id: str | None = None,
+) -> tuple[AIJob, bool]:
     _handler, job_params, runtime_fields = _validate_create_request(payload)
+    if trigger_request_id:
+        runtime_fields = {
+            **runtime_fields,
+            "_system": {
+                **(runtime_fields.get("_system") if isinstance(runtime_fields.get("_system"), dict) else {}),
+                "trigger_request_id": trigger_request_id,
+            },
+        }
     request_fingerprint = _request_fingerprint(payload, job_params)
-    if payload.client_request_id:
-        await JobRepo.advisory_lock_for_client_request(db, caller_id, payload.client_request_id)
-        existing = await JobRepo.get_recent_by_client_request(
-            db, caller_id=caller_id, client_request_id=payload.client_request_id
-        )
-        if existing:
-            if existing.request_fingerprint != request_fingerprint:
-                raise AppError(
-                    "CLIENT_REQUEST_ID_CONFLICT",
-                    "client_request_id already used with a different request payload",
-                    status_code=409,
-                    details={"job_id": str(existing.id)},
-                )
-            return existing, False
+    await JobRepo.advisory_lock_for_client_request(db, caller_id, payload.client_request_id)
+    existing = await JobRepo.get_recent_by_client_request(
+        db, caller_id=caller_id, client_request_id=payload.client_request_id
+    )
+    if existing:
+        if existing.request_fingerprint != request_fingerprint:
+            raise AppError(
+                "CLIENT_REQUEST_ID_CONFLICT",
+                "client_request_id already used with a different request payload",
+                status_code=409,
+                details={"job_id": str(existing.id)},
+            )
+        if not payload.options or payload.options.idempotency_mode == "reject_duplicate":
+            raise AppError(
+                "CLIENT_REQUEST_ID_CONFLICT",
+                "client_request_id already used",
+                status_code=409,
+                details={"job_id": str(existing.id)},
+            )
+        return existing, False
 
     if settings.MAX_ACTIVE_JOBS > 0:
         await db.execute(text("SELECT pg_advisory_lock(hashtext('max_active_jobs_gate'))"))
@@ -256,7 +341,7 @@ async def create_job(db: AsyncSession, payload: CreateJobRequest, caller_id: str
         request_fingerprint=request_fingerprint,
         metadata=payload.metadata,
         priority=payload.options.priority if payload.options else "normal",
-        timeout_seconds=payload.options.timeout_seconds if payload.options else None,
+        timeout_seconds=None,
         callback_url=payload.callback.url if payload.callback else None,
         callback_events=payload.callback.events if payload.callback else None,
     )
@@ -285,22 +370,60 @@ async def get_job_or_404(db: AsyncSession, job_id: uuid.UUID) -> AIJob:
     return job
 
 
-async def get_job_response(db: AsyncSession, job_id: uuid.UUID, caller_id: str) -> JobStatusResponse:
+async def get_job_response(
+    db: AsyncSession,
+    job_id: uuid.UUID,
+    caller_id: str,
+    *,
+    request_id: str = "-",
+) -> JobStatusResponse:
     job = await JobRepo.get_for_caller(db, job_id, caller_id)
     if not job:
         raise NotFoundAppError("JOB_NOT_FOUND", f"job_id 不存在: {job_id}")
-    return _job_to_response(job)
+    return _job_to_response(job, request_id)
 
 
-def create_job_response(job: AIJob) -> dict[str, Any]:
-    return {
-        "job_id": job.id,
-        "client_request_id": job.client_request_id,
-        "job_type": job.job_type,
-        "status": job.status,
-        "status_url": _status_url(job.id),
-        "created_at": job.created_at,
-    }
+def create_job_response(job: AIJob, request_id: str = "-") -> CreateJobResponse:
+    return CreateJobResponse.model_validate(_job_payload(job))
+
+
+def trigger_request_id_from_job(job: AIJob) -> str | None:
+    try:
+        system_fields = runtime_fields_from_job(job).get("_system")
+    except Exception:
+        return None
+    if not isinstance(system_fields, dict):
+        return None
+    value = system_fields.get("trigger_request_id")
+    return value if isinstance(value, str) and value else None
+
+
+async def submit_job_request(
+    db: AsyncSession,
+    payload: CreateJobRequest,
+    caller_id: str,
+    *,
+    request_id: str,
+) -> CreateJobResponse:
+    job, created = await create_job(
+        db,
+        payload,
+        caller_id,
+        trigger_request_id=request_id,
+    )
+    task_id = str(uuid.uuid4()) if created else None
+    if task_id:
+        await JobRepo.set_celery_task_id(db, job.id, task_id)
+    await db.commit()
+    if task_id:
+        await db.refresh(job)
+        from app.tasks.jobs import dispatch_job_task
+
+        dispatch_job_task.apply_async(args=[str(job.id)], task_id=task_id)
+        await JobRepo.mark_celery_published(db, job.id, task_id)
+        await db.commit()
+        await db.refresh(job)
+    return create_job_response(job, request_id=request_id)
 
 
 def _load_input_text(job: AIJob) -> str:
@@ -371,9 +494,10 @@ def _persist_large_artifact_payload(
     return result_data
 
 
-def _persist_large_artifacts(job: AIJob, result: JobResult) -> dict[str, Any]:
+def _persist_large_artifacts(job: AIJob, result: JobResult | dict[str, Any]) -> dict[str, Any]:
     generation = int(getattr(job, "execution_generation", None) or 1)
-    return _persist_large_artifact_payload(job, result.model_dump(), scope=f"results/g{generation}")
+    result_data = result.model_dump() if isinstance(result, JobResult) else dict(result)
+    return _persist_large_artifact_payload(job, result_data, scope=f"results/g{generation}")
 
 
 def _persist_work_item_artifacts(job: AIJob, *, kind: str, chunk_index: int, result: dict[str, Any]) -> dict[str, Any]:

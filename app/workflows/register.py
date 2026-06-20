@@ -1,6 +1,5 @@
 def register_all_workflows() -> None:
-    """Register built-in workflow handlers.
+    from app.core import workflow_registry
+    from app.workflows.job_test_add import JobTestAddWorkflow
 
-    The project currently ships no built-in job types. New job types must be
-    added deliberately under the project standards before being registered here.
-    """
+    workflow_registry.register(JobTestAddWorkflow())

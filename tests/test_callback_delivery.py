@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.core.config import settings
 from app.models.job import AIJob
 from app.schemas.jobs import CallbackResponseEnvelope
 from app.services.callbacks import (
@@ -11,6 +12,7 @@ from app.services.callbacks import (
     build_callback_body,
     deliver_callback,
 )
+from app.services.job_runtime import payload_hash
 from app.services.jobs import _job_to_response
 
 
@@ -31,19 +33,44 @@ def _callback_test_handler(monkeypatch):
 
 def _job(callback_url: str | None = "https://example.com/callback") -> AIJob:
     now = datetime.now(timezone.utc)
+    job_params = {"a": 2, "b": 3}
+    job_params_hash = payload_hash(job_params)
     return AIJob(
         id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="client-add-1",
         job_type="test.callback",
         status="succeeded",
         progress_percent=100,
-        metadata_={"caller_task_id": "task-1"},
+        progress_text="completed",
+        progress_stage="completed",
+        metadata_={"trigger_request_id": "req-trigger-1"},
+        job_params_hash=job_params_hash,
+        runtime_ref={
+            "storage": "db_inline",
+            "type": "json",
+            "name": "runtime",
+            "payload": {
+                "schema_version": 1,
+                "job_type": "test.callback",
+                "job_params_hash": job_params_hash,
+                "runtime_fields": {"_system": {"trigger_request_id": "req-trigger-1"}},
+                "output_target": {
+                    "type": "oss_prefix",
+                    "oss_bucket": "bucket",
+                    "oss_prefix": "outputs/",
+                    "oss_region": "region",
+                },
+            },
+        },
         callback_url=callback_url,
-        result={"artifacts": [], "signals": {}},
+        result={"a": 2, "b": 3, "result": 5},
         callback_status="pending",
         callback_attempts=0,
         callback_next_retry_at=None,
         callback_last_error=None,
         created_at=now,
+        updated_at=now,
         finished_at=now,
     )
 
@@ -52,25 +79,40 @@ def test_build_callback_body_uses_public_fields():
     job = _job()
     body = build_callback_body(job)
 
-    assert body["schema_version"] == "v1"
+    assert set(body) == {
+        "event",
+        "event_id",
+        "attempt",
+        "sent_at",
+        "trigger_request_id",
+        "caller_id",
+        "job",
+    }
     assert body["event"] == "job.succeeded"
     assert body["attempt"] == 1
     assert body["event_id"]
     assert body["sent_at"]
-    assert body["job_id"] == str(job.id)
-    assert body["client_request_id"] is None
-    assert body["job_type"] == "test.callback"
-    assert body["status"] == "succeeded"
-    assert body["progress"] == {"percent": 100, "message": None, "stage": None}
-    assert body["error"] is None
-    assert body["metadata"] == {"caller_task_id": "task-1"}
-    assert body["data"] == {"artifacts": [], "signals": {}}
-    assert body["created_at"] == job.created_at.isoformat().replace("+00:00", "Z")
-    assert body["started_at"] is None
-    assert body["finished_at"] == job.finished_at.isoformat().replace("+00:00", "Z")
-    assert "job" not in body
-    assert "result" not in body
-    assert "callback" not in body
+    assert body["trigger_request_id"] == "req-trigger-1"
+    assert body["caller_id"] == "caller-1"
+    assert body["job"] == {
+        "job_id": str(job.id),
+        "client_request_id": "client-add-1",
+        "job_type": "test.callback",
+        "job_status": "succeeded",
+        "job_progress": {"percent": 100, "message": "completed", "stage": "completed"},
+        "job_result": {"a": 2, "b": 3, "result": 5},
+        "job_error": None,
+        "callback": {
+            "status": "pending",
+            "attempt": 0,
+            "last_error": None,
+            "next_retry_at": None,
+        },
+        "status_url": f"{settings.SERVICE_API_PREFIX}/jobs/{job.id}",
+        "created_at": job.created_at.isoformat().replace("+00:00", "Z"),
+        "updated_at": job.updated_at.isoformat().replace("+00:00", "Z"),
+        "finished_at": job.finished_at.isoformat().replace("+00:00", "Z"),
+    }
 
 
 def test_job_view_exposes_callback_delivery_state():
@@ -81,19 +123,20 @@ def test_job_view_exposes_callback_delivery_state():
     job.callback_next_retry_at = next_retry_at
     job.callback_last_error = {"code": "CALLBACK_HTTP_ERROR", "status_code": 503}
 
-    view = _job_to_response(job)
+    job_view = _job_to_response(job, request_id="req-view")
 
-    assert view.callback.status == "failed"
-    assert view.callback.attempts == 2
-    assert view.callback.next_retry_at == next_retry_at
-    assert view.callback.last_error == {"code": "CALLBACK_HTTP_ERROR", "status_code": 503}
+    assert job_view.callback.status == "retrying"
+    assert job_view.callback.attempt == 2
+    assert job_view.callback.next_retry_at == next_retry_at
+    assert job_view.callback.last_error.reason == "CALLBACK_HTTP_ERROR"
+    assert job_view.callback.last_error.details == {"status_code": 503}
 
 
 def test_job_view_marks_missing_callback_not_configured():
-    view = _job_to_response(_job(None))
+    job_view = _job_to_response(_job(None), request_id="req-view")
 
-    assert view.callback.status == "not_configured"
-    assert view.callback.attempts == 0
+    assert job_view.callback.status == "not_configured"
+    assert job_view.callback.attempt == 0
 
 
 def test_job_view_uses_shell_result_and_metadata():
@@ -105,11 +148,10 @@ def test_job_view_uses_shell_result_and_metadata():
         "signals": {"public": True},
     }
 
-    view = _job_to_response(job)
+    job_view = _job_to_response(job, request_id="req-view")
 
-    assert view.progress.stage == "finalize"
-    assert view.metadata == {"visible": "metadata"}
-    assert view.result == {
+    assert job_view.job_progress.stage == "completed"
+    assert job_view.job_result == {
         "artifacts": [{"key": "public", "type": "json", "label": "Public"}],
         "signals": {"public": True},
     }
@@ -124,8 +166,8 @@ def test_build_callback_body_uses_next_attempt_number():
     assert body["attempt"] == 3
 
 
-def test_callback_response_requires_common_extension_fields():
-    with pytest.raises(ValueError, match="metadata"):
+def test_callback_response_rejects_legacy_v1_fields():
+    with pytest.raises(ValueError, match="schema_version"):
         CallbackResponseEnvelope.model_validate(
             {
                 "schema_version": "v1",
@@ -176,7 +218,7 @@ async def test_deliver_callback_tries_once_on_http_failure(monkeypatch):
 
     class _Response:
         status_code = 503
-        text = '{"schema_version":"v1","event":"job.succeeded","event_id":"00000000-0000-0000-0000-000000000000","job_id":"00000000-0000-0000-0000-000000000000","job_type":"test.callback","status":"succeeded","msg":"temporary failure","metadata":{},"data":{}}'
+        text = '{"accepted":false,"msg":"temporary failure","details":{"retry_after_seconds":30}}'
 
     class _Client:
         def __init__(self, timeout):
@@ -201,8 +243,13 @@ async def test_deliver_callback_tries_once_on_http_failure(monkeypatch):
     assert result.status == "failed"
     assert result.attempts == 1
     assert result.last_error["code"] == "CALLBACK_HTTP_ERROR"
-    assert result.last_error["response"]["format"] == "v1"
-    assert result.last_error["response"]["valid"] is False
+    assert result.last_error["response"] == {
+        "format": "ack",
+        "valid": True,
+        "accepted": False,
+        "msg": "temporary failure",
+        "details": {"retry_after_seconds": 30},
+    }
 
 
 @pytest.mark.asyncio
@@ -238,32 +285,27 @@ async def test_deliver_callback_uses_shell_callback_fields(monkeypatch):
     assert result.status == "delivered"
     assert posted["url"] == "https://shell.example.com/callback"
     assert posted["headers"]["X-AI-Service-Event"] == "job.succeeded"
-    assert b'"job_id"' in posted["body"]
-    assert b'"job"' not in posted["body"]
+    body = json.loads(posted["body"].decode("utf-8"))
+    assert set(body) == {
+        "event",
+        "event_id",
+        "attempt",
+        "sent_at",
+        "trigger_request_id",
+        "caller_id",
+        "job",
+    }
+    assert body["job"]["job_id"] == str(job.id)
+    assert body["job"]["job_result"] == {"a": 2, "b": 3, "result": 5}
+    assert "job_id" not in body
+    assert "data" not in body
 
 
 @pytest.mark.asyncio
-async def test_deliver_callback_records_v1_response_summary(monkeypatch):
+async def test_deliver_callback_records_ack_response_summary(monkeypatch):
     class _Response:
         status_code = 200
-
-        def __init__(self, request_body):
-            self.text = json.dumps(
-                {
-                    "schema_version": "v1",
-                    "event": request_body["event"],
-                    "event_id": request_body["event_id"],
-                    "job_id": request_body["job_id"],
-                    "client_request_id": request_body["client_request_id"],
-                    "job_type": request_body["job_type"],
-                    "status": request_body["status"],
-                    "msg": None,
-                    "metadata": request_body["metadata"],
-                    "data": {"accepted": True, "duplicate": False},
-                    "received_at": request_body["sent_at"],
-                    "processed_at": request_body["sent_at"],
-                }
-            )
+        text = '{"accepted":true,"msg":null,"details":{"duplicate":false}}'
 
     class _Client:
         def __init__(self, timeout):
@@ -276,21 +318,24 @@ async def test_deliver_callback_records_v1_response_summary(monkeypatch):
             return False
 
         async def post(self, url, content, headers):
-            return _Response(json.loads(content.decode("utf-8")))
+            return _Response()
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
 
     result = await deliver_callback(_job())
 
     assert result.status == "delivered"
-    assert result.response["format"] == "v1"
-    assert result.response["valid"] is True
-    assert result.response["mismatches"] == []
-    assert result.response["data"] == {"accepted": True, "duplicate": False}
+    assert result.response == {
+        "format": "ack",
+        "valid": True,
+        "accepted": True,
+        "msg": None,
+        "details": {"duplicate": False},
+    }
 
 
 @pytest.mark.asyncio
-async def test_deliver_callback_keeps_legacy_response_compatible(monkeypatch):
+async def test_deliver_callback_rejects_unstructured_json_response(monkeypatch):
     class _Response:
         status_code = 200
         text = '{"status":"success","msg":null}'
@@ -312,27 +357,17 @@ async def test_deliver_callback_keeps_legacy_response_compatible(monkeypatch):
 
     result = await deliver_callback(_job())
 
-    assert result.status == "delivered"
-    assert result.response == {"format": "legacy", "status": "success", "msg": None}
+    assert result.status == "failed"
+    assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
+    assert result.last_error["response"]["format"] == "ack"
+    assert result.last_error["response"]["valid"] is False
 
 
 @pytest.mark.asyncio
-async def test_deliver_callback_does_not_treat_malformed_v1_as_legacy(monkeypatch):
+async def test_deliver_callback_rejects_invalid_ack_response(monkeypatch):
     class _Response:
         status_code = 200
-
-        def __init__(self, request_body):
-            self.text = json.dumps(
-                {
-                    "event": request_body["event"],
-                    "event_id": request_body["event_id"],
-                    "job_id": request_body["job_id"],
-                    "client_request_id": request_body["client_request_id"],
-                    "job_type": request_body["job_type"],
-                    "status": request_body["status"],
-                    "msg": None,
-                }
-            )
+        text = '{"accepted":true,"msg":null,"details":[]}'
 
     class _Client:
         def __init__(self, timeout):
@@ -345,7 +380,7 @@ async def test_deliver_callback_does_not_treat_malformed_v1_as_legacy(monkeypatc
             return False
 
         async def post(self, url, content, headers):
-            return _Response(json.loads(content.decode("utf-8")))
+            return _Response()
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
 
@@ -354,13 +389,13 @@ async def test_deliver_callback_does_not_treat_malformed_v1_as_legacy(monkeypatc
     assert result.status == "failed"
     assert result.attempts == 1
     assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
-    assert result.last_error["response"]["format"] == "v1"
+    assert result.last_error["response"]["format"] == "ack"
     assert result.last_error["response"]["valid"] is False
-    assert "schema_version" in result.last_error["response"]["error"]
+    assert "details" in result.last_error["response"]["error"]
 
 
 @pytest.mark.asyncio
-async def test_deliver_callback_does_not_treat_partial_v1_with_data_as_json_success(monkeypatch):
+async def test_deliver_callback_rejects_partial_v1_like_body(monkeypatch):
     class _Response:
         status_code = 200
         text = '{"status":"succeeded","msg":null,"metadata":{},"data":{}}'
@@ -384,7 +419,7 @@ async def test_deliver_callback_does_not_treat_partial_v1_with_data_as_json_succ
 
     assert result.status == "failed"
     assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
-    assert result.last_error["response"]["format"] == "v1"
+    assert result.last_error["response"]["format"] == "ack"
     assert result.last_error["response"]["valid"] is False
 
 

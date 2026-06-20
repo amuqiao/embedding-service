@@ -81,7 +81,7 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
             "job_params": {"value": {"hello": "world"}, "label": "Echo"},
             "callback": {"url": "https://example.com/callback"},
             "metadata": {"caller_task_id": "task-1"},
-            "options": {"priority": "high", "timeout_seconds": 123},
+            "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
         }
     )
 
@@ -96,8 +96,8 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     assert "callback_payload" not in captured
     assert "options_payload" not in captured
     assert captured["metadata"] == {"caller_task_id": "task-1"}
-    assert captured["priority"] == "high"
-    assert captured["timeout_seconds"] == 123
+    assert captured["priority"] == "normal"
+    assert captured["timeout_seconds"] is None
     assert captured["callback_url"] == "https://example.com/callback"
     assert captured["callback_events"] == ["job.succeeded", "job.failed"]
     assert job.job_params_ref["payload_snapshot"] == {"value": {"hello": "world"}, "label": "Echo"}
@@ -144,6 +144,7 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
             "client_request_id": "req-1",
             "job_type": "test.echo",
             "job_params": {"value": {"hello": "world"}, "label": "Echo"},
+            "options": {"idempotency_mode": "return_existing"},
         }
     )
     expected_fingerprint = _request_fingerprint(payload, {"value": {"hello": "world"}, "label": "Echo"})
@@ -153,3 +154,42 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
 
     assert job is existing
     assert created is False
+
+
+@pytest.mark.asyncio
+async def test_create_job_rejects_duplicate_by_default(monkeypatch):
+    existing = AIJob(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="req-1",
+        request_fingerprint=None,
+        job_type="test.echo",
+        status="queued",
+        progress_percent=0,
+        metadata_={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    async def fake_advisory_lock(*_args):
+        pass
+
+    async def fake_get_recent(*_args, **_kwargs):
+        return existing
+
+    monkeypatch.setattr("app.services.jobs.settings.MAX_ACTIVE_JOBS", 0)
+    monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: _TestHandler())
+
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-1",
+            "job_type": "test.echo",
+            "job_params": {"value": {"hello": "world"}, "label": "Echo"},
+        }
+    )
+    existing.request_fingerprint = _request_fingerprint(payload, {"value": {"hello": "world"}, "label": "Echo"})
+
+    with pytest.raises(Exception, match="client_request_id already used"):
+        await create_job(_FakeDB(), payload, "caller-1")

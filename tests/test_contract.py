@@ -13,11 +13,12 @@ from app.services.jobs import _validate_create_request, validate_job_status_payl
 
 def _valid_payload() -> dict:
     return {
+        "client_request_id": "contract-req-1",
         "job_type": "test.echo",
         "job_params": {"value": {"hello": "world"}},
         "callback": {"url": "https://example.com/callback"},
         "metadata": {"caller_task_id": "task-1"},
-        "options": {"priority": "normal", "timeout_seconds": 300},
+        "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
     }
 
 
@@ -110,6 +111,7 @@ def test_create_job_validation_allows_non_model_runtime(monkeypatch):
 
     payload = CreateJobRequest.model_validate(
         {
+            "client_request_id": "contract-no-model",
             "job_type": "generic.no_model",
             "job_params": {"input": {"value": 1}},
         }
@@ -142,6 +144,7 @@ def test_create_job_validation_preserves_runtime_app_error(monkeypatch):
 
     payload = CreateJobRequest.model_validate(
         {
+            "client_request_id": "contract-runtime-app-error",
             "job_type": "generic.runtime_app_error",
             "job_params": {"input": {"value": 1}},
         }
@@ -170,6 +173,7 @@ def test_create_job_validation_wraps_unexpected_prerequisite_errors(monkeypatch)
 
     payload = CreateJobRequest.model_validate(
         {
+            "client_request_id": "contract-runtime-crash",
             "job_type": "generic.runtime_crash",
             "job_params": {"input": {"value": 1}},
         }
@@ -222,18 +226,23 @@ def test_job_result_rejects_legacy_artifact_target():
 
 
 def _job_view_payload(*, job_type: str, status: str, result=None, error=None) -> dict:
+    progress_stage = {"queued": "accepted", "succeeded": "completed"}.get(status, status)
     return {
         "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
         "client_request_id": "contract-test",
         "job_type": job_type,
-        "status": status,
-        "progress": {"percent": 100 if status in {"succeeded", "failed"} else 10, "message": "test", "stage": status},
-        "result": result,
-        "error": error,
-        "callback": {"status": "not_configured", "attempts": 0},
-        "metadata": {},
+        "job_status": status,
+        "job_progress": {
+            "percent": 100 if status in {"succeeded", "failed"} else 10,
+            "message": "test",
+            "stage": progress_stage,
+        },
+        "job_result": result,
+        "job_error": error,
+        "callback": {"status": "not_configured", "attempt": 0},
+        "status_url": "/api/v1/ai-jobs/jobs/0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
         "created_at": datetime(2026, 6, 15, 10, 0, 0, tzinfo=UTC),
-        "started_at": datetime(2026, 6, 15, 10, 0, 5, tzinfo=UTC) if status != "queued" else None,
+        "updated_at": datetime(2026, 6, 15, 10, 1, 0, tzinfo=UTC),
         "finished_at": datetime(2026, 6, 15, 10, 1, 0, tzinfo=UTC) if status in {"succeeded", "failed"} else None,
     }
 
@@ -312,13 +321,11 @@ def test_unknown_route_uses_unified_error_envelope():
     response = client.get("/definitely-not-found")
 
     assert response.status_code == 404
-    assert response.json() == {
-        "error": {
-            "code": "NOT_FOUND",
-            "message": "Not Found",
-            "details": {},
-        }
-    }
+    body = response.json()
+    assert body["code"] == 404001
+    assert body["data"]["error"]["reason"] == "NOT_FOUND"
+    assert body["request_id"]
+    assert isinstance(body["server_time"], int)
 
 
 def test_unhandled_exception_uses_unified_error_envelope():
@@ -334,10 +341,8 @@ def test_unhandled_exception_uses_unified_error_envelope():
     response = client.get(route_path)
 
     assert response.status_code == 500
-    assert response.json() == {
-        "error": {
-            "code": "INTERNAL_ERROR",
-            "message": "Internal server error",
-            "details": {},
-        }
-    }
+    body = response.json()
+    assert body["code"] == 500001
+    assert body["data"]["error"]["reason"] == "INTERNAL_ERROR"
+    assert body["request_id"]
+    assert isinstance(body["server_time"], int)

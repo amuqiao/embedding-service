@@ -23,6 +23,7 @@ class FakeDB:
 def _payload() -> CreateJobRequest:
     return CreateJobRequest.model_validate(
         {
+            "client_request_id": "submit-req-1",
             "job_type": "test.echo",
             "job_params": {"value": {"ok": True}},
         }
@@ -36,6 +37,11 @@ def _job() -> AIJob:
         status="queued",
         created_at=datetime.now(timezone.utc),
     )
+
+
+class _Handler:
+    def validate_public_result(self, result):
+        return result
 
 
 @pytest.mark.asyncio
@@ -66,6 +72,7 @@ async def test_submit_ai_job_commits_then_publishes_created_job(monkeypatch):
     monkeypatch.setattr("app.application.jobs.submission.JobRepo.set_celery_task_id", fake_set_celery_task_id)
     monkeypatch.setattr("app.application.jobs.submission.JobRepo.mark_celery_published", fake_mark_celery_published)
     monkeypatch.setattr("app.application.jobs.submission.dispatch_job_task", FakeDispatchTask)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: _Handler())
 
     response = await submit_ai_job(db, _payload(), "caller-1")
 
@@ -95,6 +102,7 @@ async def test_submit_ai_job_reuses_existing_idempotent_job_without_dispatch(mon
         "app.application.jobs.submission.dispatch_job_task.apply_async",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("existing job should not dispatch")),
     )
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: _Handler())
 
     response = await submit_ai_job(db, _payload(), "caller-1")
 

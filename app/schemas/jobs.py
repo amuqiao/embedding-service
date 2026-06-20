@@ -1,61 +1,55 @@
+from __future__ import annotations
+
+import math
 import re
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, StrictFloat, StrictInt, field_validator, model_validator
 
 from app.schemas.common import StrictBaseModel
+from app.schemas.envelope import ResponseEnvelope
+from app.schemas.errors import ErrorDetail
 
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-JobStatus = Literal["queued", "running", "succeeded", "failed"]
-CallbackDeliveryStatus = Literal["not_configured", "pending", "delivering", "delivered", "failed", "skipped"]
 
-
-class OSSReference(StrictBaseModel):
-    oss_key: str = Field(min_length=1)
-    oss_url: str = Field(min_length=1)
-    content_hash: str | None = None
-    content_type: str = Field(min_length=1)
-
-    @field_validator("content_hash")
-    @classmethod
-    def validate_hash(cls, value: str | None) -> str | None:
-        if value is not None and not HASH_RE.fullmatch(value):
-            raise ValueError("content_hash must match sha256:<64 lowercase hex>")
-        return value
-
-    @field_validator("content_type")
-    @classmethod
-    def validate_content_type(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        parts = [part.strip() for part in normalized.split(";")]
-        if parts[0] != "text/plain":
-            raise ValueError("content_type must be text/plain; charset=utf-8")
-        params = {part for part in parts[1:] if part}
-        if "charset=utf-8" not in params:
-            raise ValueError("content_type must be text/plain; charset=utf-8")
-        return "text/plain; charset=utf-8"
+JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
+ProgressStage = Literal[
+    "accepted",
+    "fetching_input",
+    "planning",
+    "calling_model",
+    "merging",
+    "writing_result",
+    "delivering_callback",
+    "completed",
+    "failed",
+    "canceled",
+]
+CallbackDeliveryStatus = Literal["not_configured", "pending", "delivering", "delivered", "retrying", "failed"]
+NumberValue: TypeAlias = StrictInt | StrictFloat
 
 
 class CallbackConfig(StrictBaseModel):
     url: str = Field(min_length=1)
     events: list[Literal["job.succeeded", "job.failed"]] | None = None
+    secret_ref: str | None = None
 
     @model_validator(mode="after")
-    def default_events(self):
+    def default_events(self) -> "CallbackConfig":
         if not self.events:
             self.events = ["job.succeeded", "job.failed"]
         return self
 
 
 class JobOptions(StrictBaseModel):
-    priority: Literal["low", "normal", "high"] = "normal"
-    timeout_seconds: int | None = Field(default=None, gt=0)
+    priority: Literal["low", "normal"] = "normal"
+    idempotency_mode: Literal["reject_duplicate", "return_existing"] = "reject_duplicate"
 
 
 class CreateJobRequest(StrictBaseModel):
-    client_request_id: str | None = Field(default=None, max_length=255)
+    client_request_id: str = Field(min_length=1, max_length=255)
     job_type: str = Field(min_length=1)
     job_params: dict[str, Any] = Field(default_factory=dict)
     callback: CallbackConfig | None = None
@@ -63,13 +57,53 @@ class CreateJobRequest(StrictBaseModel):
     options: JobOptions | None = None
 
 
-class CreateJobResponse(StrictBaseModel):
+class JobProgress(StrictBaseModel):
+    stage: ProgressStage
+    percent: int = Field(ge=0, le=100)
+    message: str | None = None
+
+
+class CallbackState(StrictBaseModel):
+    status: CallbackDeliveryStatus
+    attempt: int = Field(ge=0)
+    last_error: ErrorDetail | None = None
+    next_retry_at: datetime | None = None
+
+
+class JobEnvelope(StrictBaseModel):
     job_id: UUID
     client_request_id: str | None = None
     job_type: str
-    status: JobStatus
+    job_status: JobStatus
+    job_progress: JobProgress
+    job_result: dict[str, Any] | None = None
+    job_error: ErrorDetail | None = None
+    callback: CallbackState
     status_url: str
     created_at: datetime
+    updated_at: datetime
+    finished_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_terminal_payload(self) -> "JobEnvelope":
+        if self.job_status in {"queued", "running"}:
+            if self.job_result is not None:
+                raise ValueError("job_result must be null while job is not terminal")
+            if self.job_error is not None:
+                raise ValueError("job_error must be null while job is not terminal")
+        elif self.job_status == "succeeded":
+            if self.job_error is not None:
+                raise ValueError("job_error must be null when job succeeded")
+        elif self.job_status in {"failed", "canceled"}:
+            if self.job_result is not None:
+                raise ValueError("job_result must be null when job failed or canceled")
+            if self.job_error is None:
+                raise ValueError("job_error is required when job failed or canceled")
+        return self
+
+
+class JobResponseData(StrictBaseModel):
+    job: JobEnvelope
 
 
 class Artifact(StrictBaseModel):
@@ -85,14 +119,23 @@ class Artifact(StrictBaseModel):
     content_size_bytes: int | None = None
     content: Any | None = None
 
+    @field_validator("content_hash")
+    @classmethod
+    def validate_hash(cls, value: str | None) -> str | None:
+        if value is not None and not HASH_RE.fullmatch(value):
+            raise ValueError("content_hash must match sha256:<64 lowercase hex>")
+        return value
+
 
 class JobResult(StrictBaseModel):
-    artifacts: list[Artifact | dict[str, Any]]
-    signals: dict[str, Any] = {}
+    artifacts: list[Artifact | dict[str, Any]] = Field(default_factory=list)
+    signals: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("artifacts", mode="before")
     @classmethod
-    def validate_artifacts(cls, value):
+    def validate_artifacts(cls, value: Any) -> list[Artifact | dict[str, Any]]:
+        if value is None:
+            return []
         if not isinstance(value, list):
             raise ValueError("artifacts must be a list")
         artifacts: list[Artifact | dict[str, Any]] = []
@@ -109,110 +152,42 @@ class JobResult(StrictBaseModel):
         return artifacts
 
 
-class JobError(StrictBaseModel):
-    code: str
-    message: str
-    details: dict[str, Any] = {}
+class JobTestAddParams(StrictBaseModel):
+    a: NumberValue
+    b: NumberValue
+
+    @field_validator("a", "b")
+    @classmethod
+    def validate_number(cls, value: NumberValue) -> NumberValue:
+        if isinstance(value, bool):
+            raise ValueError("value must be a number")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("value must be finite")
+        return value
 
 
-class JobProgress(StrictBaseModel):
-    percent: int = Field(ge=0, le=100)
-    message: str | None = None
-    stage: str | None = None
+class JobTestAddResult(StrictBaseModel):
+    a: NumberValue
+    b: NumberValue
+    result: NumberValue
+
+    @field_validator("a", "b", "result")
+    @classmethod
+    def validate_number(cls, value: NumberValue) -> NumberValue:
+        if isinstance(value, bool):
+            raise ValueError("value must be a number")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("value must be finite")
+        return value
 
 
-class CallbackDeliveryView(StrictBaseModel):
-    status: CallbackDeliveryStatus
-    attempts: int
-    next_retry_at: datetime | None = None
-    last_error: dict[str, Any] | None = None
+CreateJobResponse = JobEnvelope
+JobStatusResponse = JobEnvelope
 
 
-class JobView(StrictBaseModel):
-    job_id: UUID
-    client_request_id: str | None = None
-    job_type: str
-    status: JobStatus
-    progress: JobProgress
-    result: dict[str, Any] | None = None
-    error: JobError | None = None
-    callback: CallbackDeliveryView
-    metadata: dict[str, Any] = {}
-    created_at: datetime
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
+def __getattr__(name: str) -> Any:
+    if name in {"CallbackEnvelope", "CallbackResponseEnvelope"}:
+        from app.schemas import callbacks as callback_schemas
 
-    @model_validator(mode="after")
-    def validate_status_payload(self):
-        if self.status in {"queued", "running"}:
-            if self.result is not None:
-                raise ValueError("result must be null while job is not terminal")
-            if self.error is not None:
-                raise ValueError("error must be null while job is not terminal")
-        elif self.status == "succeeded":
-            if self.error is not None:
-                raise ValueError("error must be null when job succeeded")
-        elif self.status == "failed":
-            if self.result is not None:
-                raise ValueError("result must be null when job failed")
-            if self.error is None:
-                raise ValueError("error is required when job failed")
-        return self
-
-
-class JobStatusResponse(JobView):
-    pass
-
-
-class CallbackEnvelope(StrictBaseModel):
-    schema_version: Literal["v1"] = "v1"
-    event: Literal["job.succeeded", "job.failed"]
-    event_id: UUID
-    attempt: int = Field(ge=1)
-    sent_at: datetime
-    job_id: UUID
-    client_request_id: str | None = None
-    job_type: str
-    status: JobStatus
-    progress: JobProgress
-    error: JobError | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    data: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-
-    @model_validator(mode="after")
-    def validate_event_matches_job(self):
-        if self.status not in {"succeeded", "failed"}:
-            raise ValueError("callback job must be terminal")
-        if self.status == "succeeded" and self.error is not None:
-            raise ValueError("error must be null when callback job succeeded")
-        if self.status == "failed" and self.error is None:
-            raise ValueError("error is required when callback job failed")
-        expected = "job.succeeded" if self.status == "succeeded" else "job.failed"
-        if self.event != expected:
-            raise ValueError("callback event must match job status")
-        return self
-
-
-class CallbackResponseEnvelope(StrictBaseModel):
-    schema_version: Literal["v1"] = "v1"
-    event: Literal["job.succeeded", "job.failed"]
-    event_id: UUID
-    job_id: UUID
-    client_request_id: str | None = None
-    job_type: str
-    status: Literal["succeeded", "failed"]
-    msg: str | None
-    metadata: dict[str, Any]
-    data: dict[str, Any]
-    received_at: datetime | None = None
-    processed_at: datetime | None = None
-
-    @model_validator(mode="after")
-    def validate_response_contract(self):
-        expected = "job.succeeded" if self.status == "succeeded" else "job.failed"
-        if self.event != expected:
-            raise ValueError("callback response event must match job status")
-        return self
+        return getattr(callback_schemas, name)
+    raise AttributeError(name)

@@ -15,6 +15,7 @@ from app.api.routes import health, jobs, meta
 from app.core.exceptions import AppError
 from app.core.logging import configure_logging, set_request_id
 from app.core.config import settings
+from app.schemas.errors import build_error_envelope
 from app.workflows.register import register_all_workflows
 
 register_all_workflows()
@@ -70,45 +71,54 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 app.add_middleware(RequestIDMiddleware)
 
 
+def _request_id(request: Request) -> str:
+    return getattr(request.state, "request_id", "-")
+
+
 @app.exception_handler(AppError)
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
-    return JSONResponse(
+    status_code, body = build_error_envelope(
+        reason=exc.code,
+        request_id=_request_id(request),
+        details=exc.details,
         status_code=exc.status_code,
-        content={"error": {"code": exc.code, "message": exc.message, "details": exc.details}},
+    )
+    return JSONResponse(
+        status_code=status_code,
+        content=jsonable_encoder(body),
     )
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    return JSONResponse(
+    status_code, body = build_error_envelope(
+        reason="INVALID_INPUT",
+        request_id=_request_id(request),
+        details={"errors": exc.errors()},
         status_code=422,
-        content=jsonable_encoder({
-            "error": {
-                "code": "INVALID_INPUT",
-                "message": "Request validation failed",
-                "details": {"errors": exc.errors()},
-            }
-        }),
+    )
+    return JSONResponse(
+        status_code=status_code,
+        content=jsonable_encoder(body),
     )
 
 
 @app.exception_handler(StarletteHTTPException)
 async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-    code = {
+    reason = {
         404: "NOT_FOUND",
         405: "METHOD_NOT_ALLOWED",
     }.get(exc.status_code, "HTTP_ERROR")
-    message = exc.detail if isinstance(exc.detail, str) else "HTTP error"
     details = {} if isinstance(exc.detail, str) else {"detail": exc.detail}
-    return JSONResponse(
+    status_code, body = build_error_envelope(
+        reason=reason,
+        request_id=_request_id(request),
+        details=details,
         status_code=exc.status_code,
-        content=jsonable_encoder({
-            "error": {
-                "code": code,
-                "message": message,
-                "details": details,
-            }
-        }),
+    )
+    return JSONResponse(
+        status_code=status_code,
+        content=jsonable_encoder(body),
         headers=getattr(exc, "headers", None),
     )
 
@@ -116,9 +126,15 @@ async def http_error_handler(request: Request, exc: StarletteHTTPException) -> J
 @app.exception_handler(Exception)
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("unhandled_exception method=%s path=%s", request.method, request.url.path)
-    return JSONResponse(
+    status_code, body = build_error_envelope(
+        reason="INTERNAL_ERROR",
+        request_id=_request_id(request),
+        details={},
         status_code=500,
-        content={"error": {"code": "INTERNAL_ERROR", "message": "Internal server error", "details": {}}},
+    )
+    return JSONResponse(
+        status_code=status_code,
+        content=jsonable_encoder(body),
     )
 
 
