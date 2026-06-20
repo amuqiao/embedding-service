@@ -14,16 +14,7 @@ _CELERY_SOFT_TIMEOUT_BUFFER: int = 300   # time for L1 cleanup (job write + call
 _CELERY_HARD_TIMEOUT_BUFFER: int = 60    # time for soft-limit handler to finish before SIGKILL
 _JOB_STALE_RUNNING_BUFFER: int = 600     # recovery scan gap to avoid mis-classifying a recently killed job
 _CALLBACK_DELIVERY_CLAIM_GRACE: int = 175  # DB commit/recovery skew margin after one callback HTTP timeout
-_DEPRECATED_INIT_CONFIG_KEYS = frozenset(
-    {
-        "SHORT_DRAMA_RS_SCHEMA_SOURCE",
-        "SHORT_DRAMA_RS_RESULT_SINK",
-        "SHORT_DRAMA_RS_API_KEY",
-        "SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH",
-        "SHORT_DRAMA_RS_RESULT_RESPONSE_FIXTURE_PATH",
-        "SHORT_DRAMA_RS_TAG_SCHEMA_VERSION",
-    }
-)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -31,18 +22,6 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
-    def __init__(self, **values):
-        deprecated = sorted(
-            {
-                str(key).upper()
-                for key in values
-                if str(key).upper() in _DEPRECATED_INIT_CONFIG_KEYS
-            }
-        )
-        if deprecated:
-            raise ValueError("deprecated config keys are not supported: " + ", ".join(deprecated))
-        super().__init__(**values)
 
     # ── Infrastructure credentials ────────────────────────────────────────────
     SERVICE_NAME: str = "ai-job-service"
@@ -61,7 +40,6 @@ class Settings(BaseSettings):
 
     # ── Access control ────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: str = "http://localhost:3000"
-    ENABLE_MOCK_INTERFACES: bool = True
 
     # ── Object storage ────────────────────────────────────────────────────────
     STORAGE_BACKEND: str = "local"
@@ -109,21 +87,7 @@ class Settings(BaseSettings):
     CELERY_RETRY_DELAY: int = 60
     CELERY_RESULT_EXPIRES: int = 86400
 
-    PROMPT_CONFIG_PATH: str = "app/workflows/novel_localization/prompts.yaml"
-
-    # ── Short drama tagging RS integration ───────────────────────────────────
-    # RS test data is not always available. Keep schema fetch and result write
-    # mockable independently so the CPP-facing tagging flow can still be tested.
-    SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED: bool = True
-    SHORT_DRAMA_RS_RESULT_MOCK_ENABLED: bool = True
-    SHORT_DRAMA_RS_BASE_URL: str = ""
-    SHORT_DRAMA_RS_TIMEOUT_SECONDS: int = 10
-    SHORT_DRAMA_RS_SCHEMA_MOCK_PATH: str = (
-        "mock/short_drama_tagging/tag_schema_snapshot.{lang}.json"
-    )
-    SHORT_DRAMA_RS_RESULT_RESPONSE_MOCK_PATH: str = (
-        "mock/short_drama_tagging/rs_write_result_response.success.json"
-    )
+    PROMPT_CONFIG_PATH: str = "app/core/prompts.yaml"
 
     LOG_LEVEL: str = Field(default="INFO")
 
@@ -156,7 +120,6 @@ class Settings(BaseSettings):
             "JOB_MAX_EXECUTION_ATTEMPTS": self.JOB_MAX_EXECUTION_ATTEMPTS,
             "CELERY_RETRY_DELAY": self.CELERY_RETRY_DELAY,
             "CELERY_RESULT_EXPIRES": self.CELERY_RESULT_EXPIRES,
-            "SHORT_DRAMA_RS_TIMEOUT_SECONDS": self.SHORT_DRAMA_RS_TIMEOUT_SECONDS,
         }
         for name, value in positive_fields.items():
             if value <= 0:
@@ -185,12 +148,6 @@ class Settings(BaseSettings):
         if not self.CALLBACK_SIGNING_SECRET:
             _log.warning(
                 "CALLBACK_SIGNING_SECRET is not configured — callback HMAC signatures will be invalid"
-            )
-        if (not self.SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED or not self.SHORT_DRAMA_RS_RESULT_MOCK_ENABLED) and (
-            not self.SHORT_DRAMA_RS_BASE_URL
-        ):
-            raise ValueError(
-                "SHORT_DRAMA_RS_BASE_URL is required when short drama RS schema/result mock is disabled"
             )
         return self
 

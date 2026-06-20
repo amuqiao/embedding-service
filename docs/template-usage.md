@@ -4,7 +4,7 @@
 
 本模板提供的是通用 Job 执行层：FastAPI API、Celery 异步任务、对象存储产物、状态轮询、Callback、模型配置和 workflow 注册机制。它不负责用户系统、项目管理、前端状态、业务流程编排或生产部署。
 
-Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata` 和 `options`。具体任务入参由 `job_type` 自己的 `job_params` schema 定义；具体任务出参由 `job_type` 自己的 `result` schema 定义。`novel_localization` 是内置示例 workflow，用来展示如何把文本 LLM 任务适配到这套通用 Job 骨架。
+Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata` 和 `options`。具体任务入参由 `job_type` 自己的 `job_params` schema 定义；具体任务出参由 `job_type` 自己的 `result` schema 定义。当前仓库不注册任何内置 `job_type`。
 
 规范先行重构期间，长期合同、目录骨架和注册真源以 [AI Job 服务项目规范与骨架](架构/project-standards.md) 为准。新 `job_type` 的目标注册入口是 `app/jobs/registry.py`，Prompt YAML、README 示例和 mock fixture 都不是注册事实源。
 
@@ -23,22 +23,9 @@ Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`cal
 
 这些值决定对外服务身份、API 路径、对象存储路径和本地数据库名称。业务密钥、模型参数、Callback、Redis、PostgreSQL、对象存储等配置继续按 `.env.example` 维护。
 
-## 处理内置示例
+## 当前内置能力
 
-### 方案 A：保留示例
-
-保留 `app/workflows/novel_localization/`，三个 `novel_localization.*` job type 会继续可用。这个方案适合在新 workflow 完成前保留一个可运行参考。
-
-当你准备切换到自己的 Prompt 配置时，把 `PROMPT_CONFIG_PATH` 指向新的 YAML 文件。
-
-### 方案 B：删除示例
-
-如果新项目不需要小说本地化示例，按下面顺序删除：
-
-1. 删除 `app/workflows/novel_localization/`。
-2. 从目标 `job_type` registry 移除 `novel_localization.*` 注册项。
-3. 删除或替换 `app/workflows/novel_localization/prompts.yaml`。
-4. 如果仍使用 YAML Prompt 模板，把 `PROMPT_CONFIG_PATH` 指向新的 YAML 文件。
+当前仓库没有内置能力示例。`app/workflows/register.py` 默认不注册任何 handler，`app/core/prompts.yaml` 默认声明空模板集合。新增正式能力时，应先按项目标准定义 schema 和合同，再补 handler、注册入口、Prompt 模板和验证用例。
 
 ## 接入新 Workflow
 
@@ -120,29 +107,13 @@ API、worker、recovery 和测试必须读取同一份 registry。新增 workflo
 
 如果希望 `GET /prompt-templates` 返回该 job type，并让请求校验使用 YAML 中的 Prompt block 定义，需要在 `PROMPT_CONFIG_PATH` 指向的 YAML 文件里加入新 job type。
 
-可以参考 `app/workflows/novel_localization/prompts.yaml` 的结构。
+当前默认文件是 `app/core/prompts.yaml`，其中 `job_types` 为空。
 
 如果跳过 YAML 配置，只要 handler 已注册，registry 级别的 `job_type` 校验仍然可用；但 `GET /prompt-templates` 不会列出这个 job type。
 
 ### 4. 调用 API 验证
 
-`POST /jobs` 的顶层字段保持通用；文本、图片、Prompt、模型等具体任务参数都放在 `job_params` 中。内置 `generic.echo` 用来质检通用骨架，不调用模型，不需要 `source` / `prompt` / `model_id`：
-
-```bash
-curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
-  -H "Authorization: Bearer $SERVICE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "job_type": "generic.echo",
-    "job_params": {
-      "value": {"hello": "world"},
-      "label": "Echo"
-    },
-    "metadata": {"caller_task_id": "echo-1"}
-  }'
-```
-
-以内置小说本地化示例为例，开发阶段也可以使用 inline source，不需要先写 OSS 输入对象：
+`POST /jobs` 的顶层字段保持通用；文本、图片、Prompt、模型等具体任务参数都放在 `job_params` 中。下面示例只有在你实现并注册 `your_workflow.my_job` 后才可用：
 
 ```bash
 curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
@@ -150,14 +121,10 @@ curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
   -H "Content-Type: application/json" \
   -d '{
     "job_type": "your_workflow.my_job",
-    "callback": {"url": "http://localhost:9999/callback"},
-    "metadata": {"caller_task_id": "task-1"},
-    "options": {"priority": "normal", "timeout_seconds": 300},
     "job_params": {
-      "model_id": "gpt-4.1",
-      "source": {"inline": {"text": "Hello world"}},
-      "prompt": {"blocks": [{"key": "user", "role": "user", "content": "Process this text."}]}
-    }
+      "value": {"hello": "world"}
+    },
+    "metadata": {"caller_task_id": "task-1"}
   }'
 ```
 
@@ -260,7 +227,7 @@ def normalize_job_params(self, job_params: dict) -> dict:
     return params.model_dump()
 ```
 
-`job_params` 会被规范化后写入运行时对象，并在 `AIJob.job_params_ref` 中保存引用；`AIJob.job_params_hash` 用于执行前校验引用内容没有漂移。创建 Job 时还会写入 `runtime_ref`，保存 handler 当时派生出的 `runtime_fields` 和输出目标引用。当前内置 `novel_localization` 为了复用现有 LLM 执行器，会通过 `runtime_job_fields()` 把 `job_params.model_id` 和 `job_params.prompt` 映射为运行时字段；这不是通用 Job 创建层的要求。
+`job_params` 会被规范化后写入运行时对象，并在 `AIJob.job_params_ref` 中保存引用；`AIJob.job_params_hash` 用于执行前校验引用内容没有漂移。创建 Job 时还会写入 `runtime_ref`，保存 handler 当时派生出的 `runtime_fields` 和输出目标引用。
 
 ## 新实例配置
 

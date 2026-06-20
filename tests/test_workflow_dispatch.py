@@ -2,12 +2,10 @@ import celery
 import pytest
 import uuid
 
-from app.core import workflow_registry
 from app.models.job import AIJob, AIJobWorkItem
-from app.services.job_planner import JobPlan, PlannedWorkItem, build_job_plan
+from app.services.job_planner import JobPlan, PlannedWorkItem
 from app.services.job_workflow import execute_work_item, fail_job, finalize_job, plan_job
-from app.tasks.jobs import _ensure_workflows_registered, fanout_after_mapping_task
-from scripts.verify.e2e_backend_call import Config, api_path
+from app.tasks.jobs import fanout_after_mapping_task
 
 
 class FakeDB:
@@ -16,22 +14,6 @@ class FakeDB:
 
     async def refresh(self, _obj):
         pass
-
-
-def test_task_entrypoint_registration_restores_short_drama_translation_handler():
-    previous = dict(workflow_registry._registry)
-    try:
-        workflow_registry._registry.clear()
-        with pytest.raises(KeyError):
-            workflow_registry.get("short_drama.tag_schema.translation")
-
-        _ensure_workflows_registered()
-
-        handler = workflow_registry.get("short_drama.tag_schema.translation")
-        assert handler.job_type == "short_drama.tag_schema.translation"
-    finally:
-        workflow_registry._registry.clear()
-        workflow_registry._registry.update(previous)
 
 
 def test_memory_fanout_dispatches_finalize_chord(monkeypatch):
@@ -63,38 +45,25 @@ def test_memory_fanout_dispatches_finalize_chord(monkeypatch):
     assert calls["body"].args == ("job-1", 1)
 
 
-def test_e2e_api_path_uses_configured_prefix(tmp_path):
-    config = Config(
-        base_url="http://127.0.0.1:8100",
-        api_prefix="/api/v1/custom-ai",
-        service_api_key="token",
-        input_file=tmp_path / "input.txt",
-        model_id=None,
-        output_bucket="local-dev",
-        output_prefix="ai-jobs/test",
-        output_region="local",
-        poll_interval=1.0,
-        timeout_seconds=10,
-        storage_dir=tmp_path,
-        repeat_input=1,
-        dry_run=False,
-        contract_only=False,
-        contract_check=True,
-        callback_port=0,
-        callback_wait_seconds=1,
-        callback_signing_secret="secret",
-    )
-
-    assert api_path(config, "/jobs") == "/api/v1/custom-ai/jobs"
-
-
 @pytest.mark.asyncio
 async def test_plan_job_reuses_existing_execution_plan(monkeypatch):
     job_id = uuid.uuid4()
-    plan = build_job_plan("novel_localization.step1_localize", "短文本")
+    plan = JobPlan(
+        execution_mode="single",
+        chunk_count=1,
+        chunk_registry=[{"chunk_index": 1, "input": {"value": 1}}],
+        work_items=[
+            PlannedWorkItem(
+                name="test.custom.whole",
+                kind="whole",
+                chunk_index=0,
+                input_data={"value": 1},
+            )
+        ],
+    )
     job = AIJob(
         id=job_id,
-        job_type="novel_localization.step1_localize",
+        job_type="test.custom",
         status="running",
         progress_percent=10,
         celery_task_id="root-task",
@@ -148,7 +117,7 @@ async def test_plan_job_allows_custom_plan_without_text_source(monkeypatch):
     job_id = uuid.uuid4()
     job = AIJob(
         id=job_id,
-        job_type="generic.custom",
+        job_type="test.custom",
         status="running",
         progress_percent=5,
         celery_task_id="root-task",
@@ -160,7 +129,7 @@ async def test_plan_job_allows_custom_plan_without_text_source(monkeypatch):
         chunk_registry=[{"chunk_index": 1, "input": {"value": 1}}],
         work_items=[
             PlannedWorkItem(
-                name="generic.custom.whole",
+                name="test.custom.whole",
                 kind="whole",
                 chunk_index=0,
                 input_data={"value": 1},
@@ -170,7 +139,7 @@ async def test_plan_job_allows_custom_plan_without_text_source(monkeypatch):
     created_item = AIJobWorkItem(
         id=uuid.uuid4(),
         job_id=job_id,
-        name="generic.custom.whole",
+        name="test.custom.whole",
         kind="whole",
         chunk_index=0,
         input_ref={"oss_bucket": "bucket", "oss_key": "runtime/whole.json", "oss_region": "region"},
@@ -224,7 +193,7 @@ async def test_plan_job_ignores_old_generation_work_items(monkeypatch):
     job_id = uuid.uuid4()
     job = AIJob(
         id=job_id,
-        job_type="generic.custom",
+        job_type="test.custom",
         status="running",
         progress_percent=5,
         celery_task_id="root-task",
@@ -233,7 +202,7 @@ async def test_plan_job_ignores_old_generation_work_items(monkeypatch):
             "execution_mode": "single",
             "chunk_count": 1,
             "chunk_registry": [],
-            "work_items": [{"name": "generic.custom.whole", "kind": "whole", "chunk_index": 0}],
+            "work_items": [{"name": "test.custom.whole", "kind": "whole", "chunk_index": 0}],
             "execution_generation": 1,
         },
     )
@@ -241,7 +210,7 @@ async def test_plan_job_ignores_old_generation_work_items(monkeypatch):
         id=uuid.uuid4(),
         job_id=job_id,
         execution_generation=1,
-        name="generic.custom.whole",
+        name="test.custom.whole",
         kind="whole",
         chunk_index=0,
         status="succeeded",
@@ -250,7 +219,7 @@ async def test_plan_job_ignores_old_generation_work_items(monkeypatch):
         id=uuid.uuid4(),
         job_id=job_id,
         execution_generation=2,
-        name="generic.custom.whole",
+        name="test.custom.whole",
         kind="whole",
         chunk_index=0,
         status="queued",
@@ -261,7 +230,7 @@ async def test_plan_job_ignores_old_generation_work_items(monkeypatch):
         chunk_registry=[{"chunk_index": 1, "input": {"value": 2}}],
         work_items=[
             PlannedWorkItem(
-                name="generic.custom.whole",
+                name="test.custom.whole",
                 kind="whole",
                 chunk_index=0,
                 input_data={"value": 2},
@@ -321,7 +290,7 @@ async def test_finalize_waits_for_pending_work_items(monkeypatch):
     job_id = uuid.uuid4()
     job = AIJob(
         id=job_id,
-        job_type="novel_localization.step1_localize",
+        job_type="test.custom",
         status="running",
         progress_percent=50,
         celery_task_id="root-task",
@@ -372,7 +341,7 @@ async def test_finalize_ignores_failed_work_items_from_older_generation(monkeypa
     job_id = uuid.uuid4()
     job = AIJob(
         id=job_id,
-        job_type="generic.custom",
+        job_type="test.custom",
         status="running",
         progress_percent=80,
         celery_task_id="root-task",
@@ -456,7 +425,7 @@ async def test_finalize_skips_when_canvas_generation_is_stale(monkeypatch):
     job_id = uuid.uuid4()
     job = AIJob(
         id=job_id,
-        job_type="generic.custom",
+        job_type="test.custom",
         status="running",
         progress_percent=80,
         celery_task_id="new-root-task",
@@ -490,7 +459,7 @@ async def test_execute_work_item_allows_custom_runtime_without_model(monkeypatch
     item_id = uuid.uuid4()
     job = AIJob(
         id=job_id,
-        job_type="generic.custom",
+        job_type="test.custom",
         status="running",
         progress_percent=10,
         celery_task_id="root-task",
@@ -554,7 +523,7 @@ async def test_execute_work_item_skips_stale_generation_item(monkeypatch):
     item_id = uuid.uuid4()
     job = AIJob(
         id=job_id,
-        job_type="generic.custom",
+        job_type="test.custom",
         status="running",
         execution_generation=2,
         celery_task_id="root-task",
@@ -599,7 +568,7 @@ async def test_fail_job_ignores_stale_generation_item(monkeypatch):
     item_id = uuid.uuid4()
     job = AIJob(
         id=job_id,
-        job_type="generic.custom",
+        job_type="test.custom",
         status="running",
         execution_generation=2,
         celery_task_id="root-task",

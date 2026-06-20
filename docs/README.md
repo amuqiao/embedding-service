@@ -67,7 +67,7 @@ job-implementation-guide.md
 Prompt 调整：
 
 ```text
-app/workflows/novel_localization/prompts.yaml
+app/core/prompts.yaml
   ↓
 架构/架构总览.md
   ↓

@@ -13,6 +13,19 @@ class _FakeDB:
         pass
 
 
+class _TestHandler:
+    allow_callback = True
+
+    def normalize_job_params(self, job_params):
+        return job_params
+
+    def validate_normalized_job_params(self, job_params):
+        pass
+
+    def runtime_job_fields(self, job_params):
+        return {}
+
+
 @pytest.mark.asyncio
 async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monkeypatch):
     captured: dict = {}
@@ -59,11 +72,12 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fake_create)
     monkeypatch.setattr("app.services.jobs.write_runtime_json", fake_write_runtime_json)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: _TestHandler())
 
     payload = CreateJobRequest.model_validate(
         {
             "client_request_id": "req-1",
-            "job_type": "generic.echo",
+            "job_type": "test.echo",
             "job_params": {"value": {"hello": "world"}, "label": "Echo"},
             "callback": {"url": "https://example.com/callback"},
             "metadata": {"caller_task_id": "task-1"},
@@ -89,7 +103,7 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     assert job.job_params_ref["payload_snapshot"] == {"value": {"hello": "world"}, "label": "Echo"}
     assert job.job_params_hash.startswith("sha256:")
     assert job.runtime_ref["payload_snapshot"]["schema_version"] == 1
-    assert job.runtime_ref["payload_snapshot"]["job_type"] == "generic.echo"
+    assert job.runtime_ref["payload_snapshot"]["job_type"] == "test.echo"
     assert job.runtime_ref["payload_snapshot"]["job_params_hash"] == job.job_params_hash
     assert job.runtime_ref["payload_snapshot"]["runtime_fields"] == {}
     assert job.runtime_ref["payload_snapshot"]["output_target"]["type"] == "oss_prefix"
@@ -102,7 +116,7 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
         caller_id="caller-1",
         client_request_id="req-1",
         request_fingerprint=None,
-        job_type="generic.echo",
+        job_type="test.echo",
         status="queued",
         progress_percent=0,
         metadata_={},
@@ -123,11 +137,12 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
     monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: _TestHandler())
 
     payload = CreateJobRequest.model_validate(
         {
             "client_request_id": "req-1",
-            "job_type": "generic.echo",
+            "job_type": "test.echo",
             "job_params": {"value": {"hello": "world"}, "label": "Echo"},
         }
     )

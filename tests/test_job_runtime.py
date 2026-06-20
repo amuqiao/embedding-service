@@ -18,7 +18,7 @@ def test_write_runtime_json_stores_small_runtime_payload_inline(monkeypatch):
         "app.services.job_runtime.storage.write_text",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("runtime payload should not use storage")),
     )
-    job = AIJob(id=uuid.uuid4(), job_type="generic.echo")
+    job = AIJob(id=uuid.uuid4(), job_type="test.echo")
     payload = {"value": {"hello": "world"}}
 
     ref = write_runtime_json(job, "job_params", payload)
@@ -32,9 +32,6 @@ def test_write_runtime_json_stores_small_runtime_payload_inline(monkeypatch):
 
 
 def test_runtime_helpers_read_payload_from_refs(monkeypatch):
-    from app.workflows.novel_localization.handler import register_all
-
-    register_all()
     job_params = {
         "model_id": "gpt-4.1",
         "source": {"inline": {"text": "原文"}},
@@ -45,7 +42,7 @@ def test_runtime_helpers_read_payload_from_refs(monkeypatch):
         "runtime/job_params.json": job_params,
         "runtime/runtime.json": {
             "schema_version": 1,
-            "job_type": "novel_localization.step1_localize",
+            "job_type": "test.text",
             "job_params_hash": job_params_hash,
             "runtime_fields": {
                 "model_id": "gpt-4.1",
@@ -70,7 +67,7 @@ def test_runtime_helpers_read_payload_from_refs(monkeypatch):
 
     job = AIJob(
         id=uuid.uuid4(),
-        job_type="novel_localization.step1_localize",
+        job_type="test.text",
         job_params_ref={"oss_bucket": "bucket", "oss_key": "runtime/job_params.json", "oss_region": "region"},
         job_params_hash=job_params_hash,
         runtime_ref={"oss_bucket": "bucket", "oss_key": "runtime/runtime.json", "oss_region": "region"},
@@ -96,7 +93,7 @@ def test_job_params_hash_mismatch_fails_fast(monkeypatch):
 
     job = AIJob(
         id=uuid.uuid4(),
-        job_type="generic.echo",
+        job_type="test.echo",
         job_params_ref={"oss_bucket": "bucket", "oss_key": "runtime/job_params.json", "oss_region": "region"},
         job_params_hash=payload_hash({"value": "original"}),
     )
@@ -108,7 +105,7 @@ def test_job_params_hash_mismatch_fails_fast(monkeypatch):
 def test_runtime_helpers_fail_fast_without_refs():
     job = AIJob(
         id=uuid.uuid4(),
-        job_type="generic.echo",
+        job_type="test.echo",
     )
     item = AIJobWorkItem(
         id=uuid.uuid4(),

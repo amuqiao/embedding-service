@@ -1,40 +1,20 @@
-import yaml
 import pytest
 from datetime import UTC, datetime
 from fastapi.security import HTTPAuthorizationCredentials
 
-from app.core.config import settings
 from app.core.exceptions import AppError
-from app.core.prompt_templates import get_template
+from app.core.prompt_templates import list_prompt_templates
 from app.core.security import require_service_auth
 from app.main import app
-from app.schemas.jobs import CreateJobRequest, JobResult, NovelLocalizationJobParams
+from app.schemas.jobs import CreateJobRequest, JobResult
 from app.services.executor import _prompt_messages
-from app.services.job_runtime import payload_hash
 from app.services.jobs import _validate_create_request, validate_job_status_payload
 
 
 def _valid_payload() -> dict:
-    template = get_template("novel_localization.step1_localize")
-    assert template is not None
     return {
-        "job_type": "novel_localization.step1_localize",
-        "job_params": {
-            "model_id": "gpt-4.1",
-            "source": {
-                "oss": {
-                    "oss_key": "jobs/test/input.txt",
-                    "oss_url": "https://example.com/jobs/test/input.txt",
-                    "content_type": "text/plain; charset=utf-8",
-                },
-            },
-            "prompt": {
-                "blocks": [
-                    {"key": block.key, "role": block.role, "content": block.default_content}
-                    for block in template.prompt_blocks
-                ]
-            },
-        },
+        "job_type": "test.echo",
+        "job_params": {"value": {"hello": "world"}},
         "callback": {"url": "https://example.com/callback"},
         "metadata": {"caller_task_id": "task-1"},
         "options": {"priority": "normal", "timeout_seconds": 300},
@@ -43,46 +23,18 @@ def _valid_payload() -> dict:
 
 def test_create_job_request_accepts_valid_payload():
     payload = CreateJobRequest.model_validate(_valid_payload())
-    assert payload.job_type == "novel_localization.step1_localize"
-    assert payload.job_params["source"]["oss"]["oss_key"] == "jobs/test/input.txt"
+    assert payload.job_type == "test.echo"
+    assert payload.job_params == {"value": {"hello": "world"}}
     assert payload.metadata == {"caller_task_id": "task-1"}
 
 
-def test_novel_localization_job_params_accept_valid_payload():
-    params = NovelLocalizationJobParams.model_validate(_valid_payload()["job_params"])
-    assert params.source.oss.oss_key == "jobs/test/input.txt"
-    assert params.source.oss.content_type == "text/plain; charset=utf-8"
+def test_default_prompt_templates_declares_no_builtin_job_types():
+    templates = list_prompt_templates()
+    assert templates.version == "empty"
+    assert templates.job_types == []
 
 
-def test_step1_prompt_requires_chinese_localized_output():
-    template = get_template("novel_localization.step1_localize")
-    assert template is not None
-    user_block = next((b for b in template.prompt_blocks if b.key == "user"), None)
-    assert user_block is not None
-    content = user_block.default_content
-
-    assert "语言是中文" in content
-    assert "小说本地化方法论" in content
-
-
-def _block_content(job_type: str, key: str) -> str:
-    template = get_template(job_type)
-    assert template is not None
-    return next(block.default_content for block in template.prompt_blocks if block.key == key)
-
-
-def test_user_prompt_defaults_to_yaml_config():
-    config = yaml.safe_load(settings.prompt_config_path.read_text(encoding="utf-8"))
-    expected = {
-        job_type: job_config["prompt_blocks"]["user"]["content"].strip()
-        for job_type, job_config in config["job_types"].items()
-    }
-
-    for job_type, content in expected.items():
-        assert _block_content(job_type, "user") == content
-
-
-def test_runtime_prompt_appends_service_output_contract():
+def test_runtime_prompt_builds_generic_user_and_work_note_messages():
     messages = _prompt_messages(
         {
             "blocks": [
@@ -91,13 +43,11 @@ def test_runtime_prompt_appends_service_output_contract():
             ]
         },
         "待处理正文",
-        "novel_localization.step1_localize",
+        "test.echo",
     )
 
     user_message = messages[0]["content"]
     assert "用户配置提示" in user_message
-    assert "AI 能力层输出格式契约" in user_message
-    assert "===本地化正文开始===" in user_message
     assert "===待处理文本开始===" in user_message
     assert messages[1]["content"].startswith("【已有工作注释 / 上一轮约束】")
 
@@ -111,22 +61,11 @@ def test_runtime_prompt_skips_empty_work_note_input():
             ]
         },
         "待处理正文",
-        "novel_localization.step1_localize",
+        "test.echo",
     )
 
     assert [message["role"] for message in messages] == ["user"]
     assert all(not message["content"].startswith("【已有工作注释 / 上一轮约束】") for message in messages)
-
-
-def test_create_job_request_rejects_non_text_content_type():
-    params = _valid_payload()["job_params"]
-    params["source"]["oss"]["content_type"] = "application/json"
-    try:
-        NovelLocalizationJobParams.model_validate(params)
-    except Exception as exc:
-        assert "content_type" in str(exc)
-    else:
-        raise AssertionError("non-text content_type should be rejected")
 
 
 def test_create_job_request_rejects_legacy_job_contract_fields():
@@ -155,6 +94,8 @@ def test_create_job_request_rejects_execution_mode():
 
 def test_create_job_validation_allows_non_model_runtime(monkeypatch):
     class GenericHandler:
+        allow_callback = True
+
         def normalize_job_params(self, job_params):
             return job_params
 
@@ -265,7 +206,7 @@ def test_job_result_rejects_legacy_artifact_target():
                         "apply_mode": "append",
                         "content": "请统一角色称呼。",
                         "target": {
-                            "job_type": "novel_localization.step1_localize",
+                            "job_type": "legacy.job",
                             "prompt_block_key": "work_note",
                             "default_mode": "append",
                         },
@@ -298,36 +239,43 @@ def _job_view_payload(*, job_type: str, status: str, result=None, error=None) ->
 
 
 def test_job_view_status_and_result_contracts():
-    translation_result = {
-        "artifacts": [
-            {
-                "label_id": "label-1",
-                "langs": {"en": {"name": "Name", "definition": "Definition"}},
-            }
-        ],
-        "signals": {
-            "source_schema_hash": payload_hash({"labels": ["label-1"]}),
-            "translated_schemas_hash": payload_hash({"artifacts": ["label-1"]}),
-        },
-    }
+    class NullResultHandler:
+        def validate_public_result(self, result):
+            if result is not None:
+                raise ValueError("public result must be null")
+            return None
 
-    validate_job_status_payload(
-        _job_view_payload(
-            job_type="short_drama.tag_schema.translation",
-            status="succeeded",
-            result=translation_result,
+    class RequiredResultHandler:
+        def validate_public_result(self, result):
+            if result is None:
+                raise ValueError("succeeded result is required")
+            return result
+
+    def get_handler(job_type):
+        return RequiredResultHandler() if job_type == "test.required_result" else NullResultHandler()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr("app.core.workflow_registry.get", get_handler)
+    try:
+        validate_job_status_payload(_job_view_payload(job_type="test.null_result", status="succeeded"))
+        validate_job_status_payload(
+            _job_view_payload(
+                job_type="test.required_result",
+                status="succeeded",
+                result={"value": {"ok": True}},
+            )
         )
-    )
-    validate_job_status_payload(_job_view_payload(job_type="short_drama.tagging.initial", status="succeeded"))
 
-    with pytest.raises(Exception, match="result must be null"):
-        validate_job_status_payload(_job_view_payload(job_type="short_drama.tagging.initial", status="queued", result={}))
-    with pytest.raises(Exception, match="error is required"):
-        validate_job_status_payload(_job_view_payload(job_type="short_drama.tagging.initial", status="failed"))
-    with pytest.raises(Exception, match="public result must be null"):
-        validate_job_status_payload(_job_view_payload(job_type="short_drama.tagging.initial", status="succeeded", result={}))
-    with pytest.raises(Exception, match="succeeded result is required"):
-        validate_job_status_payload(_job_view_payload(job_type="short_drama.tag_schema.translation", status="succeeded"))
+        with pytest.raises(Exception, match="result must be null"):
+            validate_job_status_payload(_job_view_payload(job_type="test.null_result", status="queued", result={}))
+        with pytest.raises(Exception, match="error is required"):
+            validate_job_status_payload(_job_view_payload(job_type="test.null_result", status="failed"))
+        with pytest.raises(Exception, match="public result must be null"):
+            validate_job_status_payload(_job_view_payload(job_type="test.null_result", status="succeeded", result={}))
+        with pytest.raises(Exception, match="succeeded result is required"):
+            validate_job_status_payload(_job_view_payload(job_type="test.required_result", status="succeeded"))
+    finally:
+        monkeypatch.undo()
 
 
 def test_openapi_declares_bearer_auth_for_protected_routes():

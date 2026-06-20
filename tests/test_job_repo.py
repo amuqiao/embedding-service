@@ -86,7 +86,7 @@ async def test_mark_succeeded_persists_public_and_canonical_results():
 
     job = AIJob(
         id=uuid.uuid4(),
-        job_type="generic.echo",
+        job_type="test.echo",
         status="running",
         celery_task_id="task-1",
         progress_percent=30,
@@ -164,7 +164,7 @@ async def test_update_progress_can_require_current_task_and_generation():
 
     job = AIJob(
         id=uuid.uuid4(),
-        job_type="generic.echo",
+        job_type="test.echo",
         status="running",
         celery_task_id="task-1",
         execution_generation=2,
@@ -199,7 +199,7 @@ async def test_set_execution_plan_can_require_current_task_and_generation():
 
     job = AIJob(
         id=uuid.uuid4(),
-        job_type="generic.echo",
+        job_type="test.echo",
         status="running",
         celery_task_id="task-1",
         execution_generation=2,

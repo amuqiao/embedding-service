@@ -57,7 +57,7 @@ FastAPI AI Job 执行后端模板。服务只负责模型执行、异步 Job、�
 
 API 前缀由 `SERVICE_API_PREFIX` 配置，默认是 `/api/v1/ai-jobs`。
 
-Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是内置示例 `app/workflows/novel_localization/prompts.yaml`。该 YAML 是运行时 Prompt 的默认配置源，定义各 `job_type` 的 `system/user/work_note` 默认值和运行时输出契约。
+Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts.yaml`。当前项目不注册任何内置 `job_type`，该 YAML 只声明空模板集合；新增正式能力时再按项目规范补充 Prompt 模板和 workflow 注册。
 
 模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML，配置项包括对外 `model_id`、LiteLLM model id、上下文窗口、所需环境变量和模型调用参数。
 
@@ -70,7 +70,7 @@ Authorization: Bearer dev-service-key
 ## 冒烟验证
 
 ```bash
-./scripts/verify.sh smoke
+./scripts/verify.sh check
 ```
 
 默认使用真实模型；需要在 `.env` 配置 `OPENAI_API_KEY`。对象存储默认使用本地后端，文件写入 `storage/objects/`。单次模型调用超时由 `MODEL_CALL_TIMEOUT_SECONDS` 控制，e2e 脚本的 `--timeout-seconds` 只控制脚本轮询等待时间。
@@ -142,19 +142,13 @@ OSS_PUBLIC_ENDPOINT=
 ```bash
 ./scripts/verify.sh test
 ./scripts/verify.sh smoke
-./scripts/verify.sh mock-smoke
-./scripts/verify.sh workflow-smoke
-./scripts/verify.sh e2e --input-file .data/test_novel.txt
 ./scripts/verify.sh oss --env-file .env.dev
 ./scripts/verify.sh check
 ./scripts/verify.sh --help
 ```
 
 - `test`：运行本地 pytest。
-- `smoke`：对已运行 API 执行真实模型短链路验证。
-- `mock-smoke`：使用 Mock OpenAI 和本地存储验证完整任务流程，不调用真实模型；会临时停止已运行的 worker，并在结束时仅恢复原本处于运行状态的 worker。
-- `workflow-smoke`：使用真实模型和放大输入验证服务内部自动分块、Celery canvas 和 merge。
-- `e2e`：从 `.data` 读取 `.txt`，使用真实模型模拟调用方请求，枚举 `health`、`models`、`prompt-templates`、`jobs`、轮询和 callback，并用内置 `novel_localization` 示例 workflow 验证 artifact 契约。
+- `smoke` / `mock-smoke` / `workflow-smoke` / `e2e`：当前无内置 `job_type`，新增正式能力后再恢复对应验证。
 - `oss`：校验 Aliyun OSS 读写删除连通性。
 - `check`：运行脚本语法检查和 pytest。
 

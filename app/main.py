@@ -126,7 +126,3 @@ API_PREFIX = settings.SERVICE_API_PREFIX
 app.include_router(health.router)
 app.include_router(meta.router, prefix=API_PREFIX)
 app.include_router(jobs.router, prefix=API_PREFIX)
-if settings.ENABLE_MOCK_INTERFACES:
-    from app.api.routes import mock_interfaces
-
-    app.include_router(mock_interfaces.router)

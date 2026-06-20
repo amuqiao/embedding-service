@@ -24,48 +24,15 @@
 
 ## 二、Job 类型
 
-本项目通过 `WorkflowHandler` 注册表支持多个 `job_type`；内置 `novel_localization` 示例由 `app/workflows/novel_localization/prompts.yaml` 定义。
+本项目通过 `WorkflowHandler` 注册表支持多个 `job_type`。当前仓库不注册任何内置 `job_type`；新增正式能力前，应先在 `docs/架构/project-standards.md` 定义标准输入、标准输出、错误码、callback envelope 和 job result schema，再落地代码。
 
-### 2.1 novel_localization.step1_localize（本地化）
+新增能力的最小落地项：
 
-| 项 | 说明 |
-|---|---|
-| 输入 | 原文中文小说（OSS 对象，UTF-8） |
-| Prompt blocks | `user`（本地化方法论）、`work_note`（上一轮约束，可为空） |
-| 输出 artifact | `localized_text`（中文本地化稿，OSS 写入）、`work_note`（本次模型输出的工作注释，inline） |
-| work_note apply_mode | `replace`（直接替换，不与旧注释合并） |
-| signals | `{}` |
-| 重跑时 | source 换为上一次 step1 输出的 localized_text OSS key；work_note 换为 step2 返回的建议注释 |
-
-模型输出格式（由 output_contract 约束）：
-```
-===工作注释开始===
-...注释内容...
-===工作注释结束===
-
-===本地化正文开始===
-...中文本地化正文...
-===本地化正文结束===
-```
-
-### 2.2 novel_localization.step2_review（校验）
-
-| 项 | 说明 |
-|---|---|
-| 输入 | step1 输出的 localized_text（OSS 对象） |
-| Prompt blocks | `user`（校验标准）、`work_note`（当前工作注释） |
-| 输出 artifact | `review_summary`（校验结果说明，inline）；**仅 passed=false 时**额外返回 `work_note`（建议注释，inline） |
-| signals | `{"passed": true/false}` |
-| 语义 | `status=succeeded` 表示 AI Job 成功，`signals.passed=false` 表示校验未通过（非错误） |
-
-### 2.3 novel_localization.step3_translate（翻译）
-
-| 项 | 说明 |
-|---|---|
-| 输入 | step1 输出的 localized_text（OSS 对象） |
-| Prompt blocks | `user`（翻译标准）、`work_note`（可为空） |
-| 输出 artifact | `translated_text`（英文终稿，OSS 写入） |
-| signals | `{}` |
+- 定义能力专属 `job_params` schema。
+- 定义能力专属 `job_result` schema。
+- 实现 `WorkflowHandler`，明确 `job_type`、执行模式、callback 支持策略和结果校验。
+- 在 workflow 注册入口显式注册该 handler。
+- 补充针对该 `job_type` 的合同测试、执行测试和 callback 测试。
 
 ---
 
@@ -93,8 +60,7 @@ dispatch_job_task(job_id)
 当 `WorkflowHandler.chunking_enabled=True` 且输入字符数 > `WorkflowHandler.max_single_chars` 时触发：
 
 - 按 `WorkflowHandler.chunk_size` 字符切分
-- step1 额外生成 memory WorkItem（人物/地名/术语一致性）
-- step3 额外生成 scan WorkItem（最终合并扫描）
+- handler 可按能力需要额外生成 memory、scan 或其他 WorkItem
 - WorkItem 结果汇总后进入 finalize，对外仍返回单一 Job 状态
 
 Chunked 模式只改变内部 canvas 结构，不改变对外 Job 合同。服务承诺的是 **job 作为整体可恢复、可重跑、可收敛**；不承诺按 `memory`、`chunk`、`scan`、`merge` 等内部 work item 精确续跑。Worker 重启或 stale running 恢复时，服务会按新的执行代次重新规划并重新投递整个 Job，旧代 work item 只作为内部历史记录保留，不参与新代 merge。

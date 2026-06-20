@@ -83,7 +83,6 @@ app/
       health.py
       meta.py
       jobs.py
-      mock_interfaces.py
   schemas/
     envelope.py
     errors.py
@@ -123,9 +122,7 @@ app/
     work_items.py
     finalizer.py
   workflows/
-    generic/
-    novel_localization/
-    short_drama_tagging/
+    <workflow_name>/
   integrations/
     ai/
     storage/
@@ -311,7 +308,7 @@ HTTP 接口始终遵循 [HTTP 标准输出](#http-标准输出)。Job 不是另�
 ```json
 {
   "client_request_id": "cpp-20260620-book-2042-tagging",
-  "job_type": "short_drama.tagging",
+  "job_type": "story.tagging",
   "job_params": {
     "book_id": "2042",
     "title": "Example Story",
@@ -377,7 +374,7 @@ HTTP 接口始终遵循 [HTTP 标准输出](#http-标准输出)。Job 不是另�
     "job": {
       "job_id": "job_01JZ8Q7Y4W7X2Z6M8N9P0Q1R2S",
       "client_request_id": "cpp-20260620-book-2042-tagging",
-      "job_type": "short_drama.tagging",
+      "job_type": "story.tagging",
       "job_status": "queued",
       "job_progress": {
         "stage": "accepted",
@@ -413,7 +410,7 @@ HTTP 接口始终遵循 [HTTP 标准输出](#http-标准输出)。Job 不是另�
     "job": {
       "job_id": "job_01JZ8Q7Y4W7X2Z6M8N9P0Q1R2S",
       "client_request_id": "cpp-20260620-book-2042-tagging",
-      "job_type": "short_drama.tagging",
+      "job_type": "story.tagging",
       "job_status": "succeeded",
       "job_progress": {
         "stage": "completed",
@@ -468,7 +465,7 @@ HTTP 接口始终遵循 [HTTP 标准输出](#http-标准输出)。Job 不是另�
     "job": {
       "job_id": "job_01JZ8Q7Y4W7X2Z6M8N9P0Q1R2S",
       "client_request_id": "cpp-20260620-book-2042-tagging",
-      "job_type": "short_drama.tagging",
+      "job_type": "story.tagging",
       "job_status": "failed",
       "job_progress": {
         "stage": "failed",
@@ -536,7 +533,7 @@ Callback 成功正例：
   "job": {
     "job_id": "job_01JZ8Q7Y4W7X2Z6M8N9P0Q1R2S",
     "client_request_id": "cpp-20260620-book-2042-tagging",
-    "job_type": "short_drama.tagging",
+    "job_type": "story.tagging",
     "job_status": "succeeded",
     "job_progress": {
       "stage": "completed",
@@ -591,7 +588,7 @@ Callback 失败正例：
   "job": {
     "job_id": "job_01JZ8Q7Y4W7X2Z6M8N9P0Q1R2S",
     "client_request_id": "cpp-20260620-book-2042-tagging",
-    "job_type": "short_drama.tagging",
+    "job_type": "story.tagging",
     "job_status": "failed",
     "job_progress": {
       "stage": "failed",

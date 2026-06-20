@@ -196,7 +196,7 @@
 - Contract tests 覆盖所有公开接口成功和失败结构。
 - Route / OpenAPI envelope allowlist 检查：所有非豁免受保护接口必须使用 `ResponseEnvelope[TData]`。
 - Job HTTP contract tests 检查 `data.job.job_result`，不得把 Job 字段平铺到 `data` 顶层。
-- `tests/test_mock_interfaces.py`
+- Mock 接口仅在重新定义为正式调试能力后补合同测试；当前不保留旧 mock interface 测试。
 - OpenAPI/schema 快照。
 - OpenAPI example、README 示例、mock fixture 与 schema 的 parity check。
 
@@ -227,7 +227,7 @@
 - canonical result -> `job_result` 可追溯性检查。
 - `data.job.job_result` 与 `CallbackEnvelope.job.job_result` 一致性测试。
 - JobResponseData / JobEnvelope / CallbackEnvelope contract tests。
-- `tests/test_short_drama_workflow.py`
+- 新增 job_type 时补对应 workflow schema / callback / result 合同测试；当前不保留旧 workflow 专属测试。
 - `tests/test_callback_delivery.py`
 - `tests/test_workflow_dispatch.py`
 
@@ -303,7 +303,7 @@
 
 验证：
 
-- `tests/test_mock_interfaces.py`
+- Mock fixture 不作为合同真源；当前不保留旧 mock interface 测试。
 - OpenAPI/schema 快照。
 - OpenAPI example、README 示例、mock fixture 与 schema 的 parity check。
 - 文档链接检查或 `rg` 检查非标准响应模式。

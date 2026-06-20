@@ -10,21 +10,30 @@ from app.services.callbacks import (
     CallbackDeliveryResult,
     build_callback_body,
     deliver_callback,
-    validate_callback_response_payload,
 )
-from app.services.job_runtime import payload_hash, write_runtime_json
 from app.services.jobs import _job_to_response
-from app.workflows.register import register_all_workflows
 
 
-register_all_workflows()
+@pytest.fixture(autouse=True)
+def _callback_test_handler(monkeypatch):
+    class Handler:
+        def build_callback_data(self, job):
+            return job.result if isinstance(job.result, dict) else {}
+
+        def validate_callback_response(self, response):
+            pass
+
+        def validate_public_result(self, result):
+            return result
+
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: Handler())
 
 
 def _job(callback_url: str | None = "https://example.com/callback") -> AIJob:
     now = datetime.now(timezone.utc)
     return AIJob(
         id=uuid.uuid4(),
-        job_type="novel_localization.step1_localize",
+        job_type="test.callback",
         status="succeeded",
         progress_percent=100,
         metadata_={"caller_task_id": "task-1"},
@@ -50,7 +59,7 @@ def test_build_callback_body_uses_public_fields():
     assert body["sent_at"]
     assert body["job_id"] == str(job.id)
     assert body["client_request_id"] is None
-    assert body["job_type"] == "novel_localization.step1_localize"
+    assert body["job_type"] == "test.callback"
     assert body["status"] == "succeeded"
     assert body["progress"] == {"percent": 100, "message": None, "stage": None}
     assert body["error"] is None
@@ -115,91 +124,6 @@ def test_build_callback_body_uses_next_attempt_number():
     assert body["attempt"] == 3
 
 
-def test_build_callback_body_includes_short_drama_success_data():
-    params = {"t_book_id": "300000000300000279"}
-    job = _job()
-    job.job_type = "short_drama.tagging.initial"
-    job.client_request_id = "cpp:300000000300000279:initial:mock"
-    job.metadata_ = {"source_service": "cpp", "business_scene": "short_drama_tagging"}
-    job.job_params_ref = write_runtime_json(job, "job_params", params)
-    job.job_params_hash = payload_hash(params)
-    job.canonical_result = {
-        "artifacts": [],
-        "signals": {
-            "success": False,
-            "result_status": "partial_success",
-            "validation_issue_count": 1,
-            "validation_issues": [{"issue": "below_min_items"}],
-            "reason_codes": ["below_min_items"],
-            "t_book_id": "300000000300000279",
-            "subtitle_language": "zh",
-            "requested_schema_language": "zh",
-        },
-    }
-
-    body = build_callback_body(job)
-
-    assert body["job_id"] == str(job.id)
-    assert body["client_request_id"] == "cpp:300000000300000279:initial:mock"
-    assert body["data"] == {
-        "t_book_id": "300000000300000279",
-        "result_status": "partial_success",
-        "validation_issue_count": 1,
-        "validation_issues": [{"issue": "below_min_items"}],
-        "reason_codes": ["below_min_items"],
-        "subtitle_language": "zh",
-        "requested_schema_language": "zh",
-    }
-
-
-def test_build_callback_body_includes_short_drama_failed_data_from_job_params():
-    params = {"t_book_id": "300000000300000279"}
-    job = _job()
-    job.job_type = "short_drama.tagging.initial"
-    job.status = "failed"
-    job.error = {"code": "MODEL_OUTPUT_INVALID", "message": "bad tags", "details": {}}
-    job.metadata_ = {"business_scene": "short_drama_tagging"}
-    job.job_params_ref = write_runtime_json(job, "job_params", params)
-    job.job_params_hash = payload_hash(params)
-
-    body = build_callback_body(job)
-
-    assert body["event"] == "job.failed"
-    assert body["status"] == "failed"
-    assert body["error"] == {"code": "MODEL_OUTPUT_INVALID", "message": "bad tags", "details": {}}
-    assert body["data"] == {"t_book_id": "300000000300000279"}
-
-
-def test_build_callback_body_rejects_short_drama_success_without_signals():
-    params = {"t_book_id": "300000000300000279"}
-    job = _job()
-    job.job_type = "short_drama.tagging.initial"
-    job.job_params_ref = write_runtime_json(job, "job_params", params)
-    job.job_params_hash = payload_hash(params)
-    job.canonical_result = None
-
-    with pytest.raises(ValueError, match="canonical_result.signals"):
-        build_callback_body(job)
-
-
-def test_callback_response_handler_rejects_short_drama_data_without_acceptance_flags():
-    with pytest.raises(ValueError, match="data.accepted"):
-        validate_callback_response_payload(
-            {
-                "schema_version": "v1",
-                "event": "job.succeeded",
-                "event_id": str(uuid.uuid4()),
-                "job_id": str(uuid.uuid4()),
-                "client_request_id": "cpp:300000000300000279:initial:mock",
-                "job_type": "short_drama.tagging.initial",
-                "status": "succeeded",
-                "msg": None,
-                "metadata": {"source_service": "cpp", "business_scene": "short_drama_tagging"},
-                "data": {"t_book_id": "300000000300000279"},
-            }
-        )
-
-
 def test_callback_response_requires_common_extension_fields():
     with pytest.raises(ValueError, match="metadata"):
         CallbackResponseEnvelope.model_validate(
@@ -208,7 +132,7 @@ def test_callback_response_requires_common_extension_fields():
                 "event": "job.succeeded",
                 "event_id": str(uuid.uuid4()),
                 "job_id": str(uuid.uuid4()),
-                "job_type": "novel_localization.step1_localize",
+                "job_type": "test.callback",
                 "status": "succeeded",
                 "msg": None,
                 "data": {},
@@ -252,7 +176,7 @@ async def test_deliver_callback_tries_once_on_http_failure(monkeypatch):
 
     class _Response:
         status_code = 503
-        text = '{"schema_version":"v1","event":"job.succeeded","event_id":"00000000-0000-0000-0000-000000000000","job_id":"00000000-0000-0000-0000-000000000000","job_type":"novel_localization.step1_localize","status":"succeeded","msg":"temporary failure","metadata":{},"data":{}}'
+        text = '{"schema_version":"v1","event":"job.succeeded","event_id":"00000000-0000-0000-0000-000000000000","job_id":"00000000-0000-0000-0000-000000000000","job_type":"test.callback","status":"succeeded","msg":"temporary failure","metadata":{},"data":{}}'
 
     class _Client:
         def __init__(self, timeout):
@@ -462,71 +386,6 @@ async def test_deliver_callback_does_not_treat_partial_v1_with_data_as_json_succ
     assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
     assert result.last_error["response"]["format"] == "v1"
     assert result.last_error["response"]["valid"] is False
-
-
-@pytest.mark.asyncio
-async def test_deliver_callback_rejects_short_drama_v1_response_with_invalid_data(monkeypatch):
-    class _Response:
-        status_code = 200
-
-        def __init__(self, request_body):
-            self.text = json.dumps(
-                {
-                    "schema_version": "v1",
-                    "event": request_body["event"],
-                    "event_id": request_body["event_id"],
-                    "job_id": request_body["job_id"],
-                    "client_request_id": request_body["client_request_id"],
-                    "job_type": request_body["job_type"],
-                    "status": request_body["status"],
-                    "msg": None,
-                    "metadata": request_body["metadata"],
-                    "data": {"t_book_id": request_body["data"]["t_book_id"]},
-                }
-            )
-
-    class _Client:
-        def __init__(self, timeout):
-            self.timeout = timeout
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def post(self, url, content, headers):
-            return _Response(json.loads(content.decode("utf-8")))
-
-    monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
-    params = {"t_book_id": "300000000300000279"}
-    job = _job()
-    job.job_type = "short_drama.tagging.initial"
-    job.client_request_id = "cpp:300000000300000279:initial:mock"
-    job.metadata_ = {"source_service": "cpp", "business_scene": "short_drama_tagging"}
-    job.job_params_ref = write_runtime_json(job, "job_params", params)
-    job.job_params_hash = payload_hash(params)
-    job.canonical_result = {
-        "artifacts": [],
-        "signals": {
-            "success": True,
-            "result_status": "success",
-            "validation_issue_count": 0,
-            "validation_issues": [],
-            "reason_codes": [],
-            "t_book_id": "300000000300000279",
-            "subtitle_language": "zh",
-            "requested_schema_language": "zh",
-        },
-    }
-
-    result = await deliver_callback(job)
-
-    assert result.status == "failed"
-    assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
-    assert result.last_error["response"]["format"] == "v1"
-    assert result.last_error["response"]["valid"] is False
-    assert "data.accepted" in result.last_error["response"]["error"]
 
 
 @pytest.mark.asyncio

@@ -23,7 +23,7 @@ class FakeDB:
 def _payload() -> CreateJobRequest:
     return CreateJobRequest.model_validate(
         {
-            "job_type": "generic.echo",
+            "job_type": "test.echo",
             "job_params": {"value": {"ok": True}},
         }
     )
@@ -32,7 +32,7 @@ def _payload() -> CreateJobRequest:
 def _job() -> AIJob:
     return AIJob(
         id=uuid.uuid4(),
-        job_type="generic.echo",
+        job_type="test.echo",
         status="queued",
         created_at=datetime.now(timezone.utc),
     )
@@ -46,7 +46,7 @@ async def test_submit_ai_job_commits_then_publishes_created_job(monkeypatch):
 
     async def fake_create_job(_db, payload, caller_id):
         assert _db is db
-        assert payload.job_type == "generic.echo"
+        assert payload.job_type == "test.echo"
         assert caller_id == "caller-1"
         return job, True
 

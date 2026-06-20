@@ -38,23 +38,6 @@ class OSSReference(StrictBaseModel):
         return "text/plain; charset=utf-8"
 
 
-class JobSourceInline(StrictBaseModel):
-    text: str = Field(min_length=1)
-
-
-class JobSource(StrictBaseModel):
-    oss: OSSReference | None = None
-    inline: JobSourceInline | None = None
-
-    @model_validator(mode="after")
-    def validate_source(self):
-        if self.oss is None and self.inline is None:
-            raise ValueError("JobSource must have either 'oss' or 'inline'")
-        if self.oss is not None and self.inline is not None:
-            raise ValueError("JobSource cannot have both 'oss' and 'inline'")
-        return self
-
-
 class CallbackConfig(StrictBaseModel):
     url: str = Field(min_length=1)
     events: list[Literal["job.succeeded", "job.failed"]] | None = None
@@ -64,16 +47,6 @@ class CallbackConfig(StrictBaseModel):
         if not self.events:
             self.events = ["job.succeeded", "job.failed"]
         return self
-
-
-class PromptBlock(StrictBaseModel):
-    key: str = Field(min_length=1)
-    role: Literal["user"]
-    content: str = ""
-
-
-class PromptConfig(StrictBaseModel):
-    blocks: list[PromptBlock] = Field(min_length=1)
 
 
 class JobOptions(StrictBaseModel):
@@ -88,13 +61,6 @@ class CreateJobRequest(StrictBaseModel):
     callback: CallbackConfig | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     options: JobOptions | None = None
-
-
-class NovelLocalizationJobParams(StrictBaseModel):
-    model_id: str = Field(min_length=1)
-    source: JobSource
-    prompt: PromptConfig
-    extra: dict[str, Any] | None = None
 
 
 class CreateJobResponse(StrictBaseModel):
