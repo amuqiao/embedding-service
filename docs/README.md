@@ -1,6 +1,6 @@
 # AI Job Template 文档导航
 
-本文是 `docs/` 目录的入口索引。当前主线是通用 FastAPI AI Job 执行模板；`novel_localization` 相关文档只作为内置示例 workflow 或历史上下文使用。
+本文是 `docs/` 目录的入口索引。当前主线是 AI Job 能力层服务：通用合同、当前架构、运行验证和具体能力对接分层维护；示例或历史文档不作为当前事实源。
 
 ## 当前必要文档
 
@@ -8,15 +8,19 @@
 |---|---|
 | [`template-usage.md`](template-usage.md) | 模板替换清单，以及接入新 workflow 的最小步骤 |
 | [`架构/README.md`](架构/README.md) | 架构目录入口 |
-| [`架构/架构总览.md`](架构/架构总览.md) | 服务定位、边界、API、Job 生命周期、异步执行、Callback、恢复机制、数据模型和扩展边界；待进一步模板化精简 |
+| [`架构/project-standards.md`](架构/project-standards.md) | 项目规范与骨架：标准 envelope、输入输出 schema、异常、配置、日志、ORM、Repository 和验证基线 |
+| [`架构/架构总览.md`](架构/架构总览.md) | 服务定位、边界、API、Job 生命周期、异步执行、Callback、恢复机制、数据模型和扩展边界 |
+| [`架构/通用_AI_Job_接入规范.md`](架构/通用_AI_Job_接入规范.md) | 通用 AI Job 创建、查询、Callback、幂等、错误和新增 `job_type` 的合同事实源 |
+| [`架构/refactor-plan.md`](架构/refactor-plan.md) | 规范先行重构路线：先建项目标准和骨架，再适配接口、Job、配置、日志、异常和 ORM |
 | [`job-implementation-guide.md`](job-implementation-guide.md) | Job 系统实施说明；待进一步从内置示例 workflow 中抽离通用机制说明 |
 | [`部署与发布手册.md`](部署与发布手册.md) | 本地开发、compose 部署、配置规则、验证入口和常见排障 |
 
-## 内置示例文档
+## 具体能力对接文档
 
 | 文档 | 用途 |
 |---|---|
-| [`接口层/小说本地化AI能力层_后端对接接口文档.md`](接口层/小说本地化AI能力层_后端对接接口文档.md) | `novel_localization` 示例 workflow 的历史对接文档，不作为通用模板 API 主文档 |
+| [`接口层/CPP服务接口.md`](接口层/CPP服务接口.md) | 短剧打标 / 标签体系翻译等 CPP 调用方对接说明；通用 Job 壳仍以接入规范为准 |
+| [`接口层/mock-interfaces.md`](接口层/mock-interfaces.md) | mock 联调接口、示例请求和示例回调；用于联调和 contract fixture，不替代正式合同 |
 
 ## 阶段性维护文档
 
@@ -53,9 +57,9 @@ job-implementation-guide.md
 后端对接：
 
 ```text
-接口层/小说本地化AI能力层_后端对接接口文档.md
+架构/通用_AI_Job_接入规范.md
   ↓
-架构/架构总览.md
+接口层/CPP服务接口.md（仅短剧 / CPP 对接需要）
   ↓
 部署与发布手册.md
 ```
@@ -73,6 +77,6 @@ template-usage.md
 ## 后续合并提炼规则
 
 - 配置说明只保留两处：稳定规则写入 [`部署与发布手册.md`](部署与发布手册.md)，生产调参和准入口径写入 [`架构/production-readiness-review.md`](架构/production-readiness-review.md)。
-- 通用 API 契约应优先沉淀到模板文档；`novel_localization` 文档只保留示例 workflow 的业务契约，不作为新 workflow 的默认对接依据。
+- 通用 API 契约应优先沉淀到 [`架构/通用_AI_Job_接入规范.md`](架构/通用_AI_Job_接入规范.md)；具体能力文档只记录该能力的 `job_params`、结果和联调规则，不反向定义通用 Job 壳。
 - Job 机制说明分两层：[`架构/架构总览.md`](架构/架构总览.md) 讲心智模型和边界，[`job-implementation-guide.md`](job-implementation-guide.md) 讲当前实现选择和排障判断。
 - `archive/` 只允许保存历史依据，不允许被 README、AGENTS.md 或对接方作为当前事实来源引用。

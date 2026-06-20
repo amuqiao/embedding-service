@@ -6,6 +6,8 @@
 
 Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata` 和 `options`。具体任务入参由 `job_type` 自己的 `job_params` schema 定义；具体任务出参由 `job_type` 自己的 `result` schema 定义。`novel_localization` 是内置示例 workflow，用来展示如何把文本 LLM 任务适配到这套通用 Job 骨架。
 
+规范先行重构期间，长期合同、目录骨架和注册真源以 [AI Job 服务项目规范与骨架](架构/project-standards.md) 为准。新 `job_type` 的目标注册入口是 `app/jobs/registry.py`，Prompt YAML、README 示例和 mock fixture 都不是注册事实源。
+
 ## 新项目替换清单
 
 创建新项目时，优先替换下列稳定标识。
@@ -34,13 +36,13 @@ Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`cal
 如果新项目不需要小说本地化示例，按下面顺序删除：
 
 1. 删除 `app/workflows/novel_localization/`。
-2. 从 `app/workflows/register.py` 移除 `_register_novel_localization()`。
+2. 从目标 `job_type` registry 移除 `novel_localization.*` 注册项。
 3. 删除或替换 `app/workflows/novel_localization/prompts.yaml`。
 4. 如果仍使用 YAML Prompt 模板，把 `PROMPT_CONFIG_PATH` 指向新的 YAML 文件。
 
 ## 接入新 Workflow
 
-一个 workflow 表示一组共享同一业务主题的 job type，例如 `document_translation` 或 `audio_transcription`。接入新 workflow 的最小路径是：写 handler、注册 handler、为 `job_params` 提供 schema 归一化、按需补 Prompt YAML、用 API 创建 Job 验证。
+一个 workflow 表示一组共享同一业务主题的 job type，例如 `document_translation` 或 `audio_transcription`。接入新 workflow 的目标路径是：定义 params / runtime / canonical result / public result / callback data schema，写 handler，注册 `job_type`，按需补 Prompt YAML，并用 API 创建 Job 验证。
 
 ### 1. 创建 Handler 文件
 
@@ -97,17 +99,22 @@ def register_all() -> None:
     register(MyJobHandler())
 ```
 
-### 2. 注册 Workflow
+### 2. 注册 Job Type
 
-在 `app/workflows/register.py` 增加注册入口：
+在目标 `app/jobs/registry.py` 增加注册项。注册项至少声明：
 
-```python
-from app.workflows.your_workflow.handler import register_all as _register_your_workflow
+- 稳定唯一的 `job_type`。
+- handler 入口。
+- params schema 和版本。
+- runtime fields schema 和版本。
+- canonical result schema 和版本。
+- public result schema 和版本；允许显式为 `null`。
+- callback data schema 和版本；未声明时默认引用 public result。
+- 是否允许 callback、artifact、外部写回。
+- 默认超时、成本预算、队列或并发分类。
+- 支持的执行计划类型。
 
-_register_your_workflow()
-```
-
-API、worker 和 pytest 都通过这个统一入口注册 workflow。新增 workflow 时不要只在 `app/main.py` 注册，否则 worker 进程可能拿不到 handler。
+API、worker、recovery 和测试必须读取同一份 registry。新增 workflow 时不要只在 FastAPI 启动路径注册，否则 worker 或 recovery 进程可能拿不到 handler。
 
 ### 3. 定义 Prompt 模板
 
