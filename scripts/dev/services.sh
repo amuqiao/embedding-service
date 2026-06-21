@@ -12,6 +12,10 @@ API_URL="${API_URL:-http://${API_HOST}:${API_PORT}}"
 API_DOCS_URL="${API_DOCS_URL:-${API_URL}/docs}"
 API_OPENAPI_URL="${API_OPENAPI_URL:-${API_URL}/openapi.json}"
 API_HEALTH_URL="${API_HEALTH_URL:-${API_URL}/health}"
+DEV_API_RELOAD="${DEV_API_RELOAD:-$(env_value DEV_API_RELOAD)}"
+DEV_API_RELOAD="${DEV_API_RELOAD:-true}"
+WATCHFILES_FORCE_POLLING="${WATCHFILES_FORCE_POLLING:-$(env_value WATCHFILES_FORCE_POLLING)}"
+WATCHFILES_FORCE_POLLING="${WATCHFILES_FORCE_POLLING:-true}"
 
 APP_SERVICES=(api worker)
 DEP_SERVICES=(postgres redis)
@@ -43,10 +47,29 @@ service_url() {
   esac
 }
 
+api_reload_enabled() {
+  case "$DEV_API_RELOAD" in
+    true|True|TRUE) return 0 ;;
+    false|False|FALSE) return 1 ;;
+    *) die "DEV_API_RELOAD must be true or false" 2 ;;
+  esac
+}
+
 service_command() {
   case "$1" in
     api)
-      printf "env API_HOST=%q API_PORT=%q %q " "$API_HOST" "$API_PORT" "$ROOT_DIR/start-api.sh"
+      if api_reload_enabled; then
+        printf "env API_HOST=%q API_PORT=%q WATCHFILES_FORCE_POLLING=%q %q app.main:app --host %q --port %q --reload --reload-dir %q " \
+          "$API_HOST" \
+          "$API_PORT" \
+          "$WATCHFILES_FORCE_POLLING" \
+          "$ROOT_DIR/.venv/bin/uvicorn" \
+          "$API_HOST" \
+          "$API_PORT" \
+          "$ROOT_DIR/app"
+      else
+        printf "env API_HOST=%q API_PORT=%q %q " "$API_HOST" "$API_PORT" "$ROOT_DIR/start-api.sh"
+      fi
       ;;
     worker)
       printf "%q " "$ROOT_DIR/start-worker.sh"
@@ -206,7 +229,13 @@ start_service() {
 
   require_app_service "$service"
   require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
-  [[ "$service" == "api" ]] && require_executable "$ROOT_DIR/start-api.sh" "missing start-api.sh"
+  if [[ "$service" == "api" ]]; then
+    if api_reload_enabled; then
+      require_executable "$ROOT_DIR/.venv/bin/uvicorn" "run: ./scripts/dev.sh bootstrap"
+    else
+      require_executable "$ROOT_DIR/start-api.sh" "missing start-api.sh"
+    fi
+  fi
   [[ "$service" == "worker" ]] && require_executable "$ROOT_DIR/start-worker.sh" "missing start-worker.sh"
 
   pid_file="$(service_pid_file "$service")"
@@ -267,6 +296,14 @@ stop_service() {
   if ! wait_for_pid_exit "$pid" 10; then
     event "KILLING" "$service" "pid=$pid"
     kill -9 "$pid" 2>/dev/null || true
+    sleep 1
+    if [[ "$service" == "api" ]]; then
+      local owner_pid
+      owner_pid="$(port_owner_pid "$API_PORT")"
+      if [[ -n "$owner_pid" ]]; then
+        die "api port ${API_PORT} is still used by pid=${owner_pid} after stopping api" 4
+      fi
+    fi
   fi
   rm -f "$pid_file"
   event "STOPPED" "$service" ""

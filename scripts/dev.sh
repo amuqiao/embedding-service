@@ -22,8 +22,10 @@ usage() {
 
 服务：
   api       FastAPI 服务，URL: ${API_URL}，文档: ${API_DOCS_URL}，OpenAPI: ${API_OPENAPI_URL}，健康检查: ${API_HEALTH_URL}
+            本地默认使用 uvicorn --reload 热更新；如需旧启动路径，设置 DEV_API_RELOAD=false。
   worker    Celery worker，处理 jobs.dispatch 及 work item 异步任务
             本地使用 solo pool，避免 macOS/Python 3.13 下 prefork 调用 OpenAI 时崩溃。
+            worker 代码变更后使用 ./scripts/dev.sh restart worker。
 
 命令：
   bootstrap           缺少 .env 时从 .env.example 创建，并执行 uv sync。

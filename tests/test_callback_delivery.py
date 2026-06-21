@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.core.config import settings
+from app.core.exceptions import AppError
 from app.models.job import AIJob
 from app.schemas.jobs import CallbackResponseEnvelope
 from app.services.callbacks import (
@@ -113,6 +114,39 @@ def test_build_callback_body_uses_public_fields():
         "updated_at": job.updated_at.isoformat().replace("+00:00", "Z"),
         "finished_at": job.finished_at.isoformat().replace("+00:00", "Z"),
     }
+
+
+def test_build_callback_body_uses_arithmetic_public_result_schema(monkeypatch):
+    from app.workflows.arithmetic import ArithmeticWorkflow
+
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: ArithmeticWorkflow())
+    job = _job()
+    job.job_type = "arithmetic"
+    job.result = {
+        "a": 8,
+        "b": 2,
+        "addition": 10,
+        "subtraction": 6,
+        "multiplication": 16,
+        "division": 4.0,
+    }
+    job.runtime_ref["payload"]["job_type"] = "arithmetic"
+
+    body = build_callback_body(job)
+
+    assert body["job"]["job_type"] == "arithmetic"
+    assert body["job"]["job_result"] == job.result
+
+    job.result = {
+        "a": 8,
+        "b": 2,
+        "addition": 10,
+        "subtraction": 6,
+        "multiplication": 16,
+    }
+    with pytest.raises(AppError) as exc:
+        build_callback_body(job)
+    assert exc.value.code == "JOB_VIEW_CONTRACT_INVALID"
 
 
 def test_job_view_exposes_callback_delivery_state():

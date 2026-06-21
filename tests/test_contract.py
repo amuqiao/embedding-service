@@ -11,6 +11,13 @@ from app.services.executor import _prompt_messages
 from app.services.jobs import _validate_create_request, validate_job_status_payload
 
 
+@pytest.fixture(autouse=True)
+def reset_openapi_schema():
+    app.openapi_schema = None
+    yield
+    app.openapi_schema = None
+
+
 def _valid_payload() -> dict:
     return {
         "client_request_id": "contract-req-1",
@@ -191,11 +198,48 @@ def test_create_job_validation_wraps_unexpected_prerequisite_errors(monkeypatch)
 @pytest.mark.asyncio
 async def test_service_auth_uses_caller_id_header(monkeypatch):
     monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
+    monkeypatch.setattr("app.core.security.settings.DISABLE_HTTP_AUTH_HEADER", False)
+    monkeypatch.setattr("app.core.security.settings.DISABLE_CALLER_ID_HEADER", False)
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="test-token")
 
     caller_id = await require_service_auth(credentials=credentials, caller_id="caller-1")
 
     assert caller_id == "caller-1"
+
+
+@pytest.mark.asyncio
+async def test_service_auth_can_disable_http_auth_header(monkeypatch):
+    monkeypatch.setattr("app.core.security.settings.DISABLE_HTTP_AUTH_HEADER", True)
+    monkeypatch.setattr("app.core.security.settings.DISABLE_CALLER_ID_HEADER", False)
+
+    caller_id = await require_service_auth(credentials=None, caller_id="caller-1")
+
+    assert caller_id == "caller-1"
+
+
+@pytest.mark.asyncio
+async def test_service_auth_can_disable_caller_id_header(monkeypatch):
+    monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
+    monkeypatch.setattr("app.core.security.settings.DISABLE_HTTP_AUTH_HEADER", False)
+    monkeypatch.setattr("app.core.security.settings.DISABLE_CALLER_ID_HEADER", True)
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="test-token")
+
+    caller_id = await require_service_auth(credentials=credentials, caller_id="bad caller!")
+
+    assert caller_id == "default"
+
+
+@pytest.mark.asyncio
+async def test_service_auth_rejects_invalid_caller_id_header_by_default(monkeypatch):
+    monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
+    monkeypatch.setattr("app.core.security.settings.DISABLE_HTTP_AUTH_HEADER", False)
+    monkeypatch.setattr("app.core.security.settings.DISABLE_CALLER_ID_HEADER", False)
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="test-token")
+
+    with pytest.raises(AppError) as exc:
+        await require_service_auth(credentials=credentials, caller_id="bad caller!")
+
+    assert exc.value.code == "UNAUTHORIZED"
 
 
 def test_job_result_rejects_legacy_artifact_target():
@@ -287,7 +331,68 @@ def test_job_view_status_and_result_contracts():
         monkeypatch.undo()
 
 
-def test_openapi_declares_bearer_auth_for_protected_routes():
+def test_arithmetic_job_view_result_uses_registered_result_schema(monkeypatch):
+    from app.workflows.arithmetic import ArithmeticWorkflow
+
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: ArithmeticWorkflow())
+
+    validate_job_status_payload(
+        _job_view_payload(
+            job_type="arithmetic",
+            status="succeeded",
+            result={
+                "a": 8,
+                "b": 2,
+                "addition": 10,
+                "subtraction": 6,
+                "multiplication": 16,
+                "division": 4.0,
+            },
+        )
+    )
+
+    with pytest.raises(Exception, match="division"):
+        validate_job_status_payload(
+            _job_view_payload(
+                job_type="arithmetic",
+                status="succeeded",
+                result={
+                    "a": 8,
+                    "b": 2,
+                    "addition": 10,
+                    "subtraction": 6,
+                    "multiplication": 16,
+                },
+            )
+        )
+
+
+def test_openapi_create_job_request_defaults_to_arithmetic_example():
+    from app.core.config import settings
+
+    schema = app.openapi()
+    operation = schema["paths"][f"{settings.SERVICE_API_PREFIX}/jobs"]["post"]
+    request_content = operation["requestBody"]["content"]["application/json"]
+    visible_examples = []
+    if "example" in request_content:
+        visible_examples.append(request_content["example"])
+    if "examples" in request_content:
+        visible_examples.extend(example["value"] for example in request_content["examples"].values())
+    request_schema = request_content["schema"]
+    if "$ref" in request_schema:
+        request_schema = schema["components"]["schemas"][request_schema["$ref"].rsplit("/", 1)[-1]]
+    visible_examples.extend(request_schema.get("examples", []))
+
+    arithmetic_example = next(example for example in visible_examples if example["job_type"] == "arithmetic")
+    assert arithmetic_example["client_request_id"] == "swagger-arithmetic-demo"
+    assert arithmetic_example["job_params"] == {"a": 9, "b": 3}
+    assert arithmetic_example["metadata"] == {"source": "swagger-ui"}
+    assert arithmetic_example["options"] == {"priority": "normal", "idempotency_mode": "return_existing"}
+
+
+def test_openapi_declares_bearer_auth_for_protected_routes(monkeypatch):
+    monkeypatch.setattr("app.core.config.settings.DISABLE_HTTP_AUTH_HEADER", False)
+    monkeypatch.setattr("app.core.config.settings.DISABLE_CALLER_ID_HEADER", False)
     schema = app.openapi()
 
     security_schemes = schema["components"]["securitySchemes"]
@@ -296,6 +401,37 @@ def test_openapi_declares_bearer_auth_for_protected_routes():
     from app.core.config import settings
     prompt_templates = schema["paths"][f"{settings.SERVICE_API_PREFIX}/prompt-templates"]["get"]
     assert {"HTTPBearer": []} in prompt_templates["security"]
+
+
+def test_openapi_omits_bearer_auth_when_http_auth_header_is_disabled(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr("app.core.config.settings.DISABLE_HTTP_AUTH_HEADER", True)
+    monkeypatch.setattr("app.core.config.settings.DISABLE_CALLER_ID_HEADER", False)
+
+    schema = app.openapi()
+
+    assert "HTTPBearer" not in schema.get("components", {}).get("securitySchemes", {})
+    prompt_templates = schema["paths"][f"{settings.SERVICE_API_PREFIX}/prompt-templates"]["get"]
+    assert "security" not in prompt_templates
+
+
+def test_openapi_omits_caller_id_header_when_caller_id_header_is_disabled(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr("app.core.config.settings.DISABLE_HTTP_AUTH_HEADER", False)
+    monkeypatch.setattr("app.core.config.settings.DISABLE_CALLER_ID_HEADER", True)
+
+    schema = app.openapi()
+
+    create_job = schema["paths"][f"{settings.SERVICE_API_PREFIX}/jobs"]["post"]
+    parameter_names = [
+        parameter["name"]
+        for parameter in create_job.get("parameters", [])
+        if parameter.get("in") == "header"
+    ]
+    assert "X-AI-Service-Caller-ID" not in parameter_names
+    assert {"HTTPBearer": []} in create_job["security"]
 
 
 def test_health_endpoints():
@@ -328,10 +464,12 @@ def test_unknown_route_uses_unified_error_envelope():
     assert isinstance(body["server_time"], int)
 
 
-def test_unauthorized_route_uses_unified_error_envelope():
+def test_unauthorized_route_uses_unified_error_envelope(monkeypatch):
     from fastapi.testclient import TestClient
     from app.core.config import settings
 
+    monkeypatch.setattr("app.core.security.settings.DISABLE_HTTP_AUTH_HEADER", False)
+    monkeypatch.setattr("app.core.security.settings.DISABLE_CALLER_ID_HEADER", False)
     client = TestClient(app, raise_server_exceptions=False)
     response = client.get(f"{settings.SERVICE_API_PREFIX}/models")
 
@@ -341,6 +479,20 @@ def test_unauthorized_route_uses_unified_error_envelope():
     assert body["data"]["error"]["reason"] == "UNAUTHORIZED"
     assert body["request_id"]
     assert isinstance(body["server_time"], int)
+
+
+def test_models_route_allows_missing_authorization_when_auth_header_is_disabled(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.core.config import settings
+
+    monkeypatch.setattr("app.core.security.settings.DISABLE_HTTP_AUTH_HEADER", True)
+    monkeypatch.setattr("app.core.security.settings.DISABLE_CALLER_ID_HEADER", False)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(f"{settings.SERVICE_API_PREFIX}/models")
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
 
 
 def test_method_not_allowed_uses_unified_error_envelope():

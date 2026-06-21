@@ -4,7 +4,7 @@
 
 本模板提供的是通用 Job 执行层：FastAPI API、Celery 异步任务、对象存储产物、状态轮询、Callback、模型配置和 workflow 注册机制。它不负责用户系统、项目管理、前端状态、业务流程编排或生产部署。
 
-Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata` 和 `options`。具体任务入参由 `job_type` 自己的 `job_params` schema 定义；具体任务出参由 `job_type` 自己的 `result` schema 定义。当前仓库只注册 `job_test_add` 作为测试示例 `job_type`。
+Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata` 和 `options`。具体任务入参由 `job_type` 自己的 `job_params` schema 定义；具体任务出参由 `job_type` 自己的 `result` schema 定义。当前仓库注册了 `job_test_add` 测试示例 `job_type`，以及不依赖模型调用的 `arithmetic` 示例能力。
 
 规范先行重构期间，长期合同、目录骨架和注册真源以 [AI Job 服务项目规范与骨架](架构/project-standards.md) 为准。新 `job_type` 的目标注册入口是 `app/jobs/registry.py`，Prompt YAML、README 示例和 mock fixture 都不是注册事实源。
 
@@ -25,7 +25,7 @@ Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`cal
 
 ## 当前内置能力
 
-当前仓库没有内置能力示例。`app/workflows/register.py` 默认不注册任何 handler，`app/core/prompts.yaml` 默认声明空模板集合。新增正式能力时，应先按项目标准定义 schema 和合同，再补 handler、注册入口、Prompt 模板和验证用例。
+当前仓库内置 `arithmetic` 示例能力：输入两个非 0 数，使用现有 Celery single canvas 执行一个 `whole` work item，并返回加、减、乘、除四个结果。`app/core/prompts.yaml` 默认声明空模板集合；新增正式 LLM 能力时，应先按项目标准定义 schema 和合同，再补 handler、注册入口、Prompt 模板和验证用例。
 
 ## 接入新 Workflow
 
@@ -127,6 +127,8 @@ curl -X POST http://localhost:8100/api/v1/ai-jobs/jobs \
     "metadata": {"caller_task_id": "task-1"}
   }'
 ```
+
+本地联调如需省略 `Authorization`，可设置 `DISABLE_HTTP_AUTH_HEADER=true`；如需忽略 `X-AI-Service-Caller-ID`，可设置 `DISABLE_CALLER_ID_HEADER=true`，此时统一使用 `default` caller。配置层只允许在loopback DB/Redis 地址下开启这两个开关；生产环境应保持为 `false`。
 
 创建成功只表示 Job 已进入队列：
 

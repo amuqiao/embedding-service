@@ -4,8 +4,10 @@ import uuid
 
 from app.models.job import AIJob, AIJobWorkItem
 from app.services.job_planner import JobPlan, PlannedWorkItem
-from app.services.job_workflow import execute_work_item, fail_job, finalize_job, plan_job
+from app.services.job_runtime import payload_hash
+from app.services.job_workflow import build_canvas, execute_work_item, fail_job, finalize_job, plan_job
 from app.tasks.jobs import fanout_after_mapping_task
+from app.workflows.register import register_all_workflows
 
 
 class FakeDB:
@@ -515,6 +517,148 @@ async def test_execute_work_item_allows_custom_runtime_without_model(monkeypatch
 
     assert result == {"work_item_id": str(item_id), "kind": "whole", "chunk_index": 0}
     assert succeeded["result"] == {"artifacts": [], "signals": {"custom": True}}
+
+
+@pytest.mark.asyncio
+async def test_arithmetic_single_canvas_plan_execute_finalize_flow(monkeypatch):
+    register_all_workflows()
+    job_id = uuid.uuid4()
+    params = {"a": 9, "b": 3}
+    job = AIJob(
+        id=job_id,
+        job_type="arithmetic",
+        status="running",
+        progress_percent=5,
+        celery_task_id="root-task",
+        execution_generation=1,
+        job_params_ref={
+            "storage": "db_inline",
+            "type": "json",
+            "name": "job_params",
+            "payload": params,
+        },
+        job_params_hash=payload_hash(params),
+    )
+    work_items: list[AIJobWorkItem] = []
+    delivered: list[uuid.UUID] = []
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_mark_running(*_args, **_kwargs):
+        return True
+
+    async def fake_list_work_items(_db, _job_id, **_kwargs):
+        return list(work_items)
+
+    async def fake_create_work_item(_db, *, job_id, execution_generation, name, kind, chunk_index, input_ref):
+        item = AIJobWorkItem(
+            id=uuid.uuid4(),
+            job_id=job_id,
+            execution_generation=execution_generation,
+            name=name,
+            kind=kind,
+            chunk_index=chunk_index,
+            status="queued",
+            input_ref=input_ref,
+        )
+        work_items.append(item)
+        return item
+
+    async def fake_set_execution_plan(_db, _job_id, *, execution_plan, **_kwargs):
+        job.execution_plan = execution_plan
+        return True
+
+    async def fake_update_progress(
+        _db,
+        _job_id,
+        *,
+        progress_percent,
+        progress_text,
+        progress_stage=None,
+        **_kwargs,
+    ):
+        job.progress_percent = progress_percent
+        job.progress_text = progress_text
+        job.progress_stage = progress_stage
+        return True
+
+    async def fake_get_work_item(_db, item_id):
+        return next((item for item in work_items if item.id == item_id), None)
+
+    async def fake_claim_work_item(_db, item_id, *, celery_task_id):
+        item = next(item for item in work_items if item.id == item_id)
+        item.status = "running"
+        item.celery_task_id = celery_task_id
+        return True
+
+    async def fake_mark_work_item_succeeded(_db, item_id, result):
+        item = next(item for item in work_items if item.id == item_id)
+        item.status = "succeeded"
+        item.result = result
+
+    async def fake_mark_succeeded(_db, _job_id, *, celery_task_id, result, canonical_result, canonical_result_ref=None):
+        assert celery_task_id == "root-task"
+        assert canonical_result == {
+            "a": 9,
+            "b": 3,
+            "addition": 12,
+            "subtraction": 6,
+            "multiplication": 27,
+            "division": 3.0,
+        }
+        job.status = "succeeded"
+        job.result = result
+        job.canonical_result = canonical_result
+        job.canonical_result_ref = canonical_result_ref
+        return True
+
+    async def fake_deliver_callback_for_job(delivered_job_id):
+        delivered.append(delivered_job_id)
+        return True
+
+    monkeypatch.setattr("app.services.job_workflow.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_running", fake_mark_running)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.list_work_items", fake_list_work_items)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.create_work_item", fake_create_work_item)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.set_execution_plan", fake_set_execution_plan)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.update_progress", fake_update_progress)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.get_work_item", fake_get_work_item)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.claim_work_item_for_execution", fake_claim_work_item)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_work_item_succeeded", fake_mark_work_item_succeeded)
+    monkeypatch.setattr("app.services.job_workflow.JobRepo.mark_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr("app.services.job_workflow._persist_large_artifacts", lambda _job, result: result.model_dump())
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback_for_job)
+
+    planned_job, plan, item_ids = await plan_job(FakeDB(), job_id)
+
+    assert planned_job is job
+    assert plan.execution_mode == "single"
+    assert item_ids == {"whole:0": work_items[0].id}
+    canvas = build_canvas(job.id, job.job_type, plan, item_ids, execution_generation=job.execution_generation)
+    assert [task.task for task in canvas.tasks] == ["jobs.execute_work_item", "jobs.finalize_job"]
+    assert canvas.tasks[0].args == (str(job_id), str(work_items[0].id))
+    assert canvas.tasks[1].args == (str(job_id), 1)
+
+    executed = await execute_work_item(
+        FakeDB(),
+        job_id=job_id,
+        item_id=work_items[0].id,
+        celery_task_id="work-task",
+    )
+    finalized = await finalize_job(FakeDB(), job_id, execution_generation=1)
+
+    assert executed == {"work_item_id": str(work_items[0].id), "kind": "whole", "chunk_index": 0}
+    assert finalized == {"job_id": str(job_id), "status": "succeeded"}
+    assert job.result == {
+        "a": 9,
+        "b": 3,
+        "addition": 12,
+        "subtraction": 6,
+        "multiplication": 27,
+        "division": 3.0,
+    }
+    assert delivered == [job_id]
 
 
 @pytest.mark.asyncio

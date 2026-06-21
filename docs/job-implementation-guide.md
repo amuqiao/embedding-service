@@ -24,7 +24,7 @@
 
 ## 二、Job 类型
 
-本项目通过 `WorkflowHandler` 注册表支持多个 `job_type`。当前仓库只注册 `job_test_add` 作为测试示例能力；新增正式能力前，应先在 `docs/架构/project-standards.md` 和 `docs/架构/job-type-extension-standard.md` 定义标准输入、标准输出、错误码、callback envelope 和 job result schema，再落地代码。
+本项目通过 `WorkflowHandler` 注册表支持多个 `job_type`。当前仓库注册了 `job_test_add` 测试示例能力，以及不依赖模型调用的 `arithmetic` 示例能力；新增正式 LLM 能力前，应先在 `docs/架构/project-standards.md` 和 `docs/架构/job-type-extension-standard.md` 定义标准输入、标准输出、错误码、callback envelope 和 job result schema，再落地代码。
 
 新增能力的最小落地项：
 
@@ -195,6 +195,8 @@ T0+24h 后        → Worker recovery loop 删除 expires_at <= now() 的记录
 |---|---|
 | `DATABASE_URL` | PostgreSQL 连接串 |
 | `SERVICE_API_KEY` | Bearer Token，调用方鉴权 |
+| `DISABLE_HTTP_AUTH_HEADER` | 本地联调开关；`true` 时跳过 Bearer 校验，仅允许loopback DB/Redis 地址开启 |
+| `DISABLE_CALLER_ID_HEADER` | 本地联调开关；`true` 时忽略 `X-AI-Service-Caller-ID` 并使用 `default` caller，仅允许loopback DB/Redis 地址开启 |
 | `CALLBACK_SIGNING_SECRET` | Callback HMAC-SHA256 签名密钥 |
 | `OPENAI_API_KEY` | 模型调用密钥 |
 

@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -26,6 +27,61 @@ logger = logging.getLogger(__name__)
 logger.info("app_start service=%s version=0.1.0", settings.SERVICE_NAME)
 
 app = FastAPI(title=settings.SERVICE_TITLE, version="0.1.0")
+
+
+def _remove_http_bearer_security(schema: dict) -> None:
+    security_schemes = schema.get("components", {}).get("securitySchemes")
+    if security_schemes:
+        security_schemes.pop("HTTPBearer", None)
+        if not security_schemes:
+            schema.get("components", {}).pop("securitySchemes", None)
+
+    for path_item in schema.get("paths", {}).values():
+        for operation in path_item.values():
+            if not isinstance(operation, dict) or "security" not in operation:
+                continue
+            operation["security"] = [
+                item for item in operation["security"]
+                if "HTTPBearer" not in item
+            ]
+            if not operation["security"]:
+                operation.pop("security", None)
+
+
+def _remove_caller_id_header_parameter(schema: dict) -> None:
+    for path_item in schema.get("paths", {}).values():
+        for operation in path_item.values():
+            if not isinstance(operation, dict) or "parameters" not in operation:
+                continue
+            operation["parameters"] = [
+                parameter for parameter in operation["parameters"]
+                if not (
+                    parameter.get("in") == "header"
+                    and parameter.get("name") == "X-AI-Service-Caller-ID"
+                )
+            ]
+            if not operation["parameters"]:
+                operation.pop("parameters", None)
+
+
+def custom_openapi() -> dict:
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+    if settings.DISABLE_HTTP_AUTH_HEADER:
+        _remove_http_bearer_security(schema)
+    if settings.DISABLE_CALLER_ID_HEADER:
+        _remove_caller_id_header_parameter(schema)
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 app.add_middleware(
     CORSMiddleware,

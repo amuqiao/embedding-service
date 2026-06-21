@@ -32,6 +32,7 @@ class OperationSpec:
 
 
 _SERVICE_AUTH_ERRORS = frozenset({"UNAUTHORIZED", "FORBIDDEN", "INTERNAL_ERROR"})
+_SERVICE_AUTH_BOUNDARY = "service bearer token (locally disable-able) + caller id header (optionally ignored)"
 
 _OPERATIONS: dict[str, OperationSpec] = {
     OperationID.LIST_MODELS: OperationSpec(
@@ -39,7 +40,7 @@ _OPERATIONS: dict[str, OperationSpec] = {
         channel="http",
         method="GET",
         path="/models",
-        auth_boundary="service bearer token + caller id header",
+        auth_boundary=_SERVICE_AUTH_BOUNDARY,
         request_schema=None,
         response_data_schema="ModelsResponse",
         error_codes=_SERVICE_AUTH_ERRORS,
@@ -52,7 +53,7 @@ _OPERATIONS: dict[str, OperationSpec] = {
         channel="http",
         method="GET",
         path="/prompt-templates",
-        auth_boundary="service bearer token + caller id header",
+        auth_boundary=_SERVICE_AUTH_BOUNDARY,
         request_schema=None,
         response_data_schema="PromptTemplatesResponse",
         error_codes=_SERVICE_AUTH_ERRORS,
@@ -65,7 +66,7 @@ _OPERATIONS: dict[str, OperationSpec] = {
         channel="http",
         method="POST",
         path="/jobs",
-        auth_boundary="service bearer token + caller id header",
+        auth_boundary=_SERVICE_AUTH_BOUNDARY,
         request_schema="CreateJobRequest",
         response_data_schema="JobResponseData",
         error_codes=frozenset(
@@ -89,7 +90,7 @@ _OPERATIONS: dict[str, OperationSpec] = {
         channel="http",
         method="GET",
         path="/jobs/{job_id}",
-        auth_boundary="service bearer token + caller id header + caller owned job",
+        auth_boundary=f"{_SERVICE_AUTH_BOUNDARY} + caller owned job",
         request_schema=None,
         response_data_schema="JobResponseData",
         error_codes=frozenset(

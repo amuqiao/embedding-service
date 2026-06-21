@@ -81,6 +81,16 @@ def test_job_type_registry_exposes_required_metadata():
     assert spec.allow_callback is True
     assert spec.error_codes <= all_error_reasons()
 
+    assert "arithmetic" in specs
+    arithmetic_spec = specs["arithmetic"]
+    assert arithmetic_spec.params_schema == "ArithmeticParams"
+    assert arithmetic_spec.runtime_fields_schema == "ArithmeticRuntimeFields"
+    assert arithmetic_spec.canonical_result_schema == "ArithmeticResult"
+    assert arithmetic_spec.public_result_schema == "ArithmeticResult"
+    assert arithmetic_spec.allow_callback is True
+    assert arithmetic_spec.canvas_pattern == "single"
+    assert arithmetic_spec.error_codes <= all_error_reasons()
+
 
 def test_registry_consistency_check_passes():
     register_all_workflows()

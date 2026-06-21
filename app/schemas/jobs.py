@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import Field, StrictFloat, StrictInt, field_validator, model_validator
+from pydantic import ConfigDict, Field, StrictFloat, StrictInt, field_validator, model_validator
 
 from app.schemas.common import StrictBaseModel
 from app.schemas.envelope import ResponseEnvelope
@@ -49,6 +49,28 @@ class JobOptions(StrictBaseModel):
 
 
 class CreateJobRequest(StrictBaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "client_request_id": "swagger-arithmetic-demo",
+                    "job_type": "arithmetic",
+                    "job_params": {
+                        "a": 9,
+                        "b": 3,
+                    },
+                    "metadata": {
+                        "source": "swagger-ui",
+                    },
+                    "options": {
+                        "priority": "normal",
+                        "idempotency_mode": "return_existing",
+                    },
+                }
+            ]
+        }
+    )
+
     client_request_id: str = Field(min_length=1, max_length=255)
     job_type: str = Field(min_length=1)
     job_params: dict[str, Any] = Field(default_factory=dict)
@@ -182,6 +204,51 @@ class JobTestAddResult(StrictBaseModel):
             raise ValueError("value must be a number")
         if isinstance(value, float) and not math.isfinite(value):
             raise ValueError("value must be finite")
+        return value
+
+
+class ArithmeticParams(StrictBaseModel):
+    a: NumberValue
+    b: NumberValue
+
+    @field_validator("a", "b")
+    @classmethod
+    def validate_nonzero_number(cls, value: NumberValue) -> NumberValue:
+        if isinstance(value, bool):
+            raise ValueError("value must be a number")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("value must be finite")
+        if value == 0:
+            raise ValueError("value must be non-zero")
+        return value
+
+
+class ArithmeticRuntimeFields(StrictBaseModel):
+    operation: Literal["add_subtract_multiply_divide"]
+
+
+class ArithmeticResult(StrictBaseModel):
+    a: NumberValue
+    b: NumberValue
+    addition: NumberValue
+    subtraction: NumberValue
+    multiplication: NumberValue
+    division: StrictFloat
+
+    @field_validator("a", "b", "addition", "subtraction", "multiplication")
+    @classmethod
+    def validate_number(cls, value: NumberValue) -> NumberValue:
+        if isinstance(value, bool):
+            raise ValueError("value must be a number")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("value must be finite")
+        return value
+
+    @field_validator("division")
+    @classmethod
+    def validate_division(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("division must be finite")
         return value
 
 

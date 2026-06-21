@@ -110,6 +110,85 @@ def test_post_jobs_returns_response_envelope_with_queued_job(monkeypatch):
     assert job["job_result"] is None
 
 
+def test_post_jobs_uses_default_caller_when_caller_id_header_is_disabled(monkeypatch):
+    from app.api.routes import jobs as jobs_routes
+    from app.main import app
+
+    job_id = uuid.uuid4()
+
+    async def fake_submit_job_request(_db, payload, caller_id, *, request_id):
+        assert caller_id == "default"
+        assert request_id == "req-create-default-caller"
+        assert payload.job_type == "job_test_add"
+        return _job_envelope(job_id=job_id, job_status="queued", job_result=None)
+
+    async def fake_get_db():
+        yield object()
+
+    monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
+    monkeypatch.setattr("app.core.security.settings.DISABLE_HTTP_AUTH_HEADER", False)
+    monkeypatch.setattr("app.core.security.settings.DISABLE_CALLER_ID_HEADER", True)
+    monkeypatch.setattr(jobs_routes, "submit_job_request", fake_submit_job_request)
+    app.dependency_overrides[get_db] = fake_get_db
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post(
+            f"{settings.SERVICE_API_PREFIX}/jobs",
+            json={
+                "client_request_id": "client-add-1",
+                "job_type": "job_test_add",
+                "job_params": {"a": 2, "b": 3},
+            },
+            headers={
+                "Authorization": "Bearer test-token",
+                "X-AI-Service-Caller-ID": "bad caller!",
+                "X-Request-ID": "req-create-default-caller",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    job = _assert_response_envelope(response.json())
+    assert job["job_status"] == "queued"
+
+
+def test_post_jobs_rejects_invalid_caller_id_header_by_default(monkeypatch):
+    from app.api.routes import jobs as jobs_routes
+    from app.main import app
+
+    async def fake_submit_job_request(*_args, **_kwargs):
+        raise AssertionError("invalid caller id must be rejected before submit")
+
+    async def fake_get_db():
+        yield object()
+
+    monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
+    monkeypatch.setattr("app.core.security.settings.DISABLE_HTTP_AUTH_HEADER", False)
+    monkeypatch.setattr("app.core.security.settings.DISABLE_CALLER_ID_HEADER", False)
+    monkeypatch.setattr(jobs_routes, "submit_job_request", fake_submit_job_request)
+    app.dependency_overrides[get_db] = fake_get_db
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post(
+            f"{settings.SERVICE_API_PREFIX}/jobs",
+            json={
+                "client_request_id": "client-add-1",
+                "job_type": "job_test_add",
+                "job_params": {"a": 2, "b": 3},
+            },
+            headers={
+                "Authorization": "Bearer test-token",
+                "X-AI-Service-Caller-ID": "bad caller!",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 401
+    assert response.json()["data"]["error"]["reason"] == "UNAUTHORIZED"
+
+
 def test_get_jobs_returns_response_envelope_with_standard_job_fields(monkeypatch):
     from app.api.routes import jobs as jobs_routes
     from app.main import app

@@ -19,6 +19,8 @@ def _settings_kwargs(**overrides):
     values = {
         "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/ai_jobs",
         "SERVICE_API_KEY": "test-token",
+        "DISABLE_HTTP_AUTH_HEADER": False,
+        "DISABLE_CALLER_ID_HEADER": False,
     }
     values.update(overrides)
     return values
@@ -47,6 +49,57 @@ def test_derived_timeout_properties_use_fixed_buffers():
         300 + _CELERY_SOFT_TIMEOUT_BUFFER + _CELERY_HARD_TIMEOUT_BUFFER + _JOB_STALE_RUNNING_BUFFER
     )
     assert s.callback_delivery_timeout_seconds == 5 + _CALLBACK_DELIVERY_CLAIM_GRACE
+
+
+def test_security_header_disable_flags_default_to_false():
+    s = Settings(**_settings_kwargs())
+
+    assert s.DISABLE_HTTP_AUTH_HEADER is False
+    assert s.DISABLE_CALLER_ID_HEADER is False
+
+
+def test_security_header_disable_flags_parse_bool_strings():
+    s = Settings(**_settings_kwargs(
+        DISABLE_HTTP_AUTH_HEADER="true",
+        DISABLE_CALLER_ID_HEADER="false",
+    ))
+
+    assert s.DISABLE_HTTP_AUTH_HEADER is True
+    assert s.DISABLE_CALLER_ID_HEADER is False
+
+
+def test_security_header_disable_flags_reject_ambiguous_bool_strings():
+    with pytest.raises(ValidationError, match="header disable flags"):
+        Settings(**_settings_kwargs(DISABLE_HTTP_AUTH_HEADER="1"))
+
+    with pytest.raises(ValidationError, match="header disable flags"):
+        Settings(**_settings_kwargs(DISABLE_CALLER_ID_HEADER="yes"))
+
+
+def test_security_header_disable_flags_require_local_service_urls():
+    with pytest.raises(ValidationError, match="DATABASE_URL must point to a local service"):
+        Settings(**_settings_kwargs(
+            DATABASE_URL="postgresql+asyncpg://postgres:postgres@db.example.com:5432/ai_jobs",
+            DISABLE_HTTP_AUTH_HEADER=True,
+        ))
+
+    with pytest.raises(ValidationError, match="DATABASE_URL must point to a local service"):
+        Settings(**_settings_kwargs(
+            DATABASE_URL="postgresql+asyncpg://postgres:postgres@postgres:5432/ai_jobs",
+            DISABLE_HTTP_AUTH_HEADER=True,
+        ))
+
+    with pytest.raises(ValidationError, match="REDIS_URL must point to a local service"):
+        Settings(**_settings_kwargs(
+            REDIS_URL="redis://redis.example.com:6379/0",
+            DISABLE_CALLER_ID_HEADER=True,
+        ))
+
+    with pytest.raises(ValidationError, match="REDIS_URL must point to a local service"):
+        Settings(**_settings_kwargs(
+            REDIS_URL="redis://redis:6379/0",
+            DISABLE_CALLER_ID_HEADER=True,
+        ))
 
 
 def test_settings_rejects_buffers_below_minimum():

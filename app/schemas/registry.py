@@ -3,6 +3,9 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from app.schemas.jobs import (
+    ArithmeticParams,
+    ArithmeticResult,
+    ArithmeticRuntimeFields,
     CreateJobRequest,
     JobResponseData,
     JobTestAddParams,
@@ -16,6 +19,9 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
     for schema in (
         CreateJobRequest,
         JobResponseData,
+        ArithmeticParams,
+        ArithmeticRuntimeFields,
+        ArithmeticResult,
         JobTestAddParams,
         JobTestAddRuntimeFields,
         JobTestAddResult,

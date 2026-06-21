@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,6 +15,11 @@ _CELERY_SOFT_TIMEOUT_BUFFER: int = 300   # time for L1 cleanup (job write + call
 _CELERY_HARD_TIMEOUT_BUFFER: int = 60    # time for soft-limit handler to finish before SIGKILL
 _JOB_STALE_RUNNING_BUFFER: int = 600     # recovery scan gap to avoid mis-classifying a recently killed job
 _CALLBACK_DELIVERY_CLAIM_GRACE: int = 175  # DB commit/recovery skew margin after one callback HTTP timeout
+
+
+def _looks_like_local_service_url(value: str) -> bool:
+    host = urlparse(value).hostname or ""
+    return host in {"127.0.0.1", "localhost", "::1"}
 
 
 class Settings(BaseSettings):
@@ -40,6 +46,8 @@ class Settings(BaseSettings):
 
     # ── Access control ────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: str = "http://localhost:3000"
+    DISABLE_HTTP_AUTH_HEADER: bool = False
+    DISABLE_CALLER_ID_HEADER: bool = False
 
     # ── Object storage ────────────────────────────────────────────────────────
     STORAGE_BACKEND: str = "local"
@@ -100,6 +108,19 @@ class Settings(BaseSettings):
             raise ValueError("STORAGE_BACKEND must be local or aliyun_oss")
         return value
 
+    @field_validator("DISABLE_HTTP_AUTH_HEADER", "DISABLE_CALLER_ID_HEADER", mode="before")
+    @classmethod
+    def validate_disable_header_flag(cls, value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized == "true":
+                return True
+            if normalized == "false":
+                return False
+        raise ValueError("header disable flags must be boolean true or false")
+
     @model_validator(mode="after")
     def validate_config_invariants(self) -> "Settings":
         import logging as _logging
@@ -133,6 +154,19 @@ class Settings(BaseSettings):
         for name, value in non_negative_fields.items():
             if value < 0:
                 raise ValueError(f"{name} must be greater than or equal to 0")
+
+        if self.DISABLE_HTTP_AUTH_HEADER or self.DISABLE_CALLER_ID_HEADER:
+            for name, value in {
+                "DATABASE_URL": self.DATABASE_URL,
+                "REDIS_URL": self.REDIS_URL,
+            }.items():
+                if not _looks_like_local_service_url(value):
+                    raise ValueError(
+                        f"{name} must point to a local service when auth header disable flags are enabled"
+                    )
+            _log.warning(
+                "insecure HTTP auth/caller header disable flag enabled; use local development only"
+            )
 
         # Callback delivery window invariant:
         # The claim window is derived from callback timeout + an internal grace period.
