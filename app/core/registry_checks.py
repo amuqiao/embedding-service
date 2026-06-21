@@ -132,9 +132,11 @@ def validate_app_route_operations(app) -> None:
             schema = request_body["content"]["application/json"]["schema"] if request_body else {}
             if _schema_ref_name(schema) != spec.request_schema:
                 raise ValueError(f"operation {operation_id} request schema mismatch")
-        success_status = "202" if spec.method == "POST" and spec.path == "/jobs" else "200"
+        success_status = "200"
         response_schema = operation["responses"][success_status]["content"]["application/json"]["schema"]
         response_ref = _schema_ref_name(response_schema)
+        if not response_ref:
+            response_ref = _schema_ref_name(response_schema.get("properties", {}).get("data", {}))
         if spec.response_data_schema not in response_ref:
             raise ValueError(f"operation {operation_id} response schema mismatch: {response_ref}")
 

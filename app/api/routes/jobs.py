@@ -1,12 +1,11 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.operations import OperationID
 from app.core.database import get_db
 from app.core.security import require_service_auth
-from app.schemas.envelope import ResponseEnvelope, success_envelope
 from app.schemas.jobs import CreateJobRequest, JobResponseData
 from app.services.jobs import get_job_response, submit_job_request
 
@@ -15,8 +14,7 @@ router = APIRouter(tags=["jobs"])
 
 @router.post(
     "/jobs",
-    response_model=ResponseEnvelope[JobResponseData],
-    status_code=status.HTTP_202_ACCEPTED,
+    response_model=JobResponseData,
     operation_id=OperationID.CREATE_AI_JOB,
 )
 async def create_ai_job(
@@ -31,12 +29,12 @@ async def create_ai_job(
         caller_id,
         request_id=request.state.request_id,
     )
-    return success_envelope(JobResponseData(job=job), request)
+    return JobResponseData(job=job)
 
 
 @router.get(
     "/jobs/{job_id}",
-    response_model=ResponseEnvelope[JobResponseData],
+    response_model=JobResponseData,
     operation_id=OperationID.GET_AI_JOB,
 )
 async def get_ai_job(
@@ -51,4 +49,4 @@ async def get_ai_job(
         caller_id,
         request_id=request.state.request_id,
     )
-    return success_envelope(JobResponseData(job=job), request)
+    return JobResponseData(job=job)

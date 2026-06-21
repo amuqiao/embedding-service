@@ -9,8 +9,7 @@ from uuid import UUID
 from pydantic import ConfigDict, Field, StrictFloat, StrictInt, field_validator, model_validator
 
 from app.schemas.common import StrictBaseModel
-from app.schemas.envelope import ResponseEnvelope
-from app.schemas.errors import ErrorDetail
+from app.schemas.errors import CallbackErrorDetail, JobErrorDetail
 
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -22,7 +21,6 @@ ProgressStage = Literal[
     "calling_model",
     "merging",
     "writing_result",
-    "delivering_callback",
     "completed",
     "failed",
 ]
@@ -36,8 +34,12 @@ class CallbackConfig(StrictBaseModel):
 
     @model_validator(mode="after")
     def default_events(self) -> "CallbackConfig":
-        if not self.events:
-            self.events = ["job.succeeded", "job.failed"]
+        if self.events == []:
+            raise ValueError("callback.events must not be empty")
+        if self.events is None:
+            self.events = ["job.failed", "job.succeeded"]
+        else:
+            self.events = sorted(set(self.events))
         return self
 
 
@@ -86,7 +88,7 @@ class JobProgress(StrictBaseModel):
 class CallbackState(StrictBaseModel):
     status: CallbackDeliveryStatus
     attempt: int = Field(ge=0)
-    last_error: ErrorDetail | None = None
+    last_error: CallbackErrorDetail | None = None
     next_retry_at: datetime | None = None
 
 
@@ -97,7 +99,7 @@ class JobEnvelope(StrictBaseModel):
     job_status: JobStatus
     job_progress: JobProgress
     job_result: dict[str, Any] | None = None
-    job_error: ErrorDetail | None = None
+    job_error: JobErrorDetail | None = None
     callback: CallbackState
     status_url: str
     created_at: datetime

@@ -36,7 +36,7 @@ class ForbiddenError(AppError):
 
 class ValidationAppError(AppError):
     def __init__(self, code: str, message: str, details: dict[str, Any] | None = None):
-        super().__init__(code, message, status_code=422, details=details)
+        super().__init__(code, message, status_code=400, details=details)
 
 
 class NotFoundAppError(AppError):

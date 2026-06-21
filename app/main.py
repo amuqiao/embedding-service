@@ -1,4 +1,5 @@
 import logging
+import json
 import re
 import time
 import uuid
@@ -8,7 +9,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -17,6 +18,7 @@ from app.core.exceptions import AppError
 from app.core.logging import configure_logging, set_request_id
 from app.core.config import settings
 from app.schemas.errors import build_error_envelope
+from app.schemas.envelope import success_resp
 from app.jobs.types.register import register_all_job_types
 
 logger = logging.getLogger(__name__)
@@ -59,15 +61,131 @@ def _remove_caller_id_header_parameter(schema: dict) -> None:
                 operation.pop("parameters", None)
 
 
+def _http_envelope_schema(data_schema: dict) -> dict:
+    return {
+        "type": "object",
+        "required": ["code", "msg", "data", "request_id", "server_time"],
+        "properties": {
+            "code": {"type": "string", "example": "0"},
+            "msg": {"type": "string", "example": "success"},
+            "data": data_schema,
+            "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "server_time": {"type": "string", "format": "date-time"},
+        },
+    }
+
+
+def _error_envelope_schema() -> dict:
+    return {
+        "type": "object",
+        "required": ["code", "msg", "data", "request_id", "server_time"],
+        "properties": {
+            "code": {"type": "string", "example": "100001"},
+            "msg": {"type": "string", "example": "invalid input"},
+            "data": {"type": "object", "nullable": True},
+            "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "server_time": {"type": "string", "format": "date-time"},
+        },
+    }
+
+
+def _install_envelope_openapi_contract(schema: dict) -> None:
+    components = schema.setdefault("components", {}).setdefault("schemas", {})
+    components["ErrorEnvelope"] = _error_envelope_schema()
+    request_id_parameter = {
+        "name": "X-Request-ID",
+        "in": "header",
+        "required": False,
+        "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": r"^[a-zA-Z0-9._:-]{1,128}$",
+        },
+        "description": "Optional request trace ID. Invalid values return HTTP 400 with code 100002.",
+    }
+    for path, path_item in schema.get("paths", {}).items():
+        if not path.startswith(API_PREFIX):
+            continue
+        for operation in path_item.values():
+            if not isinstance(operation, dict):
+                continue
+            parameters = operation.setdefault("parameters", [])
+            if not any(parameter.get("name") == "X-Request-ID" and parameter.get("in") == "header" for parameter in parameters):
+                parameters.append(request_id_parameter)
+            responses = operation.setdefault("responses", {})
+            success = responses.get("200")
+            if success:
+                media = success.get("content", {}).get("application/json")
+                if media and "schema" in media:
+                    media["schema"] = _http_envelope_schema(media["schema"])
+            responses.pop("202", None)
+            responses.pop("422", None)
+            for status_code in ("400", "401", "403", "404", "405", "409", "500", "502", "504"):
+                responses.setdefault(
+                    status_code,
+                    {
+                        "description": "ErrorEnvelope",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/ErrorEnvelope"}
+                            }
+                        },
+                    },
+                )
+
+
 _HEALTH_PATHS = {"/health", "/healthz"}
-# 只允许 ASCII 字母、数字、连字符、下划线，最长 128 字符
-_REQUEST_ID_RE = re.compile(r'^[a-zA-Z0-9\-_]{1,128}$')
+_ENVELOPE_FIELDS = {"code", "msg", "data", "request_id", "server_time"}
+# 只允许 ASCII 字母、数字、点号、下划线、冒号和连字符，最长 128 字符
+_REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9._:-]{1,128}$")
+
+
+def _new_request_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _is_standard_json_api_path(path: str) -> bool:
+    if path in _HEALTH_PATHS or path in {"/openapi.json", "/docs", "/redoc"}:
+        return False
+    return path.startswith(API_PREFIX)
+
+
+def _is_json_response(response: Response) -> bool:
+    content_type = response.headers.get("content-type", "")
+    return content_type.split(";", 1)[0].lower() == "application/json"
+
+
+def _filtered_headers(response: Response) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in response.headers.items()
+        if key.lower() not in {"content-length", "content-type"}
+    }
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        raw_id = request.headers.get("X-Request-ID", "")
-        request_id = raw_id if (raw_id and _REQUEST_ID_RE.match(raw_id)) else str(uuid.uuid4())
+        raw_id = request.headers.get("X-Request-ID")
+        if raw_id and not _REQUEST_ID_RE.fullmatch(raw_id):
+            request_id = _new_request_id()
+            request.state.request_id = request_id
+            set_request_id(request_id)
+            status_code, body = build_error_envelope(
+                reason="REQUEST_ID_INVALID",
+                request_id=request_id,
+                details={
+                    "header": "X-Request-ID",
+                    "allowed": "ASCII letters, digits, dot, underscore, colon, and hyphen; length 1-128",
+                },
+                status_code=400,
+            )
+            return JSONResponse(
+                status_code=status_code,
+                content=jsonable_encoder(body),
+                headers={"X-Request-ID": request_id},
+            )
+        request_id = raw_id if raw_id else _new_request_id()
         request.state.request_id = request_id
         set_request_id(request_id)
         started = time.monotonic()
@@ -89,6 +207,46 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
                 request.method, request.url.path, response.status_code, duration_ms,
             )
         return response
+
+
+class SuccessEnvelopeMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if (
+            not _is_standard_json_api_path(request.url.path)
+            or response.status_code != 200
+            or not _is_json_response(response)
+        ):
+            return response
+
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        if not body:
+            payload = None
+        else:
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                return Response(
+                    content=body,
+                    status_code=response.status_code,
+                    headers=_filtered_headers(response),
+                    media_type=response.media_type,
+                )
+
+        if isinstance(payload, dict) and set(payload.keys()) == _ENVELOPE_FIELDS:
+            return Response(
+                content=body,
+                status_code=response.status_code,
+                headers=_filtered_headers(response),
+                media_type="application/json",
+            )
+
+        envelope = success_resp(payload, _request_id(request))
+        return JSONResponse(
+            status_code=200,
+            content=jsonable_encoder(envelope),
+            headers=_filtered_headers(response),
+        )
 
 
 def _request_id(request: Request) -> str:
@@ -115,6 +273,7 @@ def install_openapi(application: FastAPI) -> None:
             _remove_http_bearer_security(schema)
         if settings.DISABLE_CALLER_ID_HEADER:
             _remove_caller_id_header_parameter(schema)
+        _install_envelope_openapi_contract(schema)
         application.openapi_schema = schema
         return application.openapi_schema
 
@@ -129,6 +288,7 @@ def install_middlewares(application: FastAPI) -> None:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    application.add_middleware(SuccessEnvelopeMiddleware)
     application.add_middleware(RequestIDMiddleware)
 
 
@@ -148,11 +308,19 @@ def install_exception_handlers(application: FastAPI) -> None:
 
     @application.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        errors = [
+            {
+                "loc": list(error.get("loc", ())),
+                "type": str(error.get("type", "")),
+                "msg": str(error.get("msg", "")),
+            }
+            for error in exc.errors()
+        ]
         status_code, body = build_error_envelope(
             reason="INVALID_INPUT",
             request_id=_request_id(request),
-            details={"errors": exc.errors()},
-            status_code=422,
+            details={"errors": errors},
+            status_code=400,
         )
         return JSONResponse(
             status_code=status_code,
@@ -165,11 +333,10 @@ def install_exception_handlers(application: FastAPI) -> None:
             404: "NOT_FOUND",
             405: "METHOD_NOT_ALLOWED",
         }.get(exc.status_code, "HTTP_ERROR")
-        details = {} if isinstance(exc.detail, str) else {"detail": exc.detail}
         status_code, body = build_error_envelope(
             reason=reason,
             request_id=_request_id(request),
-            details=details,
+            details=None,
             status_code=exc.status_code,
         )
         return JSONResponse(

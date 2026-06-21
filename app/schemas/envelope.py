@@ -1,29 +1,43 @@
 from __future__ import annotations
 
-import time
+from datetime import datetime, timezone
 from typing import Any, Generic, TypeVar
 
 from fastapi import Request
-from pydantic import Field
 
 from app.schemas.common import StrictBaseModel
 
 TData = TypeVar("TData")
 
 
-class ResponseEnvelope(StrictBaseModel, Generic[TData]):
-    code: int
+class HttpEnvelope(StrictBaseModel, Generic[TData]):
+    code: str
     msg: str
-    data: TData
+    data: TData | None
     request_id: str
-    server_time: int = Field(ge=0)
+    server_time: str
+
+
+class ErrorEnvelope(StrictBaseModel):
+    code: str
+    msg: str
+    data: Any | None
+    request_id: str
+    server_time: str
+
+
+ResponseEnvelope = HttpEnvelope
+
+
+def server_time_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def build_response_envelope(
     *,
     data: Any,
     request_id: str,
-    code: int = 0,
+    code: str = "0",
     msg: str = "success",
 ) -> dict[str, Any]:
     return {
@@ -31,7 +45,7 @@ def build_response_envelope(
         "msg": msg,
         "data": data,
         "request_id": request_id,
-        "server_time": int(time.time()),
+        "server_time": server_time_now(),
     }
 
 
@@ -39,10 +53,31 @@ def request_id_from_request(request: Request) -> str:
     return getattr(request.state, "request_id", "-")
 
 
-def success_envelope(data: TData, request: Request) -> ResponseEnvelope[TData]:
-    return ResponseEnvelope.model_validate(
+def success_resp(data: TData | None, request_id: str) -> HttpEnvelope[TData]:
+    return HttpEnvelope[TData].model_validate(
         build_response_envelope(
             data=data,
-            request_id=request_id_from_request(request),
+            request_id=request_id,
         )
     )
+
+
+def error_resp(
+    *,
+    code: str,
+    msg: str,
+    request_id: str,
+    data: Any | None = None,
+) -> ErrorEnvelope:
+    return ErrorEnvelope.model_validate(
+        build_response_envelope(
+            data=data,
+            request_id=request_id,
+            code=code,
+            msg=msg,
+        )
+    )
+
+
+def success_envelope(data: TData, request: Request) -> HttpEnvelope[TData]:
+    return success_resp(data, request_id_from_request(request))

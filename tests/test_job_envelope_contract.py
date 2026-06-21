@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from fastapi.testclient import TestClient
 
@@ -39,11 +40,16 @@ def _job_envelope(
     }
 
 
+def _assert_iso_datetime(value: str) -> None:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    assert parsed.tzinfo is not None
+
+
 def _assert_response_envelope(body: dict) -> dict:
-    assert body["code"] == 0
+    assert body["code"] == "0"
     assert body["msg"] == "success"
     assert isinstance(body["request_id"], str)
-    assert isinstance(body["server_time"], int)
+    _assert_iso_datetime(body["server_time"])
     assert set(body["data"]) == {"job"}
     return body["data"]["job"]
 
@@ -103,7 +109,8 @@ def test_post_jobs_returns_response_envelope_with_queued_job(monkeypatch):
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 202
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "req-create-add"
     job = _assert_response_envelope(response.json())
     _assert_standard_job_fields(job)
     assert job["job_status"] == "queued"
@@ -148,7 +155,8 @@ def test_post_jobs_uses_default_caller_when_caller_id_header_is_disabled(monkeyp
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 202
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "req-create-default-caller"
     job = _assert_response_envelope(response.json())
     assert job["job_status"] == "queued"
 
@@ -186,7 +194,11 @@ def test_post_jobs_rejects_invalid_caller_id_header_by_default(monkeypatch):
         app.dependency_overrides.clear()
 
     assert response.status_code == 401
-    assert response.json()["data"]["error"]["reason"] == "UNAUTHORIZED"
+    body = response.json()
+    assert body["code"] == "200001"
+    assert body["msg"] == "missing or invalid service token"
+    assert body["data"] is None
+    assert body["request_id"] == response.headers["X-Request-ID"]
 
 
 def test_get_jobs_returns_response_envelope_with_standard_job_fields(monkeypatch):
@@ -220,6 +232,7 @@ def test_get_jobs_returns_response_envelope_with_standard_job_fields(monkeypatch
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "req-get-add"
     job = _assert_response_envelope(response.json())
     _assert_standard_job_fields(job)
     assert job["job_id"] == str(job_id)

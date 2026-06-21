@@ -5,7 +5,8 @@ import pytest
 
 from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest
-from app.services.jobs import _request_fingerprint, create_job
+from app.core.exceptions import AppError
+from app.services.jobs import _request_fingerprint, create_job, validate_create_contract
 
 
 class _FakeDB:
@@ -26,6 +27,14 @@ class _TestHandler:
 
     def runtime_job_fields(self, job_params):
         return {}
+
+
+@pytest.fixture(autouse=True)
+def _public_callback_dns(monkeypatch):
+    monkeypatch.setattr(
+        "app.core.callback_security.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(None, None, None, "", ("93.184.216.34", 443))],
+    )
 
 
 @pytest.mark.asyncio
@@ -106,7 +115,7 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     assert captured["timeout_seconds"] == 300
     assert captured["initial_attempt"] == (job.id, 300)
     assert captured["callback_url"] == "https://example.com/callback"
-    assert captured["callback_events"] == ["job.succeeded", "job.failed"]
+    assert captured["callback_events"] == ["job.failed", "job.succeeded"]
     assert job.job_params_ref["payload_snapshot"] == {"value": {"hello": "world"}, "label": "Echo"}
     assert job.job_params_hash.startswith("sha256:")
     assert job.runtime_ref["payload_snapshot"]["schema_version"] == 1
@@ -154,7 +163,7 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
             "options": {"idempotency_mode": "return_existing"},
         }
     )
-    expected_fingerprint = _request_fingerprint(payload, {"value": {"hello": "world"}, "label": "Echo"})
+    expected_fingerprint = _request_fingerprint(payload, "caller-1", {"value": {"hello": "world"}, "label": "Echo"})
     existing.request_fingerprint = expected_fingerprint
 
     job, created = await create_job(_FakeDB(), payload, "caller-1")
@@ -196,7 +205,56 @@ async def test_create_job_rejects_duplicate_by_default(monkeypatch):
             "job_params": {"value": {"hello": "world"}, "label": "Echo"},
         }
     )
-    existing.request_fingerprint = _request_fingerprint(payload, {"value": {"hello": "world"}, "label": "Echo"})
+    existing.request_fingerprint = _request_fingerprint(payload, "caller-1", {"value": {"hello": "world"}, "label": "Echo"})
 
     with pytest.raises(Exception, match="client_request_id already used"):
         await create_job(_FakeDB(), payload, "caller-1")
+
+
+def test_request_fingerprint_canonicalizes_callback_and_ignores_metadata():
+    left = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-1",
+            "job_type": "test.echo",
+            "job_params": {"value": {"hello": "world"}},
+            "callback": {"url": "https://EXAMPLE.com"},
+            "metadata": {"trace": "left"},
+        }
+    )
+    right = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-1",
+            "job_type": "test.echo",
+            "job_params": {"value": {"hello": "world"}},
+            "callback": {"url": "https://example.com/"},
+            "metadata": {"trace": "right"},
+            "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
+        }
+    )
+
+    left_hash = _request_fingerprint(left, "caller-1", {"value": {"hello": "world"}})
+    right_hash = _request_fingerprint(right, "caller-1", {"value": {"hello": "world"}})
+
+    assert left_hash == right_hash
+
+
+def test_validate_create_contract_rejects_callback_domain_resolving_to_metadata_ip(monkeypatch):
+    def fake_getaddrinfo(*_args, **_kwargs):
+        return [(None, None, None, "", ("169.254.169.254", 443))]
+
+    monkeypatch.setattr("app.core.callback_security.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-1",
+            "job_type": "test.echo",
+            "job_params": {"value": {"hello": "world"}},
+            "callback": {"url": "https://metadata.example/callback"},
+        }
+    )
+
+    with pytest.raises(AppError) as exc:
+        validate_create_contract(payload)
+
+    assert exc.value.code == "INVALID_INPUT"
+    assert "private or reserved" in exc.value.message

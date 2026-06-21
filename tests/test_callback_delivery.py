@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -12,9 +14,12 @@ from app.services.callbacks import (
     CallbackDeliveryResult,
     build_callback_body,
     deliver_callback,
+    _sign,
 )
 from app.services.job_runtime import payload_hash
 from app.services.jobs import _job_to_response
+
+_ACK_HEADERS = {"Content-Type": "application/json"}
 
 
 @pytest.fixture(autouse=True)
@@ -31,6 +36,10 @@ def _callback_test_handler(monkeypatch):
 
     monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: Handler())
     monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: Handler())
+    monkeypatch.setattr(
+        "app.core.callback_security.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(None, None, None, "", ("93.184.216.34", 443))],
+    )
 
 
 def _job(callback_url: str | None = "https://example.com/callback") -> Job:
@@ -231,11 +240,22 @@ def test_job_view_uses_shell_result_and_metadata():
 
 def test_build_callback_body_uses_next_attempt_number():
     job = _job()
+    first_body = build_callback_body(job)
     job.callback_attempts = 2
 
     body = build_callback_body(job)
 
     assert body["attempt"] == 3
+    assert body["event_id"] == first_body["event_id"]
+
+    job.status = "failed"
+    job.result = None
+    job.error = {"code": "JOB_EXECUTION_FAILED", "message": "failed"}
+
+    failed_body = build_callback_body(job)
+
+    assert failed_body["event"] == "job.failed"
+    assert failed_body["event_id"] != first_body["event_id"]
 
 
 def test_callback_response_rejects_legacy_v1_fields():
@@ -273,6 +293,28 @@ async def test_deliver_callback_skips_invalid_url_with_error():
 
 
 @pytest.mark.asyncio
+async def test_deliver_callback_revalidates_resolved_callback_ip(monkeypatch):
+    def fake_getaddrinfo(*_args, **_kwargs):
+        return [(None, None, None, "", ("10.0.0.10", 443))]
+
+    monkeypatch.setattr("app.core.callback_security.socket.getaddrinfo", fake_getaddrinfo)
+
+    result = await deliver_callback(_job("https://callback.example/path"))
+
+    assert result.status == "skipped"
+    assert result.attempts == 0
+    assert result.last_error["code"] == "CALLBACK_URL_INVALID"
+    assert "private or reserved" in result.last_error["message"]
+
+
+def test_callback_signature_requires_non_empty_secret(monkeypatch):
+    monkeypatch.setattr(settings, "CALLBACK_SIGNING_SECRET", "")
+
+    with pytest.raises(ValueError, match="CALLBACK_SIGNING_SECRET"):
+        _sign("2026-06-21T00:00:00+00:00", b"{}")
+
+
+@pytest.mark.asyncio
 async def test_deliver_callback_records_invalid_body_contract():
     job = _job()
     job.status = "running"
@@ -290,6 +332,7 @@ async def test_deliver_callback_tries_once_on_http_failure(monkeypatch):
 
     class _Response:
         status_code = 503
+        headers = _ACK_HEADERS
         text = '{"accepted":false,"msg":"temporary failure","details":{"retry_after_seconds":30}}'
 
     class _Client:
@@ -329,8 +372,9 @@ async def test_deliver_callback_uses_shell_callback_fields(monkeypatch):
     posted: dict = {}
 
     class _Response:
-        status_code = 204
-        text = ""
+        status_code = 200
+        headers = _ACK_HEADERS
+        text = '{"accepted":true,"msg":null,"details":{}}'
 
     class _Client:
         def __init__(self, timeout):
@@ -349,6 +393,7 @@ async def test_deliver_callback_uses_shell_callback_fields(monkeypatch):
             return _Response()
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
+    monkeypatch.setattr(settings, "CALLBACK_SIGNING_SECRET", "callback-secret")
     job = _job("https://shell.example.com/callback")
     job.callback_events = ["job.succeeded"]
 
@@ -356,7 +401,19 @@ async def test_deliver_callback_uses_shell_callback_fields(monkeypatch):
 
     assert result.status == "delivered"
     assert posted["url"] == "https://shell.example.com/callback"
-    assert posted["headers"]["X-AI-Service-Event"] == "job.succeeded"
+    assert set(posted["headers"]) == {
+        "Content-Type",
+        "X-Callback-Timestamp",
+        "X-Callback-Signature",
+    }
+    assert posted["headers"]["Content-Type"] == "application/json"
+    timestamp = posted["headers"]["X-Callback-Timestamp"]
+    expected_signature = "sha256=" + hmac.new(
+        b"callback-secret",
+        timestamp.encode("utf-8") + b"." + posted["body"],
+        hashlib.sha256,
+    ).hexdigest()
+    assert posted["headers"]["X-Callback-Signature"] == expected_signature
     body = json.loads(posted["body"].decode("utf-8"))
     assert set(body) == {
         "event",
@@ -377,6 +434,7 @@ async def test_deliver_callback_uses_shell_callback_fields(monkeypatch):
 async def test_deliver_callback_records_ack_response_summary(monkeypatch):
     class _Response:
         status_code = 200
+        headers = _ACK_HEADERS
         text = '{"accepted":true,"msg":null,"details":{"duplicate":false}}'
 
     class _Client:
@@ -407,9 +465,62 @@ async def test_deliver_callback_records_ack_response_summary(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "headers", "text", "expected_error"),
+    [
+        (204, _ACK_HEADERS, "", "HTTP 204"),
+        (200, _ACK_HEADERS, "", "body"),
+        (200, _ACK_HEADERS, "not-json", "must be JSON"),
+        (200, {"Content-Type": "text/plain"}, '{"accepted":true,"msg":null,"details":{}}', "Content-Type"),
+        (200, _ACK_HEADERS, '["accepted"]', "object"),
+        (200, _ACK_HEADERS, '{"msg":null,"details":{}}', "accepted"),
+        (200, _ACK_HEADERS, '{"accepted":"true","msg":null,"details":{}}', "boolean"),
+    ],
+)
+async def test_deliver_callback_rejects_invalid_success_ack_contract(
+    monkeypatch,
+    status_code,
+    headers,
+    text,
+    expected_error,
+):
+    class _Response:
+        pass
+
+    _Response.status_code = status_code
+    _Response.headers = headers
+    _Response.text = text
+
+    class _Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, content, headers):
+            return _Response()
+
+    monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
+
+    result = await deliver_callback(_job())
+
+    assert result.status == "failed"
+    assert result.attempts == 1
+    assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
+    assert result.last_error["response"]["format"] == "ack"
+    assert result.last_error["response"]["valid"] is False
+    assert expected_error in result.last_error["response"]["error"]
+
+
+@pytest.mark.asyncio
 async def test_deliver_callback_rejects_negative_ack_response(monkeypatch):
     class _Response:
         status_code = 200
+        headers = _ACK_HEADERS
         text = '{"accepted":false,"msg":"duplicate rejected","details":{"duplicate":true}}'
 
     class _Client:
@@ -445,6 +556,7 @@ async def test_deliver_callback_rejects_negative_ack_response(monkeypatch):
 async def test_deliver_callback_uses_job_type_ack_validator(monkeypatch):
     class _Response:
         status_code = 200
+        headers = _ACK_HEADERS
         text = '{"accepted":true,"msg":null,"details":{"domain":"invalid"}}'
 
     class _Client:
@@ -482,6 +594,7 @@ async def test_deliver_callback_uses_job_type_ack_validator(monkeypatch):
 async def test_deliver_callback_rejects_unstructured_json_response(monkeypatch):
     class _Response:
         status_code = 200
+        headers = _ACK_HEADERS
         text = '{"status":"success","msg":null}'
 
     class _Client:
@@ -511,6 +624,7 @@ async def test_deliver_callback_rejects_unstructured_json_response(monkeypatch):
 async def test_deliver_callback_rejects_invalid_ack_response(monkeypatch):
     class _Response:
         status_code = 200
+        headers = _ACK_HEADERS
         text = '{"accepted":true,"msg":null,"details":[]}'
 
     class _Client:
@@ -542,6 +656,7 @@ async def test_deliver_callback_rejects_invalid_ack_response(monkeypatch):
 async def test_deliver_callback_rejects_partial_v1_like_body(monkeypatch):
     class _Response:
         status_code = 200
+        headers = _ACK_HEADERS
         text = '{"status":"succeeded","msg":null,"metadata":{},"data":{}}'
 
     class _Client:

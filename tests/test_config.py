@@ -19,6 +19,7 @@ def _settings_kwargs(**overrides):
     values = {
         "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/cms_story_tagger",
         "SERVICE_API_KEY": "test-token",
+        "CALLBACK_SIGNING_SECRET": "test-callback-secret",
         "DISABLE_HTTP_AUTH_HEADER": False,
         "DISABLE_CALLER_ID_HEADER": False,
     }
@@ -56,6 +57,11 @@ def test_security_header_disable_flags_default_to_false():
 
     assert s.DISABLE_HTTP_AUTH_HEADER is False
     assert s.DISABLE_CALLER_ID_HEADER is False
+
+
+def test_settings_requires_callback_signing_secret():
+    with pytest.raises(ValidationError, match="CALLBACK_SIGNING_SECRET"):
+        Settings(**_settings_kwargs(CALLBACK_SIGNING_SECRET=""))
 
 
 def test_security_header_disable_flags_parse_bool_strings():

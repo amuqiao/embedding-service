@@ -29,6 +29,11 @@ def _valid_payload() -> dict:
     }
 
 
+def _assert_iso_server_time(value: str) -> None:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    assert parsed.tzinfo is not None
+
+
 def test_create_job_request_accepts_valid_payload():
     payload = CreateJobRequest.model_validate(_valid_payload())
     assert payload.job_type == "test.echo"
@@ -401,6 +406,28 @@ def test_openapi_create_job_request_defaults_to_arithmetic_example():
     assert arithmetic_example["options"] == {"priority": "normal", "idempotency_mode": "return_existing"}
 
 
+def test_openapi_declares_unified_response_envelope_for_jobs():
+    from app.core.config import settings
+
+    schema = app.openapi()
+    operation = schema["paths"][f"{settings.SERVICE_API_PREFIX}/jobs"]["post"]
+    responses = operation["responses"]
+
+    assert "202" not in responses
+    assert "422" not in responses
+    success_schema = responses["200"]["content"]["application/json"]["schema"]
+    assert set(success_schema["required"]) == {"code", "msg", "data", "request_id", "server_time"}
+    assert success_schema["properties"]["code"]["type"] == "string"
+    assert success_schema["properties"]["server_time"]["format"] == "date-time"
+    assert success_schema["properties"]["data"]["$ref"].endswith("/JobResponseData")
+    assert responses["400"]["content"]["application/json"]["schema"]["$ref"].endswith("/ErrorEnvelope")
+    assert any(
+        parameter["name"] == "X-Request-ID"
+        and parameter["schema"]["pattern"] == r"^[a-zA-Z0-9._:-]{1,128}$"
+        for parameter in operation["parameters"]
+    )
+
+
 def test_openapi_declares_bearer_auth_for_protected_routes(monkeypatch):
     monkeypatch.setattr("app.core.config.settings.DISABLE_HTTP_AUTH_HEADER", False)
     monkeypatch.setattr("app.core.config.settings.DISABLE_CALLER_ID_HEADER", False)
@@ -469,10 +496,10 @@ def test_unknown_route_uses_unified_error_envelope():
 
     assert response.status_code == 404
     body = response.json()
-    assert body["code"] == 404001
-    assert body["data"]["error"]["reason"] == "NOT_FOUND"
+    assert body["code"] == "300404"
+    assert body["data"] is None
     assert body["request_id"]
-    assert isinstance(body["server_time"], int)
+    _assert_iso_server_time(body["server_time"])
 
 
 def test_unauthorized_route_uses_unified_error_envelope(monkeypatch):
@@ -486,10 +513,10 @@ def test_unauthorized_route_uses_unified_error_envelope(monkeypatch):
 
     assert response.status_code == 401
     body = response.json()
-    assert body["code"] == 401001
-    assert body["data"]["error"]["reason"] == "UNAUTHORIZED"
+    assert body["code"] == "200001"
+    assert body["data"] is None
     assert body["request_id"]
-    assert isinstance(body["server_time"], int)
+    _assert_iso_server_time(body["server_time"])
 
 
 def test_models_route_allows_missing_authorization_when_auth_header_is_disabled(monkeypatch):
@@ -503,7 +530,47 @@ def test_models_route_allows_missing_authorization_when_auth_header_is_disabled(
     response = client.get(f"{settings.SERVICE_API_PREFIX}/models")
 
     assert response.status_code == 200
-    assert response.json()["code"] == 0
+    assert response.json()["code"] == "0"
+
+
+def test_legal_request_id_allows_dot_and_colon(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.core.config import settings
+
+    monkeypatch.setattr("app.core.security.settings.DISABLE_HTTP_AUTH_HEADER", True)
+    monkeypatch.setattr("app.core.security.settings.DISABLE_CALLER_ID_HEADER", False)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(
+        f"{settings.SERVICE_API_PREFIX}/models",
+        headers={"X-Request-ID": "trace.id:part-1"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["request_id"] == "trace.id:part-1"
+    assert response.headers["X-Request-ID"] == "trace.id:part-1"
+
+
+def test_invalid_request_id_returns_error_envelope(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.core.config import settings
+
+    monkeypatch.setattr("app.core.security.settings.DISABLE_HTTP_AUTH_HEADER", True)
+    monkeypatch.setattr("app.core.security.settings.DISABLE_CALLER_ID_HEADER", False)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(
+        f"{settings.SERVICE_API_PREFIX}/models",
+        headers={"X-Request-ID": "bad request id"},
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["code"] == "100002"
+    assert body["data"]["header"] == "X-Request-ID"
+    assert body["request_id"] == response.headers["X-Request-ID"]
+    _assert_iso_server_time(body["server_time"])
 
 
 def test_method_not_allowed_uses_unified_error_envelope():
@@ -515,10 +582,10 @@ def test_method_not_allowed_uses_unified_error_envelope():
 
     assert response.status_code == 405
     body = response.json()
-    assert body["code"] == 405001
-    assert body["data"]["error"]["reason"] == "METHOD_NOT_ALLOWED"
+    assert body["code"] == "100405"
+    assert body["data"] is None
     assert body["request_id"]
-    assert isinstance(body["server_time"], int)
+    _assert_iso_server_time(body["server_time"])
 
 
 def test_generic_http_exception_uses_unified_error_envelope():
@@ -534,13 +601,12 @@ def test_generic_http_exception_uses_unified_error_envelope():
     client = TestClient(app, raise_server_exceptions=False)
     response = client.get(route_path)
 
-    assert response.status_code == 418
+    assert response.status_code == 400
     body = response.json()
-    assert body["code"] == 400002
-    assert body["data"]["error"]["reason"] == "HTTP_ERROR"
-    assert body["data"]["error"]["details"] == {"detail": {"reason": "teapot"}}
+    assert body["code"] == "100004"
+    assert body["data"] is None
     assert body["request_id"]
-    assert isinstance(body["server_time"], int)
+    _assert_iso_server_time(body["server_time"])
 
 
 def test_unhandled_exception_uses_unified_error_envelope():
@@ -557,7 +623,7 @@ def test_unhandled_exception_uses_unified_error_envelope():
 
     assert response.status_code == 500
     body = response.json()
-    assert body["code"] == 500001
-    assert body["data"]["error"]["reason"] == "INTERNAL_ERROR"
+    assert body["code"] == "900500"
+    assert body["data"] is None
     assert body["request_id"]
-    assert isinstance(body["server_time"], int)
+    _assert_iso_server_time(body["server_time"])

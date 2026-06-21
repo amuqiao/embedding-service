@@ -177,9 +177,7 @@ class Settings(BaseSettings):
             )
 
         if not self.CALLBACK_SIGNING_SECRET:
-            _log.warning(
-                "CALLBACK_SIGNING_SECRET is not configured — callback HMAC signatures will be invalid"
-            )
+            raise ValueError("CALLBACK_SIGNING_SECRET must be configured for callback HMAC signatures")
         return self
 
     # ── Derived: worker timeout chain (L1 anchor + fixed buffers) ─────────────

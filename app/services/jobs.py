@@ -1,13 +1,13 @@
 import hashlib
-import ipaddress
 import json
 import uuid
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.callback_security import validate_callback_url_security
 from app.core.exceptions import AppError, InternalAppError, NotFoundAppError, ValidationAppError
 from app.core.config import settings
 from app.core.error_registry import get_error_spec
@@ -16,7 +16,7 @@ from app.core.prompt_templates import get_template
 from app.integrations.storage import sha256_digest, storage
 from app.models.job import Job
 from app.repositories.job_repo import JobRepo
-from app.schemas.errors import ErrorDetail
+from app.schemas.errors import JobErrorDetail
 from app.schemas.jobs import CreateJobRequest, CreateJobResponse, JobResult, JobStatusResponse
 from app.services.job_runtime import (
     build_runtime_snapshot,
@@ -41,13 +41,40 @@ def _configured_oss_region() -> str:
     return settings.OSS_REGION or "local"
 
 
-def _request_fingerprint(payload: CreateJobRequest, job_params: dict[str, Any]) -> str:
+def _canonical_callback(callback: Any) -> dict[str, Any] | None:
+    if callback is None:
+        return None
+    parsed = urlsplit(callback.url)
+    hostname = parsed.hostname or ""
+    ascii_host = hostname.encode("idna").decode("ascii").lower()
+    scheme = parsed.scheme.lower()
+    netloc = ascii_host
+    if parsed.port is not None and not (scheme == "https" and parsed.port == 443):
+        netloc = f"{netloc}:{parsed.port}"
+    canonical_url = urlunsplit((scheme, netloc, parsed.path or "/", parsed.query or "", ""))
+    return {
+        "url": canonical_url,
+        "events": sorted(set(callback.events or ["job.failed", "job.succeeded"])),
+    }
+
+
+def _canonical_options(payload: CreateJobRequest) -> dict[str, Any]:
+    if payload.options is None:
+        return {"priority": "normal", "idempotency_mode": "reject_duplicate"}
+    return {
+        "priority": payload.options.priority,
+        "idempotency_mode": payload.options.idempotency_mode,
+    }
+
+
+def _request_fingerprint(payload: CreateJobRequest, caller_id: str, job_params: dict[str, Any]) -> str:
     body = {
+        "caller_id": caller_id,
+        "client_request_id": payload.client_request_id,
         "job_type": payload.job_type,
         "job_params": job_params,
-        "callback": payload.callback.model_dump() if payload.callback else None,
-        "metadata": payload.metadata,
-        "options": payload.options.model_dump() if payload.options else None,
+        "callback": _canonical_callback(payload.callback),
+        "options": _canonical_options(payload),
     }
     encoded = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
@@ -61,7 +88,7 @@ def _job_error_detail(error: dict[str, Any] | None) -> dict[str, Any] | None:
     for key, value in error.items():
         if key not in {"code", "reason", "message", "details"}:
             details[key] = value
-    return ErrorDetail(reason=reason, details=details, retryable=get_error_spec(reason).retryable).model_dump()
+    return JobErrorDetail(reason=reason, details=details, retryable=get_error_spec(reason).retryable).model_dump()
 
 
 def _callback_state(job: Job) -> dict[str, Any]:
@@ -99,7 +126,7 @@ def _progress_stage(job: Job) -> str:
         "calling_model": "calling_model",
         "merging": "merging",
         "writing_result": "writing_result",
-        "delivering_callback": "delivering_callback",
+        "delivering_callback": "writing_result",
         "completed": "completed",
         "failed": "failed",
         "success_side_effect": "writing_result",
@@ -176,14 +203,6 @@ def _validate_prompt(job_type: str, prompt_payload: dict[str, Any]) -> None:
             )
 
 
-def _is_private_host(hostname: str) -> bool:
-    try:
-        addr = ipaddress.ip_address(hostname)
-        return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_unspecified
-    except ValueError:
-        return False
-
-
 def _normalize_job_params(payload: CreateJobRequest, handler: Any) -> dict[str, Any]:
     try:
         params = handler.normalize_job_params(payload.job_params)
@@ -207,17 +226,13 @@ def _normalize_job_params(payload: CreateJobRequest, handler: Any) -> dict[str, 
 def _validate_callback(callback: Any) -> None:
     if callback is None:
         return
-    parsed_callback = urlparse(callback.url)
-    hostname = parsed_callback.hostname or ""
-    is_allowed_local = (
-        settings.ALLOW_INSECURE_CALLBACKS
-        and parsed_callback.scheme == "http"
-        and hostname in {"127.0.0.1", "localhost"}
-    )
-    if parsed_callback.scheme != "https" and not is_allowed_local:
-        raise ValidationAppError("INVALID_INPUT", "callback.url must be HTTPS")
-    if not is_allowed_local and _is_private_host(hostname):
-        raise ValidationAppError("INVALID_INPUT", "callback.url must not target private network addresses")
+    try:
+        validate_callback_url_security(
+            callback.url,
+            allow_insecure_local=settings.ALLOW_INSECURE_CALLBACKS,
+        )
+    except ValueError as exc:
+        raise ValidationAppError("INVALID_INPUT", str(exc)) from exc
 
 
 def validate_create_contract(payload: CreateJobRequest) -> tuple[Any, dict[str, Any]]:
@@ -297,7 +312,7 @@ async def create_job(
                 "trigger_request_id": trigger_request_id,
             },
         }
-    request_fingerprint = _request_fingerprint(payload, job_params)
+    request_fingerprint = _request_fingerprint(payload, caller_id, job_params)
     await JobRepo.advisory_lock_for_client_request(db, caller_id, payload.client_request_id)
     existing = await JobRepo.get_recent_by_client_request(
         db, caller_id=caller_id, client_request_id=payload.client_request_id
@@ -308,14 +323,14 @@ async def create_job(
                 "CLIENT_REQUEST_ID_CONFLICT",
                 "client_request_id already used with a different request payload",
                 status_code=409,
-                details={"job_id": str(existing.id)},
+                details={"client_request_id": payload.client_request_id, "existing_job_id": str(existing.id)},
             )
         if not payload.options or payload.options.idempotency_mode == "reject_duplicate":
             raise AppError(
                 "CLIENT_REQUEST_ID_CONFLICT",
                 "client_request_id already used",
                 status_code=409,
-                details={"job_id": str(existing.id)},
+                details={"client_request_id": payload.client_request_id, "existing_job_id": str(existing.id)},
             )
         return existing, False
 
