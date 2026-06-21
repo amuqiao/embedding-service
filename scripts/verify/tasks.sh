@@ -6,14 +6,20 @@ source "$ROOT_DIR/scripts/dev/services.sh"
 
 run_tests() {
   section "Test"
-  require_executable "$ROOT_DIR/.venv/bin/pytest" "run: ./scripts/dev.sh bootstrap"
-  "$ROOT_DIR/.venv/bin/pytest" -q
+  require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
+  "$ROOT_DIR/.venv/bin/python" -m pytest -q
 }
 
 run_oss_check() {
   section "OSS"
   require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
   "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/verify/check_aliyun_oss.py" "$@"
+}
+
+run_workflow_smoke() {
+  section "Workflow Smoke"
+  require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
+  "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" --api-url "$API_URL"
 }
 
 run_script_syntax() {
@@ -46,6 +52,7 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/dev/check_ports.py" \
     "$ROOT_DIR/scripts/verify/check_aliyun_oss.py" \
     "$ROOT_DIR/scripts/verify/env_config_check.py" \
+    "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" \
     "$ROOT_DIR/scripts/verify/mock_openai_server.py" \
     "$ROOT_DIR/scripts/verify/registry_check.py"
   event "OK" "dev/check_ports.py" "py_compile"

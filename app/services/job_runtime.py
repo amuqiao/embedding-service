@@ -6,7 +6,7 @@ from typing import Any
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.integrations.storage import storage
-from app.models.job import AIJob, AIJobWorkItem
+from app.models.job import Job
 
 
 def payload_hash(payload: dict[str, Any]) -> str:
@@ -50,7 +50,7 @@ def _validate_output_target(target: Any) -> dict[str, Any]:
     return target
 
 
-def write_runtime_json(job: AIJob, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+def write_runtime_json(job: Job, name: str, payload: dict[str, Any]) -> dict[str, Any]:
     content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     data = content.encode("utf-8")
     return {
@@ -83,7 +83,7 @@ def read_runtime_json(ref: dict[str, Any] | None) -> dict[str, Any]:
     return value
 
 
-def job_params_from_job(job: AIJob) -> dict[str, Any]:
+def job_params_from_job(job: Job) -> dict[str, Any]:
     params = read_runtime_json(job.job_params_ref)
     if not job.job_params_hash:
         raise AppError("RUNTIME_HASH_MISSING", "运行时参数 hash 不存在", status_code=500)
@@ -98,7 +98,7 @@ def job_params_from_job(job: AIJob) -> dict[str, Any]:
     return params
 
 
-def runtime_snapshot_from_job(job: AIJob) -> dict[str, Any]:
+def runtime_snapshot_from_job(job: Job) -> dict[str, Any]:
     snapshot = read_runtime_json(job.runtime_ref)
     if not job.job_params_hash:
         raise AppError("RUNTIME_HASH_MISSING", "运行时参数 hash 不存在", status_code=500)
@@ -109,26 +109,22 @@ def runtime_snapshot_from_job(job: AIJob) -> dict[str, Any]:
     return snapshot
 
 
-def runtime_fields_from_job(job: AIJob) -> dict[str, Any]:
+def runtime_fields_from_job(job: Job) -> dict[str, Any]:
     fields = runtime_snapshot_from_job(job).get("runtime_fields")
     if not isinstance(fields, dict):
         raise AppError("RUNTIME_REF_INVALID", "运行时字段必须是 JSON object", status_code=500)
     return fields
 
 
-def output_target_from_job(job: AIJob) -> dict[str, Any]:
+def output_target_from_job(job: Job) -> dict[str, Any]:
     return _validate_output_target(runtime_snapshot_from_job(job).get("output_target"))
 
 
-def model_id_from_job(job: AIJob) -> str | None:
+def model_id_from_job(job: Job) -> str | None:
     value = runtime_fields_from_job(job).get("model_id")
     return value if isinstance(value, str) and value else None
 
 
-def prompt_payload_from_job(job: AIJob) -> dict[str, Any]:
+def prompt_payload_from_job(job: Job) -> dict[str, Any]:
     value = runtime_fields_from_job(job).get("prompt_payload")
     return value if isinstance(value, dict) else {}
-
-
-def work_item_payload(item: AIJobWorkItem) -> dict[str, Any]:
-    return read_runtime_json(item.input_ref)

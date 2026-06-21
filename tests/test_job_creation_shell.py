@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.models.job import AIJob
+from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest
 from app.services.jobs import _request_fingerprint, create_job
 
@@ -15,6 +15,8 @@ class _FakeDB:
 
 class _TestHandler:
     allow_callback = True
+    timeout_seconds = 300
+    max_attempts = 1
 
     def normalize_job_params(self, job_params):
         return job_params
@@ -33,7 +35,7 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
 
     async def fake_create(_db, **kwargs):
         captured.update(kwargs)
-        return AIJob(
+        return Job(
             id=uuid.uuid4(),
             caller_id=kwargs["caller_id"],
             client_request_id=kwargs["client_request_id"],
@@ -57,6 +59,9 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     async def fake_get_recent(*_args, **_kwargs):
         return None
 
+    async def fake_create_initial_attempt(_db, created_job, *, timeout_seconds):
+        captured["initial_attempt"] = (created_job.id, timeout_seconds)
+
     def fake_write_runtime_json(job, name, payload):
         return {
             "storage": "oss_object",
@@ -71,8 +76,9 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
     monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fake_create)
+    monkeypatch.setattr("app.services.jobs.JobRepo.create_initial_attempt", fake_create_initial_attempt)
     monkeypatch.setattr("app.services.jobs.write_runtime_json", fake_write_runtime_json)
-    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: _TestHandler())
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
 
     payload = CreateJobRequest.model_validate(
         {
@@ -97,7 +103,8 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     assert "options_payload" not in captured
     assert captured["metadata"] == {"caller_task_id": "task-1"}
     assert captured["priority"] == "normal"
-    assert captured["timeout_seconds"] is None
+    assert captured["timeout_seconds"] == 300
+    assert captured["initial_attempt"] == (job.id, 300)
     assert captured["callback_url"] == "https://example.com/callback"
     assert captured["callback_events"] == ["job.succeeded", "job.failed"]
     assert job.job_params_ref["payload_snapshot"] == {"value": {"hello": "world"}, "label": "Echo"}
@@ -111,7 +118,7 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
 
 @pytest.mark.asyncio
 async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch):
-    existing = AIJob(
+    existing = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
         client_request_id="req-1",
@@ -137,7 +144,7 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
     monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
-    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: _TestHandler())
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
 
     payload = CreateJobRequest.model_validate(
         {
@@ -158,7 +165,7 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
 
 @pytest.mark.asyncio
 async def test_create_job_rejects_duplicate_by_default(monkeypatch):
-    existing = AIJob(
+    existing = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
         client_request_id="req-1",
@@ -180,7 +187,7 @@ async def test_create_job_rejects_duplicate_by_default(monkeypatch):
     monkeypatch.setattr("app.services.jobs.settings.MAX_ACTIVE_JOBS", 0)
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
     monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
-    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: _TestHandler())
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
 
     payload = CreateJobRequest.model_validate(
         {

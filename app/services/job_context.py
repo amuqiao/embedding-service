@@ -3,7 +3,7 @@ import re
 from typing import Any
 
 from app.integrations.ai_gateway import TextGenerationResult
-from app.models.job import AIJob
+from app.models.job import Job
 from app.services.job_runtime import prompt_payload_from_job
 
 
@@ -62,7 +62,7 @@ def project_memory_from_generation(result: TextGenerationResult) -> dict[str, An
     return normalize_project_memory(parsed, raw=result.text)
 
 
-def project_memory_from_job(job: AIJob) -> dict[str, Any] | None:
+def project_memory_from_job(job: Job) -> dict[str, Any] | None:
     work_note = prompt_block_content(prompt_payload_from_job(job), "work_note")
     parsed = extract_tagged_json(work_note, "project_memory") or extract_tagged_json(work_note, "mapping_table")
     if parsed:
@@ -85,7 +85,7 @@ def extract_tagged_json(text: str, tag: str) -> dict[str, Any] | None:
     return extract_json_object(match.group(1))
 
 
-def append_context_to_prompt(job: AIJob, context_text: str) -> dict[str, Any]:
+def append_context_to_prompt(job: Job, context_text: str) -> dict[str, Any]:
     if not context_text.strip():
         return prompt_payload_from_job(job)
 

@@ -6,15 +6,16 @@
 
 | 文档 | 用途 |
 |---|---|
-| [`template-usage.md`](template-usage.md) | 模板替换清单，以及接入新 workflow 的最小步骤 |
+| [`template-usage.md`](template-usage.md) | 模板替换清单；当前 Job 执行主线以 Taskiq 设计和 job_type 接入规范为准 |
 | [`架构/README.md`](架构/README.md) | 架构目录入口 |
 | [`架构/project-standards.md`](架构/project-standards.md) | 项目规范与骨架：标准 envelope、输入输出 schema、异常、配置、日志、ORM、Repository 和验证基线 |
 | [`架构/http-api-extension-standard.md`](架构/http-api-extension-standard.md) | 新增业务 HTTP 接口时的 schema、operation registry、错误、日志和测试接入规范 |
-| [`架构/job-type-extension-standard.md`](架构/job-type-extension-standard.md) | 新增 `job_type` 时的 Params、Runtime、Result、WorkflowHandler、错误、日志和测试接入规范 |
+| [`架构/job-type-extension-standard.md`](架构/job-type-extension-standard.md) | 新增 `job_type` 时的 Params、Runtime、Result、`JobExecutor`、错误、日志和测试接入规范 |
 | [`架构/架构总览.md`](架构/架构总览.md) | 服务定位、边界、API、Job 生命周期、异步执行、Callback、恢复机制、数据模型和扩展边界 |
+| [`架构/taskiq-job-model-design.md`](架构/taskiq-job-model-design.md) | 移除 Celery、改用 Taskiq 后的目标 Job 数据模型、生命周期、Attempt、Callback Outbox 和 Event 设计 |
 | [`架构/通用_AI_Job_接入规范.md`](架构/通用_AI_Job_接入规范.md) | 通用 AI Job 创建、查询、Callback、幂等、错误和新增 `job_type` 的合同事实源 |
 | [`架构/refactor-plan.md`](架构/refactor-plan.md) | 规范先行重构路线：先建项目标准和骨架，再适配接口、Job、配置、日志、异常和 ORM |
-| [`job-implementation-guide.md`](job-implementation-guide.md) | Job 系统实施说明；待进一步从内置示例 workflow 中抽离通用机制说明 |
+| [`job-implementation-guide.md`](job-implementation-guide.md) | 旧 Job 系统实施说明；Taskiq 迁移后仅保留历史排障上下文，当前实现以 Taskiq 设计文档为准 |
 | [`部署与发布手册.md`](部署与发布手册.md) | 本地开发、compose 部署、配置规则、验证入口和常见排障 |
 
 ## 具体能力对接文档

@@ -5,11 +5,11 @@ ROOT_DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 API_HOST="${API_HOST:-0.0.0.0}"
 API_PORT="${API_PORT:-8200}"
 
-if [ -x "$ROOT_DIR/.venv/bin/uvicorn" ]; then
-  UVICORN="$ROOT_DIR/.venv/bin/uvicorn"
+if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
+  set -- "$ROOT_DIR/.venv/bin/python" -m uvicorn
 else
-  UVICORN="uvicorn"
+  set -- python -m uvicorn
 fi
 
 cd "$ROOT_DIR"
-exec "$UVICORN" app.main:app --host "$API_HOST" --port "$API_PORT"
+exec "$@" app.main:app --host "$API_HOST" --port "$API_PORT"

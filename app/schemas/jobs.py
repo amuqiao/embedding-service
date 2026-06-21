@@ -205,6 +205,21 @@ class JobTestAddResult(StrictBaseModel):
         return value
 
 
+class JobTestEchoParams(StrictBaseModel):
+    message: str = Field(min_length=1, max_length=512)
+    repeat: int = Field(default=1, ge=1, le=5)
+
+
+class JobTestEchoRuntimeFields(StrictBaseModel):
+    operation: Literal["echo"]
+
+
+class JobTestEchoResult(StrictBaseModel):
+    message: str
+    repeated: list[str]
+    count: int = Field(ge=1, le=5)
+
+
 class ArithmeticParams(StrictBaseModel):
     a: NumberValue
     b: NumberValue

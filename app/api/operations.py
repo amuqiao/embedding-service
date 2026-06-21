@@ -82,7 +82,7 @@ _OPERATIONS: dict[str, OperationSpec] = {
             }
         ),
         idempotency_key="caller_id + client_request_id",
-        side_effects=("db:ai_jobs", "broker:celery", "storage:runtime_snapshot"),
+        side_effects=("db:jobs", "broker:taskiq", "storage:runtime_snapshot"),
         log_events=("request_completed", "request_failed"),
     ),
     OperationID.GET_AI_JOB: OperationSpec(

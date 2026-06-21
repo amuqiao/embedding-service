@@ -134,7 +134,7 @@ def test_create_job_validation_allows_non_model_runtime(monkeypatch):
             "job_params": {"input": {"value": 1}},
         }
     )
-    monkeypatch.setattr("app.core.workflow_registry.get", lambda job_type: GenericHandler())
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda job_type: GenericHandler())
     monkeypatch.setattr("app.services.jobs.get_template", lambda job_type: None)
     monkeypatch.setattr(
         "app.services.jobs.get_enabled_model",
@@ -167,7 +167,7 @@ def test_create_job_validation_preserves_runtime_app_error(monkeypatch):
             "job_params": {"input": {"value": 1}},
         }
     )
-    monkeypatch.setattr("app.core.workflow_registry.get", lambda job_type: RuntimeHandler())
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda job_type: RuntimeHandler())
 
     with pytest.raises(AppError) as exc:
         _validate_create_request(payload)
@@ -196,7 +196,7 @@ def test_create_job_validation_wraps_unexpected_prerequisite_errors(monkeypatch)
             "job_params": {"input": {"value": 1}},
         }
     )
-    monkeypatch.setattr("app.core.workflow_registry.get", lambda job_type: RuntimeHandler())
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda job_type: RuntimeHandler())
 
     with pytest.raises(AppError) as exc:
         _validate_create_request(payload)
@@ -319,7 +319,7 @@ def test_job_view_status_and_result_contracts():
         return RequiredResultHandler() if job_type == "test.required_result" else NullResultHandler()
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr("app.core.workflow_registry.get", get_handler)
+    monkeypatch.setattr("app.jobs.registry.get", get_handler)
     try:
         validate_job_status_payload(_job_view_payload(job_type="test.null_result", status="succeeded"))
         validate_job_status_payload(
@@ -343,9 +343,9 @@ def test_job_view_status_and_result_contracts():
 
 
 def test_arithmetic_job_view_result_uses_registered_result_schema(monkeypatch):
-    from app.workflows.arithmetic import ArithmeticWorkflow
+    from app.jobs.types.arithmetic import ArithmeticJob
 
-    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: ArithmeticWorkflow())
+    monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: ArithmeticJob())
 
     validate_job_status_payload(
         _job_view_payload(

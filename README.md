@@ -12,13 +12,13 @@ FastAPI AI Job 执行后端模板。服务只负责模型执行、异步 Job、�
 ./scripts/dev.sh status
 ```
 
-`./scripts/dev.sh start` 会启动 PostgreSQL / Redis，执行 Alembic 迁移，并启动 FastAPI API 与 Celery worker。
+`./scripts/dev.sh start` 会启动 PostgreSQL / Redis，执行 Alembic 迁移，并启动 FastAPI API 与 Taskiq worker。
 
 ## 运行与部署模式
 
 本项目区分 1 个本地运行入口和 2 个 compose 部署入口：
 
-- `local`：宿主机运行 FastAPI API 和 Celery worker，`docker compose` 只提供 PostgreSQL / Redis。本地开发默认使用此模式，入口是 `./scripts/dev.sh`。
+- `local`：宿主机运行 FastAPI API 和 Taskiq worker，`docker compose` 只提供 PostgreSQL / Redis。本地开发默认使用此模式，入口是 `./scripts/dev.sh`。
 - `compose-deps`：只启动 PostgreSQL / Redis 依赖服务，适合给宿主机上的应用进程提供依赖。
 - `compose-full`：API、worker、PostgreSQL、Redis 全部由 `docker compose` 管理，并在应用启动前执行 Alembic 迁移。
 

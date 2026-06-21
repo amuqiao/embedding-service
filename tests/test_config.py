@@ -4,9 +4,9 @@ from pydantic import ValidationError
 from app.core.config import (
     Settings,
     _CALLBACK_DELIVERY_CLAIM_GRACE,
-    _CELERY_HARD_TIMEOUT_BUFFER,
-    _CELERY_SOFT_TIMEOUT_BUFFER,
     _JOB_STALE_RUNNING_BUFFER,
+    _WORKER_HARD_TIMEOUT_BUFFER,
+    _WORKER_SOFT_TIMEOUT_BUFFER,
 )
 from scripts.verify.env_config_check import (
     DEPLOYMENT_OR_SCRIPT_KEYS,
@@ -17,7 +17,7 @@ from scripts.verify.env_config_check import (
 
 def _settings_kwargs(**overrides):
     values = {
-        "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/ai_jobs",
+        "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/cms_story_tagger",
         "SERVICE_API_KEY": "test-token",
         "DISABLE_HTTP_AUTH_HEADER": False,
         "DISABLE_CALLER_ID_HEADER": False,
@@ -43,10 +43,10 @@ def test_settings_rejects_zero_or_negative_control_values():
 def test_derived_timeout_properties_use_fixed_buffers():
     # Buffer values are now code constants — passing them has no effect.
     s = Settings(**_settings_kwargs(MODEL_CALL_TIMEOUT_SECONDS=300))
-    assert s.celery_soft_time_limit == 300 + _CELERY_SOFT_TIMEOUT_BUFFER
-    assert s.celery_time_limit == 300 + _CELERY_SOFT_TIMEOUT_BUFFER + _CELERY_HARD_TIMEOUT_BUFFER
+    assert s.worker_soft_time_limit == 300 + _WORKER_SOFT_TIMEOUT_BUFFER
+    assert s.worker_hard_time_limit == 300 + _WORKER_SOFT_TIMEOUT_BUFFER + _WORKER_HARD_TIMEOUT_BUFFER
     assert s.job_stale_running_seconds == (
-        300 + _CELERY_SOFT_TIMEOUT_BUFFER + _CELERY_HARD_TIMEOUT_BUFFER + _JOB_STALE_RUNNING_BUFFER
+        300 + _WORKER_SOFT_TIMEOUT_BUFFER + _WORKER_HARD_TIMEOUT_BUFFER + _JOB_STALE_RUNNING_BUFFER
     )
     assert s.callback_delivery_timeout_seconds == 5 + _CALLBACK_DELIVERY_CLAIM_GRACE
 
@@ -79,13 +79,13 @@ def test_security_header_disable_flags_reject_ambiguous_bool_strings():
 def test_security_header_disable_flags_require_local_service_urls():
     with pytest.raises(ValidationError, match="DATABASE_URL must point to a local service"):
         Settings(**_settings_kwargs(
-            DATABASE_URL="postgresql+asyncpg://postgres:postgres@db.example.com:5432/ai_jobs",
+            DATABASE_URL="postgresql+asyncpg://postgres:postgres@db.example.com:5432/cms_story_tagger",
             DISABLE_HTTP_AUTH_HEADER=True,
         ))
 
     with pytest.raises(ValidationError, match="DATABASE_URL must point to a local service"):
         Settings(**_settings_kwargs(
-            DATABASE_URL="postgresql+asyncpg://postgres:postgres@postgres:5432/ai_jobs",
+            DATABASE_URL="postgresql+asyncpg://postgres:postgres@postgres:5432/cms_story_tagger",
             DISABLE_HTTP_AUTH_HEADER=True,
         ))
 
@@ -107,9 +107,9 @@ def test_settings_rejects_buffers_below_minimum():
     # Buffer minimums are enforced by code constants, so any MODEL_CALL_TIMEOUT_SECONDS
     # value produces a valid chain. This test documents the constant floor.
     s = Settings(**_settings_kwargs(MODEL_CALL_TIMEOUT_SECONDS=1))
-    assert s.celery_soft_time_limit == 1 + _CELERY_SOFT_TIMEOUT_BUFFER
-    assert _CELERY_SOFT_TIMEOUT_BUFFER >= 300
-    assert _CELERY_HARD_TIMEOUT_BUFFER >= 60
+    assert s.worker_soft_time_limit == 1 + _WORKER_SOFT_TIMEOUT_BUFFER
+    assert _WORKER_SOFT_TIMEOUT_BUFFER >= 300
+    assert _WORKER_HARD_TIMEOUT_BUFFER >= 60
     assert _JOB_STALE_RUNNING_BUFFER >= 600
 
 

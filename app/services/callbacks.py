@@ -12,7 +12,7 @@ import httpx
 from pydantic import BaseModel
 
 from app.core.config import settings
-from app.models.job import AIJob
+from app.models.job import Job
 from app.schemas.callbacks import CallbackEnvelope, CallbackResponseEnvelope
 from app.services.jobs import _job_payload, trigger_request_id_from_job
 
@@ -48,13 +48,13 @@ def _validate_callback_url(url: str) -> None:
 
 def validate_callback_response_payload(payload: dict[str, Any], *, job_type: str) -> CallbackResponseEnvelope:
     envelope = CallbackResponseEnvelope.model_validate(payload)
-    from app.core import workflow_registry
+    from app.jobs.factory import get_job_executor
 
-    workflow_registry.get(job_type).validate_callback_response(envelope)
+    get_job_executor(job_type).validate_callback_response(envelope)
     return envelope
 
 
-def build_callback_body(job: AIJob) -> dict:
+def build_callback_body(job: Job) -> dict:
     event = "job.succeeded" if job.status == "succeeded" else "job.failed"
     sent_at = datetime.now(timezone.utc)
     envelope = CallbackEnvelope.model_validate(
@@ -99,7 +99,7 @@ def _callback_response_summary(response_text: str, callback_body: dict[str, Any]
     }
 
 
-async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
+async def deliver_callback(job: Job) -> CallbackDeliveryResult:
     url = job.callback_url
     if not url:
         return CallbackDeliveryResult(status="skipped")

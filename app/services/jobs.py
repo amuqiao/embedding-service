@@ -14,7 +14,7 @@ from app.core.error_registry import get_error_spec
 from app.core.model_registry import get_enabled_model
 from app.core.prompt_templates import get_template
 from app.integrations.storage import sha256_digest, storage
-from app.models.job import AIJob
+from app.models.job import Job
 from app.repositories.job_repo import JobRepo
 from app.schemas.errors import ErrorDetail
 from app.schemas.jobs import CreateJobRequest, CreateJobResponse, JobResult, JobStatusResponse
@@ -64,7 +64,7 @@ def _job_error_detail(error: dict[str, Any] | None) -> dict[str, Any] | None:
     return ErrorDetail(reason=reason, details=details, retryable=get_error_spec(reason).retryable).model_dump()
 
 
-def _callback_state(job: AIJob) -> dict[str, Any]:
+def _callback_state(job: Job) -> dict[str, Any]:
     if not job.callback_url:
         return {
             "status": "not_configured",
@@ -85,7 +85,7 @@ def _callback_state(job: AIJob) -> dict[str, Any]:
     }
 
 
-def _progress_stage(job: AIJob) -> str:
+def _progress_stage(job: Job) -> str:
     if job.status == "queued":
         return "accepted"
     if job.status == "succeeded":
@@ -117,7 +117,7 @@ def _progress_stage(job: AIJob) -> str:
     return "calling_model"
 
 
-def _job_payload(job: AIJob) -> dict[str, Any]:
+def _job_payload(job: Job) -> dict[str, Any]:
     try:
         return validate_job_status_payload(
             {
@@ -148,7 +148,7 @@ def _job_payload(job: AIJob) -> dict[str, Any]:
         ) from exc
 
 
-def _job_to_response(job: AIJob, request_id: str = "-") -> JobStatusResponse:
+def _job_to_response(job: Job, request_id: str = "-") -> JobStatusResponse:
     return JobStatusResponse.model_validate(_job_payload(job))
 
 
@@ -221,9 +221,9 @@ def _validate_callback(callback: Any) -> None:
 
 
 def validate_create_contract(payload: CreateJobRequest) -> tuple[Any, dict[str, Any]]:
-    from app.core import workflow_registry
+    from app.jobs.factory import get_job_executor
     try:
-        handler = workflow_registry.get(payload.job_type)
+        handler = get_job_executor(payload.job_type)
     except KeyError:
         raise ValidationAppError("INVALID_JOB_TYPE", f"不支持的 job_type: {payload.job_type}")
     job_params = _normalize_job_params(payload, handler)
@@ -238,7 +238,7 @@ def validate_create_contract(payload: CreateJobRequest) -> tuple[Any, dict[str, 
 
 
 def validate_job_status_payload(payload: dict[str, Any]):
-    from app.core.workflow_registry import validate_job_view_payload
+    from app.jobs.registry import validate_job_view_payload
 
     return validate_job_view_payload(payload)
 
@@ -287,8 +287,8 @@ async def create_job(
     caller_id: str,
     *,
     trigger_request_id: str | None = None,
-) -> tuple[AIJob, bool]:
-    _handler, job_params, runtime_fields = _validate_create_request(payload)
+) -> tuple[Job, bool]:
+    handler, job_params, runtime_fields = _validate_create_request(payload)
     if trigger_request_id:
         runtime_fields = {
             **runtime_fields,
@@ -333,6 +333,8 @@ async def create_job(
                 details={"active_jobs": active, "limit": settings.MAX_ACTIVE_JOBS},
             )
 
+    timeout_seconds = int(getattr(handler, "timeout_seconds", settings.MODEL_CALL_TIMEOUT_SECONDS))
+    max_attempts = int(getattr(handler, "max_attempts", 1))
     job = await JobRepo.create(
         db,
         caller_id=caller_id,
@@ -341,10 +343,13 @@ async def create_job(
         request_fingerprint=request_fingerprint,
         metadata=payload.metadata,
         priority=payload.options.priority if payload.options else "normal",
-        timeout_seconds=None,
+        timeout_seconds=timeout_seconds,
+        max_attempts=max_attempts,
+        job_params=job_params,
         callback_url=payload.callback.url if payload.callback else None,
         callback_events=payload.callback.events if payload.callback else None,
     )
+    job.idempotency_key = payload.client_request_id
     job_params_hash = payload_hash(job_params)
     output_target = configured_output_target(job.id)
     job.job_params_hash = job_params_hash
@@ -359,11 +364,12 @@ async def create_job(
             output_target=output_target,
         ),
     )
+    await JobRepo.create_initial_attempt(db, job, timeout_seconds=timeout_seconds)
     await db.flush()
     return job, True
 
 
-async def get_job_or_404(db: AsyncSession, job_id: uuid.UUID) -> AIJob:
+async def get_job_or_404(db: AsyncSession, job_id: uuid.UUID) -> Job:
     job = await JobRepo.get(db, job_id)
     if not job:
         raise NotFoundAppError("JOB_NOT_FOUND", f"job_id 不存在: {job_id}")
@@ -383,11 +389,11 @@ async def get_job_response(
     return _job_to_response(job, request_id)
 
 
-def create_job_response(job: AIJob, request_id: str = "-") -> CreateJobResponse:
+def create_job_response(job: Job, request_id: str = "-") -> CreateJobResponse:
     return CreateJobResponse.model_validate(_job_payload(job))
 
 
-def trigger_request_id_from_job(job: AIJob) -> str | None:
+def trigger_request_id_from_job(job: Job) -> str | None:
     try:
         system_fields = runtime_fields_from_job(job).get("_system")
     except Exception:
@@ -411,22 +417,17 @@ async def submit_job_request(
         caller_id,
         trigger_request_id=request_id,
     )
-    task_id = str(uuid.uuid4()) if created else None
-    if task_id:
-        await JobRepo.set_celery_task_id(db, job.id, task_id)
     await db.commit()
-    if task_id:
+    if created and job.active_attempt_id is not None:
         await db.refresh(job)
-        from app.tasks.jobs import dispatch_job_task
+        from app.tasks.jobs import publish_job_attempt
 
-        dispatch_job_task.apply_async(args=[str(job.id)], task_id=task_id)
-        await JobRepo.mark_celery_published(db, job.id, task_id)
-        await db.commit()
+        await publish_job_attempt(job.active_attempt_id)
         await db.refresh(job)
     return create_job_response(job, request_id=request_id)
 
 
-def _load_input_text(job: AIJob) -> str:
+def _load_input_text(job: Job) -> str:
     job_params = job_params_from_job(job)
 
     # Inline source: text stored directly
@@ -464,14 +465,14 @@ def _artifact_key(output_target: dict[str, Any], artifact_key: str, *, scope: st
 
 
 def _persist_large_artifact_payload(
-    job: AIJob,
+    job: Job,
     result_data: dict[str, Any],
     *,
     scope: str = "",
 ) -> dict[str, Any]:
-    from app.core import workflow_registry
+    from app.jobs.factory import get_job_executor
     try:
-        persist_keys = workflow_registry.get(job.job_type).large_artifact_keys
+        persist_keys = get_job_executor(job.job_type).large_artifact_keys
     except KeyError:
         persist_keys = frozenset()
     output_target: dict[str, Any] | None = None
@@ -494,13 +495,7 @@ def _persist_large_artifact_payload(
     return result_data
 
 
-def _persist_large_artifacts(job: AIJob, result: JobResult | dict[str, Any]) -> dict[str, Any]:
+def _persist_large_artifacts(job: Job, result: JobResult | dict[str, Any]) -> dict[str, Any]:
     generation = int(getattr(job, "execution_generation", None) or 1)
     result_data = result.model_dump() if isinstance(result, JobResult) else dict(result)
     return _persist_large_artifact_payload(job, result_data, scope=f"results/g{generation}")
-
-
-def _persist_work_item_artifacts(job: AIJob, *, kind: str, chunk_index: int, result: dict[str, Any]) -> dict[str, Any]:
-    generation = int(getattr(job, "execution_generation", None) or 1)
-    scope = f"work-items/g{generation}/{kind}-{chunk_index}"
-    return _persist_large_artifact_payload(job, result, scope=scope)

@@ -1,5 +1,7 @@
-import asyncio
+from __future__ import annotations
+
 import logging
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -7,21 +9,21 @@ from typing import Any
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.logging import set_request_id
-from app.core.config import settings
 from app.repositories.job_repo import JobRepo
 from app.services.callbacks import deliver_callback
 from app.services.jobs import get_job_or_404
-from app.tasks.celery_app import celery_app
+from app.tasks.taskiq_app import broker
 
 logger = logging.getLogger(__name__)
 
 
 def _ensure_workflows_registered() -> None:
-    from app.workflows.register import register_all_workflows
+    from app.jobs.types.register import register_all_job_types
 
-    register_all_workflows()
+    register_all_job_types()
 
 
 def _session_factory():
@@ -38,108 +40,146 @@ async def _with_db(coro):
         await engine.dispose()
 
 
-@celery_app.task(name="jobs.dispatch", bind=True, acks_late=True)
-def dispatch_job_task(self, job_id: str) -> dict[str, Any]:
-    """Plan a job and dispatch its workflow canvas."""
-    _ensure_workflows_registered()
-    set_request_id(job_id)
-    try:
-        return asyncio.run(_dispatch(job_id, self.request.id))
-    except Exception as exc:
-        try:
-            asyncio.run(_fail(job_id, None, exc, self.request.id))
-        except Exception:
-            logger.exception("job_dispatch_fail_cleanup_error job_id=%s", job_id)
-        raise
-
-
-async def _dispatch(job_id: str, celery_task_id: str) -> dict[str, Any]:
-    job_uuid = uuid.UUID(job_id)
-
-    async def run(db):
-        from app.services.job_workflow import build_canvas, plan_job
-
-        job = await get_job_or_404(db, job_uuid)
-        if job.status in ("succeeded", "failed"):
-            logger.warning("job_dispatch_skipped job_id=%s status=%s", job_id, job.status)
-            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
-        if job.celery_task_id != celery_task_id:
-            logger.warning(
-                "job_dispatch_task_id_mismatch job_id=%s message_task_id=%s db_task_id=%s status=%s",
-                job_id, celery_task_id, job.celery_task_id, job.status,
-            )
-            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
-        if job.status == "queued":
-            claimed = await JobRepo.mark_running_if_queued(
-                db,
-                job.id,
-                celery_task_id=celery_task_id,
-                progress_text="正在规划执行策略",
-            )
-            if not claimed:
-                logger.warning("job_dispatch_claim_failed job_id=%s status=%s", job_id, job.status)
-                return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
-            await db.commit()
-        elif job.status != "running":
-            logger.warning("job_dispatch_unexpected_status job_id=%s status=%s", job_id, job.status)
-            return {"job_id": job_id, "status": "skipped", "job_type": job.job_type}
-
-        job, plan, item_ids = await plan_job(db, job_uuid)
-        canvas = build_canvas(
-            job.id,
-            job.job_type,
-            plan,
-            item_ids,
-            execution_generation=int(job.execution_generation or 1),
-        )
-        canvas.apply_async()
-        logger.info(
-            "job_workflow_dispatched job_id=%s job_type=%s execution_mode=%s chunk_count=%d",
-            job_id,
-            job.job_type,
-            plan.execution_mode,
-            plan.chunk_count,
-        )
-        return {
-            "job_id": job_id,
-            "status": "dispatched",
-            "job_type": job.job_type,
-            "execution_mode": plan.execution_mode,
-            "chunk_count": plan.chunk_count,
-        }
-
-    return await _with_db(run)
-
-
-async def _fail(job_id: str, _work_item_id: str | None, exc: Exception, celery_task_id: str) -> None:
+def _job_error_from_exception(exc: Exception) -> dict[str, Any]:
     if isinstance(exc, AppError):
-        logger.error("job_failed job_id=%s error_code=%s", job_id, exc.code)
-        error = {"code": exc.code, "message": exc.message, "details": exc.details}
-    else:
-        logger.error("job_failed job_id=%s error_type=%s", job_id, type(exc).__name__, exc_info=True)
+        return {"code": exc.code, "message": exc.message, "details": exc.details}
+    if isinstance(exc, KeyError):
+        return {
+            "code": "INVALID_JOB_TYPE",
+            "message": "stored job references an unregistered job_type",
+            "details": {"type": type(exc).__name__, "message": str(exc)[:500]},
+        }
+    return {
+        "code": "MODEL_CALL_FAILED",
+        "message": "模型调用失败或内部处理失败",
+        "details": {"type": type(exc).__name__, "message": str(exc)[:500]},
+    }
+
+
+async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
+    try:
+        await run_job_attempt.kiq(str(attempt_id))
+    except Exception as exc:
         error = {
-            "code": "MODEL_CALL_FAILED",
-            "message": "模型调用失败或内部处理失败",
+            "code": "TASKIQ_PUBLISH_FAILED",
+            "message": "Taskiq publish failed",
             "details": {"type": type(exc).__name__, "message": str(exc)[:500]},
         }
 
-    async def run(db):
-        job_uuid = uuid.UUID(job_id)
-        marked = await JobRepo.mark_failed(db, job_uuid, error, celery_task_id=celery_task_id)
-        await db.commit()
-        return marked
+        async def record_failure(db):
+            await JobRepo.mark_attempt_publish_failed(
+                db,
+                attempt_id,
+                error=error,
+                next_dispatch_at=datetime.now(timezone.utc) + timedelta(seconds=settings.JOB_ORPHAN_TIMEOUT_SECONDS),
+            )
+            await db.commit()
 
-    marked = await _with_db(run)
-    if marked:
-        await deliver_callback_for_job(uuid.UUID(job_id))
-    else:
-        logger.warning("job_fail_state_lost job_id=%s", job_id)
+        await _with_db(record_failure)
+        raise
+
+    async def mark_published(db):
+        await JobRepo.mark_attempt_published(
+            db,
+            attempt_id,
+            next_dispatch_at=datetime.now(timezone.utc) + timedelta(seconds=settings.JOB_ORPHAN_TIMEOUT_SECONDS),
+        )
+        await db.commit()
+
+    await _with_db(mark_published)
+
+
+@broker.task(task_name="jobs.run_attempt")
+async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
+    _ensure_workflows_registered()
+    attempt_uuid = uuid.UUID(attempt_id)
+    set_request_id(attempt_id)
+    lease_token: uuid.UUID | None = None
+    job_id: uuid.UUID | None = None
+    try:
+        worker_id = f"{os.uname().nodename}:{os.getpid()}"
+
+        async def claim(db):
+            claimed_attempt = await JobRepo.claim_attempt_for_execution(
+                db,
+                attempt_uuid,
+                worker_id=worker_id,
+                lease_seconds=settings.job_stale_running_seconds,
+            )
+            await db.commit()
+            return claimed_attempt
+
+        claimed = await _with_db(claim)
+        if claimed is None:
+            logger.info("taskiq_attempt_skipped attempt_id=%s reason=claim_failed", attempt_id)
+            return {"attempt_id": attempt_id, "status": "skipped"}
+        job, _attempt, lease_token = claimed
+        job_id = job.id
+
+        async def heartbeat(phase: str) -> None:
+            async def extend(db):
+                extended = await JobRepo.heartbeat_attempt(
+                    db,
+                    attempt_uuid,
+                    lease_token=lease_token,
+                    lease_seconds=settings.job_stale_running_seconds,
+                )
+                await db.commit()
+                return extended
+
+            if not await _with_db(extend):
+                raise AppError(
+                    "JOB_STATE_TRANSITION_CONFLICT",
+                    "attempt lease could not be extended",
+                    status_code=500,
+                    details={"attempt_id": attempt_id, "phase": phase},
+                )
+
+        async def execute(db):
+            from app.jobs.runner import execute_job
+
+            await heartbeat("before:execute")
+            return await execute_job(
+                db,
+                job.id,
+                execution_generation=job.execution_generation,
+                attempt_id=attempt_uuid,
+                lease_token=lease_token,
+            )
+
+        result = await _with_db(execute)
+        if result.get("status") != "succeeded":
+            raise AppError("JOB_EXECUTION_FAILED", "job attempt finished without success", status_code=500, details=result)
+        return {"attempt_id": attempt_id, "job_id": str(job_id), "status": "succeeded", "result": result}
+    except Exception as exc:
+        logger.exception("taskiq_attempt_failed attempt_id=%s", attempt_id)
+        if lease_token is not None:
+            error = _job_error_from_exception(exc)
+
+            async def mark_failed(db):
+                marked = await JobRepo.mark_attempt_failed(
+                    db,
+                    attempt_uuid,
+                    lease_token=lease_token,
+                    error=error,
+                    retryable=True,
+                    next_dispatch_at=datetime.now(timezone.utc),
+                )
+                await db.commit()
+                return marked
+
+            marked = await _with_db(mark_failed)
+            if marked and job_id is not None:
+                await deliver_callback_for_job(job_id)
+        raise
 
 
 async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
     async def run(db):
         job = await get_job_or_404(db, job_id)
         if job.status not in ("succeeded", "failed"):
+            return False
+        if not job.callback_url:
             return False
         if job.callback_attempts >= settings.CALLBACK_MAX_DELIVERY_ATTEMPTS:
             return False
@@ -180,92 +220,14 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
         return False
 
 
-@celery_app.task(name="jobs.execute_work_item", bind=True, acks_late=True)
-def execute_work_item_task(self, job_id: str, item_id: str) -> dict:
-    """Execute a single work item (chunk, memory, scan, or whole)."""
-    _ensure_workflows_registered()
-    set_request_id(f"{job_id}:{item_id}")
-    try:
-        async def run(db):
-            from app.services.job_workflow import execute_work_item
-            return await execute_work_item(
-                db,
-                job_id=uuid.UUID(job_id),
-                item_id=uuid.UUID(item_id),
-                celery_task_id=self.request.id,
-            )
-        return asyncio.run(_with_db(run))
-    except Exception as exc:
-        try:
-            if isinstance(exc, AppError):
-                error = {"code": exc.code, "message": exc.message, "details": exc.details}
-            else:
-                error = {
-                    "code": "WORK_ITEM_FAILED",
-                    "message": str(exc)[:500],
-                    "details": {"type": type(exc).__name__},
-                }
-            async def fail(db):
-                from app.services.job_workflow import fail_job
-                await fail_job(
-                    db,
-                    job_id=uuid.UUID(job_id),
-                    item_id=uuid.UUID(item_id),
-                    error=error,
-                )
-            asyncio.run(_with_db(fail))
-        except Exception:
-            logger.exception("work_item_fail_cleanup_error job_id=%s item_id=%s", job_id, item_id)
-        raise
-
-
-@celery_app.task(name="jobs.fanout_after_mapping", acks_late=True)
-def fanout_after_mapping_task(
-    memory_result: dict,
-    job_id: str,
-    chunk_item_ids: list[str],
-    execution_generation: int = 1,
-) -> dict[str, Any]:
-    """After memory mapping completes, dispatch chunks and finalize when all chunks finish."""
-    _ensure_workflows_registered()
-    from celery import chord as celery_chord
-    from celery import group as celery_group
-
-    celery_chord(celery_group([
-        execute_work_item_task.s(job_id, item_id)
-        for item_id in chunk_item_ids
-    ]), finalize_job_task.s(job_id, execution_generation)).apply_async()
-    return {"job_id": job_id, "dispatched_chunks": len(chunk_item_ids)}
-
-
-@celery_app.task(name="jobs.finalize_job", acks_late=True)
-def finalize_job_task(prev_result, job_id: str, execution_generation: int | None = None) -> dict:
-    """Finalize a job after all work items complete."""
-    _ensure_workflows_registered()
-    set_request_id(job_id)
-    async def run(db):
-        from app.services.job_workflow import finalize_job
-        return await finalize_job(
-            db,
-            uuid.UUID(job_id),
-            execution_generation=execution_generation,
-        )
-    try:
-        return asyncio.run(_with_db(run))
-    except Exception as exc:
-        logger.exception("finalize_job_error job_id=%s", job_id)
-        raise
-
-
-@celery_app.task(name="jobs.cleanup_expired")
-def cleanup_expired_jobs_task() -> dict[str, Any]:
-    """清理过期 Job 记录；worker recovery loop 会周期调用同一 repo 方法。"""
+@broker.task(task_name="jobs.cleanup_expired")
+async def cleanup_expired_jobs_task() -> dict[str, Any]:
     async def run(db):
         deleted_count = await JobRepo.cleanup_expired_jobs(db)
         await db.commit()
         return {"deleted_count": deleted_count}
 
-    result = asyncio.run(_with_db(run))
+    result = await _with_db(run)
     deleted_count = result.get("deleted_count", 0)
     logger.info("cleanup_expired_jobs_completed deleted_count=%d", deleted_count)
     return {"deleted_count": deleted_count, "status": "success"}

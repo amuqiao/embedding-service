@@ -1,3 +1,3 @@
-from app.models.job import AIJob
+from app.models.job import Job
 
-__all__ = ["AIJob"]
+__all__ = ["Job"]

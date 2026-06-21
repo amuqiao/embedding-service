@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dev.sh - 本地开发服务入口
 #
-# 作用域：只管理当前仓库的本地 FastAPI/Celery 服务和 docker compose 本地依赖。
+# 作用域：只管理当前仓库的本地 FastAPI/Taskiq 服务和 docker compose 本地依赖。
 # 验证、smoke、e2e 等一次性检查不属于本入口。
 # 约束：入口脚本只做参数分发和帮助说明，具体实现下沉到 scripts/dev/ 原子脚本。
 
@@ -17,14 +17,14 @@ usage() {
   ./scripts/dev.sh --help
 
 作用域：
-  当前仓库的本地服务入口。管理 FastAPI API、Celery worker，以及 docker compose 中的 postgres/redis 本地依赖。
+  当前仓库的本地服务入口。管理 FastAPI API、Taskiq worker，以及 docker compose 中的 postgres/redis 本地依赖。
   不负责部署、验证任务、生产运维、数据库重置、远程资源或其他仓库。
 
 服务：
   api       FastAPI 服务，URL: ${API_URL}，文档: ${API_DOCS_URL}，OpenAPI: ${API_OPENAPI_URL}，健康检查: ${API_HEALTH_URL}
             本地默认使用 uvicorn --reload 热更新；如需旧启动路径，设置 DEV_API_RELOAD=false。
-  worker    Celery worker，处理 jobs.dispatch 及 work item 异步任务
-            本地使用 solo pool，避免 macOS/Python 3.13 下 prefork 调用 OpenAI 时崩溃。
+  worker    Taskiq worker，处理 jobs.run_attempt 异步任务
+            worker 通过 PostgreSQL attempt lease 获取执行权。
             worker 代码变更后使用 ./scripts/dev.sh restart worker。
 
 命令：

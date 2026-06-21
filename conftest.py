@@ -1,8 +1,8 @@
 """Project-level pytest configuration.
 
-Ensures workflow handlers are registered before any test that calls
-workflow_registry.get() (e.g. via run_ai_job or merge_work_items).
+Ensures job executors are registered before any test that calls the job
+registry (e.g. via run_ai_job or job status validation).
 """
-from app.workflows.register import register_all_workflows
+from app.jobs.types.register import register_all_job_types
 
-register_all_workflows()
+register_all_job_types()

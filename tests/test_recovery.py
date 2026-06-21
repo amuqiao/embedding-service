@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.models.job import AIJob
+from app.models.job import JobAttempt
 from app.tasks.recovery import _run_recovery
 
 
@@ -26,7 +26,7 @@ class _FakeDB:
         self.commits += 1
 
 
-async def _no_jobs(*_args, **_kwargs):
+async def _no_attempts(*_args, **_kwargs):
     return []
 
 
@@ -34,132 +34,138 @@ async def _cleanup(*_args, **_kwargs):
     return 0
 
 
-def _stale_running_job(*, execution_attempts: int = 1, execution_generation: int = 1) -> AIJob:
-    return AIJob(
+def _attempt(status: str = "published") -> JobAttempt:
+    return JobAttempt(
         id=uuid.uuid4(),
-        status="running",
-        progress_stage="success_side_effect",
-        execution_attempts=execution_attempts,
-        execution_generation=execution_generation,
-        started_at=datetime.now(timezone.utc) - timedelta(hours=2),
-        last_heartbeat_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        job_id=uuid.uuid4(),
+        attempt_no=1,
+        status=status,
+        timeout_seconds=60,
+        lease_token=uuid.uuid4() if status == "running" else None,
+        lease_expires_at=datetime.now(timezone.utc) - timedelta(minutes=1) if status == "running" else None,
     )
 
 
-def _patch_common_recovery(monkeypatch, stale_jobs):
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_orphaned_queued_jobs", _no_jobs)
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_unpublished_queued_jobs", _no_jobs)
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_stale_running_jobs", stale_jobs)
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_due_callbacks", _no_jobs)
+def _patch_common_recovery(monkeypatch, *, due_attempts=None, stale_attempts=None):
+    monkeypatch.setattr(
+        "app.tasks.recovery.JobRepo.find_dispatch_due_attempts",
+        due_attempts or _no_attempts,
+    )
+    monkeypatch.setattr(
+        "app.tasks.recovery.JobRepo.find_stale_running_attempts",
+        stale_attempts or _no_attempts,
+    )
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_due_callbacks", _no_attempts)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.cleanup_expired_jobs", _cleanup)
 
 
 @pytest.mark.asyncio
-async def test_recovery_redispatches_stale_running_job_as_whole_job(monkeypatch):
-    job = _stale_running_job(execution_attempts=1, execution_generation=1)
-    dispatched: list[dict[str, str]] = []
+async def test_recovery_republishes_due_attempts(monkeypatch):
+    attempt = _attempt("published")
+    published: list[uuid.UUID] = []
 
-    async def stale_jobs(*_args, **_kwargs):
-        return [job]
+    async def due_attempts(*_args, **_kwargs):
+        return [attempt]
 
-    async def requeue(_db, job_id, *, new_task_id, max_execution_attempts):
-        assert job_id == job.id
-        assert max_execution_attempts == 3
-        job.status = "queued"
-        job.execution_generation += 1
-        job.celery_task_id = new_task_id
-        return True
+    async def publish(attempt_id):
+        published.append(attempt_id)
 
-    async def mark_published(_db, job_id, task_id):
-        assert job_id == job.id
-        assert task_id == job.celery_task_id
-        return True
-
-    async def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("stale running jobs below max attempts should be requeued")
-
-    class _DispatchTask:
-        @staticmethod
-        def apply_async(*, args, task_id):
-            dispatched.append({"job_id": args[0], "task_id": task_id})
-
-    _patch_common_recovery(monkeypatch, stale_jobs)
-    monkeypatch.setattr("app.tasks.recovery.settings.JOB_MAX_EXECUTION_ATTEMPTS", 3)
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.requeue_stale_running_for_recovery", requeue)
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.mark_celery_published", mark_published)
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.mark_failed_if_running", fail_if_called)
-    monkeypatch.setattr("app.tasks.jobs.dispatch_job_task", _DispatchTask)
+    _patch_common_recovery(monkeypatch, due_attempts=due_attempts)
+    monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", publish)
 
     result = await _run_recovery(_FakeDB())
 
     assert result["recovered"] == 1
     assert result["failed"] == 0
-    assert job.status == "queued"
-    assert job.execution_generation == 2
-    assert dispatched == [{"job_id": str(job.id), "task_id": job.celery_task_id}]
+    assert published == [attempt.id]
 
 
 @pytest.mark.asyncio
-async def test_recovery_marks_stale_running_job_failed_after_max_execution_attempts(monkeypatch):
-    job = _stale_running_job(execution_attempts=3)
+async def test_recovery_marks_stale_running_attempt_failed(monkeypatch):
+    attempt = _attempt("running")
     delivered: list[str] = []
+    marked: list[uuid.UUID] = []
 
-    async def stale_jobs(*_args, **_kwargs):
-        return [job]
+    async def stale_attempts(*_args, **_kwargs):
+        return [attempt]
 
-    async def mark_failed(_db, job_id, error):
-        assert job_id == job.id
+    async def mark_failed(
+        _db,
+        attempt_id,
+        *,
+        lease_token,
+        error,
+        error_kind,
+        failure_phase,
+        retryable,
+        next_dispatch_at,
+    ):
+        assert attempt_id == attempt.id
+        assert lease_token == attempt.lease_token
         assert error["code"] == "JOB_TIMEOUT"
-        assert error["details"]["execution_attempts"] == 3
-        assert error["details"]["max_execution_attempts"] == 3
-        job.status = "failed"
-        job.error = error
+        assert error_kind == "timeout"
+        assert failure_phase == "lease"
+        assert retryable is True
+        assert next_dispatch_at is not None
+        marked.append(attempt_id)
         return True
 
-    async def requeue_if_called(*_args, **_kwargs):
-        raise AssertionError("jobs at max attempts must not be requeued")
-
-    async def deliver_callback(job_id):
-        delivered.append(str(job_id))
-        return True
-
-    _patch_common_recovery(monkeypatch, stale_jobs)
-    monkeypatch.setattr("app.tasks.recovery.settings.JOB_MAX_EXECUTION_ATTEMPTS", 3)
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.mark_failed_if_running", mark_failed)
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.requeue_stale_running_for_recovery", requeue_if_called)
-    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", deliver_callback)
+    _patch_common_recovery(monkeypatch, stale_attempts=stale_attempts)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.mark_attempt_failed", mark_failed)
 
     result = await _run_recovery(_FakeDB())
 
     assert result["recovered"] == 0
     assert result["failed"] == 1
-    assert job.status == "failed"
-    assert delivered == [str(job.id)]
+    assert marked == [attempt.id]
+    assert delivered == []
 
 
 @pytest.mark.asyncio
-async def test_recovery_skips_stale_running_job_when_peer_already_claimed_requeue(monkeypatch):
-    job = _stale_running_job(execution_attempts=1)
-    dispatched: list[str] = []
+async def test_recovery_skips_stale_attempt_when_peer_already_claimed(monkeypatch):
+    attempt = _attempt("running")
+    delivered: list[str] = []
 
-    async def stale_jobs(*_args, **_kwargs):
-        return [job]
+    async def stale_attempts(*_args, **_kwargs):
+        return [attempt]
 
-    async def requeue(_db, _job_id, *, new_task_id, max_execution_attempts):
+    async def mark_failed(*_args, **_kwargs):
         return False
 
-    class _DispatchTask:
-        @staticmethod
-        def apply_async(*, args, task_id):
-            dispatched.append(task_id)
+    async def deliver_callback(job_id):
+        delivered.append(str(job_id))
+        return True
 
-    _patch_common_recovery(monkeypatch, stale_jobs)
-    monkeypatch.setattr("app.tasks.recovery.settings.JOB_MAX_EXECUTION_ATTEMPTS", 3)
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.requeue_stale_running_for_recovery", requeue)
-    monkeypatch.setattr("app.tasks.jobs.dispatch_job_task", _DispatchTask)
+    _patch_common_recovery(monkeypatch, stale_attempts=stale_attempts)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.mark_attempt_failed", mark_failed)
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", deliver_callback)
 
     result = await _run_recovery(_FakeDB())
 
     assert result["recovered"] == 0
     assert result["failed"] == 0
-    assert dispatched == []
+    assert delivered == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_delivers_due_callbacks(monkeypatch):
+    from app.models.job import Job
+
+    due_job = Job(id=uuid.uuid4(), job_type="job_test_add", status="failed")
+    delivered: list[str] = []
+
+    async def due_callbacks(*_args, **_kwargs):
+        return [due_job]
+
+    async def deliver_callback(job_id):
+        delivered.append(str(job_id))
+        return True
+
+    _patch_common_recovery(monkeypatch)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_due_callbacks", due_callbacks)
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", deliver_callback)
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["callbacks"] == 1
+    assert delivered == [str(due_job.id)]

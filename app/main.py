@@ -17,7 +17,7 @@ from app.core.exceptions import AppError
 from app.core.logging import configure_logging, set_request_id
 from app.core.config import settings
 from app.schemas.errors import build_error_envelope
-from app.workflows.register import register_all_workflows
+from app.jobs.types.register import register_all_job_types
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ def _request_id(request: Request) -> str:
 
 
 def bootstrap_runtime() -> None:
-    register_all_workflows()
+    register_all_job_types()
     configure_logging()
     logger.info("app_start service=%s version=0.1.0", settings.SERVICE_NAME)
 

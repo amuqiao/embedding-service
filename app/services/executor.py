@@ -53,10 +53,11 @@ def _model_output_invalid(message: str) -> AppError:
 
 
 async def run_ai_job(job_type: str, model_id: str, prompt_payload: dict, input_text: str) -> JobResult:
-    from app.core import workflow_registry
-    handler = workflow_registry.get(job_type)
+    from app.jobs.factory import get_job_executor
+
+    executor = get_job_executor(job_type)
     result = await generate_text(model_id, _prompt_messages(prompt_payload, input_text, job_type))
     text = result.text.strip()
     if _is_model_refusal(text):
         raise _model_output_invalid(f"{job_type} 模型拒绝执行请求")
-    return handler.parse_output(text)
+    return executor.parse_output(text)

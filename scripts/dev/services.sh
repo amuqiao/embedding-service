@@ -59,11 +59,11 @@ service_command() {
   case "$1" in
     api)
       if api_reload_enabled; then
-        printf "env API_HOST=%q API_PORT=%q WATCHFILES_FORCE_POLLING=%q %q app.main:app --host %q --port %q --reload --reload-dir %q " \
+        printf "env API_HOST=%q API_PORT=%q WATCHFILES_FORCE_POLLING=%q %q -m uvicorn app.main:app --host %q --port %q --reload --reload-dir %q " \
           "$API_HOST" \
           "$API_PORT" \
           "$WATCHFILES_FORCE_POLLING" \
-          "$ROOT_DIR/.venv/bin/uvicorn" \
+          "$ROOT_DIR/.venv/bin/python" \
           "$API_HOST" \
           "$API_PORT" \
           "$ROOT_DIR/app"

@@ -7,8 +7,8 @@ from app.api.operations import all_operation_ids, all_operation_specs
 from app.core.error_registry import all_error_reasons
 from app.core.registry_checks import validate_all_registries
 from app.main import app
-from app.workflows.register import register_all_workflows
-from app.core import workflow_registry
+from app.jobs.types.register import register_all_job_types
+from app.jobs import registry as job_registry
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,8 +69,8 @@ def test_error_registry_covers_produced_error_reasons():
 
 
 def test_job_type_registry_exposes_required_metadata():
-    register_all_workflows()
-    specs = workflow_registry.all_job_type_specs()
+    register_all_job_types()
+    specs = job_registry.all_job_type_specs()
 
     assert "job_test_add" in specs
     spec = specs["job_test_add"]
@@ -88,10 +88,18 @@ def test_job_type_registry_exposes_required_metadata():
     assert arithmetic_spec.canonical_result_schema == "ArithmeticResult"
     assert arithmetic_spec.public_result_schema == "ArithmeticResult"
     assert arithmetic_spec.allow_callback is True
-    assert arithmetic_spec.canvas_pattern == "single"
     assert arithmetic_spec.error_codes <= all_error_reasons()
 
 
 def test_registry_consistency_check_passes():
-    register_all_workflows()
+    register_all_job_types()
     validate_all_registries(app)
+
+
+def test_register_all_job_types_reregisters_after_clear():
+    register_all_job_types()
+    job_registry.clear_for_tests()
+
+    register_all_job_types()
+
+    assert {"arithmetic", "job_test_add", "job_test_echo"} <= set(job_registry.all_job_types())

@@ -11,6 +11,9 @@ from app.schemas.jobs import (
     JobTestAddParams,
     JobTestAddResult,
     JobTestAddRuntimeFields,
+    JobTestEchoParams,
+    JobTestEchoResult,
+    JobTestEchoRuntimeFields,
 )
 from app.schemas.meta import ModelsResponse, PromptTemplatesResponse
 
@@ -25,6 +28,9 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
         JobTestAddParams,
         JobTestAddRuntimeFields,
         JobTestAddResult,
+        JobTestEchoParams,
+        JobTestEchoRuntimeFields,
+        JobTestEchoResult,
         ModelsResponse,
         PromptTemplatesResponse,
     )

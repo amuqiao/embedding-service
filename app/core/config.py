@@ -8,11 +8,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
 # ── Timeout chain safety margins (code constants, not configurable) ───────────
-# These are structural invariants in the Celery timeout chain.
 # L1 = MODEL_CALL_TIMEOUT_SECONDS (operator-configured anchor).
 # L3–L5 are derived from L1 + these buffers; they must never shrink below minimum.
-_CELERY_SOFT_TIMEOUT_BUFFER: int = 300   # time for L1 cleanup (job write + callback) after AI timeout
-_CELERY_HARD_TIMEOUT_BUFFER: int = 60    # time for soft-limit handler to finish before SIGKILL
+_WORKER_SOFT_TIMEOUT_BUFFER: int = 300   # time for L1 cleanup (job write + callback) after AI timeout
+_WORKER_HARD_TIMEOUT_BUFFER: int = 60    # time for soft-limit handler to finish before process termination
 _JOB_STALE_RUNNING_BUFFER: int = 600     # recovery scan gap to avoid mis-classifying a recently killed job
 _CALLBACK_DELIVERY_CLAIM_GRACE: int = 175  # DB commit/recovery skew margin after one callback HTTP timeout
 
@@ -90,10 +89,9 @@ class Settings(BaseSettings):
     JOB_RECOVERY_CALLBACK_BATCH_SIZE: int = 50
     JOB_MAX_EXECUTION_ATTEMPTS: int = 3
 
-    # ── Celery internals ──────────────────────────────────────────────────────
-    CELERY_MAX_RETRIES: int = 0
-    CELERY_RETRY_DELAY: int = 60
-    CELERY_RESULT_EXPIRES: int = 86400
+    # ── Taskiq / worker internals ─────────────────────────────────────────────
+    TASKIQ_MAX_RETRIES: int = 0
+    TASKIQ_RETRY_DELAY: int = 60
 
     PROMPT_CONFIG_PATH: str = "app/core/prompts.yaml"
 
@@ -139,8 +137,7 @@ class Settings(BaseSettings):
             "JOB_RECOVERY_BATCH_SIZE": self.JOB_RECOVERY_BATCH_SIZE,
             "JOB_RECOVERY_CALLBACK_BATCH_SIZE": self.JOB_RECOVERY_CALLBACK_BATCH_SIZE,
             "JOB_MAX_EXECUTION_ATTEMPTS": self.JOB_MAX_EXECUTION_ATTEMPTS,
-            "CELERY_RETRY_DELAY": self.CELERY_RETRY_DELAY,
-            "CELERY_RESULT_EXPIRES": self.CELERY_RESULT_EXPIRES,
+            "TASKIQ_RETRY_DELAY": self.TASKIQ_RETRY_DELAY,
         }
         for name, value in positive_fields.items():
             if value <= 0:
@@ -149,7 +146,7 @@ class Settings(BaseSettings):
         non_negative_fields = {
             "DB_MAX_OVERFLOW": self.DB_MAX_OVERFLOW,
             "MAX_ACTIVE_JOBS": self.MAX_ACTIVE_JOBS,
-            "CELERY_MAX_RETRIES": self.CELERY_MAX_RETRIES,
+            "TASKIQ_MAX_RETRIES": self.TASKIQ_MAX_RETRIES,
         }
         for name, value in non_negative_fields.items():
             if value < 0:
@@ -185,19 +182,19 @@ class Settings(BaseSettings):
             )
         return self
 
-    # ── Derived: Celery timeout chain (L1 anchor + fixed buffers) ─────────────
+    # ── Derived: worker timeout chain (L1 anchor + fixed buffers) ─────────────
 
     @property
-    def celery_soft_time_limit(self) -> int:
-        return self.MODEL_CALL_TIMEOUT_SECONDS + _CELERY_SOFT_TIMEOUT_BUFFER
+    def worker_soft_time_limit(self) -> int:
+        return self.MODEL_CALL_TIMEOUT_SECONDS + _WORKER_SOFT_TIMEOUT_BUFFER
 
     @property
-    def celery_time_limit(self) -> int:
-        return self.celery_soft_time_limit + _CELERY_HARD_TIMEOUT_BUFFER
+    def worker_hard_time_limit(self) -> int:
+        return self.worker_soft_time_limit + _WORKER_HARD_TIMEOUT_BUFFER
 
     @property
     def job_stale_running_seconds(self) -> int:
-        return self.celery_time_limit + _JOB_STALE_RUNNING_BUFFER
+        return self.worker_hard_time_limit + _JOB_STALE_RUNNING_BUFFER
 
     @property
     def callback_delivery_timeout_seconds(self) -> int:

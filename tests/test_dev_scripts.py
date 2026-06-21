@@ -29,7 +29,8 @@ def _api_service_command(**env_overrides: str) -> str:
 def test_dev_api_service_command_uses_uvicorn_reload_by_default():
     command = _api_service_command(DEV_API_RELOAD="true", WATCHFILES_FORCE_POLLING="true")
 
-    assert ".venv/bin/uvicorn" in command
+    assert ".venv/bin/python" in command
+    assert "-m uvicorn" in command
     assert "app.main:app" in command
     assert "--reload" in command
     assert "WATCHFILES_FORCE_POLLING=true" in command

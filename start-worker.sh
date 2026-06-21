@@ -2,28 +2,39 @@
 set -e
 
 ROOT_DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
-WORKER_LOGLEVEL="${WORKER_LOGLEVEL:-info}"
-WORKER_POOL="${WORKER_POOL:-threads}"
+WORKER_LOGLEVEL="${WORKER_LOGLEVEL:-INFO}"
+WORKER_CONCURRENCY="${WORKER_CONCURRENCY:-1}"
+WORKER_RECOVERY_LOOP="${WORKER_RECOVERY_LOOP:-true}"
 
-if [ -x "$ROOT_DIR/.venv/bin/celery" ]; then
-  CELERY="$ROOT_DIR/.venv/bin/celery"
+if [ -x "$ROOT_DIR/.venv/bin/taskiq" ]; then
+  TASKIQ="$ROOT_DIR/.venv/bin/taskiq"
 else
-  CELERY="celery"
+  TASKIQ="taskiq"
 fi
 
 cd "$ROOT_DIR"
 
-set -- -A app.tasks.celery_app.celery_app worker \
-  --loglevel="$WORKER_LOGLEVEL" \
-  --pool="$WORKER_POOL"
+RECOVERY_PID=""
+TASKIQ_PID=""
 
-# solo 模式不支持并发，--concurrency 仅对 threads/prefork 有效
-if [ "$WORKER_POOL" != "solo" ] && [ -n "${WORKER_CONCURRENCY:-}" ]; then
-  set -- "$@" --concurrency="$WORKER_CONCURRENCY"
+cleanup() {
+  if [ -n "$TASKIQ_PID" ]; then
+    kill "$TASKIQ_PID" 2>/dev/null || true
+  fi
+  if [ -n "$RECOVERY_PID" ]; then
+    kill "$RECOVERY_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup INT TERM EXIT
+
+if [ "$WORKER_RECOVERY_LOOP" = "true" ]; then
+  "$ROOT_DIR/.venv/bin/python" -m app.tasks.recovery_loop &
+  RECOVERY_PID="$!"
 fi
 
-if [ -n "${WORKER_MAX_TASKS_PER_CHILD:-}" ]; then
-  set -- "$@" --max-tasks-per-child="$WORKER_MAX_TASKS_PER_CHILD"
-fi
+"$TASKIQ" worker app.tasks.taskiq_app:broker \
+  --log-level "$WORKER_LOGLEVEL" \
+  --workers "$WORKER_CONCURRENCY" &
+TASKIQ_PID="$!"
 
-exec "$CELERY" "$@"
+wait "$TASKIQ_PID"

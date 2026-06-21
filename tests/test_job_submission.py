@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.application.jobs.submission import submit_ai_job
-from app.models.job import AIJob
+from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest
 
 
@@ -30,9 +30,10 @@ def _payload() -> CreateJobRequest:
     )
 
 
-def _job() -> AIJob:
-    return AIJob(
+def _job() -> Job:
+    return Job(
         id=uuid.uuid4(),
+        active_attempt_id=uuid.uuid4(),
         job_type="test.echo",
         status="queued",
         created_at=datetime.now(timezone.utc),
@@ -56,33 +57,19 @@ async def test_submit_ai_job_commits_then_publishes_created_job(monkeypatch):
         assert caller_id == "caller-1"
         return job, True
 
-    async def fake_set_celery_task_id(_db, job_id, task_id):
-        recorded["set"] = (job_id, task_id)
-        job.celery_task_id = task_id
-
-    async def fake_mark_celery_published(_db, job_id, task_id):
-        recorded["published"] = (job_id, task_id)
-
-    class FakeDispatchTask:
-        @staticmethod
-        def apply_async(*, args, task_id):
-            recorded["dispatched"] = (args, task_id)
+    async def fake_publish(attempt_id):
+        recorded["published"] = attempt_id
 
     monkeypatch.setattr("app.application.jobs.submission.create_job", fake_create_job)
-    monkeypatch.setattr("app.application.jobs.submission.JobRepo.set_celery_task_id", fake_set_celery_task_id)
-    monkeypatch.setattr("app.application.jobs.submission.JobRepo.mark_celery_published", fake_mark_celery_published)
-    monkeypatch.setattr("app.application.jobs.submission.dispatch_job_task", FakeDispatchTask)
-    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: _Handler())
+    monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", fake_publish)
+    monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: _Handler())
 
     response = await submit_ai_job(db, _payload(), "caller-1")
 
-    task_id = recorded["set"][1]
     assert response.job_id == job.id
-    assert db.commits == 2
+    assert db.commits == 1
     assert db.refreshed == [job]
-    assert recorded["set"] == (job.id, task_id)
-    assert recorded["dispatched"] == ([str(job.id)], task_id)
-    assert recorded["published"] == (job.id, task_id)
+    assert recorded["published"] == job.active_attempt_id
 
 
 @pytest.mark.asyncio
@@ -95,14 +82,10 @@ async def test_submit_ai_job_reuses_existing_idempotent_job_without_dispatch(mon
 
     monkeypatch.setattr("app.application.jobs.submission.create_job", fake_create_job)
     monkeypatch.setattr(
-        "app.application.jobs.submission.JobRepo.set_celery_task_id",
+        "app.tasks.jobs.publish_job_attempt",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("existing job should not set task id")),
     )
-    monkeypatch.setattr(
-        "app.application.jobs.submission.dispatch_job_task.apply_async",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("existing job should not dispatch")),
-    )
-    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: _Handler())
+    monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: _Handler())
 
     response = await submit_ai_job(db, _payload(), "caller-1")
 

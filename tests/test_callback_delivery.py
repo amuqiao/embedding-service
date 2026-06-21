@@ -6,7 +6,7 @@ import pytest
 
 from app.core.config import settings
 from app.core.exceptions import AppError
-from app.models.job import AIJob
+from app.models.job import Job
 from app.schemas.jobs import CallbackResponseEnvelope
 from app.services.callbacks import (
     CallbackDeliveryResult,
@@ -29,14 +29,15 @@ def _callback_test_handler(monkeypatch):
         def validate_public_result(self, result):
             return result
 
-    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: Handler())
+    monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: Handler())
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: Handler())
 
 
-def _job(callback_url: str | None = "https://example.com/callback") -> AIJob:
+def _job(callback_url: str | None = "https://example.com/callback") -> Job:
     now = datetime.now(timezone.utc)
     job_params = {"a": 2, "b": 3}
     job_params_hash = payload_hash(job_params)
-    return AIJob(
+    return Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
         client_request_id="client-add-1",
@@ -117,9 +118,9 @@ def test_build_callback_body_uses_public_fields():
 
 
 def test_build_callback_body_uses_arithmetic_public_result_schema(monkeypatch):
-    from app.workflows.arithmetic import ArithmeticWorkflow
+    from app.jobs.types.arithmetic import ArithmeticJob
 
-    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: ArithmeticWorkflow())
+    monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: ArithmeticJob())
     job = _job()
     job.job_type = "arithmetic"
     job.result = {
@@ -467,7 +468,7 @@ async def test_deliver_callback_uses_job_type_ack_validator(monkeypatch):
             raise ValueError("domain ack rejected")
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
-    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: _RejectingHandler())
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _RejectingHandler())
 
     result = await deliver_callback(_job())
 

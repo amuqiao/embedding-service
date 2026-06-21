@@ -103,6 +103,15 @@ _SPECS: dict[str, ErrorSpec] = {
         scope="integration",
         owner="broker",
     ),
+    "TASKIQ_PUBLISH_FAILED": ErrorSpec(
+        503003,
+        "TASKIQ_PUBLISH_FAILED",
+        "taskiq publish failed",
+        503,
+        retryable=True,
+        scope="integration",
+        owner="broker",
+    ),
     "AI_PROVIDER_FAILED": ErrorSpec(
         502001,
         "AI_PROVIDER_FAILED",
@@ -189,10 +198,10 @@ _SPECS: dict[str, ErrorSpec] = {
         scope="job",
         owner="jobs",
     ),
-    "WORK_ITEM_FAILED": ErrorSpec(
+    "JOB_EXECUTION_FAILED": ErrorSpec(
         500007,
-        "WORK_ITEM_FAILED",
-        "work item failed",
+        "JOB_EXECUTION_FAILED",
+        "job execution failed",
         500,
         scope="job",
         owner="jobs",

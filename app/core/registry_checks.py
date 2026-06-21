@@ -6,7 +6,7 @@ from app.api.operations import all_operation_specs
 from app.core.config import settings
 from app.core.error_registry import all_error_reasons, all_error_specs
 from app.core.logging import all_log_events
-from app.core import workflow_registry
+from app.jobs import registry as job_registry
 from app.schemas.registry import all_schema_names
 
 
@@ -48,7 +48,7 @@ def validate_job_type_registry() -> None:
     known_errors = all_error_reasons()
     known_events = all_log_events()
     known_schemas = all_schema_names()
-    for spec in workflow_registry.all_job_type_specs().values():
+    for spec in job_registry.all_job_type_specs().values():
         missing_errors = _missing(set(spec.error_codes), known_errors)
         if missing_errors:
             raise ValueError(f"job_type {spec.job_type} references unknown errors: {missing_errors}")
