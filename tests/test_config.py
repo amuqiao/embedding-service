@@ -151,10 +151,21 @@ def test_settings_rejects_negative_or_zero_control_values():
         Settings(**_settings_kwargs(MAX_ACTIVE_JOBS=-1))
 
 
-def test_env_config_check_rejects_deprecated_rs_keys(tmp_path):
+@pytest.mark.parametrize(
+    "key",
+    [
+        "ENABLE_MOCK_INTERFACES",
+        "SHORT_DRAMA_RS_BASE_URL",
+        "SHORT_DRAMA_RS_RESULT_MOCK_ENABLED",
+        "SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED",
+        "SHORT_DRAMA_RS_TIMEOUT_SECONDS",
+    ],
+)
+def test_env_config_check_rejects_removed_mock_and_rs_keys_as_deprecated(tmp_path, key):
     env_file = tmp_path / ".env"
-    env_file.write_text("SHORT_DRAMA_RS_SCHEMA_SOURCE=fixture\n", encoding="utf-8")
+    env_file.write_text(f"{key}=value\n", encoding="utf-8")
 
     issues = check_file(env_file, settings_keys_from_config() | DEPLOYMENT_OR_SCRIPT_KEYS)
 
-    assert any("deprecated or unsupported config key: SHORT_DRAMA_RS_SCHEMA_SOURCE" in issue for issue in issues)
+    assert any(f"deprecated or unsupported config key: {key}" in issue for issue in issues)
+    assert not any(f"unknown config key: {key}" in issue for issue in issues)

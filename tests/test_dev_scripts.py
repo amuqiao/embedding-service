@@ -51,3 +51,34 @@ def test_env_config_check_allows_dev_reload_script_keys(tmp_path):
     issues = check_file(env_file, settings_keys_from_config() | DEPLOYMENT_OR_SCRIPT_KEYS)
 
     assert issues == []
+
+
+def test_verify_check_uses_default_env_config_scan():
+    result = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            """
+            source scripts/verify/tasks.sh >/dev/null
+            run_script_syntax() { :; }
+            run_cli_smoke() { :; }
+            run_python_syntax() { :; }
+            run_registry_check() { :; }
+            run_tests() { :; }
+            run_env_config_check() {
+              printf 'env-config-argc=%s\\n' "$#"
+              for arg in "$@"; do
+                printf 'env-config-arg=%s\\n' "$arg"
+              done
+            }
+            run_check
+            """,
+        ],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "env-config-argc=0" in result.stdout
+    assert "env-config-arg=" not in result.stdout

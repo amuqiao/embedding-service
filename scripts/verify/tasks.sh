@@ -68,7 +68,7 @@ run_check() {
   run_script_syntax
   run_cli_smoke
   run_python_syntax
-  run_env_config_check "$ROOT_DIR/.env.example"
+  run_env_config_check
   run_registry_check
   run_tests
 }
