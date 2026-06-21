@@ -100,6 +100,17 @@ def test_create_job_request_rejects_execution_mode():
         raise AssertionError("execution_mode should be rejected")
 
 
+def test_create_job_request_rejects_callback_secret_ref():
+    payload = _valid_payload()
+    payload["callback"]["secret_ref"] = "caller-a-callback-secret"
+    try:
+        CreateJobRequest.model_validate(payload)
+    except Exception as exc:
+        assert "secret_ref" in str(exc)
+    else:
+        raise AssertionError("callback.secret_ref should not be accepted until per-callback secrets are implemented")
+
+
 def test_create_job_validation_allows_non_model_runtime(monkeypatch):
     class GenericHandler:
         allow_callback = True

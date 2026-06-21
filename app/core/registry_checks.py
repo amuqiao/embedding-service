@@ -4,7 +4,7 @@ from fastapi.routing import APIRoute
 
 from app.api.operations import all_operation_specs
 from app.core.config import settings
-from app.core.error_registry import all_error_reasons
+from app.core.error_registry import all_error_reasons, all_error_specs
 from app.core.logging import all_log_events
 from app.core import workflow_registry
 from app.schemas.registry import all_schema_names
@@ -12,6 +12,17 @@ from app.schemas.registry import all_schema_names
 
 def _missing(values: set[str], allowed: set[str]) -> list[str]:
     return sorted(values - allowed)
+
+
+def validate_error_registry() -> None:
+    seen_codes: dict[int, str] = {}
+    for reason, spec in all_error_specs().items():
+        if reason != spec.reason:
+            raise ValueError(f"error registry key mismatch: {reason} != {spec.reason}")
+        previous = seen_codes.get(spec.code)
+        if previous is not None:
+            raise ValueError(f"duplicate error code {spec.code}: {previous}, {reason}")
+        seen_codes[spec.code] = reason
 
 
 def validate_operation_registry() -> None:
@@ -129,6 +140,7 @@ def validate_app_route_operations(app) -> None:
 
 
 def validate_all_registries(app=None) -> None:
+    validate_error_registry()
     validate_operation_registry()
     validate_job_type_registry()
     if app is not None:

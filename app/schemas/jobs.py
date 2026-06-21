@@ -14,7 +14,7 @@ from app.schemas.errors import ErrorDetail
 
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
-JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
+JobStatus = Literal["queued", "running", "succeeded", "failed"]
 ProgressStage = Literal[
     "accepted",
     "fetching_input",
@@ -25,7 +25,6 @@ ProgressStage = Literal[
     "delivering_callback",
     "completed",
     "failed",
-    "canceled",
 ]
 CallbackDeliveryStatus = Literal["not_configured", "pending", "delivering", "delivered", "retrying", "failed"]
 NumberValue: TypeAlias = StrictInt | StrictFloat
@@ -34,7 +33,6 @@ NumberValue: TypeAlias = StrictInt | StrictFloat
 class CallbackConfig(StrictBaseModel):
     url: str = Field(min_length=1)
     events: list[Literal["job.succeeded", "job.failed"]] | None = None
-    secret_ref: str | None = None
 
     @model_validator(mode="after")
     def default_events(self) -> "CallbackConfig":
@@ -116,11 +114,11 @@ class JobEnvelope(StrictBaseModel):
         elif self.job_status == "succeeded":
             if self.job_error is not None:
                 raise ValueError("job_error must be null when job succeeded")
-        elif self.job_status in {"failed", "canceled"}:
+        elif self.job_status == "failed":
             if self.job_result is not None:
-                raise ValueError("job_result must be null when job failed or canceled")
+                raise ValueError("job_result must be null when job failed")
             if self.job_error is None:
-                raise ValueError("job_error is required when job failed or canceled")
+                raise ValueError("job_error is required when job failed")
         return self
 
 

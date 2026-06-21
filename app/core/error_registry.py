@@ -22,7 +22,7 @@ _SPECS: dict[str, ErrorSpec] = {
     "UNAUTHORIZED": ErrorSpec(401001, "UNAUTHORIZED", "missing or invalid service token", 401, scope="http"),
     "FORBIDDEN": ErrorSpec(403001, "FORBIDDEN", "caller forbidden", 403, scope="http"),
     "NOT_FOUND": ErrorSpec(404001, "NOT_FOUND", "resource not found", 404, scope="http"),
-    "JOB_NOT_FOUND": ErrorSpec(404001, "JOB_NOT_FOUND", "job not found", 404, scope="job", owner="jobs"),
+    "JOB_NOT_FOUND": ErrorSpec(404002, "JOB_NOT_FOUND", "job not found", 404, scope="job", owner="jobs"),
     "METHOD_NOT_ALLOWED": ErrorSpec(405001, "METHOD_NOT_ALLOWED", "method not allowed", 405, scope="http"),
     "CLIENT_REQUEST_ID_CONFLICT": ErrorSpec(
         409001,
@@ -113,7 +113,7 @@ _SPECS: dict[str, ErrorSpec] = {
         owner="ai",
     ),
     "MODEL_CALL_FAILED": ErrorSpec(
-        502001,
+        502002,
         "MODEL_CALL_FAILED",
         "ai provider failed",
         502,
@@ -122,7 +122,7 @@ _SPECS: dict[str, ErrorSpec] = {
         owner="ai",
     ),
     "MODEL_OUTPUT_INVALID": ErrorSpec(
-        502002,
+        502005,
         "MODEL_OUTPUT_INVALID",
         "model output invalid",
         502,
@@ -289,6 +289,15 @@ _SPECS: dict[str, ErrorSpec] = {
         scope="callback",
         owner="callbacks",
     ),
+    "CALLBACK_ACK_REJECTED": ErrorSpec(
+        502006,
+        "CALLBACK_ACK_REJECTED",
+        "callback acknowledgment rejected",
+        502,
+        retryable=True,
+        scope="callback",
+        owner="callbacks",
+    ),
 }
 
 _STATUS_DEFAULTS: dict[int, ErrorSpec] = {
@@ -307,22 +316,9 @@ _STATUS_DEFAULTS: dict[int, ErrorSpec] = {
 
 def get_error_spec(reason: str, status_code: int | None = None) -> ErrorSpec:
     spec = _SPECS.get(reason)
-    if spec is not None:
-        return spec
-    if status_code is not None:
-        status_family = status_code if status_code in _STATUS_DEFAULTS else (status_code // 100) * 100
-        fallback = _STATUS_DEFAULTS.get(status_family)
-        if fallback is not None:
-            return ErrorSpec(
-                fallback.code,
-                reason,
-                fallback.msg,
-                fallback.http_status,
-                fallback.retryable,
-                scope=fallback.scope,
-                owner=fallback.owner,
-            )
-    return ErrorSpec(500001, reason or "INTERNAL_ERROR", "internal error", 500)
+    if spec is None:
+        raise KeyError(f"unknown error reason: {reason or 'INTERNAL_ERROR'}")
+    return spec
 
 
 def all_error_specs() -> dict[str, ErrorSpec]:

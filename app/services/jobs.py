@@ -76,7 +76,7 @@ def _callback_state(job: AIJob) -> dict[str, Any]:
     if status == "failed" and job.callback_next_retry_at is not None:
         status = "retrying"
     if status == "skipped":
-        status = "failed"
+        status = "failed" if job.callback_last_error else "not_configured"
     return {
         "status": status,
         "attempt": job.callback_attempts or 0,

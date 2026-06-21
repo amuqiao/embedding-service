@@ -46,8 +46,12 @@ def _validate_callback_url(url: str) -> None:
     raise ValueError("callback.url must be HTTPS")
 
 
-def validate_callback_response_payload(payload: dict[str, Any]) -> CallbackResponseEnvelope:
-    return CallbackResponseEnvelope.model_validate(payload)
+def validate_callback_response_payload(payload: dict[str, Any], *, job_type: str) -> CallbackResponseEnvelope:
+    envelope = CallbackResponseEnvelope.model_validate(payload)
+    from app.core import workflow_registry
+
+    workflow_registry.get(job_type).validate_callback_response(envelope)
+    return envelope
 
 
 def build_callback_body(job: AIJob) -> dict:
@@ -71,6 +75,7 @@ def _callback_response_summary(response_text: str, callback_body: dict[str, Any]
     text = response_text.strip()
     if not text:
         return None
+    job_type = callback_body["job"]["job_type"]
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
@@ -78,7 +83,7 @@ def _callback_response_summary(response_text: str, callback_body: dict[str, Any]
     if not isinstance(parsed, dict):
         return {"format": "ack", "valid": False, "error": "callback response acknowledgment must be an object"}
     try:
-        envelope = validate_callback_response_payload(parsed)
+        envelope = validate_callback_response_payload(parsed, job_type=job_type)
     except Exception as exc:
         return {
             "format": "ack",
@@ -156,6 +161,18 @@ async def deliver_callback(job: AIJob) -> CallbackDeliveryResult:
                         }
                         logger.warning(
                             "callback_response_contract_mismatch job_id=%s summary=%s",
+                            job.id,
+                            response_summary,
+                        )
+                        continue
+                    if response_summary and response_summary.get("accepted") is False:
+                        last_error = {
+                            "code": "CALLBACK_ACK_REJECTED",
+                            "message": "callback endpoint rejected the event acknowledgment",
+                            "response": response_summary,
+                        }
+                        logger.warning(
+                            "callback_response_rejected job_id=%s summary=%s",
                             job.id,
                             response_summary,
                         )

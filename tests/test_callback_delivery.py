@@ -173,6 +173,43 @@ def test_job_view_marks_missing_callback_not_configured():
     assert job_view.callback.attempt == 0
 
 
+def test_job_view_maps_skipped_callback_without_error_to_not_configured():
+    job = _job()
+    job.callback_status = "skipped"
+    job.callback_attempts = 0
+    job.callback_last_error = None
+
+    job_view = _job_to_response(job, request_id="req-view")
+
+    assert job_view.callback.status == "not_configured"
+    assert job_view.callback.attempt == 0
+    assert job_view.callback.last_error is None
+
+
+def test_job_view_maps_skipped_callback_with_error_to_failed():
+    job = _job()
+    job.callback_status = "skipped"
+    job.callback_attempts = 0
+    job.callback_last_error = {"code": "CALLBACK_URL_INVALID", "message": "callback.url must be HTTPS"}
+
+    job_view = _job_to_response(job, request_id="req-view")
+
+    assert job_view.callback.status == "failed"
+    assert job_view.callback.last_error.reason == "CALLBACK_URL_INVALID"
+
+
+def test_job_view_rejects_unregistered_stored_error_reason():
+    job = _job(None)
+    job.status = "failed"
+    job.result = None
+    job.error = {"code": "LEGACY_UNKNOWN", "message": "legacy error"}
+
+    with pytest.raises(AppError) as exc:
+        _job_to_response(job, request_id="req-view")
+
+    assert exc.value.code == "JOB_VIEW_CONTRACT_INVALID"
+
+
 def test_job_view_uses_shell_result_and_metadata():
     job = _job()
     job.progress_stage = "finalize"
@@ -366,6 +403,78 @@ async def test_deliver_callback_records_ack_response_summary(monkeypatch):
         "msg": None,
         "details": {"duplicate": False},
     }
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_rejects_negative_ack_response(monkeypatch):
+    class _Response:
+        status_code = 200
+        text = '{"accepted":false,"msg":"duplicate rejected","details":{"duplicate":true}}'
+
+    class _Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, content, headers):
+            return _Response()
+
+    monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
+
+    result = await deliver_callback(_job())
+
+    assert result.status == "failed"
+    assert result.attempts == 1
+    assert result.last_error["code"] == "CALLBACK_ACK_REJECTED"
+    assert result.last_error["response"] == {
+        "format": "ack",
+        "valid": True,
+        "accepted": False,
+        "msg": "duplicate rejected",
+        "details": {"duplicate": True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_uses_job_type_ack_validator(monkeypatch):
+    class _Response:
+        status_code = 200
+        text = '{"accepted":true,"msg":null,"details":{"domain":"invalid"}}'
+
+    class _Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, content, headers):
+            return _Response()
+
+    class _RejectingHandler:
+        def validate_public_result(self, result):
+            return result
+
+        def validate_callback_response(self, response):
+            raise ValueError("domain ack rejected")
+
+    monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
+    monkeypatch.setattr("app.core.workflow_registry.get", lambda _job_type: _RejectingHandler())
+
+    result = await deliver_callback(_job())
+
+    assert result.status == "failed"
+    assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
+    assert result.last_error["response"]["valid"] is False
+    assert "domain ack rejected" in result.last_error["response"]["error"]
 
 
 @pytest.mark.asyncio

@@ -294,7 +294,6 @@ HTTP 接口始终遵循 [HTTP 标准输出](#http-标准输出)。Job 不是另�
 |---|---|---:|---|
 | `url` | `string uri` | 是 | Callback 投递地址，必须通过 URL 安全校验。 |
 | `events` | `array enum` | 否 | 允许值：`job.succeeded`、`job.failed`；省略时订阅两个终态事件。 |
-| `secret_ref` | `string` | 否 | 签名密钥引用，不在请求、响应和日志中暴露明文 secret。 |
 
 `JobOptions` 枚举和字段：
 
@@ -322,8 +321,7 @@ HTTP 接口始终遵循 [HTTP 标准输出](#http-标准输出)。Job 不是另�
   },
   "callback": {
     "url": "https://caller.example.com/ai-job-callback",
-    "events": ["job.succeeded", "job.failed"],
-    "secret_ref": "caller-a-callback-secret"
+    "events": ["job.succeeded", "job.failed"]
   },
   "metadata": {
     "caller_trace_id": "trace-cpp-2042"
@@ -346,9 +344,9 @@ HTTP 接口始终遵循 [HTTP 标准输出](#http-标准输出)。Job 不是另�
 | `job_id` | `string` | 服务生成的 Job 主键。 |
 | `client_request_id` | `string` | 调用方幂等键。 |
 | `job_type` | `string` | 来自 `job_type` registry。 |
-| `job_status` | `enum` | `queued`、`running`、`succeeded`、`failed`、`canceled`。 |
+| `job_status` | `enum` | `queued`、`running`、`succeeded`、`failed`。 |
 | `job_progress` | `JobProgress` | 进度摘要，不作为终态判断依据。 |
-| `job_result` | `JobResult \| null` | 具体任务公开输出。创建、运行中、失败或取消时为 `null`。 |
+| `job_result` | `JobResult \| null` | 具体任务公开输出。创建、运行中或失败时为 `null`。 |
 | `job_error` | `ErrorDetail \| null` | Job 失败原因；HTTP 查询成功时也可能非 `null`。 |
 | `callback` | `CallbackState \| null` | Callback 投递状态摘要。 |
 | `status_url` | `string` | 轮询地址。 |
@@ -360,7 +358,7 @@ HTTP 接口始终遵循 [HTTP 标准输出](#http-标准输出)。Job 不是另�
 
 | 枚举 | 允许值 |
 |---|---|
-| `JobStatus` | `queued`、`running`、`succeeded`、`failed`、`canceled` |
+| `JobStatus` | `queued`、`running`、`succeeded`、`failed` |
 | `ProgressStage` | `accepted`、`fetching_input`、`planning`、`calling_model`、`merging`、`writing_result`、`delivering_callback`、`completed`、`failed` |
 | `CallbackStatus` | `not_configured`、`pending`、`delivering`、`delivered`、`retrying`、`failed` |
 
@@ -626,7 +624,7 @@ Callback 失败正例：
 - 同一个 Job 的轮询成功终态和成功 callback 中，`job_result` 必须同字段语义、同业务结论。
 - `callback` 发送时必须读取已持久化的 Job envelope，不得在 callback adapter 中重新计算业务结果。
 - 大文件、对象存储引用、大 JSON 或第三方写回摘要如需对外暴露，必须作为具体任务的 `job_result` 字段表达；输入引用必须放在 `job_params`。通用 Job envelope 不提供独立产物字段。
-- `queued`、`running`、`failed`、`canceled` 状态下 `job_result` 字段仍必须存在；无公开结果时值为 `null`。
+- `queued`、`running`、`failed` 状态下 `job_result` 字段仍必须存在；无公开结果时值为 `null`。
 - 如果某个 `job_type` 明确声明成功终态 `job_result = null`，轮询和 callback 都必须返回 `job_result: null`，不能一边为空、一边给出另一套业务结果。
 
 ## Schema 组合
@@ -702,20 +700,20 @@ operation registry 至少包含：
 | code | HTTP status | reason | msg |
 |---:|---:|---|---|
 | `400001` | `400` | `MALFORMED_JSON` | malformed json |
-| `401001` | `401` | `MISSING_API_KEY` | missing api key |
-| `401002` | `401` | `INVALID_API_KEY` | invalid api key |
-| `403001` | `403` | `CALLER_FORBIDDEN` | caller forbidden |
-| `404001` | `404` | `JOB_NOT_FOUND` | job not found |
-| `409001` | `409` | `DUPLICATE_CLIENT_REQUEST_ID` | duplicate client_request_id |
-| `409002` | `409` | `JOB_STATE_CONFLICT` | job state conflict |
+| `401001` | `401` | `UNAUTHORIZED` | missing or invalid service token |
+| `403001` | `403` | `FORBIDDEN` | caller forbidden |
+| `404001` | `404` | `NOT_FOUND` | resource not found |
+| `404002` | `404` | `JOB_NOT_FOUND` | job not found |
+| `409001` | `409` | `CLIENT_REQUEST_ID_CONFLICT` | duplicate client_request_id |
 | `422001` | `422` | `INVALID_JOB_TYPE` | invalid job_type |
 | `422002` | `422` | `INVALID_JOB_PARAMS` | invalid job_params |
-| `422003` | `422` | `INVALID_CALLBACK_CONFIG` | invalid callback config |
-| `429001` | `429` | `RATE_LIMITED` | rate limited |
+| `422003` | `422` | `INVALID_INPUT` | invalid input |
 | `500001` | `500` | `INTERNAL_ERROR` | internal error |
 | `502001` | `502` | `AI_PROVIDER_FAILED` | ai provider failed |
-| `502002` | `502` | `EXTERNAL_SERVICE_FAILED` | external service failed |
-| `503001` | `503` | `BROKER_UNAVAILABLE` | broker unavailable |
+| `502002` | `502` | `MODEL_CALL_FAILED` | ai provider failed |
+| `502006` | `502` | `CALLBACK_ACK_REJECTED` | callback acknowledgment rejected |
+| `503001` | `503` | `QUEUE_FULL` | service unavailable |
+| `503002` | `503` | `BROKER_UNAVAILABLE` | broker unavailable |
 | `504001` | `504` | `MODEL_CALL_TIMEOUT` | model call timeout |
 
 异常模块分两层：
