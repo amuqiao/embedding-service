@@ -9,6 +9,8 @@ __pycache__/
 .ruff_cache/
 .DS_Store
 .data/
+.run/
+.uv-cache/
 long_text_*.txt
 storage/objects/
 logs/
