@@ -55,9 +55,7 @@
 ./scripts/dev.sh start
 ./scripts/dev.sh status
 ./scripts/dev.sh stop
-./scripts/verify.sh smoke
 ./scripts/verify.sh workflow-smoke
-./scripts/verify.sh e2e
 ./scripts/verify.sh check
 ./scripts/deploy.sh check
 ```
@@ -84,11 +82,11 @@
 
 ```bash
 ./scripts/dev.sh start
-./scripts/verify.sh smoke
+./scripts/verify.sh workflow-smoke
 ./scripts/dev.sh stop
 ```
 
-修改 Job 内部执行、Celery workflow、分块或 merge 后，优先运行可重复的长文本验证：
+修改 Job 内部执行、Taskiq workflow、分块或 merge 后，优先运行可重复的模板 Job workflow 验证：
 
 ```bash
 ./scripts/dev.sh start
@@ -96,13 +94,7 @@
 ./scripts/dev.sh stop
 ```
 
-需要验证真实模型调用时，确认 `.env` 已配置 `OPENAI_API_KEY` 且 `.data/` 下存在 `.txt` 文件，然后运行：
-
-```bash
-./scripts/dev.sh start
-./scripts/verify.sh e2e
-./scripts/dev.sh stop
-```
+真实模型业务 e2e 不属于当前模板核心 `scripts/` 命令面。接入正式业务 `job_type` 后，再恢复对应业务 e2e 脚本或放入 `examples/business/`。
 
 如果因本机环境、Docker 权限或端口占用无法验证，必须在回复中明确说明未验证项和原因。
 

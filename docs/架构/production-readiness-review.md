@@ -363,22 +363,16 @@ MAX_ACTIVE_JOBS=50  # 灰度放量；生产排队目标可单独提高
 ./scripts/dev.sh start
 curl -fsS http://127.0.0.1:8100/health
 curl -fsS http://127.0.0.1:8100/healthz
-./scripts/verify.sh smoke
+./scripts/verify.sh workflow-smoke
 ./scripts/dev.sh stop
 ```
 
 ### 本地真实模型和 Callback 自测
 
-该入口会启动 `http://127.0.0.1:<port>` callback receiver，只适合本地开发或明确设置 `ALLOW_INSECURE_CALLBACKS=true` 的 dev 环境，不能替代目标环境 HTTPS Callback 验签。
-
-```bash
-./scripts/dev.sh start
-./scripts/verify.sh e2e --input-file .data/test_novel.txt
-./scripts/dev.sh stop
-```
+真实模型业务 e2e 不属于当前模板核心 `scripts/` 命令面。目标环境仍需保留业务 e2e 和 Callback 验签证据，但入口应由业务项目自备脚本或 `examples/business/` 示例工具提供。
 
 ### OSS 连通性
 
 ```bash
-./scripts/verify.sh oss --env-file .env.dev
+./.venv/bin/python examples/business/check_aliyun_oss.py --env-file .env.dev
 ```

@@ -10,12 +10,6 @@ run_tests() {
   "$PYTHON_BIN" -m pytest -q
 }
 
-run_oss_check() {
-  section "OSS"
-  require_project_python
-  "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/check_aliyun_oss.py" "$@"
-}
-
 run_workflow_smoke() {
   section "Workflow Smoke"
   require_project_python
@@ -55,10 +49,8 @@ run_python_syntax() {
   require_project_python
   "$PYTHON_BIN" -m py_compile \
     "$ROOT_DIR/scripts/dev/check_ports.py" \
-    "$ROOT_DIR/scripts/verify/check_aliyun_oss.py" \
     "$ROOT_DIR/scripts/verify/env_config_check.py" \
     "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" \
-    "$ROOT_DIR/scripts/verify/mock_openai_server.py" \
     "$ROOT_DIR/scripts/verify/registry_check.py"
   event "OK" "dev/check_ports.py" "py_compile"
   event "OK" "verify/*.py" "py_compile"

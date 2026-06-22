@@ -1,4 +1,4 @@
-"""本地 Mock OpenAI 兼容服务器，用于 mock-smoke 验证任务完整流程。
+"""本地 Mock OpenAI 兼容服务器示例，用于业务项目恢复 mock-smoke 时复用。
 
 不调用真实模型，按 job_type 返回预设的合规响应：
   step1_localize  → 包含工作注释 + 本地化正文标记
@@ -6,7 +6,7 @@
   step3_translate → 纯英文译文
 
 用法：
-  python scripts/verify/mock_openai_server.py [port]   # 默认 18200
+  python examples/business/mock_openai_server.py [port]   # 默认 18200
 """
 from __future__ import annotations
 

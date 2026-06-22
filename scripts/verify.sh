@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # verify.sh - 本地验证入口
 #
-# 作用域：承接测试、smoke、e2e、对象存储连通性等一次性验证任务。
+# 作用域：承接测试、smoke、e2e 等模板级一次性验证任务。
 # 本地服务生命周期不属于本入口。
 # 约束：入口脚本只做参数分发和帮助说明，具体实现下沉到 scripts/verify/ 原子脚本。
 
@@ -24,7 +24,6 @@ usage() {
   mock-smoke          无正式 job_type 时不可用；新增正式能力后再恢复。
   workflow-smoke      使用内置 job_test_echo 验证本地 Job 创建、Taskiq 执行和状态轮询流程。
   e2e                 无正式 job_type 时不可用；新增正式能力后再恢复。
-  oss                 校验 Aliyun OSS 读写删除连通性，参数透传给 check_aliyun_oss.py。
   env-config          校验 env 文件键名；默认检查 .env.example 和已存在的本地/测试 env，可传文件路径。
   check               执行脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest。
   help                显示帮助。
@@ -61,10 +60,6 @@ case "$command" in
     ;;
   e2e)
     no_builtin_job_types
-    ;;
-  oss)
-    shift
-    run_oss_check "$@"
     ;;
   env-config)
     shift
