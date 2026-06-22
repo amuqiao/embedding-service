@@ -1,8 +1,8 @@
 # 模板使用指南
 
-本文说明如何把本仓库作为新的 AI Job 后端模板使用，以及如何接入新的 workflow。
+本文说明如何把 `fastapi-best-ai-architecture` 作为新的 AI Job 后端模板使用，以及如何接入新的 workflow。
 
-本模板提供的是通用 Job 执行层：FastAPI API、Celery 异步任务、对象存储产物、状态轮询、Callback、模型配置和 workflow 注册机制。它不负责用户系统、项目管理、前端状态、业务流程编排或生产部署。
+本模板提供的是通用 Job 执行层：FastAPI API、Taskiq 异步任务、对象存储产物、状态轮询、Callback、模型配置和 workflow 注册机制。它不负责用户系统、项目管理、前端状态、业务流程编排或生产部署。
 
 Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata` 和 `options`。具体任务入参由 `job_type` 自己的 `job_params` schema 定义；具体任务出参由 `job_type` 自己的 `result` schema 定义。当前仓库注册了 `job_test_add` 测试示例 `job_type`，以及不依赖模型调用的 `arithmetic` 示例能力。
 
@@ -14,18 +14,19 @@ Job 公共骨架只关心 `client_request_id`、`job_type`、`job_params`、`cal
 
 | 替换项 | 位置 | 当前值 |
 |---|---|---|
-| 项目包名 | `pyproject.toml` -> `[project].name` | `fastapi-ai-job-template` |
-| Celery app 名称 | 由 `SERVICE_NAME` 自动派生 | `ai-job-service` |
-| 服务展示标题 | `SERVICE_TITLE` | `AI Job Service` |
+| 模板默认标识 | `TEMPLATE_NAME`、`COMPOSE_PROJECT_NAME` 默认值 | `fastapi-best-ai-architecture` |
+| 项目包名 | `pyproject.toml` -> `[project].name` | `fastapi-best-ai-architecture` |
+| 服务名 | `SERVICE_NAME` | `fastapi-best-ai-architecture` |
+| 服务展示标题 | `SERVICE_TITLE` | `FastAPI Best AI Architecture` |
 | API 前缀 | `SERVICE_API_PREFIX` | `/api/v1/ai-jobs` |
 | OSS 输出前缀 | `OSS_OUTPUT_PREFIX` | `ai-jobs` |
-| 数据库名 | `DATABASE_URL` | `ai_jobs` |
+| 数据库名 | `POSTGRES_DB`、`DATABASE_URL` | `fastapi_best_ai_architecture` |
 
 这些值决定对外服务身份、API 路径、对象存储路径和本地数据库名称。业务密钥、模型参数、Callback、Redis、PostgreSQL、对象存储等配置继续按 `.env.example` 维护。
 
 ## 当前内置能力
 
-当前仓库内置 `arithmetic` 示例能力：输入两个非 0 数，使用现有 Celery single canvas 执行一个 `whole` work item，并返回加、减、乘、除四个结果。`app/core/prompts.yaml` 默认声明空模板集合；新增正式 LLM 能力时，应先按项目标准定义 schema 和合同，再补 handler、注册入口、Prompt 模板和验证用例。
+当前仓库内置 `arithmetic` 示例能力：输入两个非 0 数，使用现有 Taskiq 执行链路执行一个 `whole` work item，并返回加、减、乘、除四个结果。`app/core/prompts.yaml` 默认声明空模板集合；新增正式 LLM 能力时，应先按项目标准定义 schema 和合同，再补 handler、注册入口、Prompt 模板和验证用例。
 
 ## 接入新 Workflow
 
@@ -192,9 +193,9 @@ Callback 只在终态事件触发，body 使用公共 Job 事件字段加 `data`
 
 ## Canvas Pattern
 
-`canvas_pattern` 决定 Celery 如何编排一个 Job 的 work items。
+`canvas_pattern` 决定 worker 如何编排一个 Job 的 work items。
 
-| Pattern | 适用场景 | Celery 结构 |
+| Pattern | 适用场景 | Worker 结构 |
 |---|---|---|
 | `single` | 单次模型调用，不需要分块 | `chain(execute -> finalize)` |
 | `plain_chord` | 并行处理多个 chunk，不需要特殊前置或后置模型调用 | `chord(parallel_chunks -> finalize)` |
@@ -236,7 +237,8 @@ def normalize_job_params(self, job_params: dict) -> dict:
 部署一个新的服务实例时，通常只需要先改这些身份和路径类配置：
 
 ```bash
-SERVICE_NAME=your-service-name       # Celery app 名称和 health service 字段
+TEMPLATE_NAME=your-template-name     # 模板默认标识；复用时替换
+SERVICE_NAME=your-service-name       # health service 字段和日志服务名
 SERVICE_TITLE=Your Service Title     # FastAPI docs 标题
 SERVICE_API_PREFIX=/api/v1/your-api  # Job 相关 API 前缀
 OSS_OUTPUT_PREFIX=your-prefix/jobs   # Job 输出 artifact 的对象存储前缀

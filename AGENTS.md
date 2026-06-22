@@ -1,17 +1,17 @@
 # AGENTS.md
 
-本文是 `cms-novel-localize` 仓库的 Agent 协作入口，只记录本项目内稳定、必要的工作规则。
+本文是 `fastapi-best-ai-architecture` 模板仓库的 Agent 协作入口，只记录本项目内稳定、必要的工作规则。
 
 ## 项目边界
 
-本仓库是小说本地化 AI 能力层服务，负责模型执行、异步 Job、对象存储产物、状态查询和 Callback。
+本仓库是 FastAPI AI Job 服务模板，负责模型执行、异步 Job、对象存储产物、状态查询和 Callback。
 
 本服务不负责用户系统、项目管理、前端页面状态、业务步骤编排或生产部署。
 
 ## 技术栈
 
 - 后端框架：`FastAPI`
-- 异步任务：`Celery`
+- 异步任务：`Taskiq`
 - 数据库：`PostgreSQL`
 - 缓存和任务 broker：`Redis`
 - 迁移工具：`Alembic`
@@ -108,6 +108,7 @@
 
 - `.env` 是本地私有配置，不提交。
 - `.env.example` 是可提交的配置模板。
+- `fastapi-best-ai-architecture` 是模板默认名；复用模板时通过 `TEMPLATE_NAME`、`SERVICE_NAME`、`SERVICE_TITLE`、`COMPOSE_PROJECT_NAME`、`POSTGRES_DB` 和 `DATABASE_URL` 替换项目身份，不要把业务项目名硬编码进脚本。
 - `.data/` 是本地验证输入，不提交。
 - 本地默认端口：API `8100`，PostgreSQL `25432`，Redis `26379`。
 - `scripts/dev.sh` 会拒绝明显非本地的 `DATABASE_URL` 和 `REDIS_URL`。
@@ -152,8 +153,8 @@
 
 典型规则：
 
-- 配置“模型最长等待多久”，而不是直接暴露完整 Celery 超时链。
-- 配置“软超时 buffer”“硬超时 buffer”“stale running buffer”，由代码派生 `CELERY_SOFT_TIME_LIMIT`、`CELERY_TIME_LIMIT` 和 `JOB_STALE_RUNNING_SECONDS`。
+- 配置“模型最长等待多久”，而不是直接暴露完整 worker 超时链。
+- 配置“软超时 buffer”“硬超时 buffer”“stale running buffer”，由代码派生 worker soft/hard time limit 和 `JOB_STALE_RUNNING_SECONDS`。
 - 配置“单 Worker 并发数”和“接单缓冲倍数”，由代码或部署说明推导 `MAX_ACTIVE_JOBS` 等容量限制。
 - 配置“Callback 单次超时”和“领取窗口 buffer”，由代码派生最终领取窗口。
 - 配置“总执行槽位倍数”，由代码或部署说明推导积压上限。

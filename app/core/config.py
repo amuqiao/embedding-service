@@ -6,6 +6,8 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+DEFAULT_TEMPLATE_NAME = "fastapi-best-ai-architecture"
+DEFAULT_SERVICE_TITLE = "FastAPI Best AI Architecture"
 
 # ── Timeout chain safety margins (code constants, not configurable) ───────────
 # L1 = MODEL_CALL_TIMEOUT_SECONDS (operator-configured anchor).
@@ -29,8 +31,9 @@ class Settings(BaseSettings):
     )
 
     # ── Infrastructure credentials ────────────────────────────────────────────
-    SERVICE_NAME: str = "ai-job-service"
-    SERVICE_TITLE: str = "AI Job Service"
+    TEMPLATE_NAME: str = DEFAULT_TEMPLATE_NAME
+    SERVICE_NAME: str = DEFAULT_TEMPLATE_NAME
+    SERVICE_TITLE: str = DEFAULT_SERVICE_TITLE
     SERVICE_API_PREFIX: str = "/api/v1/ai-jobs"
 
     DATABASE_URL: str

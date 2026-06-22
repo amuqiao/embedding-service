@@ -1,17 +1,17 @@
 # AGENTS.md
 
-本文是 `cms-novel-localize` 仓库的 Agent 协作入口，只记录本项目内稳定、必要的工作规则。
+本文是 `fastapi-best-ai-architecture` 模板仓库的 Agent 协作入口，只记录本项目内稳定、必要的工作规则。
 
 ## 项目边界
 
-本仓库是小说本地化 AI 能力层服务，负责模型执行、异步 Job、对象存储产物、状态查询和 Callback。
+本仓库是 FastAPI AI Job 服务模板，负责模型执行、异步 Job、对象存储产物、状态查询和 Callback。
 
 本服务不负责用户系统、项目管理、前端页面状态、业务步骤编排或生产部署。
 
 ## 技术栈
 
 - 后端框架：`FastAPI`
-- 异步任务：`Celery`
+- 异步任务：`Taskiq`
 - 数据库：`PostgreSQL`
 - 缓存和任务 broker：`Redis`
 - 迁移工具：`Alembic`
@@ -54,11 +54,9 @@
 ./scripts/dev.sh bootstrap
 ./scripts/dev.sh start
 ./scripts/dev.sh status
-./scripts/dev.sh smoke
-./scripts/dev.sh workflow-smoke
-./scripts/dev.sh e2e
-./scripts/dev.sh check
 ./scripts/dev.sh stop
+./scripts/verify.sh workflow-smoke
+./scripts/verify.sh check
 ./scripts/deploy.sh check
 ```
 
@@ -70,39 +68,33 @@
 ./scripts/dev.sh status api
 ```
 
-不要绕过 `scripts/dev.sh` 直接拼散命令，除非是在排查脚本本身。
+不要绕过 `scripts/dev.sh` 直接拼散本地服务命令，除非是在排查脚本本身。一次性验证任务使用 `scripts/verify.sh`。
 
 ## 验证要求
 
 修改代码后，优先运行：
 
 ```bash
-./scripts/dev.sh check
+./scripts/verify.sh check
 ```
 
 修改服务启动、任务执行、数据库迁移、对象存储或 Job 流程后，还应运行：
 
 ```bash
 ./scripts/dev.sh start
-./scripts/dev.sh smoke
+./scripts/verify.sh workflow-smoke
 ./scripts/dev.sh stop
 ```
 
-修改 Job 内部执行、Celery workflow、分块或 merge 后，优先运行可重复的 mock 长文本验证：
+修改 Job 内部执行、Taskiq workflow、分块或 merge 后，优先运行可重复的模板 Job workflow 验证：
 
 ```bash
 ./scripts/dev.sh start
-./scripts/dev.sh workflow-smoke
+./scripts/verify.sh workflow-smoke
 ./scripts/dev.sh stop
 ```
 
-需要验证真实模型调用时，确认 `.env` 已配置 `OPENAI_API_KEY` 且 `.data/` 下存在 `.txt` 文件，然后运行：
-
-```bash
-./scripts/dev.sh start
-./scripts/dev.sh e2e
-./scripts/dev.sh stop
-```
+真实模型业务 e2e 不属于当前模板核心 `scripts/` 命令面。接入正式业务 `job_type` 后，再恢复对应业务 e2e 脚本或放入 `examples/business/`。
 
 如果因本机环境、Docker 权限或端口占用无法验证，必须在回复中明确说明未验证项和原因。
 
@@ -118,6 +110,7 @@
 - `.env.dev` 是开发环境配置，用于共享开发环境或开发部署。
 - `.env.test` 是测试环境配置，用于测试运行和测试部署。
 - `.env.example` 是可提交的配置模板，只放配置键、默认示例值和必要注释，不放真实密钥。
+- `fastapi-best-ai-architecture` 是模板默认名；复用模板时通过 `TEMPLATE_NAME`、`SERVICE_NAME`、`SERVICE_TITLE`、`COMPOSE_PROJECT_NAME`、`POSTGRES_DB` 和 `DATABASE_URL` 替换项目身份，不要把业务项目名硬编码进脚本。
 - 新增、删除或重命名配置项时，必须同步检查 `.env.example`、`.env.dev`、`.env.test`，并确认 `.env` 是否需要本地更新。
 - 同步配置键和注释，不强行统一各环境独有的值；端口、容器地址、模型参数、限制参数、密钥占位等允许按环境保留差异。
 
@@ -129,7 +122,7 @@
 - **修改 `Settings` 字段时必须回写配置文件**：将字段从可配置改为代码常量时，必须同步从 `.env.example`、`.env.dev`、`.env.test` 中删除对应键；将代码常量改为可配置字段时，必须同步向 `.env.example` 补充该键和注释。
 - **`.env.example` 的键名必须与 `Settings` 类一致**：提交前确认 `.env.example` 中的每个键都存在于 `app/infrastructure/config.py` 的 `Settings` 类中。`WORKER_*` 系列（`WORKER_CONCURRENCY`、`WORKER_POOL`、`WORKER_LOGLEVEL`）是 `start-worker.sh` 读取的 shell 脚本参数，不在 `Settings` 中，属于合理例外。
 - `.data/` 是本地验证输入，不提交。
-- 本地默认端口：API `8000`，PostgreSQL `25432`，Redis `26379`。
+- 本地默认端口：API `8100`，PostgreSQL `25432`，Redis `26379`。
 - `scripts/dev.sh` 会拒绝明显非本地的 `DATABASE_URL` 和 `REDIS_URL`。
 - 不要在本仓库脚本中加入生产部署、远程数据库重置、密钥写入或跨仓库清理逻辑。
 

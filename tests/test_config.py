@@ -17,7 +17,7 @@ from scripts.verify.env_config_check import (
 
 def _settings_kwargs(**overrides):
     values = {
-        "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/cms_story_tagger",
+        "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/fastapi_best_ai_architecture",
         "SERVICE_API_KEY": "test-token",
         "CALLBACK_SIGNING_SECRET": "test-callback-secret",
         "DISABLE_HTTP_AUTH_HEADER": False,
@@ -59,6 +59,21 @@ def test_security_header_disable_flags_default_to_false():
     assert s.DISABLE_CALLER_ID_HEADER is False
 
 
+def test_template_identity_defaults_and_overrides():
+    assert Settings.model_fields["TEMPLATE_NAME"].default == "fastapi-best-ai-architecture"
+    assert Settings.model_fields["SERVICE_NAME"].default == "fastapi-best-ai-architecture"
+    assert Settings.model_fields["SERVICE_TITLE"].default == "FastAPI Best AI Architecture"
+
+    custom_settings = Settings(**_settings_kwargs(
+        TEMPLATE_NAME="invoice-ai-template",
+        SERVICE_NAME="invoice-ai-service",
+        SERVICE_TITLE="Invoice AI Service",
+    ))
+    assert custom_settings.TEMPLATE_NAME == "invoice-ai-template"
+    assert custom_settings.SERVICE_NAME == "invoice-ai-service"
+    assert custom_settings.SERVICE_TITLE == "Invoice AI Service"
+
+
 def test_settings_requires_callback_signing_secret():
     with pytest.raises(ValidationError, match="CALLBACK_SIGNING_SECRET"):
         Settings(**_settings_kwargs(CALLBACK_SIGNING_SECRET=""))
@@ -85,13 +100,13 @@ def test_security_header_disable_flags_reject_ambiguous_bool_strings():
 def test_security_header_disable_flags_require_local_service_urls():
     with pytest.raises(ValidationError, match="DATABASE_URL must point to a local service"):
         Settings(**_settings_kwargs(
-            DATABASE_URL="postgresql+asyncpg://postgres:postgres@db.example.com:5432/cms_story_tagger",
+            DATABASE_URL="postgresql+asyncpg://postgres:postgres@db.example.com:5432/fastapi_best_ai_architecture",
             DISABLE_HTTP_AUTH_HEADER=True,
         ))
 
     with pytest.raises(ValidationError, match="DATABASE_URL must point to a local service"):
         Settings(**_settings_kwargs(
-            DATABASE_URL="postgresql+asyncpg://postgres:postgres@postgres:5432/cms_story_tagger",
+            DATABASE_URL="postgresql+asyncpg://postgres:postgres@postgres:5432/fastapi_best_ai_architecture",
             DISABLE_HTTP_AUTH_HEADER=True,
         ))
 

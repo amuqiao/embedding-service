@@ -1,6 +1,8 @@
-# AI Job Template 文档导航
+# fastapi-best-ai-architecture 文档导航
 
 本文是 `docs/` 目录的入口索引。当前主线是 AI Job 能力层服务：通用合同、当前架构、运行验证和具体能力对接分层维护；示例或历史文档不作为当前事实源。
+
+`fastapi-best-ai-architecture` 是可替换的模板标识。复用本模板时，应按目标业务项目替换包名、服务名、API 前缀、数据库名、对象存储前缀和业务 `job_type`。
 
 ## 当前必要文档
 
@@ -18,11 +20,10 @@
 | [`job-implementation-guide.md`](job-implementation-guide.md) | 旧 Job 系统实施说明；Taskiq 迁移后仅保留历史排障上下文，当前实现以 Taskiq 设计文档为准 |
 | [`部署与发布手册.md`](部署与发布手册.md) | 本地开发、compose 部署、配置规则、验证入口和常见排障 |
 
-## 具体能力对接文档
+## 业务示例 / 历史对接文档
 
 | 文档 | 用途 |
 |---|---|
-| [`接口层/CPP服务接口.md`](接口层/CPP服务接口.md) | 短剧打标 / 标签体系翻译等 CPP 调用方对接说明；通用 Job 壳仍以接入规范为准 |
 | [`接口层/mock-interfaces.md`](接口层/mock-interfaces.md) | mock 联调接口、示例请求和示例回调；用于联调和 contract fixture，不替代正式合同 |
 
 ## 阶段性维护文档
@@ -62,7 +63,7 @@ job-implementation-guide.md
 ```text
 架构/通用_AI_Job_接入规范.md
   ↓
-接口层/CPP服务接口.md（仅短剧 / CPP 对接需要）
+业务项目自有接口文档或 examples/business 示例
   ↓
 部署与发布手册.md
 ```

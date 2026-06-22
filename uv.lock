@@ -398,7 +398,7 @@ wheels = [
 ]
 
 [[package]]
-name = "fastapi-ai-job-template"
+name = "fastapi-best-ai-architecture"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

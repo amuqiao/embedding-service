@@ -1,5 +1,5 @@
 [project]
-name = "fastapi-ai-job-template"
+name = "fastapi-best-ai-architecture"
 version = "0.1.0"
 description = "FastAPI AI job execution backend template"
 requires-python = ">=3.11"

@@ -1,6 +1,6 @@
-# FastAPI AI Job Template
+# fastapi-best-ai-architecture
 
-FastAPI AI Job 执行后端模板。服务只负责模型执行、异步 Job、产物写入对象存储、状态查询和 Callback，不承担用户系统、项目管理、前端页面状态或业务步骤编排。后续重构以 [AI Job 服务项目规范与骨架](docs/架构/project-standards.md) 为合同和骨架事实源；目标 `job_type` 注册入口收敛到 `app/jobs/registry.py`，现有 workflow 代码按重构计划迁移。
+FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默认名，复用时应替换为目标项目名，并同步 `.env`、`pyproject.toml` 和部署配置中的服务身份。服务只负责模型执行、异步 Job、产物写入对象存储、状态查询和 Callback，不承担用户系统、项目管理、前端页面状态或业务步骤编排。后续重构以 [AI Job 服务项目规范与骨架](docs/架构/project-standards.md) 为合同和骨架事实源；目标 `job_type` 注册入口收敛到 `app/jobs/registry.py`，现有 workflow 代码按重构计划迁移。
 
 外部 Job 合同采用标准 envelope 和稳定 Job 骨架：`POST /jobs` 顶层只包含 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata` 和 `options`；具体任务入参由 `job_type` 的 `job_params` schema 定义。`GET /jobs/{job_id}` 返回 `ResponseEnvelope[JobView[PublicResult]]`。Callback 使用独立 `CallbackEnvelope[CallbackData]`，不套 HTTP envelope，也不嵌套完整 `JobView`。
 
@@ -45,6 +45,16 @@ FastAPI AI Job 执行后端模板。服务只负责模型执行、异步 Job、�
 ```
 
 `docker-compose.yml` 中的 `environment` 只覆盖容器运行形态必须不同的值，例如容器网络内的 `DATABASE_URL` / `REDIS_URL` 和容器内对象存储路径。业务配置、密钥、模型参数和限制参数应来自 `.env`、`ENV_FILE` 指定文件或运行时显式环境变量。
+
+模板身份默认值：
+
+- `TEMPLATE_NAME=fastapi-best-ai-architecture`
+- `SERVICE_NAME=fastapi-best-ai-architecture`
+- `SERVICE_TITLE=FastAPI Best AI Architecture`
+- `POSTGRES_DB=fastapi_best_ai_architecture`
+- `COMPOSE_PROJECT_NAME` 未设置时，`scripts/deploy.sh` 使用 `TEMPLATE_NAME` 作为 compose project name。
+
+复用模板时优先替换这些值；不要直接改脚本逻辑来表达业务项目名。
 
 默认接口：
 

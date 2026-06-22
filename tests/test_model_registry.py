@@ -9,7 +9,7 @@ from app.integrations import ai_gateway
 
 def _settings_kwargs(**overrides):
     values = {
-        "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/cms_story_tagger",
+        "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/fastapi_best_ai_architecture",
         "SERVICE_API_KEY": "test-token",
         "CALLBACK_SIGNING_SECRET": "test-callback-secret",
         "CALLBACK_RETRY_DELAY_SECONDS": 300,

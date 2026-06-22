@@ -38,10 +38,24 @@ require_executable() {
   [[ -x "$path" ]] || die "$path not found or not executable; $hint" 2
 }
 
+resolve_repo_path() {
+  local path="$1"
+  case "$path" in
+    /*) printf "%s" "$path" ;;
+    *) printf "%s/%s" "$ROOT_DIR" "$path" ;;
+  esac
+}
+
+env_value_from() {
+  local key="$1"
+  local path="$2"
+  [[ -f "$path" ]] || return 0
+  grep -E "^${key}=" "$path" 2>/dev/null | tail -n 1 | cut -d= -f2- || true
+}
+
 env_value() {
   local key="$1"
-  [[ -f "$ROOT_DIR/.env" ]] || return 0
-  grep -E "^${key}=" "$ROOT_DIR/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- || true
+  env_value_from "$key" "$ROOT_DIR/.env"
 }
 
 assert_local_url() {

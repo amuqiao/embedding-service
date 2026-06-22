@@ -16,6 +16,7 @@ from app.schemas.callbacks import CallbackEnvelope, CallbackResponseEnvelope
 from app.services.jobs import _job_payload, trigger_request_id_from_job
 
 logger = logging.getLogger(__name__)
+CALLBACK_EVENT_NAMESPACE = "ai-job-callback"
 
 
 class CallbackDeliveryResult(BaseModel):
@@ -54,7 +55,7 @@ def validate_callback_response_payload(payload: dict[str, Any], *, job_type: str
 def build_callback_body(job: Job) -> dict:
     event = "job.succeeded" if job.status == "succeeded" else "job.failed"
     sent_at = datetime.now(timezone.utc)
-    event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"cms-story-tagger-demo:callback:{job.id}:{event}")
+    event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{CALLBACK_EVENT_NAMESPACE}:{job.id}:{event}")
     envelope = CallbackEnvelope.model_validate(
         {
             "event": event,

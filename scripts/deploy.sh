@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy.sh - FastAPI AI Job Template 部署形态入口
+# deploy.sh - fastapi-best-ai-architecture 部署形态入口
 #
 # 作用域：只管理 docker compose 部署形态。
 #   compose-deps docker compose 只管理 postgres/redis 依赖服务。
@@ -10,8 +10,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-.env}"
-PROJECT_NAME="${COMPOSE_PROJECT_NAME:-cms-story-tagger}"
 source "$ROOT_DIR/scripts/lib/common.sh"
+TEMPLATE_NAME="${TEMPLATE_NAME:-$(env_value_from TEMPLATE_NAME "$(resolve_repo_path "$ENV_FILE")")}"
+TEMPLATE_NAME="${TEMPLATE_NAME:-fastapi-best-ai-architecture}"
+PROJECT_NAME="${COMPOSE_PROJECT_NAME:-${PROJECT_NAME:-$TEMPLATE_NAME}}"
 source "$ROOT_DIR/scripts/lib/compose.sh"
 
 cd "$ROOT_DIR"
