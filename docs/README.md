@@ -24,6 +24,12 @@
 | [`架构/refactor-plan.md`](架构/refactor-plan.md) | 规范先行重构路线和阶段性检查清单 |
 | [`接口层/language-codes.md`](接口层/language-codes.md) | 业务语种合约资料；仅在接入相关业务能力时使用 |
 
+## 候选设计
+
+| 文档 | 状态 | 用途 |
+|---|---|---|
+| [`设计文档/headless-ai-job-platform-service-design.md`](设计文档/headless-ai-job-platform-service-design.md) | Proposed | Headless AI Job Platform Service 的模型目录、模型调用账本、成本估算和结构化 LLM 示例设计；不是当前已实现合同 |
+
 ## 快速阅读路径
 
 理解服务架构：
