@@ -9,7 +9,7 @@
 | 文档 | 用途 |
 |---|---|
 | [`架构/README.md`](架构/README.md) | 架构目录入口 |
-| [`架构/project-standards.md`](架构/project-standards.md) | 项目规范与骨架：标准 envelope、输入输出 schema、异常、配置、日志、ORM、Repository 和验证基线 |
+| [`架构/project-standards-code-facts.md`](架构/project-standards-code-facts.md) | 项目规范与骨架（代码事实版）：当前代码中的 envelope、输入输出 schema、异常、配置、日志、ORM、Repository 和验证基线 |
 | [`接口层/http-api-extension-standard.md`](接口层/http-api-extension-standard.md) | 新增业务 HTTP 接口时的 schema、operation registry、错误、日志和测试接入规范 |
 | [`接口层/job-type-extension-standard.md`](接口层/job-type-extension-standard.md) | 新增 `job_type` 时的 Params、Runtime、Result、`JobExecutor`、错误、日志和测试接入规范 |
 | [`设计文档/taskiq-job-model-design.md`](设计文档/taskiq-job-model-design.md) | Taskiq Job MVP 的数据模型、生命周期、Attempt、Callback Outbox 和 Event 设计 |
@@ -29,7 +29,7 @@
 理解服务架构：
 
 ```text
-架构/project-standards.md
+架构/project-standards-code-facts.md
   ↓
 设计文档/taskiq-job-model-design.md
   ↓
@@ -39,7 +39,7 @@
 新增 HTTP 接口：
 
 ```text
-架构/project-standards.md
+架构/project-standards-code-facts.md
   ↓
 接口层/http-api-extension-standard.md
 ```
@@ -47,7 +47,7 @@
 新增 `job_type`：
 
 ```text
-架构/project-standards.md
+架构/project-standards-code-facts.md
   ↓
 接口层/job-type-extension-standard.md
   ↓
@@ -57,6 +57,6 @@
 ## 维护规则
 
 - 文档导航只引用当前仓库内实际存在的文件。
-- 当前实现事实优先以代码、测试和 `project-standards.md` 为准；设计文档用于解释已接受的结构和边界。
+- 当前实现事实优先以代码、测试和 `project-standards-code-facts.md` 为准；设计文档用于解释已接受的结构和边界。
 - 新增 HTTP 接口时同步检查接口规范、operation registry、schema registry 和合同测试。
 - 新增 `job_type` 时同步检查 `job_type` 规范、executor metadata、schema registry、Callback 投影和 workflow smoke。

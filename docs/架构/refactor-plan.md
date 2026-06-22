@@ -1,6 +1,6 @@
 # AI Job 服务规范先行重构计划
 
-本文定义后续重构的实施顺序：以 [AI Job 服务项目规范与骨架](project-standards.md) 为唯一标准，先落下项目规范和骨架，再让接口、Job、Workflow、配置、日志、异常和 ORM 逐步适配标准。
+本文定义后续重构的实施顺序：以 [AI Job 服务项目规范与骨架（代码事实版）](project-standards-code-facts.md) 为当前标准，先明确项目规范和骨架，再让接口、Job、Workflow、配置、日志、异常和 ORM 逐步适配标准。
 
 ## 文档职责
 
@@ -11,11 +11,11 @@
 - 每个阶段的目标、禁止事项和验证入口。
 - 如何覆盖 `claude_blueprint/rules/backend` 的标准。
 
-本文不负责重复定义所有规范细节。规范细节见 [AI Job 服务项目规范与骨架](project-standards.md)。
+本文不负责重复定义所有规范细节。规范细节见 [AI Job 服务项目规范与骨架（代码事实版）](project-standards-code-facts.md)。
 
 ## 核心原则
 
-`project-standards.md` 是接口、Job、Callback、错误码、日志、配置和 ORM 的合同事实源。代码、测试、OpenAPI、README、mock fixture 和对接文档都必须向该标准收敛。
+`project-standards-code-facts.md` 是接口、Job、Callback、错误码、日志、配置和 ORM 的当前合同事实源。代码、测试、OpenAPI、README、mock fixture 和对接文档都必须向该标准收敛。
 
 实施顺序：
 
@@ -36,7 +36,7 @@
 - 不通过适配器或参数开关保留非标准接口形态。
 - 不让 README、mock fixture、OpenAPI 示例或对接文档成为第二套合同。
 - 不用默认值吞掉非法输入、未知字段或废弃配置。
-- 不写入任何低于 `project-standards.md` 的实现目标。
+- 不写入任何低于 `project-standards-code-facts.md` 的实现目标。
 
 ## 规范真源
 
@@ -44,7 +44,7 @@
 
 | 真源 | 目标文件或模块 |
 |---|---|
-| 项目规范与骨架 | `docs/架构/project-standards.md` |
+| 项目规范与骨架（代码事实版） | `docs/架构/project-standards-code-facts.md` |
 | HTTP envelope / ErrorDetail / JobResponseData / JobEnvelope / CallbackEnvelope | `app/schemas/envelope.py`、`app/schemas/errors.py`、`app/schemas/jobs.py`、`app/schemas/callbacks.py` |
 | 错误码注册表 | `app/core/error_registry.py` 或等价结构 |
 | operation registry | `app/core/operation_registry.py` 或等价结构 |
@@ -62,7 +62,7 @@
 
 范围：
 
-- 定稿 [AI Job 服务项目规范与骨架](project-standards.md)。
+- 定稿 [AI Job 服务项目规范与骨架（代码事实版）](project-standards-code-facts.md)。
 - 明确 HTTP 标准响应：`ResponseEnvelope[TData]`。
 - 明确错误响应：`ErrorDetail` + 错误码注册表。
 - 明确 Job 创建和查询：`ResponseEnvelope[JobResponseData[JobResult]]`，Job 字段只放在 `data.job`。
@@ -72,7 +72,7 @@
 
 禁止：
 
-- 写入任何弱化 `project-standards.md` 的例外条款。
+- 写入任何弱化 `project-standards-code-facts.md` 的例外条款。
 - 为非标准响应、非标准错误结构或非标准 Job / Callback envelope 预留实现入口。
 - 让接口文档、README 示例、OpenAPI 示例或 mock fixture 反向定义合同。
 
@@ -174,7 +174,7 @@
 
 ## 阶段 4：HTTP 接口适配标准 Envelope
 
-目标：公开接口按 `project-standards.md` 的标准输入输出适配。
+目标：公开接口按 `project-standards-code-facts.md` 的标准输入输出适配。
 
 范围：
 
@@ -310,9 +310,9 @@
 
 ## Review Checklist
 
-每个 PR 先检查是否符合 `project-standards.md`：
+每个 PR 先检查是否符合 `project-standards-code-facts.md`：
 
-- 是否符合 [项目规范与骨架](project-standards.md)。
+- 是否符合 [项目规范与骨架（代码事实版）](project-standards-code-facts.md)。
 - 是否使用标准 `ResponseEnvelope[TData]`。
 - 错误是否来自错误码注册表。
 - request schema 是否拒绝未知字段。

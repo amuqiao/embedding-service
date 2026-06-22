@@ -1,6 +1,6 @@
 # fastapi-best-ai-architecture
 
-FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默认名，复用时应替换为目标项目名，并同步 `.env`、`pyproject.toml` 和部署配置中的服务身份。服务只负责模型执行、异步 Job、产物写入对象存储、状态查询和 Callback，不承担用户系统、项目管理、前端页面状态或业务步骤编排。项目规范以 [AI Job 服务项目规范与骨架](docs/架构/project-standards.md) 为基线；新增 `job_type` 按 [新增 job_type 标准接入规范](docs/接口层/job-type-extension-standard.md) 接入。
+FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默认名，复用时应替换为目标项目名，并同步 `.env`、`pyproject.toml` 和部署配置中的服务身份。服务只负责模型执行、异步 Job、产物写入对象存储、状态查询和 Callback，不承担用户系统、项目管理、前端页面状态或业务步骤编排。项目规范以 [AI Job 服务项目规范与骨架（代码事实版）](docs/架构/project-standards-code-facts.md) 为基线；新增 `job_type` 按 [新增 job_type 标准接入规范](docs/接口层/job-type-extension-standard.md) 接入。
 
 外部 Job 合同采用标准 envelope 和稳定 Job 骨架：`POST /jobs` 顶层只包含 `client_request_id`、`job_type`、`job_params`、`callback`、`metadata` 和 `options`；具体任务入参由 `job_type` 的 `job_params` schema 定义。`GET /jobs/{job_id}` 返回 `ResponseEnvelope[JobView[PublicResult]]`。Callback 使用独立 `CallbackEnvelope[CallbackData]`，不套 HTTP envelope，也不嵌套完整 `JobView`。
 
@@ -192,7 +192,7 @@ OSS_PUBLIC_ENDPOINT=
 ## 说明文档
 
 - [文档导航](docs/README.md)
-- [项目规范与骨架](docs/架构/project-standards.md)
+- [项目规范与骨架（代码事实版）](docs/架构/project-standards-code-facts.md)
 - [新增 HTTP 接口标准接入规范](docs/接口层/http-api-extension-standard.md)
 - [新增 job_type 标准接入规范](docs/接口层/job-type-extension-standard.md)
 - [Taskiq Job MVP 数据模型设计](docs/设计文档/taskiq-job-model-design.md)
