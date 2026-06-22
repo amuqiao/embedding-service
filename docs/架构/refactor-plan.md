@@ -93,7 +93,7 @@
 - 建立 `db/base.py`、`db/session.py`、`db/models/`。
 - 建立 `repositories/`。
 - 建立 `jobs/registry.py`、`jobs/lifecycle.py`、`jobs/publisher.py`、`jobs/recovery.py`。
-- 明确 `application/`、`services/`、`jobs/`、`workflows/`、`integrations/` 的职责边界。
+- 明确 `services/`、`jobs/`、`workflows/`、`integrations/` 的职责边界。
 
 禁止：
 

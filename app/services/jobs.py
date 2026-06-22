@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import uuid
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -27,6 +28,8 @@ from app.services.job_runtime import (
     runtime_fields_from_job,
     write_runtime_json,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _status_url(job_id: uuid.UUID) -> str:
@@ -435,10 +438,18 @@ async def submit_job_request(
     await db.commit()
     if created and job.active_attempt_id is not None:
         await db.refresh(job)
-        from app.tasks.jobs import publish_job_attempt
+        from app.tasks.jobs import TaskiqPublishDeferredError, publish_job_attempt
 
-        await publish_job_attempt(job.active_attempt_id)
-        await db.refresh(job)
+        try:
+            await publish_job_attempt(job.active_attempt_id)
+        except TaskiqPublishDeferredError:
+            logger.exception(
+                "job_attempt_publish_deferred_after_create job_id=%s attempt_id=%s",
+                job.id,
+                job.active_attempt_id,
+            )
+        else:
+            await db.refresh(job)
     return create_job_response(job, request_id=request_id)
 
 

@@ -20,6 +20,13 @@ from app.tasks.taskiq_app import broker
 logger = logging.getLogger(__name__)
 
 
+class TaskiqPublishDeferredError(RuntimeError):
+    def __init__(self, attempt_id: uuid.UUID, error: dict[str, Any]):
+        super().__init__("Taskiq publish failed after job was committed; attempt is scheduled for recovery")
+        self.attempt_id = attempt_id
+        self.error = error
+
+
 def _ensure_workflows_registered() -> None:
     from app.jobs.types.register import register_all_job_types
 
@@ -67,16 +74,19 @@ async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
         }
 
         async def record_failure(db):
-            await JobRepo.mark_attempt_publish_failed(
+            recorded = await JobRepo.mark_attempt_publish_failed(
                 db,
                 attempt_id,
                 error=error,
                 next_dispatch_at=datetime.now(timezone.utc) + timedelta(seconds=settings.JOB_ORPHAN_TIMEOUT_SECONDS),
             )
-            await db.commit()
+            if recorded:
+                await db.commit()
+            return recorded
 
-        await _with_db(record_failure)
-        raise
+        if not await _with_db(record_failure):
+            raise
+        raise TaskiqPublishDeferredError(attempt_id, error) from exc
 
     async def mark_published(db):
         await JobRepo.mark_attempt_published(

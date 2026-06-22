@@ -39,7 +39,7 @@ contract tests + registry check
 |---|---|---|
 | 公共外壳 | `app/schemas/envelope.py`、`app/schemas/errors.py` | `HttpEnvelope`、`ErrorEnvelope`、`JobErrorDetail`、`CallbackErrorDetail` 统一定义。 |
 | 接口登记 | `app/api/operations.py` | `operation_id`、schema、错误码、日志事件和副作用声明。 |
-| 路由实现 | `app/api/routes/*.py` | 只做 HTTP 入站、鉴权依赖、调用 application/service、返回裸业务数据。 |
+| 路由实现 | `app/api/routes/*.py` | 只做 HTTP 入站、鉴权依赖、调用 service、返回裸业务数据。 |
 | 响应包装 | `app/main.py` | 对标准 JSON API 成功响应统一包装为 `HttpEnvelope[T]`。 |
 
 ## 模块边界

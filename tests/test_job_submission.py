@@ -3,9 +3,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.application.jobs.submission import submit_ai_job
 from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest
+from app.services.jobs import submit_job_request
 
 
 class FakeDB:
@@ -46,49 +46,155 @@ class _Handler:
 
 
 @pytest.mark.asyncio
-async def test_submit_ai_job_commits_then_publishes_created_job(monkeypatch):
+async def test_submit_job_request_commits_then_publishes_created_job(monkeypatch):
     db = FakeDB()
     job = _job()
     recorded: dict = {}
 
-    async def fake_create_job(_db, payload, caller_id):
+    async def fake_create_job(_db, payload, caller_id, *, trigger_request_id):
         assert _db is db
         assert payload.job_type == "test.echo"
         assert caller_id == "caller-1"
+        assert trigger_request_id == "request-1"
         return job, True
 
     async def fake_publish(attempt_id):
         recorded["published"] = attempt_id
 
-    monkeypatch.setattr("app.application.jobs.submission.create_job", fake_create_job)
+    monkeypatch.setattr("app.services.jobs.create_job", fake_create_job)
     monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", fake_publish)
     monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: _Handler())
 
-    response = await submit_ai_job(db, _payload(), "caller-1")
+    response = await submit_job_request(db, _payload(), "caller-1", request_id="request-1")
 
     assert response.job_id == job.id
     assert db.commits == 1
-    assert db.refreshed == [job]
+    assert db.refreshed == [job, job]
     assert recorded["published"] == job.active_attempt_id
 
 
 @pytest.mark.asyncio
-async def test_submit_ai_job_reuses_existing_idempotent_job_without_dispatch(monkeypatch):
+async def test_submit_job_request_reuses_existing_idempotent_job_without_dispatch(monkeypatch):
     db = FakeDB()
     job = _job()
 
-    async def fake_create_job(_db, _payload, _caller_id):
+    async def fake_create_job(_db, _payload, _caller_id, *, trigger_request_id):
+        assert trigger_request_id == "request-1"
         return job, False
 
-    monkeypatch.setattr("app.application.jobs.submission.create_job", fake_create_job)
+    monkeypatch.setattr("app.services.jobs.create_job", fake_create_job)
     monkeypatch.setattr(
         "app.tasks.jobs.publish_job_attempt",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("existing job should not set task id")),
     )
     monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: _Handler())
 
-    response = await submit_ai_job(db, _payload(), "caller-1")
+    response = await submit_job_request(db, _payload(), "caller-1", request_id="request-1")
 
     assert response.job_id == job.id
     assert db.commits == 1
     assert db.refreshed == []
+
+
+@pytest.mark.asyncio
+async def test_submit_job_request_returns_created_job_when_publish_failure_is_recorded(monkeypatch):
+    db = FakeDB()
+    task_db = FakeDB()
+    job = _job()
+    recorded: dict = {}
+
+    async def fake_create_job(_db, _payload, _caller_id, *, trigger_request_id):
+        assert trigger_request_id == "request-1"
+        return job, True
+
+    async def fake_kiq(attempt_id):
+        recorded["kiq_attempt_id"] = attempt_id
+        raise RuntimeError("broker unavailable")
+
+    async def fake_with_db(coro):
+        return await coro(task_db)
+
+    async def fake_mark_attempt_publish_failed(_db, attempt_id, *, error, next_dispatch_at):
+        assert _db is task_db
+        recorded["failed_attempt_id"] = attempt_id
+        recorded["error"] = error
+        recorded["next_dispatch_at"] = next_dispatch_at
+        return True
+
+    from app.tasks import jobs as task_jobs
+
+    monkeypatch.setattr("app.services.jobs.create_job", fake_create_job)
+    monkeypatch.setattr(task_jobs.run_job_attempt, "kiq", fake_kiq)
+    monkeypatch.setattr(task_jobs, "_with_db", fake_with_db)
+    monkeypatch.setattr(task_jobs.JobRepo, "mark_attempt_publish_failed", fake_mark_attempt_publish_failed)
+    monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: _Handler())
+
+    response = await submit_job_request(db, _payload(), "caller-1", request_id="request-1")
+
+    assert response.job_id == job.id
+    assert response.job_status == "queued"
+    assert db.commits == 1
+    assert task_db.commits == 1
+    assert db.refreshed == [job]
+    assert recorded["kiq_attempt_id"] == str(job.active_attempt_id)
+    assert recorded["failed_attempt_id"] == job.active_attempt_id
+    assert recorded["error"]["code"] == "TASKIQ_PUBLISH_FAILED"
+    assert recorded["next_dispatch_at"] > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_submit_job_request_exposes_unrecorded_publish_errors(monkeypatch):
+    db = FakeDB()
+    job = _job()
+
+    async def fake_create_job(_db, _payload, _caller_id, *, trigger_request_id):
+        assert trigger_request_id == "request-1"
+        return job, True
+
+    async def fake_publish(_attempt_id):
+        raise RuntimeError("publish bookkeeping failed")
+
+    monkeypatch.setattr("app.services.jobs.create_job", fake_create_job)
+    monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", fake_publish)
+    monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: _Handler())
+
+    with pytest.raises(RuntimeError, match="publish bookkeeping failed"):
+        await submit_job_request(db, _payload(), "caller-1", request_id="request-1")
+
+    assert db.commits == 1
+    assert db.refreshed == [job]
+
+
+@pytest.mark.asyncio
+async def test_submit_job_request_exposes_publish_failure_when_recovery_record_is_not_written(monkeypatch):
+    db = FakeDB()
+    task_db = FakeDB()
+    job = _job()
+
+    async def fake_create_job(_db, _payload, _caller_id, *, trigger_request_id):
+        assert trigger_request_id == "request-1"
+        return job, True
+
+    async def fake_kiq(_attempt_id):
+        raise RuntimeError("broker unavailable")
+
+    async def fake_with_db(coro):
+        return await coro(task_db)
+
+    async def fake_mark_attempt_publish_failed(_db, _attempt_id, *, error, next_dispatch_at):
+        return False
+
+    from app.tasks import jobs as task_jobs
+
+    monkeypatch.setattr("app.services.jobs.create_job", fake_create_job)
+    monkeypatch.setattr(task_jobs.run_job_attempt, "kiq", fake_kiq)
+    monkeypatch.setattr(task_jobs, "_with_db", fake_with_db)
+    monkeypatch.setattr(task_jobs.JobRepo, "mark_attempt_publish_failed", fake_mark_attempt_publish_failed)
+    monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: _Handler())
+
+    with pytest.raises(RuntimeError, match="broker unavailable"):
+        await submit_job_request(db, _payload(), "caller-1", request_id="request-1")
+
+    assert db.commits == 1
+    assert task_db.commits == 0
+    assert db.refreshed == [job]

@@ -50,7 +50,7 @@ Markdown 文档不是运行时事实源。文档与代码冲突时，以代码�
 - Taskiq 异步执行、attempt 领取、执行租约、重试和恢复。
 - `job_type` 注册、`job_params` 校验、runtime snapshot、canonical result 和 public result 投影。
 - Callback outbox、HMAC 签名投递、ack 校验和补偿重试。
-- PostgreSQL 状态权威、Redis Taskiq broker、本地对象存储或阿里云 OSS adapter。
+- PostgreSQL 状态权威、Redis Taskiq broker、本地开发对象存储或阿里云 OSS adapter；生产多副本形态应使用外部对象存储。
 - 本地开发、compose 部署检查和模板级验证脚本。
 
 本仓库当前不负责：
@@ -73,9 +73,6 @@ app/
       health.py
       jobs.py
       meta.py
-  application/
-    jobs/
-      submission.py
   core/
     callback_security.py
     config.py
@@ -481,6 +478,8 @@ InternalAppError
 - 容量和恢复：`MAX_ACTIVE_JOBS`、`OSS_INPUT_MAX_BYTES`、`JOB_ORPHAN_TIMEOUT_SECONDS`、`JOB_RECOVERY_INTERVAL_SECONDS`、`JOB_RECOVERY_BATCH_SIZE`、`JOB_RECOVERY_CALLBACK_BATCH_SIZE`、`JOB_MAX_EXECUTION_ATTEMPTS`。
 - 日志：`LOG_LEVEL`。
 
+`STORAGE_BACKEND=local` 是本地开发 / 单机 compose 模式；生产或多副本 API / worker 运行形态应使用外部对象存储后端。
+
 当前派生配置包括：
 
 - `worker_soft_time_limit = MODEL_CALL_TIMEOUT_SECONDS + 300`
@@ -600,7 +599,7 @@ callback_failed
 | 模块 | 职责 |
 |---|---|
 | `app/integrations/ai_gateway.py` | 通过 LiteLLM 执行文本生成。 |
-| `app/integrations/storage.py` | 统一本地对象存储 / OSS 存储接口。 |
+| `app/integrations/storage.py` | 统一本地开发对象存储 / OSS 存储接口；多副本运行必须使用外部对象存储后端。 |
 | `app/integrations/aliyun_oss.py` | 阿里云 OSS 适配。 |
 | `app/services/callbacks.py` | Callback HTTP 投递、签名、ack 校验和错误摘要。 |
 
