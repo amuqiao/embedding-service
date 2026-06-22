@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # deploy.sh - fastapi-best-ai-architecture 部署形态入口
 #
+# 运行环境：Bash；需要 Docker Compose。
 # 作用域：只管理 docker compose 部署形态。
 #   compose-deps docker compose 只管理 postgres/redis 依赖服务。
 #   compose-full docker compose 管理 api/worker/postgres/redis，并在应用启动前执行 Alembic 迁移。
@@ -24,6 +25,15 @@ usage() {
   cat <<EOF
 用法：
   ./scripts/deploy.sh <command> [mode]
+  ./scripts/deploy.sh -h|--help
+
+作用域：
+  本脚本只管理 compose-deps / compose-full。
+  不管理 local 本地服务生命周期、一次性验证任务、生产部署、远程数据库、K8s 或云平台资源。
+
+运行环境：
+  Requires: Bash
+  Dependencies: Docker Compose
 
 命令：
   modes                 展示本脚本管理的 compose 部署模式。
@@ -38,9 +48,29 @@ usage() {
 配置加载优先级：
   运行时显式环境变量 > docker-compose.yml environment > ENV_FILE 指定文件 > .env > 应用默认值
 
-边界：
-  本脚本只管理 compose-deps / compose-full。
-  不管理 local 本地服务生命周期、一次性验证任务、生产部署、远程数据库、K8s 或云平台资源。
+环境变量：
+  ENV_FILE                 可选，指定 compose 使用的 env 文件，默认 .env。
+  COMPOSE_PROJECT_NAME     可选，覆盖 compose project 名。
+  TEMPLATE_NAME            可选，作为默认 compose project 名来源。
+
+输出：
+  stdout: check 结果、compose 状态、启动/停止结果。
+  stderr: 缺少文件、非法 mode、Docker Compose 错误。
+
+幂等性和副作用：
+  check 只做静态校验，不启动服务。
+  up 会创建或更新 compose 服务。
+  down 使用 compose stop，停止服务但不删除 volume。
+
+常用示例：
+  ./scripts/deploy.sh check
+  ./scripts/deploy.sh modes
+  ./scripts/deploy.sh up compose-deps
+  ./scripts/deploy.sh status compose-full
+
+Exit Codes:
+  0  成功
+  2  缺少 command、非法 mode、缺少必要文件或 Docker Compose 不可用
 EOF
 }
 
@@ -121,12 +151,16 @@ status_full() {
   compose --profile app ps
 }
 
-command="${1:-help}"
+command="${1:-}"
 mode="${2:-}"
 
 case "$command" in
   --help|-h|help)
     usage
+    ;;
+  "")
+    usage >&2
+    exit 2
     ;;
   modes)
     show_modes

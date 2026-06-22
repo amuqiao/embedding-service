@@ -1,7 +1,12 @@
 import os
+import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from scripts.jobs.cli import parse_duration, parse_statuses
+from scripts.jobs.db import normalize_database_url
 from scripts.verify.env_config_check import (
     SCRIPT_OR_DEPLOYMENT_ENV_KEYS,
     check_file,
@@ -63,6 +68,67 @@ def test_dev_worker_service_command_injects_script_env(tmp_path):
     assert "WORKER_LOGLEVEL=DEBUG" in command
     assert "WORKER_RECOVERY_LOOP=false" in command
     assert "start-worker.sh" in command
+
+
+def test_jobs_cli_help_is_available_without_db():
+    result = subprocess.run(
+        ["./scripts/jobs.sh", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "Job 只读查询与排障入口" in result.stdout
+    assert "list" in result.stdout
+    assert "types" in result.stdout
+
+
+def test_shell_entrypoints_require_command_without_help():
+    for script in ("./scripts/dev.sh", "./scripts/deploy.sh", "./scripts/verify.sh", "./scripts/jobs.sh"):
+        result = subprocess.run(
+            [script],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 2
+        assert result.stdout == ""
+        assert "用法：" in result.stderr or "Usage:" in result.stderr
+
+
+def test_jobs_types_json_is_machine_readable_without_app_log_noise():
+    result = subprocess.run(
+        ["./scripts/jobs.sh", "types", "--json"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    job_types = {item["job_type"] for item in payload["job_types"]}
+    assert {"arithmetic", "job_test_add", "job_test_echo"} <= job_types
+    assert result.stderr == ""
+
+
+def test_jobs_cli_parses_statuses_and_duration():
+    assert parse_statuses(["queued,running", "failed"]) == ["queued", "running", "failed"]
+    assert parse_duration("10m").total_seconds() == 600
+
+    with pytest.raises(ValueError):
+        parse_statuses(["cancelled"])
+
+
+def test_jobs_db_normalizes_async_database_url_for_psycopg2():
+    normalized = normalize_database_url(
+        "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/app",
+        db_ssl="false",
+    )
+
+    assert normalized == "postgresql://postgres:postgres@127.0.0.1:25432/app?sslmode=disable"
 
 
 def test_env_config_check_rejects_env_file_keys_missing_from_manifest(tmp_path):

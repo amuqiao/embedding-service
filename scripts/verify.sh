@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # verify.sh - 本地验证入口
 #
+# 运行环境：Bash；需要 Python venv，check 会运行 pytest。
 # 作用域：承接测试、smoke、e2e 等模板级一次性验证任务。
 # 本地服务生命周期不属于本入口。
 # 约束：入口脚本只做参数分发和帮助说明，具体实现下沉到 scripts/verify/ 原子脚本。
@@ -14,10 +15,14 @@ usage() {
   cat <<EOF
 用法：
   ./scripts/verify.sh <command> [args...]
-  ./scripts/verify.sh --help
+  ./scripts/verify.sh -h|--help
 
 作用域：
   当前仓库的一次性验证入口。验证任务可以依赖已运行的本地 API/worker，但不负责完整本地服务生命周期。
+
+运行环境：
+  Requires: Bash
+  Dependencies: Python venv；check 会运行 pytest。
 
 命令：
   test                运行 pytest。
@@ -31,6 +36,29 @@ usage() {
 
 成功标准：
   check 成功 = 脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest 均通过。
+
+环境变量：
+  API_HOST / API_PORT        可选，workflow-smoke 使用的本地 API 地址来源。
+  SCRIPT_ENV_FILE            可选，覆盖脚本配置文件路径，默认 scripts/.env。
+
+输出：
+  stdout: 阶段化验证结果；pytest 和 workflow-smoke 输出可透传。
+  stderr: 非法命令、不可用验证任务、Python 或测试失败详情。
+
+幂等性和副作用：
+  test/check/env-config 不修改服务状态。
+  workflow-smoke 会向已运行的本地 API 创建一个内置 job_test_echo 测试 Job。
+
+常用示例：
+  ./scripts/verify.sh check
+  ./scripts/verify.sh test
+  ./scripts/verify.sh env-config
+  ./scripts/verify.sh workflow-smoke
+
+Exit Codes:
+  0  成功
+  2  缺少 command、非法命令或当前验证任务不可用
+  其他非 0 由 pytest、Python 语法检查或验证子任务返回
 EOF
 }
 
@@ -39,10 +67,14 @@ no_builtin_job_types() {
   exit 2
 }
 
-command="${1:-help}"
+command="${1:-}"
 case "$command" in
   --help|-h|help)
     usage
+    ;;
+  "")
+    usage >&2
+    exit 2
     ;;
   *)
     source "$ROOT_DIR/scripts/verify/tasks.sh"

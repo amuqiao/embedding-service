@@ -34,6 +34,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/lib/compose.sh" \
     "$ROOT_DIR/scripts/dev/services.sh" \
     "$ROOT_DIR/scripts/deploy.sh" \
+    "$ROOT_DIR/scripts/jobs.sh" \
     "$ROOT_DIR/scripts/verify/tasks.sh"
   do
     bash -n "$script"
@@ -50,6 +51,8 @@ run_cli_smoke() {
   event "OK" "verify.sh" "help"
   "$ROOT_DIR/scripts/deploy.sh" --help >/dev/null
   event "OK" "deploy.sh" "help"
+  "$ROOT_DIR/scripts/jobs.sh" --help >/dev/null
+  event "OK" "jobs.sh" "help"
 }
 
 run_python_syntax() {
@@ -60,9 +63,15 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/dev/check_ports.py" \
     "$ROOT_DIR/scripts/verify/env_config_check.py" \
     "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" \
-    "$ROOT_DIR/scripts/verify/registry_check.py"
+    "$ROOT_DIR/scripts/verify/registry_check.py" \
+    "$ROOT_DIR/scripts/jobs/__init__.py" \
+    "$ROOT_DIR/scripts/jobs/cli.py" \
+    "$ROOT_DIR/scripts/jobs/db.py" \
+    "$ROOT_DIR/scripts/jobs/formatters.py" \
+    "$ROOT_DIR/scripts/jobs/queries.py"
   event "OK" "dev/check_ports.py" "py_compile"
   event "OK" "verify/*.py" "py_compile"
+  event "OK" "jobs/*.py" "py_compile"
 }
 
 run_registry_check() {
