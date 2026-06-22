@@ -62,7 +62,7 @@ def build_headers(dotenv: dict[str, str]) -> dict[str, str]:
 
 
 def job_from_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
-    if envelope.get("code") != 0:
+    if envelope.get("code") != "0":
         raise RuntimeError(f"unexpected response envelope: {envelope}")
     job = envelope.get("data", {}).get("job")
     if not isinstance(job, dict):

@@ -130,7 +130,7 @@ OSS_PUBLIC_ENDPOINT=
 
 - `bootstrap`：缺少 `.env` 时从 `.env.example` 生成，并执行 `uv sync`。
 - `start [api|worker]`：启动指定服务；不传服务名时启动 PostgreSQL、Redis、执行数据库迁移、启动 API 和 worker，并检查 `/health`。
-  本地 API 默认通过 `uvicorn --reload` 启动，修改 `app/` 下代码会自动重载；设置 `DEV_API_RELOAD=false` 时恢复为调用 `start-api.sh`。reload 默认设置 `WATCHFILES_FORCE_POLLING=true`，避免 macOS 或受限目录中文件监听失败；如需使用系统文件事件，可设为 `false`。worker 不做自动热更新，代码变更后使用 `./scripts/dev.sh restart worker`。
+  本地 API 默认通过 `start-api.sh` 稳定启动；需要热更新时临时执行 `DEV_API_RELOAD=true ./scripts/dev.sh start api`，改用 `uvicorn --reload`。reload 默认使用 polling，避免 macOS 或受限目录中文件监听失败；如需使用系统文件事件，可临时执行 `WATCHFILES_FORCE_POLLING=false DEV_API_RELOAD=true ./scripts/dev.sh start api`。worker 不做自动热更新，代码变更后使用 `./scripts/dev.sh restart worker`。
 - `stop [api|worker]`：停止指定服务；不传服务名时停止 API、worker、PostgreSQL 和 Redis。
 - `restart [api|worker]`：重启指定服务；不传服务名时重启完整本地服务栈。
 - `status [api|worker]`：展示指定服务状态；不传服务名时展示依赖容器、应用进程 PID、日志路径和健康状态。
