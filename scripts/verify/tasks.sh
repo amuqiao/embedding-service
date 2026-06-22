@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# tasks.sh - verify.sh 的一次性验证任务编排
+#
+# 输出原则：
+#   check 类阶段先打印 section，再把可归纳的检查压缩为 OK 事件。
+#   pytest 和 workflow-smoke 的输出是验证结果本身，允许在对应 section 下透传。
+#   子任务失败时保留工具错误，由 set -e 终止，调用者根据 section 定位失败阶段。
 
 VERIFY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$(cd "$VERIFY_DIR/../.." && pwd)}"
@@ -19,6 +25,7 @@ run_workflow_smoke() {
 run_script_syntax() {
   local script
   section "Script"
+  # 语法检查不透传 bash -n 的成功输出；每个脚本成功后输出一行 OK。
   for script in \
     "$ROOT_DIR/scripts/dev.sh" \
     "$ROOT_DIR/scripts/verify.sh" \
@@ -36,6 +43,7 @@ run_script_syntax() {
 
 run_cli_smoke() {
   section "CLI"
+  # help smoke 只验证入口可用，不重复打印完整 help，避免 check 输出噪声。
   "$ROOT_DIR/scripts/dev.sh" --help >/dev/null
   event "OK" "dev.sh" "help"
   "$ROOT_DIR/scripts/verify.sh" --help >/dev/null
@@ -47,6 +55,7 @@ run_cli_smoke() {
 run_python_syntax() {
   section "Python"
   require_project_python
+  # py_compile 成功时汇总为脚本事件；失败时保留 Python 原始错误。
   "$PYTHON_BIN" -m py_compile \
     "$ROOT_DIR/scripts/dev/check_ports.py" \
     "$ROOT_DIR/scripts/verify/env_config_check.py" \

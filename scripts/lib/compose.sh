@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# compose.sh - docker compose 命令适配层
+#
+# 负责把脚本域 env 注入 compose 命令，并兼容 docker compose / docker-compose。
+# check 类命令应在调用处使用 quiet 模式并输出一行 OK；up/status 类命令可透传
+# compose 原始输出，但必须先由调用处打印稳定 section。
 
 COMPOSE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$(cd "$COMPOSE_LIB_DIR/../.." && pwd)}"

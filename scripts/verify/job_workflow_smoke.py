@@ -1,3 +1,10 @@
+"""Submit a template echo job and wait for the local Taskiq workflow to finish.
+
+The shell wrapper prints the "Workflow Smoke" section. This script prints one
+success summary with job_id; failures raise RuntimeError with the failing object
+and enough detail for the caller to inspect API/worker logs.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -37,6 +44,7 @@ def is_true(value: str | None) -> bool:
 
 
 def request_json(url: str, *, method: str, headers: dict[str, str], payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    # HTTP errors include method, URL, status, and response body because smoke failures need the API-side evidence.
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     req = Request(url, data=body, headers=headers, method=method)
     try:

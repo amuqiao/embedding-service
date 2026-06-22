@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# common.sh - 脚本公共路径、env 读取和人读输出 helper
+#
+# 输出规则：
+#   section 标记稳定阶段，例如 "== Env Config =="。
+#   event 输出状态词、对象和简短结果，例如 "OK .env.example present"。
+#   row/detail 用于 status 类表格和补充 PID、URL、日志、端口等证据。
+#   die 只用于失败出口，错误写入 stderr，并给出对象、原因或下一步。
+# 新增脚本输出时优先复用这些 helper，不在子脚本中临时 echo 新格式。
 
 COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$(cd "$COMMON_DIR/../.." && pwd)}"

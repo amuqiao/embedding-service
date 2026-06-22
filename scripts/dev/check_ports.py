@@ -1,4 +1,8 @@
-"""Check local TCP port availability for multi-project development."""
+"""Check local TCP port availability for multi-project development.
+
+Text output is for humans and keeps a compact scan result. JSON output is the
+stable machine-readable contract for callers that need to parse the result.
+"""
 
 from __future__ import annotations
 
@@ -133,6 +137,7 @@ def build_report(host: str, ports: list[int], count: int) -> dict[str, Any]:
 
 
 def print_text(report: dict[str, Any]) -> None:
+    # Keep text output readable in terminals; callers should use --format json.
     print("== Local Port Scan ==")
     print(f"host: {report['host']}")
     print(f"ok: {str(report['ok']).lower()}")

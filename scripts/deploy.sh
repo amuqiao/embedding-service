@@ -5,6 +5,7 @@
 #   compose-deps docker compose 只管理 postgres/redis 依赖服务。
 #   compose-full docker compose 管理 api/worker/postgres/redis，并在应用启动前执行 Alembic 迁移。
 # local 本地服务生命周期由 scripts/dev.sh 管理，不属于本入口命令面。
+# 输出：check 汇总为稳定 OK 事件；up/down/status 先打印部署阶段，再透传 compose 输出。
 
 set -euo pipefail
 

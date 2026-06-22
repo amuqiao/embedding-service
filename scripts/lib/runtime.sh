@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# runtime.sh - 本地脚本运行时配置
+#
+# 只维护脚本域配置：API 本地端口、worker 启动参数和工具路径。
+# 应用业务配置由根目录 .env 和 app/core/config.py 管理。
+# 本文件不主动输出；非法值通过 die fail-fast，避免 silent fallback。
 
 RUNTIME_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$(cd "$RUNTIME_DIR/../.." && pwd)}"

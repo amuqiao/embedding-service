@@ -1,3 +1,9 @@
+"""Check service and script env files against their explicit key manifests.
+
+This script is called under the shell "Env Config" section. Success is printed
+as one OK event; issues go to stderr with file, line, object, and reason.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -155,6 +161,7 @@ def parse_keys(path: Path) -> list[tuple[int, str]]:
 
 
 def check_file(path: Path, manifest: EnvKeyManifest = ENV_KEY_MANIFEST) -> list[str]:
+    # File-level checks enforce the service/script config boundary before Settings loads.
     issues: list[str] = []
     allowed_keys = allowed_keys_for_file(path)
     for line_no, key in parse_keys(path):
@@ -175,6 +182,7 @@ def check_file(path: Path, manifest: EnvKeyManifest = ENV_KEY_MANIFEST) -> list[
 
 
 def check_example_alignment() -> list[str]:
+    # Example files are the committed truth sources for local env file key sets.
     issues: list[str] = []
     service_keys = _service_example_keys()
     script_keys = _script_example_keys()
@@ -247,7 +255,7 @@ def main() -> int:
         for issue in issues:
             print(issue, file=sys.stderr)
         return 1
-    print(f"env config check passed: {checked} file(s)")
+    print(f"{'OK':<9} {'env-files':<10} checked={checked}")
     return 0
 
 

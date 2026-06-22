@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# services.sh - dev.sh 的本地服务生命周期原子实现
+#
+# 输出原则：
+#   start/stop/restart/status 围绕服务对象输出，不打印后台服务完整日志。
+#   启动类副作用必须给出 pid、log、url 或 health 证据。
+#   等待超时前只输出相关诊断证据，失败由 die 给出下一步命令。
 
 DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$(cd "$DEV_DIR/../.." && pwd)}"
@@ -135,6 +141,7 @@ wait_for_container_health() {
   local timeout_seconds="$2"
   local elapsed=0
 
+  # 健康检查成功只输出 READY；失败时再透传 compose ps 作为相关证据。
   while true; do
     if compose ps "$service" 2>/dev/null | grep -qi "healthy"; then
       event "READY" "$service" "healthy"
@@ -155,6 +162,7 @@ wait_for_api() {
   local timeout_seconds="$1"
   local elapsed=0
 
+  # API ready 是 start 的成功标准；超时时只展示最近 API 日志并给 logs 入口。
   while true; do
     if curl -fsS "$API_HEALTH_URL" >/dev/null 2>&1; then
       event "READY" "api" "$API_HEALTH_URL"
@@ -175,6 +183,7 @@ bootstrap() {
   section "Bootstrap"
   require_command uv "install uv first"
 
+  # bootstrap 有文件写入副作用，必须说明 created/existing 和来源模板。
   if [[ -f "$ROOT_DIR/.env" ]]; then
     event "EXISTS" ".env" "kept"
   else
@@ -237,6 +246,7 @@ start_service() {
   log_file="$(service_log_file "$service")"
 
   if is_running_pid_file "$pid_file"; then
+    # 重复 start 不视为失败；输出 RUNNING 和当前 pid，便于用户判断状态。
     event "RUNNING" "$service" "pid=$(pid_of "$pid_file") url=$(service_url "$service")"
     return
   fi
@@ -345,6 +355,7 @@ status_service() {
     summary="pid=$pid"
   fi
 
+  # status 使用 row/detail：一行状态摘要加 URL、health、log 等可复制证据。
   row "$service" "$state" "$summary"
   if [[ "$service" == "api" ]]; then
     detail "app" "$API_URL"

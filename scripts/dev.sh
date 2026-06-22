@@ -4,6 +4,7 @@
 # 作用域：只管理当前仓库的本地 FastAPI/Taskiq 服务和 docker compose 本地依赖。
 # 验证、smoke、e2e 等一次性检查不属于本入口。
 # 约束：入口脚本只做参数分发和帮助说明，具体实现下沉到 scripts/dev/ 原子脚本。
+# 输出：help 使用中文说明边界；执行结果由原子脚本按 section/event/row/detail 输出。
 
 set -euo pipefail
 
