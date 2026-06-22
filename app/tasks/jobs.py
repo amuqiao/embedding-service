@@ -181,8 +181,6 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
             return False
         if not job.callback_url:
             return False
-        if job.callback_attempts >= settings.CALLBACK_MAX_DELIVERY_ATTEMPTS:
-            return False
         now = datetime.now(timezone.utc)
         delivery_deadline = now + timedelta(seconds=settings.callback_delivery_timeout_seconds)
         claimed = await JobRepo.mark_callback_delivering(
@@ -195,20 +193,23 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
         await db.commit()
         if not claimed:
             return False
+        claimed_job, outbox = claimed
 
-        job.callback_status = "delivering"
-        job.callback_next_retry_at = delivery_deadline
-        result = await deliver_callback(job)
+        claimed_job.callback_status = "delivering"
+        claimed_job.callback_next_retry_at = delivery_deadline
+        result = await deliver_callback(claimed_job, payload=outbox.payload)
         next_retry_at = None
-        if result.status == "failed" and job.callback_attempts + result.attempts < settings.CALLBACK_MAX_DELIVERY_ATTEMPTS:
+        if result.status == "failed" and outbox.delivery_attempt < settings.CALLBACK_MAX_DELIVERY_ATTEMPTS:
             next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=settings.CALLBACK_RETRY_DELAY_SECONDS)
         await JobRepo.mark_callback_result(
             db,
-            job.id,
+            claimed_job.id,
             status=result.status,
-            attempts_increment=result.attempts,
             last_error=result.last_error,
             next_retry_at=next_retry_at,
+            max_attempts=settings.CALLBACK_MAX_DELIVERY_ATTEMPTS,
+            callback_id=outbox.id,
+            lease_token=outbox.lease_token,
         )
         await db.commit()
         return result.status in ("delivered", "skipped")

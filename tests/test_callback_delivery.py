@@ -687,6 +687,18 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
     from app.tasks.jobs import deliver_callback_for_job
 
     job = _job()
+    callback_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
+    outbox = type(
+        "_Outbox",
+        (),
+        {
+            "id": callback_id,
+            "lease_token": lease_token,
+            "payload": {"event": "job.succeeded", "job": {"job_type": job.job_type}},
+            "delivery_attempt": 1,
+        },
+    )()
     commits = 0
     recorded: dict = {}
 
@@ -707,25 +719,38 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
         assert now is not None
         assert max_attempts > 0
         recorded["claimed_next_retry_at"] = next_retry_at
-        return True
+        return job, outbox
 
-    async def fake_deliver_callback(sent_job):
+    async def fake_deliver_callback(sent_job, *, payload=None):
         assert sent_job is job
         assert sent_job.callback_status == "delivering"
         assert sent_job.callback_next_retry_at == recorded["claimed_next_retry_at"]
+        assert payload is outbox.payload
         return CallbackDeliveryResult(
             status="failed",
             attempts=1,
             last_error={"code": "CALLBACK_HTTP_ERROR", "status_code": 503},
         )
 
-    async def fake_mark_callback_result(_db, job_id, *, status, attempts_increment, last_error, next_retry_at):
+    async def fake_mark_callback_result(
+        _db,
+        job_id,
+        *,
+        status,
+        last_error,
+        next_retry_at,
+        max_attempts,
+        callback_id,
+        lease_token,
+    ):
         recorded["result"] = {
             "job_id": job_id,
             "status": status,
-            "attempts_increment": attempts_increment,
             "last_error": last_error,
             "next_retry_at": next_retry_at,
+            "max_attempts": max_attempts,
+            "callback_id": callback_id,
+            "lease_token": lease_token,
         }
 
     monkeypatch.setattr("app.tasks.jobs._with_db", fake_with_db)
@@ -740,7 +765,8 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
     assert commits == 2
     assert recorded["result"]["job_id"] == job.id
     assert recorded["result"]["status"] == "failed"
-    assert recorded["result"]["attempts_increment"] == 1
     assert recorded["result"]["last_error"] == {"code": "CALLBACK_HTTP_ERROR", "status_code": 503}
     assert recorded["result"]["next_retry_at"] is not None
+    assert recorded["result"]["callback_id"] == callback_id
+    assert recorded["result"]["lease_token"] == lease_token
     assert job.status == "succeeded"

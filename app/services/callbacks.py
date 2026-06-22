@@ -136,7 +136,7 @@ def _callback_response_summary(
     }
 
 
-async def deliver_callback(job: Job) -> CallbackDeliveryResult:
+async def deliver_callback(job: Job, *, payload: dict[str, Any] | None = None) -> CallbackDeliveryResult:
     url = job.callback_url
     if not url:
         return CallbackDeliveryResult(status="skipped")
@@ -149,13 +149,16 @@ async def deliver_callback(job: Job) -> CallbackDeliveryResult:
             last_error={"code": "CALLBACK_URL_INVALID", "message": str(e)},
         )
 
-    event = "job.succeeded" if job.status == "succeeded" else "job.failed"
-    events = set(job.callback_events or ["job.succeeded", "job.failed"])
-    if event not in events:
-        return CallbackDeliveryResult(status="skipped")
-
     try:
-        callback_body = build_callback_body(job)
+        if payload is None:
+            event = "job.succeeded" if job.status == "succeeded" else "job.failed"
+            callback_events = job.callback_events if job.callback_events is not None else ["job.succeeded", "job.failed"]
+            events = set(callback_events)
+            if event not in events:
+                return CallbackDeliveryResult(status="skipped")
+            callback_body = build_callback_body(job)
+        else:
+            callback_body = payload
         body = json.dumps(callback_body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     except Exception as exc:
         logger.error("callback_body_invalid job_id=%s error_type=%s", job.id, type(exc).__name__, exc_info=True)

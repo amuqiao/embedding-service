@@ -5,7 +5,11 @@ from typing import Any
 from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.job import Job, JobAttempt, JobEvent
+from app.core.config import settings
+from app.core.error_registry import get_error_spec
+from app.models.job import CallbackOutbox, Job, JobAttempt, JobEvent
+
+CALLBACK_EVENT_NAMESPACE = "ai-job-callback"
 
 
 class JobRepo:
@@ -73,11 +77,144 @@ class JobRepo:
             job_params_hash=job_params_hash,
             callback_url=callback_url,
             callback_events=callback_events,
+            callback_status="pending" if callback_url else "not_configured",
         )
         db.add(job)
         await db.flush()
         await db.refresh(job)
         return job
+
+    @staticmethod
+    def _callback_events(job: Job) -> list[str]:
+        if job.callback_events is None:
+            return ["job.succeeded", "job.failed"]
+        return list(job.callback_events)
+
+    @staticmethod
+    def _terminal_callback_event_type(job: Job) -> str | None:
+        if job.status == "succeeded":
+            return "job.succeeded"
+        if job.status == "failed":
+            return "job.failed"
+        return None
+
+    @staticmethod
+    def _job_error_detail(error: dict[str, Any] | None) -> dict[str, Any] | None:
+        if error is None:
+            return None
+        reason = str(error.get("code") or "INTERNAL_ERROR")
+        details = dict(error.get("details")) if isinstance(error.get("details"), dict) else {}
+        for key, value in error.items():
+            if key not in {"code", "reason", "message", "details"}:
+                details[key] = value
+        return {
+            "reason": reason,
+            "details": details,
+            "retryable": get_error_spec(reason).retryable,
+        }
+
+    @staticmethod
+    def _trigger_request_id(job: Job) -> str | None:
+        runtime_ref = job.runtime_ref if isinstance(job.runtime_ref, dict) else {}
+        payload = runtime_ref.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        runtime_fields = payload.get("runtime_fields")
+        if not isinstance(runtime_fields, dict):
+            return None
+        system_fields = runtime_fields.get("_system")
+        if not isinstance(system_fields, dict):
+            return None
+        value = system_fields.get("trigger_request_id")
+        return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def _terminal_callback_payload(job: Job, *, event_id: uuid.UUID, event_type: str, now: datetime) -> dict[str, Any]:
+        progress_stage = "completed" if job.status == "succeeded" else "failed"
+        callback_status = "pending" if event_type in set(JobRepo._callback_events(job)) else "skipped"
+        return {
+            "event": event_type,
+            "event_id": str(event_id),
+            "attempt": 1,
+            "sent_at": now.isoformat(),
+            "trigger_request_id": JobRepo._trigger_request_id(job),
+            "caller_id": job.caller_id,
+            "job": {
+                "job_id": str(job.id),
+                "client_request_id": job.client_request_id,
+                "job_type": job.job_type,
+                "job_status": job.status,
+                "job_progress": {
+                    "percent": job.progress_percent or 0,
+                    "message": job.progress_text or progress_stage,
+                    "stage": progress_stage,
+                },
+                "job_result": job.result,
+                "job_error": JobRepo._job_error_detail(job.error),
+                "callback": {
+                    "status": callback_status,
+                    "attempt": 0,
+                    "last_error": None,
+                    "next_retry_at": now.isoformat() if callback_status == "pending" else None,
+                },
+                "status_url": f"{settings.SERVICE_API_PREFIX}/jobs/{job.id}",
+                "created_at": (job.created_at or now).isoformat(),
+                "updated_at": (job.updated_at or now).isoformat(),
+                "finished_at": (job.finished_at or now).isoformat(),
+            },
+        }
+
+    @staticmethod
+    async def ensure_terminal_callback_outbox(db: AsyncSession, job: Job, *, now: datetime) -> CallbackOutbox | None:
+        event_type = JobRepo._terminal_callback_event_type(job)
+        if not job.callback_url or event_type is None:
+            job.callback_status = "not_configured"
+            job.callback_attempts = 0
+            job.callback_next_retry_at = None
+            job.callback_last_error = None
+            return None
+
+        result = await db.execute(
+            select(CallbackOutbox)
+            .where(CallbackOutbox.job_id == job.id, CallbackOutbox.event_type == event_type)
+            .with_for_update(skip_locked=True)
+        )
+        existing = result.scalar_one_or_none()
+        if existing is not None:
+            job.callback_status = "failed" if existing.status == "dead_letter" else existing.status
+            job.callback_attempts = existing.delivery_attempt or 0
+            job.callback_next_retry_at = existing.next_attempt_at
+            job.callback_last_error = existing.last_error
+            return existing
+
+        subscribed = event_type in set(JobRepo._callback_events(job))
+        outbox_status = "pending" if subscribed else "skipped"
+        event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{CALLBACK_EVENT_NAMESPACE}:{job.id}:{event_type}")
+        outbox = CallbackOutbox(
+            job_id=job.id,
+            event_id=event_id,
+            event_type=event_type,
+            status=outbox_status,
+            payload=JobRepo._terminal_callback_payload(job, event_id=event_id, event_type=event_type, now=now),
+            next_attempt_at=now if subscribed else None,
+        )
+        db.add(outbox)
+        await db.flush()
+        job.callback_status = "pending" if subscribed else "skipped"
+        job.callback_attempts = 0
+        job.callback_next_retry_at = now if subscribed else None
+        job.callback_last_error = None
+        db.add(
+            JobEvent(
+                job_id=job.id,
+                callback_id=outbox.id,
+                event_type="callback.created" if subscribed else "callback.skipped",
+                to_status=outbox_status,
+                payload={"event_type": event_type, "event_id": str(event_id)},
+            )
+        )
+        await db.flush()
+        return outbox
 
     @staticmethod
     async def create_initial_attempt(db: AsyncSession, job: Job, *, timeout_seconds: int) -> JobAttempt:
@@ -342,7 +479,7 @@ class JobRepo:
             job.result = None
             job.error = error
             job.finished_at = now
-            job.callback_status = "pending" if job.callback_url else "not_configured"
+            await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
         job.last_heartbeat_at = now
         job.updated_at = now
         db.add(
@@ -515,10 +652,7 @@ class JobRepo:
         job.finished_at = now
         job.last_heartbeat_at = now
         job.updated_at = now
-        job.callback_status = "pending" if job.callback_url else "not_configured"
-        job.callback_attempts = 0
-        job.callback_next_retry_at = None
-        job.callback_last_error = None
+        await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
         await db.flush()
         return True
 
@@ -550,13 +684,11 @@ class JobRepo:
         job.finished_at = now
         job.last_heartbeat_at = now
         job.updated_at = now
-        job.callback_status = "pending" if job.callback_url else "not_configured"
-        job.callback_attempts = 0
-        job.callback_next_retry_at = None
-        job.callback_last_error = None
+        await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
         await db.flush()
         return True
 
+    @staticmethod
     async def mark_callback_delivering(
         db: AsyncSession,
         job_id: uuid.UUID,
@@ -564,30 +696,58 @@ class JobRepo:
         now: datetime,
         max_attempts: int,
         next_retry_at: datetime,
-    ) -> bool:
+    ) -> tuple[Job, CallbackOutbox] | None:
         result = await db.execute(
-            text(
-                "UPDATE jobs "
-                "SET callback_status='delivering', "
-                "callback_next_retry_at=:next_retry_at, "
-                "callback_first_attempt_at=COALESCE(callback_first_attempt_at, :now), "
-                "callback_last_attempt_at=:now, "
-                "updated_at=now() "
-                "WHERE id=:job_id AND status IN ('succeeded', 'failed') "
-                "AND callback_status IN ('pending', 'failed', 'delivering') "
-                "AND callback_attempts < :max_attempts "
-                "AND (callback_next_retry_at IS NULL OR callback_next_retry_at <= :now) "
-                "AND deleted_at IS NULL"
-            ),
-            {
-                "job_id": str(job_id),
-                "now": now,
-                "max_attempts": max_attempts,
-                "next_retry_at": next_retry_at,
-            },
+            select(Job, CallbackOutbox)
+            .join(CallbackOutbox, CallbackOutbox.job_id == Job.id)
+            .where(
+                Job.id == job_id,
+                Job.status.in_(["succeeded", "failed"]),
+                Job.deleted_at.is_(None),
+                CallbackOutbox.status.in_(["pending", "failed", "leased"]),
+                CallbackOutbox.delivery_attempt < max_attempts,
+                or_(
+                    CallbackOutbox.next_attempt_at.is_(None),
+                    CallbackOutbox.next_attempt_at <= now,
+                    and_(CallbackOutbox.status == "leased", CallbackOutbox.lease_expires_at <= now),
+                ),
+            )
+            .order_by(CallbackOutbox.next_attempt_at.asc().nullsfirst(), CallbackOutbox.created_at.asc())
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        row = result.one_or_none()
+        if row is None:
+            return None
+        job, outbox = row
+        if outbox.status == "leased" and outbox.lease_expires_at and outbox.lease_expires_at > now:
+            return None
+        previous_status = outbox.status
+        outbox.status = "leased"
+        outbox.lease_token = uuid.uuid4()
+        outbox.lease_expires_at = next_retry_at
+        outbox.delivery_attempt = (outbox.delivery_attempt or 0) + 1
+        outbox.first_attempt_at = outbox.first_attempt_at or now
+        outbox.last_attempt_at = now
+        outbox.updated_at = now
+        job.callback_status = "delivering"
+        job.callback_attempts = outbox.delivery_attempt
+        job.callback_first_attempt_at = job.callback_first_attempt_at or now
+        job.callback_last_attempt_at = now
+        job.callback_next_retry_at = next_retry_at
+        job.updated_at = now
+        db.add(
+            JobEvent(
+                job_id=job.id,
+                callback_id=outbox.id,
+                event_type="callback.leased",
+                from_status=previous_status,
+                to_status="leased",
+                payload={"event_type": outbox.event_type, "delivery_attempt": outbox.delivery_attempt},
+            )
         )
         await db.flush()
-        return result.rowcount == 1
+        return job, outbox
 
     @staticmethod
     async def mark_callback_result(
@@ -595,25 +755,81 @@ class JobRepo:
         job_id: uuid.UUID,
         *,
         status: str,
-        attempts_increment: int,
         last_error: dict[str, Any] | None,
         next_retry_at: datetime | None,
+        max_attempts: int,
+        callback_id: uuid.UUID | None = None,
+        lease_token: uuid.UUID | None = None,
     ) -> None:
-        job = await JobRepo.get(db, job_id)
-        if job:
-            now = datetime.now(timezone.utc)
-            job.callback_status = status
-            job.callback_attempts = (job.callback_attempts or 0) + attempts_increment
+        conditions = [Job.id == job_id, CallbackOutbox.job_id == Job.id]
+        if callback_id is not None:
+            conditions.append(CallbackOutbox.id == callback_id)
+        else:
+            conditions.append(CallbackOutbox.status == "leased")
+        if lease_token is not None:
+            conditions.extend([CallbackOutbox.status == "leased", CallbackOutbox.lease_token == lease_token])
+        result = await db.execute(select(Job, CallbackOutbox).where(*conditions).with_for_update(skip_locked=True))
+        row = result.one_or_none()
+        if row is None:
+            return
+
+        job, outbox = row
+        now = datetime.now(timezone.utc)
+        previous_status = outbox.status
+        outbox.lease_token = None
+        outbox.lease_expires_at = None
+        outbox.last_error = last_error
+        outbox.updated_at = now
+        if status == "delivered":
+            outbox.status = "delivered"
+            outbox.next_attempt_at = None
+            outbox.delivered_at = now
+            job.callback_status = "delivered"
+            job.callback_delivered_at = now
+            job.callback_next_retry_at = None
+            job.callback_last_error = None
+        elif status == "skipped":
+            outbox.status = "skipped"
+            outbox.next_attempt_at = None
+            job.callback_status = "skipped"
+            job.callback_next_retry_at = None
             job.callback_last_error = last_error
+        elif status == "failed" and (outbox.delivery_attempt or 0) >= max_attempts:
+            outbox.status = "dead_letter"
+            outbox.next_attempt_at = None
+            outbox.dead_lettered_at = now
+            job.callback_status = "failed"
+            job.callback_failed_at = now
+            job.callback_next_retry_at = None
+            job.callback_last_error = last_error
+        elif status == "failed":
+            outbox.status = "failed"
+            outbox.next_attempt_at = next_retry_at
+            job.callback_status = "pending"
             job.callback_next_retry_at = next_retry_at
-            job.callback_first_attempt_at = job.callback_first_attempt_at or now
-            job.callback_last_attempt_at = now
-            if status == "delivered":
-                job.callback_delivered_at = now
-            elif status == "failed":
-                job.callback_failed_at = now
-            job.updated_at = now
-            await db.flush()
+            job.callback_last_error = last_error
+        else:
+            raise ValueError(f"unsupported callback result status: {status}")
+
+        job.callback_attempts = outbox.delivery_attempt or 0
+        job.callback_first_attempt_at = job.callback_first_attempt_at or outbox.first_attempt_at or now
+        job.callback_last_attempt_at = outbox.last_attempt_at or now
+        job.updated_at = now
+        db.add(
+            JobEvent(
+                job_id=job.id,
+                callback_id=outbox.id,
+                event_type=f"callback.{outbox.status}",
+                from_status=previous_status,
+                to_status=outbox.status,
+                payload={
+                    "event_type": outbox.event_type,
+                    "delivery_attempt": outbox.delivery_attempt,
+                    "last_error": last_error,
+                },
+            )
+        )
+        await db.flush()
 
     @staticmethod
     async def find_due_callbacks(
@@ -625,14 +841,19 @@ class JobRepo:
     ) -> list[Job]:
         result = await db.execute(
             select(Job)
+            .join(CallbackOutbox, CallbackOutbox.job_id == Job.id)
             .where(
                 Job.status.in_(["succeeded", "failed"]),
-                Job.callback_status.in_(["pending", "failed", "delivering"]),
-                Job.callback_attempts < max_attempts,
-                or_(Job.callback_next_retry_at.is_(None), Job.callback_next_retry_at <= now),
                 Job.deleted_at.is_(None),
+                CallbackOutbox.status.in_(["pending", "failed", "leased"]),
+                CallbackOutbox.delivery_attempt < max_attempts,
+                or_(
+                    CallbackOutbox.next_attempt_at.is_(None),
+                    CallbackOutbox.next_attempt_at <= now,
+                    and_(CallbackOutbox.status == "leased", CallbackOutbox.lease_expires_at <= now),
+                ),
             )
-            .order_by(Job.finished_at.asc(), Job.created_at.asc())
+            .order_by(CallbackOutbox.next_attempt_at.asc().nullsfirst(), CallbackOutbox.created_at.asc())
             .limit(limit)
         )
         return list(result.scalars().all())

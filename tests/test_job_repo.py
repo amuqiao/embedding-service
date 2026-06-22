@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from app.models.job import Job, JobAttempt
+from app.models.job import CallbackOutbox, Job, JobAttempt
 from app.repositories.job_repo import JobRepo
 
 
@@ -172,6 +172,117 @@ async def test_mark_succeeded_persists_public_and_canonical_results():
     assert job.canonical_result_ref == {"oss_key": "result.json"}
     assert job.error is None
     assert job.callback_status == "not_configured"
+
+
+@pytest.mark.asyncio
+async def test_mark_succeeded_creates_pending_callback_outbox_for_subscribed_event():
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="client-1",
+        job_type="test.echo",
+        status="running",
+        execution_token="task-1",
+        progress_percent=30,
+        metadata_={},
+        callback_url="https://example.com/callback",
+        callback_events=["job.succeeded"],
+        runtime_ref={
+            "payload": {
+                "runtime_fields": {"_system": {"trigger_request_id": "req-trigger-1"}},
+            },
+        },
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    db = _FakeDB()
+    db.results.extend([_ScalarResult(job), _ScalarResult(None)])
+
+    updated = await JobRepo.mark_succeeded(
+        db,
+        job.id,
+        execution_token="task-1",
+        result={"public": True},
+    )
+
+    outboxes = [item for item in db.added if isinstance(item, CallbackOutbox)]
+    assert updated is True
+    assert job.status == "succeeded"
+    assert job.callback_status == "pending"
+    assert len(outboxes) == 1
+    assert outboxes[0].job_id == job.id
+    assert outboxes[0].event_type == "job.succeeded"
+    assert outboxes[0].status == "pending"
+    assert outboxes[0].next_attempt_at is not None
+    assert outboxes[0].payload["event_id"] == str(outboxes[0].event_id)
+    assert outboxes[0].payload["trigger_request_id"] == "req-trigger-1"
+    assert outboxes[0].payload["job"]["callback"]["status"] == "pending"
+    assert outboxes[0].payload["job"]["job_progress"]["stage"] == "completed"
+    assert outboxes[0].payload["job"]["job_status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_creates_skipped_callback_outbox_for_unsubscribed_event():
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="client-1",
+        job_type="test.echo",
+        status="running",
+        execution_token="task-1",
+        progress_percent=30,
+        metadata_={},
+        callback_url="https://example.com/callback",
+        callback_events=["job.succeeded"],
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    db = _FakeDB()
+    db.results.extend([_ScalarResult(job), _ScalarResult(None)])
+
+    updated = await JobRepo.mark_failed(
+        db,
+        job.id,
+        {"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {}},
+        execution_token="task-1",
+    )
+
+    outboxes = [item for item in db.added if isinstance(item, CallbackOutbox)]
+    assert updated is True
+    assert job.status == "failed"
+    assert job.callback_status == "skipped"
+    assert job.callback_next_retry_at is None
+    assert len(outboxes) == 1
+    assert outboxes[0].job_id == job.id
+    assert outboxes[0].event_type == "job.failed"
+    assert outboxes[0].status == "skipped"
+    assert outboxes[0].next_attempt_at is None
+    assert outboxes[0].payload["job"]["job_error"] == {
+        "reason": "JOB_EXECUTION_FAILED",
+        "details": {},
+        "retryable": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_mark_callback_result_filters_by_callback_lease_token():
+    db = _FakeDB()
+    db.results.append(_NoRowResult())
+
+    await JobRepo.mark_callback_result(
+        db,
+        uuid.uuid4(),
+        status="delivered",
+        last_error=None,
+        next_retry_at=None,
+        max_attempts=3,
+        callback_id=uuid.uuid4(),
+        lease_token=uuid.uuid4(),
+    )
+
+    sql = _compile(db.statements[0])
+    assert "callback_outbox.lease_token" in sql
+    assert db.flushed is False
 
 
 @pytest.mark.asyncio
