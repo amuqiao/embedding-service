@@ -153,14 +153,14 @@ OSS_PUBLIC_ENDPOINT=
 - `test`：运行本地 pytest。
 - `smoke` / `mock-smoke` / `workflow-smoke` / `e2e`：当前未接入正式 LLM `job_type`，新增正式模型能力后再恢复对应验证；不依赖模型的 `arithmetic` 能力由 pytest 覆盖。
 - `oss`：校验 Aliyun OSS 读写删除连通性。
-- `check`：运行脚本语法检查和 pytest。
+- `check`：运行脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest。
 
-脚本入口采用“中控脚本 + 子目录原子脚本”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/deploy.sh` 只调度 compose 部署能力，公共 shell 工具位于 `scripts/lib/`。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
+脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/deploy.sh` 只调度 compose 部署能力。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
 
 入口脚本约束：
 
 - 外层入口脚本只做参数分发、帮助说明和稳定命令面，不承载具体业务实现。
-- 具体能力下沉到职责对应的子目录原子脚本；公共 shell 能力放在 `scripts/lib/`。
+- 具体能力下沉到职责对应的子目录原子脚本；公共 shell 能力按 `common.sh`、`runtime.sh`、`compose.sh` 分层放在 `scripts/lib/`。
 - `scripts/dev.sh` 只管理本地服务生命周期和本地开发端口探测；验证、对象存储连通性等一次性任务放在 `scripts/verify.sh`。
 - `scripts/deploy.sh` 只管理 `compose-deps` 和 `compose-full`，不管理 `local` 本地服务生命周期。
 - 不新增 silent fallback、默认吞错或跨职责兼容别名；命令不满足前置条件时应直接报错。

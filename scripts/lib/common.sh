@@ -38,18 +38,6 @@ require_executable() {
   [[ -x "$path" ]] || die "$path not found or not executable; $hint" 2
 }
 
-compose() {
-  if docker compose version >/dev/null 2>&1; then
-    docker compose "$@"
-    return
-  fi
-  if command -v docker-compose >/dev/null 2>&1; then
-    docker-compose "$@"
-    return
-  fi
-  die "Docker Compose is not available. Install Docker Desktop or docker-compose." 2
-}
-
 env_value() {
   local key="$1"
   [[ -f "$ROOT_DIR/.env" ]] || return 0

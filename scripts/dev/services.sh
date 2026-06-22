@@ -2,20 +2,8 @@
 
 DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$(cd "$DEV_DIR/../.." && pwd)}"
-source "$ROOT_DIR/scripts/lib/common.sh"
-
-API_HOST="${API_HOST:-$(env_value API_HOST)}"
-API_HOST="${API_HOST:-127.0.0.1}"
-API_PORT="${API_PORT:-$(env_value API_PORT)}"
-API_PORT="${API_PORT:-8100}"
-API_URL="${API_URL:-http://${API_HOST}:${API_PORT}}"
-API_DOCS_URL="${API_DOCS_URL:-${API_URL}/docs}"
-API_OPENAPI_URL="${API_OPENAPI_URL:-${API_URL}/openapi.json}"
-API_HEALTH_URL="${API_HEALTH_URL:-${API_URL}/health}"
-DEV_API_RELOAD="${DEV_API_RELOAD:-$(env_value DEV_API_RELOAD)}"
-DEV_API_RELOAD="${DEV_API_RELOAD:-true}"
-WATCHFILES_FORCE_POLLING="${WATCHFILES_FORCE_POLLING:-$(env_value WATCHFILES_FORCE_POLLING)}"
-WATCHFILES_FORCE_POLLING="${WATCHFILES_FORCE_POLLING:-true}"
+source "$ROOT_DIR/scripts/lib/runtime.sh"
+source "$ROOT_DIR/scripts/lib/compose.sh"
 
 APP_SERVICES=(api worker)
 DEP_SERVICES=(postgres redis)
@@ -48,11 +36,7 @@ service_url() {
 }
 
 api_reload_enabled() {
-  case "$DEV_API_RELOAD" in
-    true|True|TRUE) return 0 ;;
-    false|False|FALSE) return 1 ;;
-    *) die "DEV_API_RELOAD must be true or false" 2 ;;
-  esac
+  bool_enabled DEV_API_RELOAD "$DEV_API_RELOAD"
 }
 
 service_command() {
@@ -63,7 +47,7 @@ service_command() {
           "$API_HOST" \
           "$API_PORT" \
           "$WATCHFILES_FORCE_POLLING" \
-          "$ROOT_DIR/.venv/bin/python" \
+          "$PYTHON_BIN" \
           "$API_HOST" \
           "$API_PORT" \
           "$ROOT_DIR/app"
@@ -216,8 +200,8 @@ stop_dependencies() {
 migrate() {
   guard_local_env
   section "Database"
-  require_executable "$ROOT_DIR/.venv/bin/alembic" "run: ./scripts/dev.sh bootstrap"
-  "$ROOT_DIR/.venv/bin/alembic" upgrade head
+  require_executable "$ALEMBIC_BIN" "run: ./scripts/dev.sh bootstrap"
+  "$ALEMBIC_BIN" upgrade head
 }
 
 start_service() {
@@ -228,10 +212,10 @@ start_service() {
   local command
 
   require_app_service "$service"
-  require_executable "$ROOT_DIR/.venv/bin/python" "run: ./scripts/dev.sh bootstrap"
+  require_project_python
   if [[ "$service" == "api" ]]; then
     if api_reload_enabled; then
-      require_executable "$ROOT_DIR/.venv/bin/uvicorn" "run: ./scripts/dev.sh bootstrap"
+      require_executable "$UVICORN_BIN" "run: ./scripts/dev.sh bootstrap"
     else
       require_executable "$ROOT_DIR/start-api.sh" "missing start-api.sh"
     fi
@@ -454,8 +438,8 @@ status_target() {
 }
 
 scan_ports() {
-  if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
-    "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/dev/check_ports.py" "$@"
+  if [[ -x "$PYTHON_BIN" ]]; then
+    "$PYTHON_BIN" "$ROOT_DIR/scripts/dev/check_ports.py" "$@"
     return
   fi
   if command -v python3 >/dev/null 2>&1; then

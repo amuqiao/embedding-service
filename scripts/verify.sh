@@ -26,11 +26,11 @@ usage() {
   e2e                 无正式 job_type 时不可用；新增正式能力后再恢复。
   oss                 校验 Aliyun OSS 读写删除连通性，参数透传给 check_aliyun_oss.py。
   env-config          校验 env 文件键名；默认检查 .env.example 和已存在的本地/测试 env，可传文件路径。
-  check               执行脚本语法、env 配置、registry consistency 和 pytest。
+  check               执行脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest。
   help                显示帮助。
 
 成功标准：
-  check 成功 = 脚本语法、env 配置、registry consistency 和 pytest 均通过。
+  check 成功 = 脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest 均通过。
 EOF
 }
 

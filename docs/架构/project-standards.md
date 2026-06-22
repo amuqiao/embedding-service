@@ -950,7 +950,7 @@ integrations/rs
 - `./scripts/verify.sh`：一次性验证。
 - `./scripts/deploy.sh`：compose 部署形态。
 
-脚本入口只做参数分发和稳定命令面，具体能力下沉到子目录原子脚本。脚本不得管理其他仓库、远程数据库、生产平台或跨项目清理。
+脚本入口只做参数分发和稳定命令面，具体能力下沉到子目录原子脚本。公共 shell 能力按职责放在 `scripts/lib/common.sh`、`scripts/lib/runtime.sh` 和 `scripts/lib/compose.sh`。脚本不得管理其他仓库、远程数据库、生产平台或跨项目清理。
 
 ## 验收基线
 
@@ -972,4 +972,4 @@ integrations/rs
 - Metrics 测试覆盖最小指标和高基数标签禁区。
 - `job_params` / `job_result` 中对象存储引用的 hash、大小、权限和过期策略测试。
 
-`./scripts/verify.sh check` 必须执行配置检查、脚本检查、Python 语法检查、测试和 registry consistency suite。新增规范检查应优先纳入该入口。
+`./scripts/verify.sh check` 必须执行脚本语法检查、稳定入口 help 检查、Python 语法检查、配置检查、测试和 registry consistency suite。新增规范检查应优先纳入该入口。

@@ -11,21 +11,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-.env}"
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-cms-story-tagger}"
+source "$ROOT_DIR/scripts/lib/common.sh"
+source "$ROOT_DIR/scripts/lib/compose.sh"
 
 cd "$ROOT_DIR"
-
-section() {
-  printf "\n== %s ==\n" "$1"
-}
-
-event() {
-  printf "%-9s %-14s %s\n" "$1" "$2" "${3:-}"
-}
-
-die() {
-  printf "ERROR: %s\n" "$1" >&2
-  exit "${2:-1}"
-}
 
 usage() {
   cat <<EOF
@@ -49,18 +38,6 @@ usage() {
   本脚本只管理 compose-deps / compose-full。
   不管理 local 本地服务生命周期、一次性验证任务、生产部署、远程数据库、K8s 或云平台资源。
 EOF
-}
-
-compose() {
-  if docker compose version >/dev/null 2>&1; then
-    ENV_FILE="$ENV_FILE" COMPOSE_PROJECT_NAME="$PROJECT_NAME" docker compose "$@"
-    return
-  fi
-  if command -v docker-compose >/dev/null 2>&1; then
-    ENV_FILE="$ENV_FILE" COMPOSE_PROJECT_NAME="$PROJECT_NAME" docker-compose "$@"
-    return
-  fi
-  die "Docker Compose is not available. Install Docker Desktop or docker-compose." 2
 }
 
 require_file() {
