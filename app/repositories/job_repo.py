@@ -157,7 +157,7 @@ class JobRepo:
                     "last_error": None,
                     "next_retry_at": now.isoformat() if callback_status == "pending" else None,
                 },
-                "status_url": f"{settings.SERVICE_API_PREFIX}/jobs/{job.id}",
+                "status_url": f"{settings.service.api_prefix}/jobs/{job.id}",
                 "created_at": (job.created_at or now).isoformat(),
                 "updated_at": (job.updated_at or now).isoformat(),
                 "finished_at": (job.finished_at or now).isoformat(),

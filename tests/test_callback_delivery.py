@@ -3,11 +3,12 @@ import hmac
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
-from app.core.config import settings
 from app.core.exceptions import AppError
+from app.main import API_PREFIX
 from app.models.job import Job
 from app.schemas.jobs import CallbackResponseEnvelope
 from app.services.callbacks import (
@@ -20,6 +21,28 @@ from app.services.job_runtime import payload_hash
 from app.services.jobs import _job_to_response
 
 _ACK_HEADERS = {"Content-Type": "application/json"}
+
+
+def _callback_settings(**overrides):
+    values = {
+        "ALLOW_INSECURE_CALLBACKS": False,
+        "CALLBACK_SIGNING_SECRET": "test-callback-secret",
+        "CALLBACK_TIMEOUT_SECONDS": 5,
+    }
+    values.update(overrides)
+    return SimpleNamespace(
+        callback=SimpleNamespace(
+            signing_secret_value=values["CALLBACK_SIGNING_SECRET"],
+            allow_insecure_callbacks=values["ALLOW_INSECURE_CALLBACKS"],
+            timeout_seconds=values["CALLBACK_TIMEOUT_SECONDS"],
+        ),
+    )
+
+
+def _patch_callback_settings(monkeypatch, **overrides) -> None:
+    import app.services.callbacks as callbacks_module
+
+    monkeypatch.setattr(callbacks_module, "settings", _callback_settings(**overrides))
 
 
 @pytest.fixture(autouse=True)
@@ -119,7 +142,7 @@ def test_build_callback_body_uses_public_fields():
             "last_error": None,
             "next_retry_at": None,
         },
-        "status_url": f"{settings.SERVICE_API_PREFIX}/jobs/{job.id}",
+        "status_url": f"{API_PREFIX}/jobs/{job.id}",
         "created_at": job.created_at.isoformat().replace("+00:00", "Z"),
         "updated_at": job.updated_at.isoformat().replace("+00:00", "Z"),
         "finished_at": job.finished_at.isoformat().replace("+00:00", "Z"),
@@ -308,7 +331,7 @@ async def test_deliver_callback_revalidates_resolved_callback_ip(monkeypatch):
 
 
 def test_callback_signature_requires_non_empty_secret(monkeypatch):
-    monkeypatch.setattr(settings, "CALLBACK_SIGNING_SECRET", "")
+    _patch_callback_settings(monkeypatch, CALLBACK_SIGNING_SECRET="")
 
     with pytest.raises(ValueError, match="CALLBACK_SIGNING_SECRET"):
         _sign("2026-06-21T00:00:00+00:00", b"{}")
@@ -393,7 +416,7 @@ async def test_deliver_callback_uses_shell_callback_fields(monkeypatch):
             return _Response()
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
-    monkeypatch.setattr(settings, "CALLBACK_SIGNING_SECRET", "callback-secret")
+    _patch_callback_settings(monkeypatch, CALLBACK_SIGNING_SECRET="callback-secret")
     job = _job("https://shell.example.com/callback")
     job.callback_events = ["job.succeeded"]
 

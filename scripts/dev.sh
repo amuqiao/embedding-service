@@ -28,7 +28,7 @@ usage() {
             worker 代码变更后使用 ./scripts/dev.sh restart worker。
 
 命令：
-  bootstrap           缺少 .env 时从 .env.example 创建，并执行 uv sync。
+  bootstrap           缺少 .env / scripts/.env 时分别从对应 example 创建，并执行 uv sync。
   start [service]     启动服务；不传 service 时启动依赖、执行迁移、启动 api 和 worker。
   stop [service]      停止服务；不传 service 时停止 api、worker、postgres 和 redis。
   restart [service]   重启服务；不传 service 时重启完整本地服务栈。
@@ -46,6 +46,7 @@ usage() {
   日志: ${LOG_DIR}/api.log, ${LOG_DIR}/worker.log
 
 保护边界：
+  应用配置写入 .env；脚本端口、compose 项目名和 worker 启动参数写入 scripts/.env。
   生命周期和迁移动作会拒绝非本地 DATABASE_URL / REDIS_URL。
   未知 service 会直接报错。
   启动 api 前会检查端口 ${API_PORT} 是否已被其他进程占用。

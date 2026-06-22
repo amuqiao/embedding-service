@@ -1,4 +1,3 @@
-import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,9 +25,9 @@ class TextModel:
 
 def _load_model_config() -> dict[str, Any]:
     try:
-        raw = settings.model_config_path.read_text(encoding="utf-8")
+        raw = settings.registry.model_config_path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
-        raise RuntimeError(f"model config not found: {settings.model_config_path}") from exc
+        raise RuntimeError(f"model config not found: {settings.registry.model_config_path}") from exc
     data = yaml.safe_load(raw)
     if not isinstance(data, dict):
         raise RuntimeError("model config must be a YAML object")
@@ -64,10 +63,7 @@ def _requires_env(config: dict[str, Any], model_id: str) -> tuple[str, ...]:
 
 
 def _env_value(name: str) -> str:
-    value = getattr(settings, name, "")
-    if isinstance(value, str) and value:
-        return value
-    return os.getenv(name, "")
+    return settings.application_env_value(name)
 
 
 def _model_is_available(model: TextModel) -> bool:
@@ -136,9 +132,7 @@ def _models() -> list[TextModel]:
 
 def list_models_response() -> ModelsResponse:
     models = [model for model in _models() if _model_is_available(model)]
-    default = settings.DEFAULT_MODEL_ID
-    if default not in {m.id for m in models} and models:
-        default = models[0].id
+    default = settings.registry.default_model_id
     return ModelsResponse(
         default_model_id=default,
         models=[

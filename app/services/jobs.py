@@ -33,15 +33,15 @@ logger = logging.getLogger(__name__)
 
 
 def _status_url(job_id: uuid.UUID) -> str:
-    return f"{settings.SERVICE_API_PREFIX}/jobs/{job_id}"
+    return f"{settings.service.api_prefix}/jobs/{job_id}"
 
 
 def _configured_oss_bucket() -> str:
-    return settings.OSS_BUCKET or "local-dev"
+    return settings.storage.oss_bucket or "local-dev"
 
 
 def _configured_oss_region() -> str:
-    return settings.OSS_REGION or "local"
+    return settings.storage.oss_region or "local"
 
 
 def _canonical_callback(callback: Any) -> dict[str, Any] | None:
@@ -232,7 +232,7 @@ def _validate_callback(callback: Any) -> None:
     try:
         validate_callback_url_security(
             callback.url,
-            allow_insecure_local=settings.ALLOW_INSECURE_CALLBACKS,
+            allow_insecure_local=settings.callback.allow_insecure_callbacks,
         )
     except ValueError as exc:
         raise ValidationAppError("INVALID_INPUT", str(exc)) from exc
@@ -337,21 +337,21 @@ async def create_job(
             )
         return existing, False
 
-    if settings.MAX_ACTIVE_JOBS > 0:
+    if settings.job.max_active_jobs > 0:
         await db.execute(text("SELECT pg_advisory_lock(hashtext('max_active_jobs_gate'))"))
         try:
             active = await JobRepo.count_active_jobs(db)
         finally:
             await db.execute(text("SELECT pg_advisory_unlock(hashtext('max_active_jobs_gate'))"))
-        if active >= settings.MAX_ACTIVE_JOBS:
+        if active >= settings.job.max_active_jobs:
             raise AppError(
                 "QUEUE_FULL",
                 "服务当前繁忙，请稍后重试",
                 status_code=503,
-                details={"active_jobs": active, "limit": settings.MAX_ACTIVE_JOBS},
+                details={"active_jobs": active, "limit": settings.job.max_active_jobs},
             )
 
-    timeout_seconds = int(getattr(handler, "timeout_seconds", settings.MODEL_CALL_TIMEOUT_SECONDS))
+    timeout_seconds = int(getattr(handler, "timeout_seconds", settings.ai_provider.model_call_timeout_seconds))
     max_attempts = int(getattr(handler, "max_attempts", 1))
     job = await JobRepo.create(
         db,
@@ -475,7 +475,7 @@ def _load_input_text(job: Job) -> str:
         raise AppError("OSS_FETCH_FAILED", "OSS 对象读取失败", status_code=422) from exc
 
     data = text.encode("utf-8")
-    if len(data) > settings.OSS_INPUT_MAX_BYTES:
+    if len(data) > settings.job.oss_input_max_bytes:
         raise AppError("INPUT_TOO_LARGE", "OSS input exceeds service limit", status_code=422)
     expected_hash = oss_payload.get("content_hash")
     if expected_hash and sha256_digest(data) != expected_hash:

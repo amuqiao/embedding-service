@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def _make_session():
-    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    engine = create_async_engine(settings.database.url, poolclass=NullPool)
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 
@@ -38,14 +38,14 @@ async def _run_recovery(db: AsyncSession) -> dict:
         due_attempts = await JobRepo.find_dispatch_due_attempts(
             db,
             now,
-            limit=settings.JOB_RECOVERY_BATCH_SIZE,
+            limit=settings.job.recovery_batch_size,
         )
         dispatch_attempts.extend(attempt.id for attempt in due_attempts)
 
         stale_attempts = await JobRepo.find_stale_running_attempts(
             db,
             now,
-            limit=settings.JOB_RECOVERY_BATCH_SIZE,
+            limit=settings.job.recovery_batch_size,
         )
         for attempt in stale_attempts:
             error = {
@@ -73,8 +73,8 @@ async def _run_recovery(db: AsyncSession) -> dict:
         due_callbacks = await JobRepo.find_due_callbacks(
             db,
             now=now,
-            max_attempts=settings.CALLBACK_MAX_DELIVERY_ATTEMPTS,
-            limit=settings.JOB_RECOVERY_CALLBACK_BATCH_SIZE,
+            max_attempts=settings.callback.max_delivery_attempts,
+            limit=settings.job.recovery_callback_batch_size,
         )
         callback_due.extend(str(job.id) for job in due_callbacks)
 

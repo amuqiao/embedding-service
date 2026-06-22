@@ -121,7 +121,7 @@ def validate_app_route_operations(app) -> None:
         methods = {method for method in route.methods or set() if method not in {"HEAD", "OPTIONS"}}
         if methods != {spec.method}:
             raise ValueError(f"operation {operation_id} method mismatch: route={sorted(methods)} spec={spec.method}")
-        expected_path = f"{settings.SERVICE_API_PREFIX}{spec.path}"
+        expected_path = f"{settings.service.api_prefix}{spec.path}"
         if route.path != expected_path:
             raise ValueError(f"operation {operation_id} path mismatch: route={route.path} spec={expected_path}")
         operation = _openapi_operation(app, expected_path, spec.method)

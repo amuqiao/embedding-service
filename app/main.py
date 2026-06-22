@@ -23,7 +23,7 @@ from app.jobs.types.register import register_all_job_types
 
 logger = logging.getLogger(__name__)
 
-API_PREFIX = settings.SERVICE_API_PREFIX
+API_PREFIX = settings.service.api_prefix
 
 
 def _remove_http_bearer_security(schema: dict) -> None:
@@ -256,7 +256,7 @@ def _request_id(request: Request) -> str:
 def bootstrap_runtime() -> None:
     register_all_job_types()
     configure_logging()
-    logger.info("app_start service=%s version=0.1.0", settings.SERVICE_NAME)
+    logger.info("app_start service=%s version=0.1.0", settings.service.name)
 
 
 def install_openapi(application: FastAPI) -> None:
@@ -269,9 +269,9 @@ def install_openapi(application: FastAPI) -> None:
             version=application.version,
             routes=application.routes,
         )
-        if settings.DISABLE_HTTP_AUTH_HEADER:
+        if settings.security.disable_http_auth_header:
             _remove_http_bearer_security(schema)
-        if settings.DISABLE_CALLER_ID_HEADER:
+        if settings.security.disable_caller_id_header:
             _remove_caller_id_header_parameter(schema)
         _install_envelope_openapi_contract(schema)
         application.openapi_schema = schema
@@ -283,7 +283,7 @@ def install_openapi(application: FastAPI) -> None:
 def install_middlewares(application: FastAPI) -> None:
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.allowed_origins,
+        allow_origins=settings.security.allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -368,7 +368,7 @@ def include_routes(application: FastAPI) -> None:
 
 def create_app() -> FastAPI:
     bootstrap_runtime()
-    application = FastAPI(title=settings.SERVICE_TITLE, version="0.1.0")
+    application = FastAPI(title=settings.service.title, version="0.1.0")
     install_openapi(application)
     install_middlewares(application)
     install_exception_handlers(application)

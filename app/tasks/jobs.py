@@ -34,7 +34,7 @@ def _ensure_workflows_registered() -> None:
 
 
 def _session_factory():
-    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    engine = create_async_engine(settings.database.url, poolclass=NullPool)
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 
@@ -78,7 +78,7 @@ async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
                 db,
                 attempt_id,
                 error=error,
-                next_dispatch_at=datetime.now(timezone.utc) + timedelta(seconds=settings.JOB_ORPHAN_TIMEOUT_SECONDS),
+                next_dispatch_at=datetime.now(timezone.utc) + timedelta(seconds=settings.job.orphan_timeout_seconds),
             )
             if recorded:
                 await db.commit()
@@ -92,7 +92,7 @@ async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
         await JobRepo.mark_attempt_published(
             db,
             attempt_id,
-            next_dispatch_at=datetime.now(timezone.utc) + timedelta(seconds=settings.JOB_ORPHAN_TIMEOUT_SECONDS),
+            next_dispatch_at=datetime.now(timezone.utc) + timedelta(seconds=settings.job.orphan_timeout_seconds),
         )
         await db.commit()
 
@@ -192,12 +192,12 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
         if not job.callback_url:
             return False
         now = datetime.now(timezone.utc)
-        delivery_deadline = now + timedelta(seconds=settings.callback_delivery_timeout_seconds)
+        delivery_deadline = now + timedelta(seconds=settings.callback.delivery_timeout_seconds)
         claimed = await JobRepo.mark_callback_delivering(
             db,
             job.id,
             now=now,
-            max_attempts=settings.CALLBACK_MAX_DELIVERY_ATTEMPTS,
+            max_attempts=settings.callback.max_delivery_attempts,
             next_retry_at=delivery_deadline,
         )
         await db.commit()
@@ -209,15 +209,15 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
         claimed_job.callback_next_retry_at = delivery_deadline
         result = await deliver_callback(claimed_job, payload=outbox.payload)
         next_retry_at = None
-        if result.status == "failed" and outbox.delivery_attempt < settings.CALLBACK_MAX_DELIVERY_ATTEMPTS:
-            next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=settings.CALLBACK_RETRY_DELAY_SECONDS)
+        if result.status == "failed" and outbox.delivery_attempt < settings.callback.max_delivery_attempts:
+            next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=settings.callback.retry_delay_seconds)
         await JobRepo.mark_callback_result(
             db,
             claimed_job.id,
             status=result.status,
             last_error=result.last_error,
             next_retry_at=next_retry_at,
-            max_attempts=settings.CALLBACK_MAX_DELIVERY_ATTEMPTS,
+            max_attempts=settings.callback.max_delivery_attempts,
             callback_id=outbox.id,
             lease_token=outbox.lease_token,
         )

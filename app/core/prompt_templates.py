@@ -10,9 +10,9 @@ PROMPT_BLOCK_ORDER = ("user", "work_note")
 
 def _load_prompt_config() -> dict[str, Any]:
     try:
-        raw = settings.prompt_config_path.read_text(encoding="utf-8")
+        raw = settings.registry.prompt_config_path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
-        raise RuntimeError(f"prompt config not found: {settings.prompt_config_path}") from exc
+        raise RuntimeError(f"prompt config not found: {settings.registry.prompt_config_path}") from exc
     data = yaml.safe_load(raw)
     if not isinstance(data, dict):
         raise RuntimeError("prompt config must be a YAML object")

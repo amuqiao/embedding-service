@@ -1,11 +1,35 @@
 import uuid
 from datetime import datetime
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from app.core.config import settings
+from app.core import config as config_module
 from app.core.database import get_db
 from app.core.security import require_service_auth
+from app.main import API_PREFIX
+
+
+def _security_settings(**overrides):
+    values = {
+        "DISABLE_CALLER_ID_HEADER": False,
+        "DISABLE_HTTP_AUTH_HEADER": False,
+        "SERVICE_API_KEY": "test-token",
+    }
+    values.update(overrides)
+    return SimpleNamespace(
+        security=config_module.SecuritySettings(
+            service_api_key=values["SERVICE_API_KEY"],
+            disable_http_auth_header=values["DISABLE_HTTP_AUTH_HEADER"],
+            disable_caller_id_header=values["DISABLE_CALLER_ID_HEADER"],
+        ),
+    )
+
+
+def _patch_security_settings(monkeypatch, **overrides) -> None:
+    import app.core.security as security_module
+
+    monkeypatch.setattr(security_module, "settings", _security_settings(**overrides))
 
 
 def _job_envelope(
@@ -33,7 +57,7 @@ def _job_envelope(
             "last_error": None,
             "next_retry_at": None,
         },
-        "status_url": f"{settings.SERVICE_API_PREFIX}/jobs/{job_id}",
+        "status_url": f"{API_PREFIX}/jobs/{job_id}",
         "created_at": now,
         "updated_at": now,
         "finished_at": now if job_status == "succeeded" else None,
@@ -98,7 +122,7 @@ def test_post_jobs_returns_response_envelope_with_queued_job(monkeypatch):
     try:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post(
-            f"{settings.SERVICE_API_PREFIX}/jobs",
+            f"{API_PREFIX}/jobs",
             json={
                 "client_request_id": "client-add-1",
                 "job_type": "job_test_add",
@@ -132,15 +156,13 @@ def test_post_jobs_uses_default_caller_when_caller_id_header_is_disabled(monkeyp
     async def fake_get_db():
         yield object()
 
-    monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    monkeypatch.setattr("app.core.security.settings.DISABLE_HTTP_AUTH_HEADER", False)
-    monkeypatch.setattr("app.core.security.settings.DISABLE_CALLER_ID_HEADER", True)
+    _patch_security_settings(monkeypatch, SERVICE_API_KEY="test-token", DISABLE_CALLER_ID_HEADER=True)
     monkeypatch.setattr(jobs_routes, "submit_job_request", fake_submit_job_request)
     app.dependency_overrides[get_db] = fake_get_db
     try:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post(
-            f"{settings.SERVICE_API_PREFIX}/jobs",
+            f"{API_PREFIX}/jobs",
             json={
                 "client_request_id": "client-add-1",
                 "job_type": "job_test_add",
@@ -171,15 +193,13 @@ def test_post_jobs_rejects_invalid_caller_id_header_by_default(monkeypatch):
     async def fake_get_db():
         yield object()
 
-    monkeypatch.setattr("app.core.security.settings.SERVICE_API_KEY", "test-token")
-    monkeypatch.setattr("app.core.security.settings.DISABLE_HTTP_AUTH_HEADER", False)
-    monkeypatch.setattr("app.core.security.settings.DISABLE_CALLER_ID_HEADER", False)
+    _patch_security_settings(monkeypatch, SERVICE_API_KEY="test-token")
     monkeypatch.setattr(jobs_routes, "submit_job_request", fake_submit_job_request)
     app.dependency_overrides[get_db] = fake_get_db
     try:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post(
-            f"{settings.SERVICE_API_PREFIX}/jobs",
+            f"{API_PREFIX}/jobs",
             json={
                 "client_request_id": "client-add-1",
                 "job_type": "job_test_add",
@@ -225,7 +245,7 @@ def test_get_jobs_returns_response_envelope_with_standard_job_fields(monkeypatch
     try:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get(
-            f"{settings.SERVICE_API_PREFIX}/jobs/{job_id}",
+            f"{API_PREFIX}/jobs/{job_id}",
             headers={"X-Request-ID": "req-get-add"},
         )
     finally:

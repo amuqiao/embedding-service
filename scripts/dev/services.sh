@@ -56,7 +56,11 @@ service_command() {
       fi
       ;;
     worker)
-      printf "%q " "$ROOT_DIR/start-worker.sh"
+      printf "env WORKER_CONCURRENCY=%q WORKER_LOGLEVEL=%q WORKER_RECOVERY_LOOP=%q %q " \
+        "$WORKER_CONCURRENCY" \
+        "$WORKER_LOGLEVEL" \
+        "$WORKER_RECOVERY_LOOP" \
+        "$ROOT_DIR/start-worker.sh"
       ;;
     *)
       die "unknown service: $1" 2
@@ -176,6 +180,13 @@ bootstrap() {
   else
     cp "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
     event "CREATED" ".env" "from .env.example"
+  fi
+
+  if [[ -f "$ROOT_DIR/scripts/.env" ]]; then
+    event "EXISTS" "scripts/.env" "kept"
+  else
+    cp "$ROOT_DIR/scripts/.env.example" "$ROOT_DIR/scripts/.env"
+    event "CREATED" "scripts/.env" "from scripts/.env.example"
   fi
 
   uv sync

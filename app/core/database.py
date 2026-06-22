@@ -10,13 +10,13 @@ class Base(DeclarativeBase):
     pass
 
 
-_connect_args = {} if settings.DB_SSL else {"ssl": False}
+_connect_args = {} if settings.database.ssl else {"ssl": False}
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    settings.database.url,
     pool_pre_ping=True,
-    pool_size=settings.DB_POOL_SIZE,
-    max_overflow=settings.DB_MAX_OVERFLOW,
-    pool_recycle=settings.DB_POOL_RECYCLE,
+    pool_size=settings.database.pool_size,
+    max_overflow=settings.database.max_overflow,
+    pool_recycle=settings.database.pool_recycle,
     connect_args=_connect_args,
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)

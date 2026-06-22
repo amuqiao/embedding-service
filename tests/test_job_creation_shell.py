@@ -1,8 +1,10 @@
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
+from app.core import config as config_module
 from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest
 from app.core.exceptions import AppError
@@ -27,6 +29,46 @@ class _TestHandler:
 
     def runtime_job_fields(self, job_params):
         return {}
+
+
+def _job_settings(**overrides):
+    values = {
+        "ALLOW_INSECURE_CALLBACKS": False,
+        "CALLBACK_SIGNING_SECRET": "test-callback-secret",
+        "CALLBACK_TIMEOUT_SECONDS": 5,
+        "MAX_ACTIVE_JOBS": 5000,
+        "MODEL_CALL_TIMEOUT_SECONDS": 300,
+        "OSS_BUCKET": "",
+        "OSS_INPUT_MAX_BYTES": 5_242_880,
+        "OSS_REGION": "",
+        "SERVICE_API_PREFIX": "/api/v1/ai-jobs",
+    }
+    values.update(overrides)
+    return SimpleNamespace(
+        service=config_module.ServiceSettings(api_prefix=values["SERVICE_API_PREFIX"]),
+        storage=config_module.StorageSettings(
+            oss_bucket=values["OSS_BUCKET"],
+            oss_region=values["OSS_REGION"],
+        ),
+        callback=config_module.CallbackSettings(
+            signing_secret=values["CALLBACK_SIGNING_SECRET"],
+            allow_insecure_callbacks=values["ALLOW_INSECURE_CALLBACKS"],
+            timeout_seconds=values["CALLBACK_TIMEOUT_SECONDS"],
+        ),
+        ai_provider=config_module.AIProviderSettings(
+            model_call_timeout_seconds=values["MODEL_CALL_TIMEOUT_SECONDS"],
+        ),
+        job=config_module.JobSettings(
+            max_active_jobs=values["MAX_ACTIVE_JOBS"],
+            oss_input_max_bytes=values["OSS_INPUT_MAX_BYTES"],
+        ),
+    )
+
+
+def _patch_job_settings(monkeypatch, **overrides) -> None:
+    import app.services.jobs as jobs_module
+
+    monkeypatch.setattr(jobs_module, "settings", _job_settings(**overrides))
 
 
 @pytest.fixture(autouse=True)
@@ -81,7 +123,7 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
             "payload_snapshot": payload,
         }
 
-    monkeypatch.setattr("app.services.jobs.settings.MAX_ACTIVE_JOBS", 0)
+    _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=0)
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
     monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fake_create)
@@ -149,7 +191,7 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
     async def fail_create(*_args, **_kwargs):
         raise AssertionError("idempotent create should return existing job")
 
-    monkeypatch.setattr("app.services.jobs.settings.MAX_ACTIVE_JOBS", 0)
+    _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=0)
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
     monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
@@ -193,7 +235,7 @@ async def test_create_job_rejects_duplicate_by_default(monkeypatch):
     async def fake_get_recent(*_args, **_kwargs):
         return existing
 
-    monkeypatch.setattr("app.services.jobs.settings.MAX_ACTIVE_JOBS", 0)
+    _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=0)
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
     monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())

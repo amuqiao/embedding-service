@@ -14,7 +14,7 @@ CALLER_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,63}$")
 
 
 def _caller_id_from_header(caller_id: str | None) -> str:
-    if settings.DISABLE_CALLER_ID_HEADER:
+    if settings.security.disable_caller_id_header:
         return "default"
     if caller_id:
         normalized = caller_id.strip()
@@ -29,15 +29,15 @@ async def require_service_auth(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     caller_id: str | None = Header(default=None, alias="X-AI-Service-Caller-ID"),
 ) -> str:
-    if settings.DISABLE_HTTP_AUTH_HEADER:
+    if settings.security.disable_http_auth_header:
         return _caller_id_from_header(caller_id)
     if credentials is None or credentials.scheme.lower() != "bearer":
         logger.warning("auth_failed reason=missing_bearer")
         raise UnauthorizedError()
-    if not settings.SERVICE_API_KEY:
+    if not settings.security.api_key:
         logger.warning("auth_failed reason=service_key_not_configured")
         raise UnauthorizedError()
-    if not secrets.compare_digest(credentials.credentials, settings.SERVICE_API_KEY):
+    if not secrets.compare_digest(credentials.credentials, settings.security.api_key):
         logger.warning("auth_failed reason=invalid_api_key")
         raise UnauthorizedError()
     return _caller_id_from_header(caller_id)

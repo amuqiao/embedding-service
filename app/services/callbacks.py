@@ -27,10 +27,10 @@ class CallbackDeliveryResult(BaseModel):
 
 
 def _sign(timestamp: str, body: bytes) -> str:
-    if not settings.CALLBACK_SIGNING_SECRET:
+    if not settings.callback.signing_secret_value:
         raise ValueError("CALLBACK_SIGNING_SECRET must be configured")
     digest = hmac.new(
-        settings.CALLBACK_SIGNING_SECRET.encode("utf-8"),
+        settings.callback.signing_secret_value.encode("utf-8"),
         timestamp.encode("utf-8") + b"." + body,
         "sha256",
     ).hexdigest()
@@ -40,7 +40,7 @@ def _sign(timestamp: str, body: bytes) -> str:
 def _validate_callback_url(url: str) -> None:
     validate_callback_url_security(
         url,
-        allow_insecure_local=settings.ALLOW_INSECURE_CALLBACKS,
+        allow_insecure_local=settings.callback.allow_insecure_callbacks,
     )
 
 
@@ -174,7 +174,7 @@ async def deliver_callback(job: Job, *, payload: dict[str, Any] | None = None) -
     delays = [0]
     attempts = 0
     last_error: dict | None = None
-    async with httpx.AsyncClient(timeout=settings.CALLBACK_TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(timeout=settings.callback.timeout_seconds) as client:
         for attempt, delay in enumerate(delays):
             if delay:
                 await asyncio.sleep(delay)

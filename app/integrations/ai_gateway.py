@@ -1,5 +1,4 @@
 import asyncio
-import os
 from dataclasses import dataclass
 
 import litellm
@@ -7,10 +6,8 @@ import litellm
 from app.core.config import settings
 from app.core.model_registry import get_enabled_model
 
-if settings.OPENAI_BASE_URL:
-    litellm.api_base = settings.OPENAI_BASE_URL
-if settings.OPENAI_API_KEY:
-    os.environ.setdefault("OPENAI_API_KEY", settings.OPENAI_API_KEY)
+if settings.ai_provider.openai_base_url:
+    litellm.api_base = settings.ai_provider.openai_base_url
 
 
 @dataclass
@@ -31,11 +28,12 @@ async def generate_text(model_id: str, messages: list[dict[str, str]]) -> TextGe
             model=model.litellm_model,
             messages=messages,
             temperature=model.temperature,
-            timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
+            timeout=settings.ai_provider.model_call_timeout_seconds,
+            api_key=settings.ai_provider.openai_api_key_value or None,
             num_retries=model.num_retries,
             drop_params=model.drop_params,
         ),
-        timeout=settings.MODEL_CALL_TIMEOUT_SECONDS,
+        timeout=settings.ai_provider.model_call_timeout_seconds,
     )
     choice = response.choices[0]
     text = (choice.message.content or "").strip()

@@ -16,7 +16,7 @@ def main() -> None:
             logger.info("recovery_loop_completed result=%s", result)
         except Exception:
             logger.exception("recovery_loop_failed")
-        time.sleep(settings.JOB_RECOVERY_INTERVAL_SECONDS)
+        time.sleep(settings.job.recovery_interval_seconds)
 
 
 if __name__ == "__main__":

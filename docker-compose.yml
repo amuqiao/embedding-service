@@ -89,6 +89,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-fastapi_best_ai_architecture}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      WORKER_LOGLEVEL: ${WORKER_LOGLEVEL:-INFO}
+      WORKER_RECOVERY_LOOP: ${WORKER_RECOVERY_LOOP:-true}
     volumes:
       - object_storage:/app/storage/objects
     depends_on:

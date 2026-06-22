@@ -46,6 +46,8 @@ FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默�
 
 `docker-compose.yml` 中的 `environment` 只覆盖容器运行形态必须不同的值，例如容器网络内的 `DATABASE_URL` / `REDIS_URL` 和容器内对象存储路径。业务配置、密钥、模型参数和限制参数应来自 `.env`、`ENV_FILE` 指定文件或运行时显式环境变量。
 
+脚本配置独立维护在 `scripts/.env`，模板是 `scripts/.env.example`。`API_PORT`、`API_HOST_PORT`、`POSTGRES_HOST_PORT`、`REDIS_HOST_PORT`、`COMPOSE_PROJECT_NAME`、`WORKER_CONCURRENCY`、`WORKER_LOGLEVEL` 和 `WORKER_RECOVERY_LOOP` 等只影响本地脚本或 compose 编排的变量不要写入应用 `.env`。
+
 `STORAGE_BACKEND=local` 只适用于本地开发或单机 compose；生产或多副本 Headless / Platform Service 形态必须使用外部对象存储后端，例如 `aliyun_oss`，避免 API / worker 节点之间读写不同本地磁盘。
 
 模板身份默认值：
@@ -53,8 +55,8 @@ FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默�
 - `TEMPLATE_NAME=fastapi-best-ai-architecture`
 - `SERVICE_NAME=fastapi-best-ai-architecture`
 - `SERVICE_TITLE=FastAPI Best AI Architecture`
-- `POSTGRES_DB=fastapi_best_ai_architecture`
-- `COMPOSE_PROJECT_NAME` 未设置时，`scripts/deploy.sh` 使用 `TEMPLATE_NAME` 作为 compose project name。
+- `POSTGRES_DB=fastapi_best_ai_architecture`（脚本配置）
+- `COMPOSE_PROJECT_NAME` 未设置时，`scripts/deploy.sh` 使用 `TEMPLATE_NAME` 作为 compose project name；需要显式设置时写入 `scripts/.env`。
 
 复用模板时优先替换这些值；不要直接改脚本逻辑来表达业务项目名。
 
@@ -168,7 +170,7 @@ OSS_PUBLIC_ENDPOINT=
 - `env-config`：校验 env 文件键名。
 - `check`：运行脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest。
 
-脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/deploy.sh` 只调度 compose 部署能力。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
+脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/deploy.sh` 只调度 compose 部署能力。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。脚本专用变量从 `scripts/.env` 或运行时环境读取，不从应用 `.env` 读取。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
 
 入口脚本约束：
 

@@ -15,13 +15,13 @@ def payload_hash(payload: dict[str, Any]) -> str:
 
 
 def configured_output_target(job_id: uuid.UUID) -> dict[str, str]:
-    root = settings.OSS_OUTPUT_PREFIX.strip("/")
+    root = settings.storage.oss_output_prefix.strip("/")
     prefix = f"{root}/{job_id}/" if root else f"{job_id}/"
     return {
         "type": "oss_prefix",
-        "oss_bucket": settings.OSS_BUCKET or "local-dev",
+        "oss_bucket": settings.storage.oss_bucket or "local-dev",
         "oss_prefix": prefix,
-        "oss_region": settings.OSS_REGION or "local",
+        "oss_region": settings.storage.oss_region or "local",
     }
 
 

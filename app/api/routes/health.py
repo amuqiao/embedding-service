@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "service": settings.SERVICE_NAME, "version": "1.0.0"}
+    return {"status": "ok", "service": settings.service.name, "version": "1.0.0"}
 
 
 @router.get("/healthz", include_in_schema=False)
@@ -34,7 +34,7 @@ async def healthz():
     try:
         from redis.asyncio import Redis
 
-        redis = Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+        redis = Redis.from_url(settings.broker.redis_url, socket_connect_timeout=2, socket_timeout=2)
         try:
             await asyncio.wait_for(redis.ping(), timeout=2)
         finally:

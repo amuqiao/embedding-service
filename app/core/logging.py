@@ -74,7 +74,7 @@ class _RequestIDFilter(logging.Filter):
 
 
 def configure_logging() -> None:
-    level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
+    level = getattr(logging, settings.observability.log_level.upper(), logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)
     handler.addFilter(_RequestIDFilter())

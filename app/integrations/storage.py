@@ -122,13 +122,13 @@ class AliyunObjectStorage:
 
 
 def _build_storage() -> ObjectStorage:
-    if settings.STORAGE_BACKEND == "local":
-        return LocalObjectStorage(settings.local_object_storage_path)
+    if settings.storage.backend == "local":
+        return LocalObjectStorage(settings.storage.local_object_storage_path)
     required = {
-        "OSS_BUCKET": settings.OSS_BUCKET,
-        "OSS_REGION": settings.OSS_REGION,
-        "OSS_ACCESS_KEY_ID": settings.OSS_ACCESS_KEY_ID,
-        "OSS_ACCESS_KEY_SECRET": settings.OSS_ACCESS_KEY_SECRET,
+        "OSS_BUCKET": settings.storage.oss_bucket,
+        "OSS_REGION": settings.storage.oss_region,
+        "OSS_ACCESS_KEY_ID": settings.storage.oss_access_key_id,
+        "OSS_ACCESS_KEY_SECRET": settings.storage.oss_access_key_secret_value,
     }
     missing = [key for key, value in required.items() if not value]
     if missing:
@@ -136,14 +136,14 @@ def _build_storage() -> ObjectStorage:
     return AliyunObjectStorage(
         AliyunOSSClient(
             AliyunOSSConfig(
-                bucket=settings.OSS_BUCKET,
-                region=settings.OSS_REGION,
-                access_key_id=settings.OSS_ACCESS_KEY_ID,
-                access_key_secret=settings.OSS_ACCESS_KEY_SECRET,
-                project_root=settings.OSS_PROJECT_ROOT,
-                endpoint=settings.oss_endpoint,
-                endpoint_style=settings.oss_endpoint_style,
-                scheme=settings.OSS_SCHEME,
+                bucket=settings.storage.oss_bucket,
+                region=settings.storage.oss_region,
+                access_key_id=settings.storage.oss_access_key_id,
+                access_key_secret=settings.storage.oss_access_key_secret_value,
+                project_root=settings.storage.oss_project_root,
+                endpoint=settings.storage.oss_endpoint,
+                endpoint_style=settings.storage.oss_endpoint_style,
+                scheme=settings.storage.oss_scheme,
             )
         )
     )
