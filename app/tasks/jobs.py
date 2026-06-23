@@ -81,6 +81,20 @@ def _should_retry_attempt(job_type: str, error: dict[str, Any]) -> bool:
 
 
 async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
+    async def lease_dispatch(db):
+        leased = await JobRepo.lease_dispatch_for_publish(
+            db,
+            attempt_id,
+            lease_seconds=settings.job.orphan_timeout_seconds,
+        )
+        await db.commit()
+        return leased
+
+    leased = await _with_db(lease_dispatch)
+    if leased is None:
+        return
+    dispatch, lease_token = leased
+
     try:
         await run_job_attempt.kiq(str(attempt_id))
     except Exception as exc:
@@ -91,11 +105,13 @@ async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
         }
 
         async def record_failure(db):
-            recorded = await JobRepo.mark_attempt_publish_failed(
+            recorded = await JobRepo.mark_dispatch_publish_failed(
                 db,
-                attempt_id,
+                dispatch.id,
+                lease_token=lease_token,
                 error=error,
-                next_dispatch_at=datetime.now(timezone.utc) + timedelta(seconds=settings.job.orphan_timeout_seconds),
+                next_attempt_at=datetime.now(timezone.utc) + timedelta(seconds=settings.job.orphan_timeout_seconds),
+                max_publish_attempts=settings.job.dispatch_max_publish_attempts,
             )
             if recorded:
                 await db.commit()
@@ -106,10 +122,11 @@ async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
         raise TaskiqPublishDeferredError(attempt_id, error) from exc
 
     async def mark_published(db):
-        await JobRepo.mark_attempt_published(
+        await JobRepo.mark_dispatch_published(
             db,
-            attempt_id,
-            next_dispatch_at=datetime.now(timezone.utc) + timedelta(seconds=settings.job.orphan_timeout_seconds),
+            dispatch.id,
+            lease_token=lease_token,
+            next_attempt_at=datetime.now(timezone.utc) + timedelta(seconds=settings.job.orphan_timeout_seconds),
         )
         await db.commit()
 
@@ -189,7 +206,7 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
                     lease_token=lease_token,
                     error=error,
                     retryable=_should_retry_attempt(job.job_type, error),
-                    next_dispatch_at=datetime.now(timezone.utc),
+                    next_attempt_at=datetime.now(timezone.utc),
                 )
                 await db.commit()
                 return marked
@@ -223,9 +240,10 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
 
         claimed_job.callback_status = "delivering"
         claimed_job.callback_next_retry_at = delivery_deadline
-        result = await deliver_callback(claimed_job, payload=outbox.payload)
+        result = await deliver_callback(claimed_job, payload=outbox.payload, callback_url=outbox.callback_url)
         next_retry_at = None
-        if result.status == "failed" and outbox.delivery_attempt < settings.callback.max_delivery_attempts:
+        attempted_after_result = (outbox.delivery_attempts or 0) + max(0, result.attempts)
+        if result.status == "failed" and attempted_after_result < settings.callback.max_delivery_attempts:
             next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=settings.callback.retry_delay_seconds)
         await JobRepo.mark_callback_result(
             db,
@@ -234,6 +252,8 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
             last_error=result.last_error,
             next_retry_at=next_retry_at,
             max_attempts=settings.callback.max_delivery_attempts,
+            delivery_attempts=result.attempts,
+            last_response=result.response,
             callback_id=outbox.id,
             lease_token=outbox.lease_token,
         )

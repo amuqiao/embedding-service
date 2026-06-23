@@ -33,6 +33,7 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "DISABLE_HTTP_AUTH_HEADER": ("security", "disable_http_auth_header"),
     "DISABLE_CALLER_ID_HEADER": ("security", "disable_caller_id_header"),
     "REDIS_URL": ("broker", "redis_url"),
+    "TASKIQ_BROKER_KIND": ("broker", "kind"),
     "ALLOWED_ORIGINS": ("security", "allowed_origins_raw"),
     "CALLBACK_SIGNING_SECRET": ("callback", "signing_secret"),
     "ALLOW_INSECURE_CALLBACKS": ("callback", "allow_insecure_callbacks"),
@@ -60,6 +61,7 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "CALLBACK_MAX_DELIVERY_ATTEMPTS": ("callback", "max_delivery_attempts"),
     "CALLBACK_RETRY_DELAY_SECONDS": ("callback", "retry_delay_seconds"),
     "JOB_ORPHAN_TIMEOUT_SECONDS": ("job", "orphan_timeout_seconds"),
+    "JOB_DISPATCH_MAX_PUBLISH_ATTEMPTS": ("job", "dispatch_max_publish_attempts"),
     "PROMPT_CONFIG_PATH": ("registry", "prompt_config_path_raw"),
     "LOG_LEVEL": ("observability", "log_level"),
 }
@@ -193,6 +195,14 @@ class DatabaseSettings(ConfigSection):
 
 class BrokerSettings(ConfigSection):
     redis_url: str = "redis://127.0.0.1:26379/0"
+    kind: str = "redis_stream"
+
+    @field_validator("kind")
+    @classmethod
+    def validate_kind(cls, value: str) -> str:
+        if value not in {"redis_stream", "redis_list"}:
+            raise ValueError("TASKIQ_BROKER_KIND must be redis_stream or redis_list")
+        return value
 
 
 class SecuritySettings(ConfigSection):
@@ -371,6 +381,7 @@ class JobSettings(ConfigSection):
     max_active_jobs: int = 5000
     oss_input_max_bytes: int = 5_242_880
     orphan_timeout_seconds: int = 300
+    dispatch_max_publish_attempts: int = 12
     recovery_interval_seconds: int = 60
     recovery_batch_size: int = 100
     recovery_callback_batch_size: int = 50
@@ -380,6 +391,7 @@ class JobSettings(ConfigSection):
         positive_fields = {
             "OSS_INPUT_MAX_BYTES": self.oss_input_max_bytes,
             "JOB_ORPHAN_TIMEOUT_SECONDS": self.orphan_timeout_seconds,
+            "JOB_DISPATCH_MAX_PUBLISH_ATTEMPTS": self.dispatch_max_publish_attempts,
             "JOB_RECOVERY_INTERVAL_SECONDS": self.recovery_interval_seconds,
             "JOB_RECOVERY_BATCH_SIZE": self.recovery_batch_size,
             "JOB_RECOVERY_CALLBACK_BATCH_SIZE": self.recovery_callback_batch_size,
@@ -441,6 +453,9 @@ class Settings(BaseSettings):
             _log.warning(
                 "insecure HTTP auth/caller header disable flag enabled; use local development only"
             )
+
+        if self.broker.kind == "redis_list" and not _looks_like_local_service_url(self.broker.redis_url):
+            raise ValueError("TASKIQ_BROKER_KIND=redis_list is local development only; use redis_stream")
 
         delivery_timeout = self.callback.delivery_timeout_seconds
         if delivery_timeout >= self.callback.retry_delay_seconds:

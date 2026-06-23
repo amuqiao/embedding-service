@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.models.job import JobAttempt
+from app.models.job import DispatchOutbox, JobAttempt
 from app.tasks.recovery import _run_recovery, _stale_pending_ai_call_before
 
 
@@ -50,10 +50,22 @@ def _attempt(status: str = "published") -> JobAttempt:
     )
 
 
-def _patch_common_recovery(monkeypatch, *, due_attempts=None, stale_attempts=None):
+def _dispatch(attempt_id: uuid.UUID) -> DispatchOutbox:
+    return DispatchOutbox(
+        id=uuid.uuid4(),
+        job_id=uuid.uuid4(),
+        attempt_id=attempt_id,
+        event_id=f"job_attempt:{attempt_id}:dispatch",
+        task_name="jobs.run_attempt",
+        payload={"attempt_id": str(attempt_id)},
+        status="pending",
+    )
+
+
+def _patch_common_recovery(monkeypatch, *, due_dispatches=None, stale_attempts=None):
     monkeypatch.setattr(
-        "app.tasks.recovery.JobRepo.find_dispatch_due_attempts",
-        due_attempts or _no_attempts,
+        "app.tasks.recovery.JobRepo.find_due_dispatches",
+        due_dispatches or _no_attempts,
     )
     monkeypatch.setattr(
         "app.tasks.recovery.JobRepo.find_stale_running_attempts",
@@ -69,23 +81,24 @@ def _patch_common_recovery(monkeypatch, *, due_attempts=None, stale_attempts=Non
 
 @pytest.mark.asyncio
 async def test_recovery_republishes_due_attempts(monkeypatch):
-    attempt = _attempt("published")
+    attempt_id = uuid.uuid4()
+    dispatch = _dispatch(attempt_id)
     published: list[uuid.UUID] = []
 
-    async def due_attempts(*_args, **_kwargs):
-        return [attempt]
+    async def due_dispatches(*_args, **_kwargs):
+        return [dispatch]
 
     async def publish(attempt_id):
         published.append(attempt_id)
 
-    _patch_common_recovery(monkeypatch, due_attempts=due_attempts)
+    _patch_common_recovery(monkeypatch, due_dispatches=due_dispatches)
     monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", publish)
 
     result = await _run_recovery(_FakeDB())
 
     assert result["recovered"] == 1
     assert result["failed"] == 0
-    assert published == [attempt.id]
+    assert published == [attempt_id]
 
 
 @pytest.mark.asyncio
@@ -106,7 +119,7 @@ async def test_recovery_marks_stale_running_attempt_failed(monkeypatch):
         error_kind,
         failure_phase,
         retryable,
-        next_dispatch_at,
+        next_attempt_at,
     ):
         assert attempt_id == attempt.id
         assert lease_token == attempt.lease_token
@@ -114,7 +127,7 @@ async def test_recovery_marks_stale_running_attempt_failed(monkeypatch):
         assert error_kind == "timeout"
         assert failure_phase == "lease"
         assert retryable is True
-        assert next_dispatch_at is not None
+        assert next_attempt_at is not None
         marked.append(attempt_id)
         return True
 

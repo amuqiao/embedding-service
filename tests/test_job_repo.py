@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from app.models.job import CallbackOutbox, Job, JobAttempt, JobEvent
+from app.models.job import CallbackOutbox, DispatchOutbox, Job, JobAttempt, JobEvent
 from app.repositories.job_repo import JobRepo
 
 
@@ -77,16 +77,41 @@ async def test_cleanup_expired_jobs_soft_deletes_only_settled_terminal_jobs():
     rowcount = await JobRepo.cleanup_expired_jobs(db)
 
     assert rowcount == 3
-    assert len(db.statements) == 1
-    job_update = db.statements[0]
+    assert len(db.statements) == 2
+    submission_key_delete = db.statements[0]
+    assert submission_key_delete.__visit_name__ == "delete"
+    submission_key_delete_sql = _compile(submission_key_delete)
+    assert "DELETE FROM job_submission_keys" in submission_key_delete_sql
+    assert "job_aggregates.expires_at <= now()" in submission_key_delete_sql
+    assert "job_aggregates.deleted_at IS NULL" in submission_key_delete_sql
+
+    job_update = db.statements[1]
     assert job_update.__visit_name__ == "update"
 
     job_sql = _compile(job_update)
-    assert "UPDATE jobs SET" in job_sql
+    assert "UPDATE job_aggregates SET" in job_sql
     assert "deleted_at" in job_sql
-    assert "jobs.status IN" in job_sql
-    assert "jobs.callback_status IN" in job_sql
-    assert "jobs.deleted_at IS NULL" in job_sql
+    assert "job_aggregates.status IN" in job_sql
+    assert "job_aggregates.callback_status IN" in job_sql
+    assert "job_aggregates.deleted_at IS NULL" in job_sql
+
+
+@pytest.mark.asyncio
+async def test_get_submission_by_client_request_keeps_expired_key_visible_until_cleanup():
+    db = _FakeDB()
+    db.results.append(_NoRowResult())
+
+    found = await JobRepo.get_submission_by_client_request(
+        db,
+        caller_id="caller-1",
+        client_request_id="request-1",
+    )
+
+    assert found is None
+    sql = _compile(db.statements[0])
+    assert "job_submission_keys.expires_at >" not in sql
+    assert "job_submission_keys.key_value" in sql
+    assert "job_aggregates.deleted_at IS NULL" in sql
 
 
 @pytest.mark.asyncio
@@ -126,7 +151,7 @@ async def test_claim_attempt_for_execution_accepts_queued_attempt_after_uncertai
         id=attempt_id,
         job_id=job.id,
         attempt_no=1,
-        status="queued",
+        status="pending",
         timeout_seconds=60,
     )
     db = _FakeDB()
@@ -155,106 +180,146 @@ async def test_claim_attempt_for_execution_accepts_queued_attempt_after_uncertai
     events = [obj for obj in db.added if isinstance(obj, JobEvent)]
     assert len(events) == 1
     assert events[0].event_type == "attempt.claimed"
-    assert events[0].from_status == "queued"
+    assert events[0].from_status == "pending"
     assert events[0].to_status == "running"
 
 
 @pytest.mark.asyncio
-async def test_mark_attempt_published_sets_recovery_deadline():
-    attempt = JobAttempt(
+async def test_lease_dispatch_for_publish_claims_due_dispatch_intent():
+    attempt_id = uuid.uuid4()
+    job = Job(
         id=uuid.uuid4(),
-        job_id=uuid.uuid4(),
-        attempt_no=1,
+        caller_id="caller-1",
+        client_request_id="dispatch-1",
+        job_type="job_test_echo",
         status="queued",
+        active_attempt_id=attempt_id,
+        progress_percent=0,
+        metadata_={},
+    )
+    attempt = JobAttempt(
+        id=attempt_id,
+        job_id=job.id,
+        attempt_no=1,
+        status="pending",
         timeout_seconds=60,
     )
-    deadline = datetime.now(UTC) + timedelta(seconds=30)
+    dispatch = DispatchOutbox(
+        id=uuid.uuid4(),
+        event_id=f"job_attempt:{attempt_id}:dispatch",
+        job_id=job.id,
+        attempt_id=attempt_id,
+        task_name="jobs.run_attempt",
+        payload={"attempt_id": str(attempt_id)},
+        status="pending",
+        next_attempt_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
     db = _FakeDB()
-    db.results.append(_ScalarResult(attempt))
+    db.results.append(_OneRowResult((dispatch, job, attempt)))
 
-    updated = await JobRepo.mark_attempt_published(db, attempt.id, next_dispatch_at=deadline)
+    leased = await JobRepo.lease_dispatch_for_publish(db, attempt.id, lease_seconds=60)
 
-    assert updated is True
+    assert leased is not None
+    leased_dispatch, lease_token = leased
+    assert leased_dispatch is dispatch
     assert db.flushed is True
-    assert attempt.status == "published"
-    assert attempt.next_dispatch_at == deadline
-    assert attempt.dispatch_attempts == 1
+    assert dispatch.status == "leased"
+    assert dispatch.lease_token == lease_token
+    assert dispatch.lease_expires_at is not None
+    assert dispatch.leased_at is not None
 
 
 @pytest.mark.asyncio
-async def test_mark_attempt_published_allows_republish_of_same_attempt_intent():
-    attempt = JobAttempt(
+async def test_mark_dispatch_published_sets_recovery_deadline():
+    lease_token = uuid.uuid4()
+    dispatch = DispatchOutbox(
         id=uuid.uuid4(),
         job_id=uuid.uuid4(),
-        attempt_no=1,
-        status="published",
-        timeout_seconds=60,
-        dispatch_attempts=2,
-        last_dispatch_error={"code": "TASKIQ_PUBLISH_FAILED"},
+        attempt_id=uuid.uuid4(),
+        event_id="job_attempt:test:dispatch",
+        task_name="jobs.run_attempt",
+        payload={},
+        status="leased",
+        lease_token=lease_token,
+        publish_attempts=2,
+        last_error={"code": "TASKIQ_PUBLISH_FAILED"},
     )
     deadline = datetime.now(UTC) + timedelta(seconds=30)
     db = _FakeDB()
-    db.results.append(_ScalarResult(attempt))
+    db.results.append(_ScalarResult(dispatch))
 
-    updated = await JobRepo.mark_attempt_published(db, attempt.id, next_dispatch_at=deadline)
+    updated = await JobRepo.mark_dispatch_published(db, dispatch.id, lease_token=lease_token, next_attempt_at=deadline)
 
     assert updated is True
     assert db.flushed is True
-    assert attempt.status == "published"
-    assert attempt.next_dispatch_at == deadline
-    assert attempt.dispatch_attempts == 3
-    assert attempt.last_dispatch_error is None
+    assert dispatch.status == "published"
+    assert dispatch.next_attempt_at == deadline
+    assert dispatch.publish_attempts == 3
+    assert dispatch.last_error is None
+    assert dispatch.lease_token is None
 
 
 @pytest.mark.asyncio
-async def test_mark_attempt_publish_failed_records_retry_for_already_published_attempt():
+async def test_mark_dispatch_publish_failed_records_retry_for_leased_dispatch():
     error = {"code": "TASKIQ_PUBLISH_FAILED", "message": "publish failed"}
-    attempt = JobAttempt(
+    lease_token = uuid.uuid4()
+    dispatch = DispatchOutbox(
         id=uuid.uuid4(),
         job_id=uuid.uuid4(),
-        attempt_no=1,
-        status="published",
-        timeout_seconds=60,
-        dispatch_attempts=1,
+        attempt_id=uuid.uuid4(),
+        event_id="job_attempt:test:dispatch",
+        task_name="jobs.run_attempt",
+        payload={},
+        status="leased",
+        lease_token=lease_token,
+        publish_attempts=1,
     )
     deadline = datetime.now(UTC) + timedelta(seconds=30)
     db = _FakeDB()
-    db.results.append(_ScalarResult(attempt))
+    db.results.append(_ScalarResult(dispatch))
 
-    updated = await JobRepo.mark_attempt_publish_failed(db, attempt.id, error=error, next_dispatch_at=deadline)
+    updated = await JobRepo.mark_dispatch_publish_failed(
+        db,
+        dispatch.id,
+        lease_token=lease_token,
+        error=error,
+        next_attempt_at=deadline,
+        max_publish_attempts=3,
+    )
 
     assert updated is True
     assert db.flushed is True
-    assert attempt.status == "published"
-    assert attempt.dispatch_attempts == 2
-    assert attempt.last_dispatch_error == error
-    assert attempt.next_dispatch_at == deadline
+    assert dispatch.status == "retrying"
+    assert dispatch.publish_attempts == 2
+    assert dispatch.last_error == error
+    assert dispatch.next_attempt_at == deadline
+    assert dispatch.lease_token is None
 
 
 @pytest.mark.asyncio
-async def test_find_dispatch_due_attempts_requires_deadline_for_published_attempts():
+async def test_find_due_dispatches_requires_deadline_for_published_dispatches():
     db = _FakeDB()
     db.results.append(_ScalarListResult([]))
 
-    await JobRepo.find_dispatch_due_attempts(db, datetime.now(UTC), limit=10)
+    await JobRepo.find_due_dispatches(db, datetime.now(UTC), limit=10)
 
     sql = _compile(db.statements[0])
-    assert "job_attempts.status =" in sql
-    assert "job_attempts.next_dispatch_at IS NULL" in sql
-    assert "job_attempts.next_dispatch_at <=" in sql
+    assert "dispatch_outbox.status =" in sql
+    assert "dispatch_outbox.next_attempt_at IS NULL" in sql
+    assert "dispatch_outbox.next_attempt_at <=" in sql
 
 
 @pytest.mark.asyncio
-async def test_find_dispatch_due_attempts_requires_active_queued_job():
+async def test_find_due_dispatches_requires_active_queued_job():
     db = _FakeDB()
     db.results.append(_ScalarListResult([]))
 
-    await JobRepo.find_dispatch_due_attempts(db, datetime.now(UTC), limit=10)
+    await JobRepo.find_due_dispatches(db, datetime.now(UTC), limit=10)
 
     sql = _compile(db.statements[0])
-    assert "jobs.status =" in sql
-    assert "jobs.active_attempt_id = job_attempts.id" in sql
-    assert "jobs.deleted_at IS NULL" in sql
+    assert "job_aggregates.status =" in sql
+    assert "job_aggregates.active_attempt_id = job_execution_attempts.id" in sql
+    assert "job_aggregates.deleted_at IS NULL" in sql
 
 
 @pytest.mark.asyncio
@@ -314,7 +379,7 @@ async def test_mark_succeeded_rejects_stale_execution_token():
     assert job.status == "running"
     assert job.result is None
     sql = _compile(db.statements[0])
-    assert "jobs.execution_token =" in sql
+    assert "job_aggregates.execution_token =" in sql
 
 
 @pytest.mark.asyncio
@@ -385,7 +450,7 @@ async def test_mark_failed_rejects_stale_execution_token():
     assert job.status == "running"
     assert job.error is None
     sql = _compile(db.statements[0])
-    assert "jobs.execution_token =" in sql
+    assert "job_aggregates.execution_token =" in sql
 
 
 @pytest.mark.asyncio
@@ -453,6 +518,92 @@ async def test_mark_callback_result_filters_by_callback_lease_token():
 
 
 @pytest.mark.asyncio
+async def test_mark_callback_delivering_does_not_count_unsent_http_attempt():
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="client-1",
+        job_type="test.echo",
+        status="succeeded",
+        callback_status="pending",
+        callback_attempts=0,
+        metadata_={},
+    )
+    outbox = CallbackOutbox(
+        id=uuid.uuid4(),
+        job_id=job.id,
+        event_type="job.succeeded",
+        status="pending",
+        payload={},
+        delivery_attempts=0,
+    )
+    db = _FakeDB()
+    db.results.append(_OneRowResult((job, outbox)))
+
+    claimed = await JobRepo.mark_callback_delivering(
+        db,
+        job.id,
+        now=datetime.now(UTC),
+        max_attempts=3,
+        next_retry_at=datetime.now(UTC) + timedelta(seconds=30),
+    )
+
+    assert claimed == (job, outbox)
+    assert outbox.status == "leased"
+    assert outbox.delivery_attempts == 0
+    assert outbox.first_attempt_at is None
+    assert outbox.last_attempt_at is None
+    assert job.callback_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_mark_callback_result_counts_only_actual_http_attempts():
+    lease_token = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="client-1",
+        job_type="test.echo",
+        status="succeeded",
+        callback_status="delivering",
+        callback_attempts=0,
+        metadata_={},
+    )
+    outbox = CallbackOutbox(
+        id=uuid.uuid4(),
+        job_id=job.id,
+        event_type="job.succeeded",
+        status="leased",
+        lease_token=lease_token,
+        payload={},
+        delivery_attempts=0,
+    )
+    db = _FakeDB()
+    db.results.append(_OneRowResult((job, outbox)))
+
+    await JobRepo.mark_callback_result(
+        db,
+        job.id,
+        status="failed",
+        last_error={"code": "CALLBACK_HTTP_ERROR"},
+        next_retry_at=datetime.now(UTC) + timedelta(seconds=60),
+        max_attempts=3,
+        delivery_attempts=1,
+        last_response={"format": "ack", "valid": False},
+        callback_id=outbox.id,
+        lease_token=lease_token,
+    )
+
+    assert outbox.status == "retrying"
+    assert outbox.delivery_attempts == 1
+    assert outbox.first_attempt_at is not None
+    assert outbox.last_attempt_at is not None
+    assert outbox.last_response == {"format": "ack", "valid": False}
+    assert job.callback_attempts == 1
+    assert job.callback_status == "retrying"
+
+
+@pytest.mark.asyncio
 async def test_mark_attempt_failed_closes_attempt_when_job_already_failed():
     error = {"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {}}
     lease_token = uuid.uuid4()
@@ -503,7 +654,7 @@ async def test_mark_attempt_failed_rejects_stale_lease_token():
     assert updated is False
     assert db.flushed is False
     sql = _compile(db.statements[0])
-    assert "job_attempts.lease_token =" in sql
+    assert "job_execution_attempts.lease_token =" in sql
 
 
 @pytest.mark.asyncio
@@ -516,7 +667,7 @@ async def test_mark_attempt_succeeded_rejects_stale_lease_token():
     assert updated is False
     assert db.flushed is False
     sql = _compile(db.statements[0])
-    assert "job_attempts.lease_token =" in sql
+    assert "job_execution_attempts.lease_token =" in sql
 
 
 @pytest.mark.asyncio
@@ -543,7 +694,7 @@ async def test_mark_attempt_failed_creates_retry_attempt_when_allowed():
         lease_token=lease_token,
         timeout_seconds=60,
     )
-    next_dispatch_at = datetime.now(UTC)
+    next_attempt_at = datetime.now(UTC)
     db = _FakeDB()
     db.results.append(_OneRowResult((job, attempt)))
 
@@ -553,10 +704,11 @@ async def test_mark_attempt_failed_creates_retry_attempt_when_allowed():
         lease_token=lease_token,
         error=error,
         retryable=True,
-        next_dispatch_at=next_dispatch_at,
+        next_attempt_at=next_attempt_at,
     )
 
     retry_attempts = [item for item in db.added if isinstance(item, JobAttempt)]
+    retry_dispatches = [item for item in db.added if isinstance(item, DispatchOutbox)]
     assert updated is True
     assert attempt.status == "failed"
     assert attempt.retryable is True
@@ -566,7 +718,10 @@ async def test_mark_attempt_failed_creates_retry_attempt_when_allowed():
     assert job.attempt_count == 2
     assert len(retry_attempts) == 1
     assert retry_attempts[0].attempt_no == 2
-    assert retry_attempts[0].next_dispatch_at == next_dispatch_at
+    assert retry_attempts[0].status == "pending"
+    assert len(retry_dispatches) == 1
+    assert retry_dispatches[0].attempt_id == retry_attempts[0].id
+    assert retry_dispatches[0].next_attempt_at == next_attempt_at
 
 
 @pytest.mark.asyncio
@@ -597,6 +752,6 @@ async def test_update_progress_can_require_current_task_and_generation():
     assert job.progress_percent == 90
     assert job.progress_stage == "success_side_effect"
     sql = _compile(db.statements[0])
-    assert "jobs.status =" in sql
-    assert "jobs.execution_token =" in sql
-    assert "jobs.execution_generation =" in sql
+    assert "job_aggregates.status =" in sql
+    assert "job_aggregates.execution_token =" in sql
+    assert "job_aggregates.execution_generation =" in sql

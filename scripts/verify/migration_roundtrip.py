@@ -25,7 +25,19 @@ REMOVED_JOB_COLUMNS = {
     "execution_plan",
     "execution_published_at",
     "first_published_at",
+    "idempotency_key",
     "last_published_at",
+    "request_fingerprint",
+}
+
+HEAD_JOB_KERNEL_TABLES = {
+    "job_submission_keys",
+    "job_aggregates",
+    "job_execution_attempts",
+    "dispatch_outbox",
+    "callback_outbox",
+    "job_audit_events",
+    "ai_call_ledger_entries",
 }
 
 
@@ -114,16 +126,27 @@ def _assert_head_schema(target_url: URL) -> None:
     tables, columns, checks = _schema_state(target_url)
     if "reconciler_leases" in tables:
         raise AssertionError("head schema must not include reconciler_leases")
-    if "ai_jobs" in tables or "ai_job_work_items" in tables:
+    if {"ai_jobs", "ai_job_work_items", "jobs", "job_attempts", "job_events", "ai_call_logs"} & tables:
         raise AssertionError("head schema must not include legacy ai_jobs tables")
-    if REMOVED_JOB_COLUMNS & columns["jobs"]:
-        raise AssertionError(f"head schema still includes removed job columns: {sorted(REMOVED_JOB_COLUMNS & columns['jobs'])}")
-    if "dispatch_attempts" not in columns["job_attempts"]:
-        raise AssertionError("job_attempts.dispatch_attempts must remain as dispatch ledger")
-    if "ck_jobs_status" not in checks["jobs"]:
-        raise AssertionError("head schema missing ck_jobs_status")
-    if "ck_job_attempts_status" not in checks["job_attempts"]:
-        raise AssertionError("head schema missing ck_job_attempts_status")
+    missing_tables = HEAD_JOB_KERNEL_TABLES - tables
+    if missing_tables:
+        raise AssertionError(f"head schema missing transactional outbox job kernel tables: {sorted(missing_tables)}")
+    if REMOVED_JOB_COLUMNS & columns["job_aggregates"]:
+        raise AssertionError(
+            f"head schema still includes removed job columns: {sorted(REMOVED_JOB_COLUMNS & columns['job_aggregates'])}"
+        )
+    if {"published_at", "dispatch_attempts", "next_dispatch_at", "last_dispatch_error"} & columns[
+        "job_execution_attempts"
+    ]:
+        raise AssertionError("job_execution_attempts must not include dispatch ledger columns")
+    required_dispatch_columns = {"event_id", "attempt_id", "status", "publish_attempts", "next_attempt_at", "lease_token"}
+    if not required_dispatch_columns.issubset(columns["dispatch_outbox"]):
+        missing = sorted(required_dispatch_columns - columns["dispatch_outbox"])
+        raise AssertionError(f"dispatch_outbox missing required columns: {missing}")
+    if "ck_job_aggregates_status" not in checks["job_aggregates"]:
+        raise AssertionError("head schema missing ck_job_aggregates_status")
+    if "ck_job_execution_attempts_status" not in checks["job_execution_attempts"]:
+        raise AssertionError("head schema missing ck_job_execution_attempts_status")
 
 
 def _assert_0012_schema(target_url: URL) -> None:

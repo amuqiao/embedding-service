@@ -114,11 +114,30 @@ async def test_submit_job_request_returns_created_job_when_publish_failure_is_re
     async def fake_with_db(coro):
         return await coro(task_db)
 
-    async def fake_mark_attempt_publish_failed(_db, attempt_id, *, error, next_dispatch_at):
+    dispatch_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
+
+    async def fake_lease_dispatch_for_publish(_db, attempt_id, *, lease_seconds):
         assert _db is task_db
-        recorded["failed_attempt_id"] = attempt_id
+        recorded["leased_attempt_id"] = attempt_id
+        recorded["lease_seconds"] = lease_seconds
+        return type("Dispatch", (), {"id": dispatch_id})(), lease_token
+
+    async def fake_mark_dispatch_publish_failed(
+        _db,
+        received_dispatch_id,
+        *,
+        lease_token: uuid.UUID,
+        error,
+        next_attempt_at,
+        max_publish_attempts,
+    ):
+        assert _db is task_db
+        recorded["failed_dispatch_id"] = received_dispatch_id
+        recorded["lease_token"] = lease_token
         recorded["error"] = error
-        recorded["next_dispatch_at"] = next_dispatch_at
+        recorded["next_attempt_at"] = next_attempt_at
+        recorded["max_publish_attempts"] = max_publish_attempts
         return True
 
     from app.tasks import jobs as task_jobs
@@ -126,7 +145,8 @@ async def test_submit_job_request_returns_created_job_when_publish_failure_is_re
     monkeypatch.setattr("app.services.jobs.create_job", fake_create_job)
     monkeypatch.setattr(task_jobs.run_job_attempt, "kiq", fake_kiq)
     monkeypatch.setattr(task_jobs, "_with_db", fake_with_db)
-    monkeypatch.setattr(task_jobs.JobRepo, "mark_attempt_publish_failed", fake_mark_attempt_publish_failed)
+    monkeypatch.setattr(task_jobs.JobRepo, "lease_dispatch_for_publish", fake_lease_dispatch_for_publish)
+    monkeypatch.setattr(task_jobs.JobRepo, "mark_dispatch_publish_failed", fake_mark_dispatch_publish_failed)
     monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: _Handler())
 
     response = await submit_job_request(db, _payload(), "caller-1", request_id="request-1")
@@ -134,12 +154,15 @@ async def test_submit_job_request_returns_created_job_when_publish_failure_is_re
     assert response.job_id == job.id
     assert response.job_status == "queued"
     assert db.commits == 1
-    assert task_db.commits == 1
+    assert task_db.commits == 2
     assert db.refreshed == [job]
     assert recorded["kiq_attempt_id"] == str(job.active_attempt_id)
-    assert recorded["failed_attempt_id"] == job.active_attempt_id
+    assert recorded["leased_attempt_id"] == job.active_attempt_id
+    assert recorded["failed_dispatch_id"] == dispatch_id
+    assert recorded["lease_token"] == lease_token
     assert recorded["error"]["code"] == "TASKIQ_PUBLISH_FAILED"
-    assert recorded["next_dispatch_at"] > datetime.now(timezone.utc)
+    assert recorded["next_attempt_at"] > datetime.now(timezone.utc)
+    assert isinstance(recorded["max_publish_attempts"], int)
 
 
 @pytest.mark.asyncio
@@ -181,7 +204,18 @@ async def test_submit_job_request_exposes_publish_failure_when_recovery_record_i
     async def fake_with_db(coro):
         return await coro(task_db)
 
-    async def fake_mark_attempt_publish_failed(_db, _attempt_id, *, error, next_dispatch_at):
+    async def fake_lease_dispatch_for_publish(_db, _attempt_id, *, lease_seconds):
+        return type("Dispatch", (), {"id": uuid.uuid4()})(), uuid.uuid4()
+
+    async def fake_mark_dispatch_publish_failed(
+        _db,
+        _dispatch_id,
+        *,
+        lease_token,
+        error,
+        next_attempt_at,
+        max_publish_attempts,
+    ):
         return False
 
     from app.tasks import jobs as task_jobs
@@ -189,12 +223,13 @@ async def test_submit_job_request_exposes_publish_failure_when_recovery_record_i
     monkeypatch.setattr("app.services.jobs.create_job", fake_create_job)
     monkeypatch.setattr(task_jobs.run_job_attempt, "kiq", fake_kiq)
     monkeypatch.setattr(task_jobs, "_with_db", fake_with_db)
-    monkeypatch.setattr(task_jobs.JobRepo, "mark_attempt_publish_failed", fake_mark_attempt_publish_failed)
+    monkeypatch.setattr(task_jobs.JobRepo, "lease_dispatch_for_publish", fake_lease_dispatch_for_publish)
+    monkeypatch.setattr(task_jobs.JobRepo, "mark_dispatch_publish_failed", fake_mark_dispatch_publish_failed)
     monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: _Handler())
 
     with pytest.raises(RuntimeError, match="broker unavailable"):
         await submit_job_request(db, _payload(), "caller-1", request_id="request-1")
 
     assert db.commits == 1
-    assert task_db.commits == 0
+    assert task_db.commits == 1
     assert db.refreshed == [job]

@@ -2,14 +2,16 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.error_registry import get_error_spec
-from app.models.job import CallbackOutbox, Job, JobAttempt, JobEvent
+from app.models.job import CallbackOutbox, DispatchOutbox, Job, JobAttempt, JobEvent, JobSubmissionKey
 
 CALLBACK_EVENT_NAMESPACE = "ai-job-callback"
+DISPATCH_TASK_NAME = "jobs.run_attempt"
+SUBMISSION_KEY_KIND_CLIENT_REQUEST_ID = "client_request_id"
 
 
 class JobRepo:
@@ -21,25 +23,25 @@ class JobRepo:
         )
 
     @staticmethod
-    async def get_recent_by_client_request(
+    async def get_submission_by_client_request(
         db: AsyncSession,
         *,
         caller_id: str,
         client_request_id: str,
-    ) -> Job | None:
-        since = datetime.now(timezone.utc) - timedelta(hours=24)
+    ) -> tuple[Job, JobSubmissionKey] | None:
         query_result = await db.execute(
-            select(Job)
+            select(Job, JobSubmissionKey)
+            .join(JobSubmissionKey, JobSubmissionKey.job_id == Job.id)
             .where(
-                Job.caller_id == caller_id,
-                Job.client_request_id == client_request_id,
-                Job.created_at >= since,
+                JobSubmissionKey.caller_id == caller_id,
+                JobSubmissionKey.key_kind == SUBMISSION_KEY_KIND_CLIENT_REQUEST_ID,
+                JobSubmissionKey.key_value == client_request_id,
                 Job.deleted_at.is_(None),
             )
-            .order_by(Job.created_at.asc())
+            .order_by(JobSubmissionKey.created_at.asc())
             .limit(1)
         )
-        return query_result.scalar_one_or_none()
+        return query_result.one_or_none()
 
     @staticmethod
     async def create(
@@ -48,7 +50,6 @@ class JobRepo:
         caller_id: str,
         client_request_id: str | None,
         job_type: str,
-        request_fingerprint: str | None = None,
         metadata: dict[str, Any] | None = None,
         priority: str = "normal",
         timeout_seconds: int | None = None,
@@ -62,7 +63,6 @@ class JobRepo:
         job = Job(
             caller_id=caller_id,
             client_request_id=client_request_id,
-            request_fingerprint=request_fingerprint,
             job_type=job_type,
             status="queued",
             progress_percent=0,
@@ -83,6 +83,27 @@ class JobRepo:
         await db.flush()
         await db.refresh(job)
         return job
+
+    @staticmethod
+    async def create_submission_key(
+        db: AsyncSession,
+        *,
+        caller_id: str,
+        client_request_id: str,
+        request_fingerprint: str,
+        job: Job,
+    ) -> JobSubmissionKey:
+        key = JobSubmissionKey(
+            caller_id=caller_id,
+            key_kind=SUBMISSION_KEY_KIND_CLIENT_REQUEST_ID,
+            key_value=client_request_id,
+            request_fingerprint=request_fingerprint,
+            job_id=job.id,
+            expires_at=job.expires_at,
+        )
+        db.add(key)
+        await db.flush()
+        return key
 
     @staticmethod
     def _callback_events(job: Job) -> list[str]:
@@ -182,7 +203,7 @@ class JobRepo:
         existing = result.scalar_one_or_none()
         if existing is not None:
             job.callback_status = "failed" if existing.status == "dead_letter" else existing.status
-            job.callback_attempts = existing.delivery_attempt or 0
+            job.callback_attempts = existing.delivery_attempts or 0
             job.callback_next_retry_at = existing.next_attempt_at
             job.callback_last_error = existing.last_error
             return existing
@@ -194,6 +215,8 @@ class JobRepo:
             job_id=job.id,
             event_id=event_id,
             event_type=event_type,
+            callback_url=job.callback_url,
+            signature_version="hmac-sha256:v1",
             status=outbox_status,
             payload=JobRepo._terminal_callback_payload(job, event_id=event_id, event_type=event_type, now=now),
             next_attempt_at=now if subscribed else None,
@@ -217,15 +240,45 @@ class JobRepo:
         return outbox
 
     @staticmethod
+    async def create_dispatch_outbox(
+        db: AsyncSession,
+        *,
+        job_id: uuid.UUID,
+        attempt_id: uuid.UUID,
+        next_attempt_at: datetime | None,
+        dispatch_reason: str,
+    ) -> DispatchOutbox:
+        outbox = DispatchOutbox(
+            event_id=f"job_attempt:{attempt_id}:dispatch",
+            job_id=job_id,
+            attempt_id=attempt_id,
+            task_name=DISPATCH_TASK_NAME,
+            payload={"attempt_id": str(attempt_id)},
+            status="pending",
+            next_attempt_at=next_attempt_at,
+        )
+        db.add(outbox)
+        db.add(
+            JobEvent(
+                job_id=job_id,
+                attempt_id=attempt_id,
+                event_type="dispatch.created",
+                to_status="pending",
+                payload={"task_name": DISPATCH_TASK_NAME, "dispatch_reason": dispatch_reason},
+            )
+        )
+        await db.flush()
+        return outbox
+
+    @staticmethod
     async def create_initial_attempt(db: AsyncSession, job: Job, *, timeout_seconds: int) -> JobAttempt:
         attempt_id = uuid.uuid4()
         attempt = JobAttempt(
             id=attempt_id,
             job_id=job.id,
             attempt_no=1,
-            status="queued",
+            status="pending",
             timeout_seconds=timeout_seconds,
-            next_dispatch_at=datetime.now(timezone.utc),
         )
         db.add(attempt)
         job.active_attempt_id = attempt_id
@@ -237,8 +290,16 @@ class JobRepo:
                 job_id=job.id,
                 attempt_id=attempt_id,
                 event_type="attempt.created",
-                to_status="queued",
+                to_status="pending",
             )
+        )
+        await db.flush()
+        await JobRepo.create_dispatch_outbox(
+            db,
+            job_id=job.id,
+            attempt_id=attempt_id,
+            next_attempt_at=datetime.now(timezone.utc),
+            dispatch_reason="initial",
         )
         await db.flush()
         return attempt
@@ -249,61 +310,150 @@ class JobRepo:
         return result.scalar_one_or_none()
 
     @staticmethod
-    async def mark_attempt_published(
+    async def lease_dispatch_for_publish(
         db: AsyncSession,
         attempt_id: uuid.UUID,
         *,
-        next_dispatch_at: datetime,
-    ) -> bool:
-        now = datetime.now(timezone.utc)
-        result = await db.execute(select(JobAttempt).where(JobAttempt.id == attempt_id).with_for_update(skip_locked=True))
-        attempt = result.scalar_one_or_none()
-        if not attempt or attempt.status not in {"queued", "published"}:
-            return False
-        previous = attempt.status
-        attempt.status = "published"
-        attempt.published_at = now
-        attempt.dispatch_attempts = (attempt.dispatch_attempts or 0) + 1
-        attempt.next_dispatch_at = next_dispatch_at
-        attempt.last_dispatch_error = None
-        attempt.updated_at = now
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> tuple[DispatchOutbox, uuid.UUID] | None:
+        now = now or datetime.now(timezone.utc)
+        result = await db.execute(
+            select(DispatchOutbox, Job, JobAttempt)
+            .join(Job, Job.id == DispatchOutbox.job_id)
+            .join(JobAttempt, JobAttempt.id == DispatchOutbox.attempt_id)
+            .where(
+                DispatchOutbox.attempt_id == attempt_id,
+                DispatchOutbox.task_name == DISPATCH_TASK_NAME,
+                Job.status == "queued",
+                Job.active_attempt_id == JobAttempt.id,
+                Job.deleted_at.is_(None),
+                JobAttempt.status == "pending",
+                or_(
+                    and_(
+                        DispatchOutbox.status.in_(["pending", "retrying"]),
+                        or_(DispatchOutbox.next_attempt_at.is_(None), DispatchOutbox.next_attempt_at <= now),
+                    ),
+                    and_(DispatchOutbox.status == "leased", DispatchOutbox.lease_expires_at <= now),
+                    and_(DispatchOutbox.status == "published", DispatchOutbox.next_attempt_at <= now),
+                ),
+            )
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        row = result.one_or_none()
+        if row is None:
+            return None
+        dispatch, _job, _attempt = row
+        previous = dispatch.status
+        lease_token = uuid.uuid4()
+        dispatch.status = "leased"
+        dispatch.lease_token = lease_token
+        dispatch.lease_expires_at = now + timedelta(seconds=lease_seconds)
+        dispatch.leased_at = now
+        dispatch.updated_at = now
         db.add(
             JobEvent(
-                job_id=attempt.job_id,
-                attempt_id=attempt.id,
-                event_type="attempt.published",
+                job_id=dispatch.job_id,
+                attempt_id=dispatch.attempt_id,
+                event_type="dispatch.leased",
                 from_status=previous,
+                to_status="leased",
+                payload={"dispatch_id": str(dispatch.id), "task_name": dispatch.task_name},
+            )
+        )
+        await db.flush()
+        return dispatch, lease_token
+
+    @staticmethod
+    async def mark_dispatch_published(
+        db: AsyncSession,
+        dispatch_id: uuid.UUID,
+        *,
+        lease_token: uuid.UUID,
+        next_attempt_at: datetime,
+    ) -> bool:
+        now = datetime.now(timezone.utc)
+        result = await db.execute(
+            select(DispatchOutbox)
+            .where(
+                DispatchOutbox.id == dispatch_id,
+                DispatchOutbox.status == "leased",
+                DispatchOutbox.lease_token == lease_token,
+            )
+            .with_for_update(skip_locked=True)
+        )
+        dispatch = result.scalar_one_or_none()
+        if dispatch is None:
+            return False
+        dispatch.status = "published"
+        dispatch.publish_attempts = (dispatch.publish_attempts or 0) + 1
+        dispatch.next_attempt_at = next_attempt_at
+        dispatch.lease_token = None
+        dispatch.lease_expires_at = None
+        dispatch.last_error = None
+        dispatch.published_at = now
+        dispatch.updated_at = now
+        db.add(
+            JobEvent(
+                job_id=dispatch.job_id,
+                attempt_id=dispatch.attempt_id,
+                event_type="dispatch.published",
+                from_status="leased",
                 to_status="published",
+                payload={"dispatch_id": str(dispatch.id), "task_name": dispatch.task_name},
             )
         )
         await db.flush()
         return True
 
     @staticmethod
-    async def mark_attempt_publish_failed(
+    async def mark_dispatch_publish_failed(
         db: AsyncSession,
-        attempt_id: uuid.UUID,
+        dispatch_id: uuid.UUID,
         *,
+        lease_token: uuid.UUID,
         error: dict[str, Any],
-        next_dispatch_at: datetime,
+        next_attempt_at: datetime,
+        max_publish_attempts: int,
     ) -> bool:
         now = datetime.now(timezone.utc)
-        result = await db.execute(select(JobAttempt).where(JobAttempt.id == attempt_id).with_for_update(skip_locked=True))
-        attempt = result.scalar_one_or_none()
-        if not attempt or attempt.status not in {"queued", "published"}:
+        result = await db.execute(
+            select(DispatchOutbox)
+            .where(
+                DispatchOutbox.id == dispatch_id,
+                DispatchOutbox.status == "leased",
+                DispatchOutbox.lease_token == lease_token,
+            )
+            .with_for_update(skip_locked=True)
+        )
+        dispatch = result.scalar_one_or_none()
+        if dispatch is None:
             return False
-        attempt.dispatch_attempts = (attempt.dispatch_attempts or 0) + 1
-        attempt.last_dispatch_error = error
-        attempt.next_dispatch_at = next_dispatch_at
-        attempt.updated_at = now
+        previous = dispatch.status
+        publish_attempts = (dispatch.publish_attempts or 0) + 1
+        dispatch.publish_attempts = publish_attempts
+        dispatch.lease_token = None
+        dispatch.lease_expires_at = None
+        dispatch.last_error = error
+        dispatch.updated_at = now
+        if publish_attempts >= max_publish_attempts:
+            dispatch.status = "dead_letter"
+            dispatch.next_attempt_at = None
+            dispatch.dead_lettered_at = now
+        else:
+            dispatch.status = "retrying"
+            dispatch.next_attempt_at = next_attempt_at
         db.add(
             JobEvent(
-                job_id=attempt.job_id,
-                attempt_id=attempt.id,
-                event_type="attempt.publish_failed",
-                from_status=attempt.status,
-                to_status=attempt.status,
-                payload=error,
+                job_id=dispatch.job_id,
+                attempt_id=dispatch.attempt_id,
+                event_type="dispatch.dead_lettered"
+                if dispatch.status == "dead_letter"
+                else "dispatch.publish_failed",
+                from_status=previous,
+                to_status=dispatch.status,
+                payload={**error, "dispatch_id": str(dispatch.id), "publish_attempts": publish_attempts},
             )
         )
         await db.flush()
@@ -325,7 +475,7 @@ class JobRepo:
                 Job.active_attempt_id == JobAttempt.id,
                 Job.status == "queued",
                 Job.deleted_at.is_(None),
-                JobAttempt.status.in_(["queued", "published"]),
+                JobAttempt.status == "pending",
             )
             .with_for_update()
         )
@@ -412,7 +562,7 @@ class JobRepo:
         error_kind: str = "worker_error",
         failure_phase: str = "execute",
         retryable: bool = False,
-        next_dispatch_at: datetime | None = None,
+        next_attempt_at: datetime | None = None,
     ) -> bool:
         conditions = [JobAttempt.id == attempt_id, JobAttempt.status == "running"]
         if lease_token is not None:
@@ -445,9 +595,8 @@ class JobRepo:
                 id=next_attempt_id,
                 job_id=job.id,
                 attempt_no=next_attempt_no,
-                status="queued",
+                status="pending",
                 timeout_seconds=job.timeout_seconds or attempt.timeout_seconds,
-                next_dispatch_at=next_dispatch_at or now,
             )
             db.add(next_attempt)
             job.active_attempt_id = next_attempt_id
@@ -465,13 +614,20 @@ class JobRepo:
                     job_id=job.id,
                     attempt_id=next_attempt_id,
                     event_type="attempt.created",
-                    to_status="queued",
+                    to_status="pending",
                     payload={
                         "reason": "retry",
                         "previous_attempt_id": str(attempt.id),
                         "previous_error": error,
                     },
                 )
+            )
+            await JobRepo.create_dispatch_outbox(
+                db,
+                job_id=job.id,
+                attempt_id=next_attempt_id,
+                next_attempt_at=next_attempt_at or now,
+                dispatch_reason="retry",
             )
         elif job.status != "failed":
             job.status = "failed"
@@ -539,23 +695,26 @@ class JobRepo:
         return True
 
     @staticmethod
-    async def find_dispatch_due_attempts(db: AsyncSession, now: datetime, *, limit: int) -> list[JobAttempt]:
+    async def find_due_dispatches(db: AsyncSession, now: datetime, *, limit: int) -> list[DispatchOutbox]:
         result = await db.execute(
-            select(JobAttempt)
-            .join(Job, Job.id == JobAttempt.job_id)
+            select(DispatchOutbox)
+            .join(Job, Job.id == DispatchOutbox.job_id)
+            .join(JobAttempt, JobAttempt.id == DispatchOutbox.attempt_id)
             .where(
                 Job.status == "queued",
                 Job.active_attempt_id == JobAttempt.id,
                 Job.deleted_at.is_(None),
+                JobAttempt.status == "pending",
                 or_(
                     and_(
-                        JobAttempt.status == "queued",
-                        or_(JobAttempt.next_dispatch_at.is_(None), JobAttempt.next_dispatch_at <= now),
+                        DispatchOutbox.status.in_(["pending", "retrying"]),
+                        or_(DispatchOutbox.next_attempt_at.is_(None), DispatchOutbox.next_attempt_at <= now),
                     ),
-                    and_(JobAttempt.status == "published", JobAttempt.next_dispatch_at <= now),
+                    and_(DispatchOutbox.status == "leased", DispatchOutbox.lease_expires_at <= now),
+                    and_(DispatchOutbox.status == "published", DispatchOutbox.next_attempt_at <= now),
                 ),
             )
-            .order_by(JobAttempt.created_at.asc())
+            .order_by(DispatchOutbox.created_at.asc())
             .limit(limit)
         )
         return list(result.scalars().all())
@@ -705,8 +864,8 @@ class JobRepo:
                 Job.id == job_id,
                 Job.status.in_(["succeeded", "failed"]),
                 Job.deleted_at.is_(None),
-                CallbackOutbox.status.in_(["pending", "failed", "leased"]),
-                CallbackOutbox.delivery_attempt < max_attempts,
+                CallbackOutbox.status.in_(["pending", "retrying", "leased"]),
+                CallbackOutbox.delivery_attempts < max_attempts,
                 or_(
                     CallbackOutbox.next_attempt_at.is_(None),
                     CallbackOutbox.next_attempt_at <= now,
@@ -727,14 +886,10 @@ class JobRepo:
         outbox.status = "leased"
         outbox.lease_token = uuid.uuid4()
         outbox.lease_expires_at = next_retry_at
-        outbox.delivery_attempt = (outbox.delivery_attempt or 0) + 1
-        outbox.first_attempt_at = outbox.first_attempt_at or now
-        outbox.last_attempt_at = now
+        outbox.leased_at = now
         outbox.updated_at = now
         job.callback_status = "delivering"
-        job.callback_attempts = outbox.delivery_attempt
-        job.callback_first_attempt_at = job.callback_first_attempt_at or now
-        job.callback_last_attempt_at = now
+        job.callback_attempts = outbox.delivery_attempts or 0
         job.callback_next_retry_at = next_retry_at
         job.updated_at = now
         db.add(
@@ -744,7 +899,7 @@ class JobRepo:
                 event_type="callback.leased",
                 from_status=previous_status,
                 to_status="leased",
-                payload={"event_type": outbox.event_type, "delivery_attempt": outbox.delivery_attempt},
+                payload={"event_type": outbox.event_type, "delivery_attempts": outbox.delivery_attempts or 0},
             )
         )
         await db.flush()
@@ -759,6 +914,8 @@ class JobRepo:
         last_error: dict[str, Any] | None,
         next_retry_at: datetime | None,
         max_attempts: int,
+        delivery_attempts: int = 1,
+        last_response: dict[str, Any] | None = None,
         callback_id: uuid.UUID | None = None,
         lease_token: uuid.UUID | None = None,
     ) -> None:
@@ -777,9 +934,15 @@ class JobRepo:
         job, outbox = row
         now = datetime.now(timezone.utc)
         previous_status = outbox.status
+        attempted_count = max(0, delivery_attempts)
+        if attempted_count:
+            outbox.delivery_attempts = (outbox.delivery_attempts or 0) + attempted_count
+            outbox.first_attempt_at = outbox.first_attempt_at or now
+            outbox.last_attempt_at = now
         outbox.lease_token = None
         outbox.lease_expires_at = None
         outbox.last_error = last_error
+        outbox.last_response = last_response
         outbox.updated_at = now
         if status == "delivered":
             outbox.status = "delivered"
@@ -795,7 +958,7 @@ class JobRepo:
             job.callback_status = "skipped"
             job.callback_next_retry_at = None
             job.callback_last_error = last_error
-        elif status == "failed" and (outbox.delivery_attempt or 0) >= max_attempts:
+        elif status == "failed" and (outbox.delivery_attempts or 0) >= max_attempts:
             outbox.status = "dead_letter"
             outbox.next_attempt_at = None
             outbox.dead_lettered_at = now
@@ -804,15 +967,15 @@ class JobRepo:
             job.callback_next_retry_at = None
             job.callback_last_error = last_error
         elif status == "failed":
-            outbox.status = "failed"
+            outbox.status = "retrying"
             outbox.next_attempt_at = next_retry_at
-            job.callback_status = "pending"
+            job.callback_status = "retrying"
             job.callback_next_retry_at = next_retry_at
             job.callback_last_error = last_error
         else:
             raise ValueError(f"unsupported callback result status: {status}")
 
-        job.callback_attempts = outbox.delivery_attempt or 0
+        job.callback_attempts = outbox.delivery_attempts or 0
         job.callback_first_attempt_at = job.callback_first_attempt_at or outbox.first_attempt_at or now
         job.callback_last_attempt_at = outbox.last_attempt_at or now
         job.updated_at = now
@@ -825,7 +988,7 @@ class JobRepo:
                 to_status=outbox.status,
                 payload={
                     "event_type": outbox.event_type,
-                    "delivery_attempt": outbox.delivery_attempt,
+                    "delivery_attempts": outbox.delivery_attempts,
                     "last_error": last_error,
                 },
             )
@@ -846,8 +1009,8 @@ class JobRepo:
             .where(
                 Job.status.in_(["succeeded", "failed"]),
                 Job.deleted_at.is_(None),
-                CallbackOutbox.status.in_(["pending", "failed", "leased"]),
-                CallbackOutbox.delivery_attempt < max_attempts,
+                CallbackOutbox.status.in_(["pending", "retrying", "leased"]),
+                CallbackOutbox.delivery_attempts < max_attempts,
                 or_(
                     CallbackOutbox.next_attempt_at.is_(None),
                     CallbackOutbox.next_attempt_at <= now,
@@ -875,10 +1038,13 @@ class JobRepo:
             Job.deleted_at.is_(None),
             Job.status.in_(["succeeded", "failed"]),
             Job.callback_status.in_(["delivered", "skipped", "not_configured"]),
+        ).subquery()
+        await db.execute(
+            delete(JobSubmissionKey).where(JobSubmissionKey.job_id.in_(select(expired_settled_jobs.c.id)))
         )
         result = await db.execute(
             update(Job)
-            .where(Job.id.in_(expired_settled_jobs))
+            .where(Job.id.in_(select(expired_settled_jobs.c.id)))
             .values(
                 delete_requested_at=func.now(),
                 deleted_at=func.now(),

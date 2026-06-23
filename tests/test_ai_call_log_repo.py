@@ -75,8 +75,8 @@ async def test_mark_stale_pending_failed_selects_stale_pending_rows_and_marks_fa
     assert row.duration_ms >= 0
     assert row.updated_at == row.completed_at
     statement_text = str(db.statement)
-    assert "ai_call_logs.status" in statement_text
-    assert "ai_call_logs.created_at" in statement_text
+    assert "ai_call_ledger_entries.status" in statement_text
+    assert "ai_call_ledger_entries.created_at" in statement_text
     assert "<=" in statement_text
     assert "FOR UPDATE" in statement_text
 

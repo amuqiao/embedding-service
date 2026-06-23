@@ -136,8 +136,13 @@ def _callback_response_summary(
     }
 
 
-async def deliver_callback(job: Job, *, payload: dict[str, Any] | None = None) -> CallbackDeliveryResult:
-    url = job.callback_url
+async def deliver_callback(
+    job: Job,
+    *,
+    payload: dict[str, Any] | None = None,
+    callback_url: str | None = None,
+) -> CallbackDeliveryResult:
+    url = callback_url if callback_url is not None else job.callback_url
     if not url:
         return CallbackDeliveryResult(status="skipped")
     try:

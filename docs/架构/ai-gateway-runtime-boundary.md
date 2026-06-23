@@ -7,11 +7,11 @@
 | 边界 | 当前 owner | 职责 | 不负责 |
 |---|---|---|---|
 | Job kernel | `app/jobs/runner.py`、`app/tasks/jobs.py`、`app/repositories/job_repo.py` | Job / Attempt 状态迁移、租约、重试、终态写回和 Callback outbox | provider 协议、usage 提取、成本估算 |
-| Job runtime consumer | `app/services/executor.py`、具体 `JobExecutor` | 从 runtime snapshot 读取模型调用输入，把 Job scope 上下文传给 AI gateway | 直接写 `ai_call_logs` 或自行计算 billing |
+| Job runtime consumer | `app/services/executor.py`、具体 `JobExecutor` | 从 runtime snapshot 读取模型调用输入，把 Job scope 上下文传给 AI gateway | 直接写 `ai_call_ledger_entries` 或自行计算 billing |
 | AI gateway facade | `app/services/ai_gateway_facade.py` | model gate、pending ledger、provider adapter 调用、usage 校验、成本估算、terminal ledger 更新 | Job 状态迁移、Callback 投递、公开 HTTP envelope 包装 |
 | Provider adapter | `app/integrations/ai_gateway.py` | 通过 LiteLLM 执行文本生成并返回 `TextGenerationResult` | 写数据库、写 Job、写 Callback、决定 billing envelope |
-| AI call ledger | `app/repositories/ai_call_log_repo.py`、`ai_call_logs` | 保存每次真实 AI provider 调用的 pending / terminal 事实 | 反向决定 Job succeeded / failed |
-| Billing read model | `app/services/billing.py` | 从 `ai_call_logs` 聚合 Job scope `BillingEnvelope` | 修改 ledger、Job、Attempt 或 provider 调用结果 |
+| AI call ledger | `app/repositories/ai_call_log_repo.py`、`ai_call_ledger_entries` | 保存每次真实 AI provider 调用的 pending / terminal 事实 | 反向决定 Job succeeded / failed |
+| Billing read model | `app/services/billing.py` | 从 `ai_call_ledger_entries` 聚合 Job scope `BillingEnvelope` | 修改 ledger、Job、Attempt 或 provider 调用结果 |
 
 稳定依赖方向：
 
@@ -20,11 +20,11 @@ Job runner
   -> JobExecutor / Job runtime consumer
   -> AI gateway facade
   -> model catalog / pricing registry
-  -> ai_call_logs repository
+  -> ai_call_ledger_entries repository
   -> LiteLLM provider adapter
 
 Billing service
-  -> ai_call_logs repository
+  -> ai_call_ledger_entries repository
   -> BillingEnvelope
 ```
 
@@ -41,7 +41,7 @@ Taskiq attempt
   -> app/services/executor.py::run_ai_job()
   -> app/services/ai_gateway_facade.py::generate_text_with_ledger()
   -> app/integrations/ai_gateway.py::generate_text()
-  -> ai_call_logs terminal row
+  -> ai_call_ledger_entries terminal row
 ```
 
 自定义 `JobExecutor` 也可以调用 `generate_text_with_ledger()`。当前 `job_real_llm_double_echo` 使用这种方式在同一 Job scope 内发起两次真实 LLM 调用，并由 Job billing 聚合两条 ledger 行。
@@ -50,7 +50,7 @@ Taskiq attempt
 
 AI gateway facade 当前使用两阶段 ledger 写入：
 
-1. 调用 provider 前创建 `ai_call_logs.status=pending` 并提交。
+1. 调用 provider 前创建 `ai_call_ledger_entries.status=pending` 并提交。
 2. Provider 返回后校验 usage、计算 cost estimate，再把同一行更新为 terminal。
 3. 如果 pending ledger 创建失败，不调用 provider。
 4. 如果 provider 超时或失败，尝试把 ledger 标记为 failed，并抛稳定 `AppError`。

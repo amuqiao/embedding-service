@@ -119,13 +119,13 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
         lease_token: uuid.UUID,
         error,
         retryable,
-        next_dispatch_at,
+        next_attempt_at,
     ):
         marked["attempt_id"] = received_attempt_id
         marked["lease_token"] = lease_token
         marked["error"] = error
         marked["retryable"] = retryable
-        marked["next_dispatch_at"] = next_dispatch_at
+        marked["next_attempt_at"] = next_attempt_at
         return True
 
     async def fake_deliver_callback_for_job(_job_id):
@@ -148,7 +148,7 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
     assert marked["lease_token"] == lease_token
     assert marked["error"]["code"] == error_code
     assert marked["retryable"] is expected_retryable
-    assert marked["next_dispatch_at"] is not None
+    assert marked["next_attempt_at"] is not None
 
 
 @pytest.mark.asyncio

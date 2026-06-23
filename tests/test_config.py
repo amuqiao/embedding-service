@@ -138,6 +138,27 @@ def test_security_header_disable_flags_require_local_service_urls():
         )
 
 
+def test_redis_list_broker_is_local_development_only():
+    local = _build_settings(
+        REDIS_URL="redis://127.0.0.1:26379/0",
+        TASKIQ_BROKER_KIND="redis_list",
+    )
+
+    assert local.broker.kind == "redis_list"
+
+    with pytest.raises(ValidationError, match="redis_list is local development only"):
+        _build_settings(
+            REDIS_URL="redis://redis:6379/0",
+            TASKIQ_BROKER_KIND="redis_list",
+        )
+
+    remote_stream = _build_settings(
+        REDIS_URL="redis://redis:6379/0",
+        TASKIQ_BROKER_KIND="redis_stream",
+    )
+    assert remote_stream.broker.kind == "redis_stream"
+
+
 def test_settings_rejects_buffers_below_minimum():
     s = _build_settings(MODEL_CALL_TIMEOUT_SECONDS=1)
     assert s.worker_soft_time_limit == 1 + _WORKER_SOFT_TIMEOUT_BUFFER

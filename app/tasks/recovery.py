@@ -51,12 +51,12 @@ async def _run_recovery(db: AsyncSession) -> dict:
 
     try:
         now = datetime.now(timezone.utc)
-        due_attempts = await JobRepo.find_dispatch_due_attempts(
+        due_dispatches = await JobRepo.find_due_dispatches(
             db,
             now,
             limit=settings.job.recovery_batch_size,
         )
-        dispatch_attempts.extend(attempt.id for attempt in due_attempts)
+        dispatch_attempts.extend(dispatch.attempt_id for dispatch in due_dispatches)
 
         stale_attempts = await JobRepo.find_stale_running_attempts(
             db,
@@ -80,7 +80,7 @@ async def _run_recovery(db: AsyncSession) -> dict:
                 error_kind="timeout",
                 failure_phase="lease",
                 retryable=True,
-                next_dispatch_at=now,
+                next_attempt_at=now,
             )
             if claimed:
                 failed += 1

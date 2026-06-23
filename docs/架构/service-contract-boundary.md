@@ -97,7 +97,7 @@ owner：
 
 - 对外字段 schema 在 `app/schemas/jobs.py`。
 - 视图构造和 job_type 结果投影在 `app/services/jobs.py`、`app/jobs/registry.py` 和对应 `JobExecutor`。
-- 状态事实来自 `jobs`、`job_attempts`、`callback_outbox` 和 `JobRepo` 受控迁移。
+- 状态事实来自 `job_aggregates`、`job_execution_attempts`、`dispatch_outbox`、`callback_outbox` 和 `JobRepo` 受控迁移。
 
 当前公开状态：
 
@@ -151,7 +151,7 @@ owner：
 - Billing schema 在 `app/schemas/billing.py`。
 - Job billing route 在 `app/api/routes/jobs.py`。
 - Billing 聚合在 `app/services/billing.py`。
-- 调用事实来自 `ai_call_logs`，由 AI gateway facade 和 repository 写入。
+- 调用事实来自 `ai_call_ledger_entries`，由 AI gateway facade 和 repository 写入。
 
 当前公开 billing 路由只开放 Job scope：
 
@@ -166,7 +166,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}/billing
 - Job billing 只在 Job 到达 `succeeded` 或 `failed` 后可查询。
 - 无 AI call 的 Job 返回 `not_billable`，不伪造 `estimated 0`。
 - `BillingEnvelope` 是 ledger 的读取投影，不反向修改 Job、attempt、callback 或 provider 调用结果。
-- `ai_call_logs` 是 AI provider call 事实源；`jobs` 表不保存 provider usage / cost 明细。
+- `ai_call_ledger_entries` 是 AI provider call 事实源；`job_aggregates` 表不保存 provider usage / cost 明细。
 - `diagnostic_reason` 当前是机器可读字符串，但不是已冻结枚举；调用方可以记录和展示，不应在未版本化合同前依赖完整枚举分支。
 - `usage_units` 当前是开放 key-value map；新增 usage key 不应视为 breaking change。
 - 通用 scope billing、caller 时间窗口聚合、批量导出和同步 AI 能力接口都不是当前公开 HTTP 合同。
@@ -175,11 +175,12 @@ GET /api/v1/ai-jobs/jobs/{job_id}/billing
 
 以下事实可以出现在数据库、日志、内部诊断或后续 ops 能力中，但不得在未版本化情况下进入公开 envelope：
 
-- `job_attempts` 的内部状态、publish status、worker id、lease token、heartbeat 和 timeout 细节。
-- `jobs.execution_token`、`execution_generation`、runtime refs、对象存储内部路径和 cleanup 标记。
+- `job_execution_attempts` 的内部状态、worker id、lease token、heartbeat 和 timeout 细节。
+- `dispatch_outbox` 的 publish status、publisher lease、publish retry 和 dead letter 细节。
+- `job_aggregates.execution_token`、`execution_generation`、runtime refs、对象存储内部路径和 cleanup 标记。
 - `callback_outbox` 的 lease、dead letter、delivery deadline、HTTP 原始响应体。
-- `job_events`。
-- `ai_call_logs` 的 provider 原始错误、request / response hash、usage detail、pricing snapshot 内部字段。
+- `job_audit_events`。
+- `ai_call_ledger_entries` 的 provider 原始错误、request / response hash、usage detail、pricing snapshot 内部字段。
 - Prompt 全文、模型完整输出、密钥、provider 原始响应或高基数诊断字段。
 
 ## 演进规则

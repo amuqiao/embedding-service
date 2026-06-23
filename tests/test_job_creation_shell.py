@@ -90,7 +90,6 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
             id=uuid.uuid4(),
             caller_id=kwargs["caller_id"],
             client_request_id=kwargs["client_request_id"],
-            request_fingerprint=kwargs["request_fingerprint"],
             job_type=kwargs["job_type"],
             status="queued",
             progress_percent=0,
@@ -110,6 +109,9 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     async def fake_get_recent(*_args, **_kwargs):
         return None
 
+    async def fake_create_submission_key(_db, **kwargs):
+        captured["submission_key"] = kwargs
+
     async def fake_create_initial_attempt(_db, created_job, *, timeout_seconds):
         captured["initial_attempt"] = (created_job.id, timeout_seconds)
 
@@ -125,8 +127,9 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
 
     _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=0)
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
-    monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fake_create)
+    monkeypatch.setattr("app.services.jobs.JobRepo.create_submission_key", fake_create_submission_key)
     monkeypatch.setattr("app.services.jobs.JobRepo.create_initial_attempt", fake_create_initial_attempt)
     monkeypatch.setattr("app.services.jobs.write_runtime_json", fake_write_runtime_json)
     monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
@@ -145,8 +148,9 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     job, created = await create_job(_FakeDB(), payload, "caller-1")
 
     assert created is True
-    assert job.request_fingerprint.startswith("sha256:")
-    assert captured["request_fingerprint"] == job.request_fingerprint
+    assert captured["submission_key"]["request_fingerprint"].startswith("sha256:")
+    assert captured["submission_key"]["job"] is job
+    assert captured["submission_key"]["client_request_id"] == "req-1"
     assert "input_payload" not in captured
     assert "prompt_payload" not in captured
     assert "output_payload" not in captured
@@ -173,7 +177,6 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
         id=uuid.uuid4(),
         caller_id="caller-1",
         client_request_id="req-1",
-        request_fingerprint=None,
         job_type="test.echo",
         status="queued",
         progress_percent=0,
@@ -186,14 +189,14 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
         pass
 
     async def fake_get_recent(*_args, **_kwargs):
-        return existing
+        return existing, SimpleNamespace(request_fingerprint=expected_fingerprint)
 
     async def fail_create(*_args, **_kwargs):
         raise AssertionError("idempotent create should return existing job")
 
     _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=0)
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
-    monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
     monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
 
@@ -206,7 +209,6 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
         }
     )
     expected_fingerprint = _request_fingerprint(payload, "caller-1", {"value": {"hello": "world"}, "label": "Echo"})
-    existing.request_fingerprint = expected_fingerprint
 
     job, created = await create_job(_FakeDB(), payload, "caller-1")
 
@@ -220,7 +222,6 @@ async def test_create_job_rejects_duplicate_by_default(monkeypatch):
         id=uuid.uuid4(),
         caller_id="caller-1",
         client_request_id="req-1",
-        request_fingerprint=None,
         job_type="test.echo",
         status="queued",
         progress_percent=0,
@@ -233,11 +234,11 @@ async def test_create_job_rejects_duplicate_by_default(monkeypatch):
         pass
 
     async def fake_get_recent(*_args, **_kwargs):
-        return existing
+        return existing, SimpleNamespace(request_fingerprint=expected_fingerprint)
 
     _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=0)
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
-    monkeypatch.setattr("app.services.jobs.JobRepo.get_recent_by_client_request", fake_get_recent)
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
 
     payload = CreateJobRequest.model_validate(
@@ -247,7 +248,7 @@ async def test_create_job_rejects_duplicate_by_default(monkeypatch):
             "job_params": {"value": {"hello": "world"}, "label": "Echo"},
         }
     )
-    existing.request_fingerprint = _request_fingerprint(payload, "caller-1", {"value": {"hello": "world"}, "label": "Echo"})
+    expected_fingerprint = _request_fingerprint(payload, "caller-1", {"value": {"hello": "world"}, "label": "Echo"})
 
     with pytest.raises(Exception, match="client_request_id already used"):
         await create_job(_FakeDB(), payload, "caller-1")

@@ -719,7 +719,8 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
             "id": callback_id,
             "lease_token": lease_token,
             "payload": {"event": "job.succeeded", "job": {"job_type": job.job_type}},
-            "delivery_attempt": 1,
+            "callback_url": job.callback_url,
+            "delivery_attempts": 0,
         },
     )()
     commits = 0
@@ -744,15 +745,17 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
         recorded["claimed_next_retry_at"] = next_retry_at
         return job, outbox
 
-    async def fake_deliver_callback(sent_job, *, payload=None):
+    async def fake_deliver_callback(sent_job, *, payload=None, callback_url=None):
         assert sent_job is job
         assert sent_job.callback_status == "delivering"
         assert sent_job.callback_next_retry_at == recorded["claimed_next_retry_at"]
         assert payload is outbox.payload
+        assert callback_url == job.callback_url
         return CallbackDeliveryResult(
             status="failed",
             attempts=1,
             last_error={"code": "CALLBACK_HTTP_ERROR", "status_code": 503},
+            response={"format": "ack", "valid": False},
         )
 
     async def fake_mark_callback_result(
@@ -763,6 +766,8 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
         last_error,
         next_retry_at,
         max_attempts,
+        delivery_attempts,
+        last_response,
         callback_id,
         lease_token,
     ):
@@ -772,6 +777,8 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
             "last_error": last_error,
             "next_retry_at": next_retry_at,
             "max_attempts": max_attempts,
+            "delivery_attempts": delivery_attempts,
+            "last_response": last_response,
             "callback_id": callback_id,
             "lease_token": lease_token,
         }
@@ -791,5 +798,7 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
     assert recorded["result"]["last_error"] == {"code": "CALLBACK_HTTP_ERROR", "status_code": 503}
     assert recorded["result"]["next_retry_at"] is not None
     assert recorded["result"]["callback_id"] == callback_id
+    assert recorded["result"]["delivery_attempts"] == 1
+    assert recorded["result"]["last_response"] == {"format": "ack", "valid": False}
     assert recorded["result"]["lease_token"] == lease_token
     assert job.status == "succeeded"

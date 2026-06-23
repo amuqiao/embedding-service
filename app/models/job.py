@@ -9,16 +9,14 @@ from app.core.database import Base
 
 
 class Job(Base):
-    __tablename__ = "jobs"
+    __tablename__ = "job_aggregates"
     __table_args__ = (
-        CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_jobs_status"),
+        CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_job_aggregates_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     caller_id: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
     client_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    request_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     job_type: Mapped[str] = mapped_column(String(96), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", index=True)
     progress_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -45,8 +43,8 @@ class Job(Base):
     active_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey(
-            "job_attempts.id",
-            name="fk_jobs_active_attempt_id_job_attempts",
+            "job_execution_attempts.id",
+            name="fk_job_aggregates_active_attempt_id_job_execution_attempts",
             use_alter=True,
             deferrable=True,
             initially="DEFERRED",
@@ -83,26 +81,43 @@ class Job(Base):
     )
 
 
-class JobAttempt(Base):
-    __tablename__ = "job_attempts"
+class JobSubmissionKey(Base):
+    __tablename__ = "job_submission_keys"
     __table_args__ = (
-        CheckConstraint(
-            "status IN ('queued', 'published', 'running', 'succeeded', 'failed')",
-            name="ck_job_attempts_status",
-        ),
-        UniqueConstraint("job_id", "attempt_no", name="uq_job_attempts_job_attempt_no"),
-        Index("ix_job_attempts_dispatch_due", "status", "next_dispatch_at", "created_at"),
-        Index("ix_job_attempts_running_lease", "status", "lease_expires_at"),
+        UniqueConstraint("caller_id", "key_kind", "key_value", name="uq_job_submission_keys_caller_kind_value"),
+        Index("ix_job_submission_keys_job_id", "job_id"),
+        Index("ix_job_submission_keys_expires_at", "expires_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False, index=True)
+    caller_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    key_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    key_value: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("job_aggregates.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class JobAttempt(Base):
+    __tablename__ = "job_execution_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'running', 'succeeded', 'failed')",
+            name="ck_job_execution_attempts_status",
+        ),
+        UniqueConstraint("job_id", "attempt_no", name="uq_job_execution_attempts_job_attempt_no"),
+        Index("ix_job_execution_attempts_running_lease", "status", "lease_expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("job_aggregates.id"), nullable=False, index=True
+    )
     attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", index=True)
-    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    dispatch_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    next_dispatch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-    last_dispatch_error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
     worker_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     leased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -121,6 +136,47 @@ class JobAttempt(Base):
     )
 
 
+class DispatchOutbox(Base):
+    __tablename__ = "dispatch_outbox"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'leased', 'published', 'retrying', 'dead_letter')",
+            name="ck_dispatch_outbox_status",
+        ),
+        CheckConstraint("publish_attempts >= 0", name="ck_dispatch_outbox_publish_attempts_non_negative"),
+        UniqueConstraint("event_id", name="uq_dispatch_outbox_event_id"),
+        UniqueConstraint("attempt_id", "task_name", name="uq_dispatch_outbox_attempt_task"),
+        Index("ix_dispatch_outbox_job_id", "job_id"),
+        Index("ix_dispatch_outbox_attempt_id", "attempt_id"),
+        Index("ix_dispatch_outbox_due", "status", "next_attempt_at", "created_at"),
+        Index("ix_dispatch_outbox_lease", "status", "lease_expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("job_aggregates.id"), nullable=False, index=True
+    )
+    attempt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("job_execution_attempts.id"), nullable=False, index=True
+    )
+    task_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
+    publish_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    leased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dead_lettered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class CallbackOutbox(Base):
     __tablename__ = "callback_outbox"
     __table_args__ = (
@@ -130,17 +186,23 @@ class CallbackOutbox(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False, index=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("job_aggregates.id"), nullable=False, index=True
+    )
     event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=uuid.uuid4)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    callback_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    signature_version: Mapped[str] = mapped_column(String(64), nullable=False, default="hmac-sha256:v1")
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    delivery_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     last_http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     last_error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    leased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     first_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -152,16 +214,18 @@ class CallbackOutbox(Base):
 
 
 class JobEvent(Base):
-    __tablename__ = "job_events"
+    __tablename__ = "job_audit_events"
     __table_args__ = (
-        Index("ix_job_events_job_created", "job_id", "created_at"),
-        Index("ix_job_events_attempt_created", "attempt_id", "created_at"),
+        Index("ix_job_audit_events_job_created", "job_id", "created_at"),
+        Index("ix_job_audit_events_attempt_created", "attempt_id", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False, index=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("job_aggregates.id"), nullable=False, index=True
+    )
     attempt_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("job_attempts.id"), nullable=True, index=True
+        UUID(as_uuid=True), ForeignKey("job_execution_attempts.id"), nullable=True, index=True
     )
     callback_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("callback_outbox.id"), nullable=True, index=True

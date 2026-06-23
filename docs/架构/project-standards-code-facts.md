@@ -330,7 +330,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}/billing -> ResponseEnvelope[JobBillingResponse
 
 - Job billing 只在 Job 到达 `succeeded` 或 `failed` 后可查询；非终态返回 `BILLING_SCOPE_NOT_TERMINAL`。
 - `BILLING_ENABLED=false` 时公开查询返回 `BILLING_DISABLED`，不返回伪造的空 envelope。
-- Billing read model 只从 `ai_call_logs` 聚合，不反向修改 Job、attempt 或 provider 调用结果。
+- Billing read model 只从 `ai_call_ledger_entries` 聚合，不反向修改 Job、attempt 或 provider 调用结果。
 - `JobEnvelope` 不默认携带 billing；公开计费信息通过独立 billing 查询获取。
 - Provider 已经调用成功但 AI call ledger terminal 更新失败时，当前抛不可自动重试的 `AI_LEDGER_UPDATE_FAILED`；不能通过重放 provider call 修复账本。
 
@@ -410,14 +410,14 @@ CallbackResponseEnvelope
 1. route 调用 `submit_job_request()`。
 2. 服务读取 `caller_id`，校验 `job_type`、`job_params`、callback 和模型可用性。
 3. 对 `caller_id + client_request_id` 申请 PostgreSQL advisory transaction lock。
-4. 查找 24 小时内同一调用方的同一 `client_request_id`。
-5. 如果请求 fingerprint 不同，返回 `CLIENT_REQUEST_ID_CONFLICT`。
+4. 通过 `job_submission_keys` 查找同一调用方的同一 `client_request_id`。
+5. 如果 submission key 的 request fingerprint 不同，返回 `CLIENT_REQUEST_ID_CONFLICT`。
 6. 如果 fingerprint 相同且 `idempotency_mode=reject_duplicate`，返回冲突。
 7. 如果 fingerprint 相同且 `idempotency_mode=return_existing`，返回已存在 Job。
 8. 检查 `MAX_ACTIVE_JOBS`；超限返回 `QUEUE_FULL`。
-9. 创建 `jobs` 记录、runtime refs、`job_attempts` 初始 attempt。
+9. 同一 DB 事务内创建 `job_aggregates`、`job_submission_keys`、runtime refs、`job_execution_attempts` 初始 attempt 和 `dispatch_outbox`。
 10. 提交 DB 事务。
-11. 通过 Taskiq 发布 `jobs.run_attempt`。
+11. `publish_job_attempt()` lease 对应 `dispatch_outbox` 后发布 Taskiq `jobs.run_attempt`。
 12. 返回 `JobResponseData(job=JobEnvelope)`。
 
 当前 `jobs.run_attempt` 主流程：
@@ -515,18 +515,18 @@ InternalAppError
 
 ## 配置模块
 
-当前配置入口是单个 `Settings` 类，位于 `app/core/config.py`，使用 `pydantic-settings` 从 `.env` 读取，`extra="ignore"`。
+当前配置入口是单个 `Settings` 类，位于 `app/core/config.py`，使用 `pydantic-settings` 从 `.env` 读取，`extra="forbid"`。
 
 主要配置组：
 
 - 服务身份：`TEMPLATE_NAME`、`SERVICE_NAME`、`SERVICE_TITLE`、`SERVICE_API_PREFIX`。
 - 数据库：`DATABASE_URL`、`DB_SSL`、`DB_POOL_SIZE`、`DB_MAX_OVERFLOW`、`DB_POOL_RECYCLE`。
 - 鉴权和调用方：`SERVICE_API_KEY`、`DISABLE_HTTP_AUTH_HEADER`、`DISABLE_CALLER_ID_HEADER`。
-- Redis / Taskiq：`REDIS_URL`、`TASKIQ_MAX_RETRIES`、`TASKIQ_RETRY_DELAY`。
+- Redis / Taskiq：`REDIS_URL`、`TASKIQ_BROKER_KIND`。
 - 对象存储：`STORAGE_BACKEND`、`LOCAL_OBJECT_STORAGE_PATH`、`OSS_*`。
 - Callback：`CALLBACK_SIGNING_SECRET`、`ALLOW_INSECURE_CALLBACKS`、`CALLBACK_TIMEOUT_SECONDS`、`CALLBACK_MAX_DELIVERY_ATTEMPTS`、`CALLBACK_RETRY_DELAY_SECONDS`。
 - 模型：`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`DEFAULT_MODEL_ID`、`MODEL_CONFIG_PATH`、`MODEL_CALL_TIMEOUT_SECONDS`。
-- 容量和恢复：`MAX_ACTIVE_JOBS`、`OSS_INPUT_MAX_BYTES`、`JOB_ORPHAN_TIMEOUT_SECONDS`、`JOB_RECOVERY_INTERVAL_SECONDS`、`JOB_RECOVERY_BATCH_SIZE`、`JOB_RECOVERY_CALLBACK_BATCH_SIZE`、`JOB_MAX_EXECUTION_ATTEMPTS`。
+- 容量和恢复：`MAX_ACTIVE_JOBS`、`OSS_INPUT_MAX_BYTES`、`JOB_ORPHAN_TIMEOUT_SECONDS`、`JOB_DISPATCH_MAX_PUBLISH_ATTEMPTS`、`JOB_RECOVERY_INTERVAL_SECONDS`、`JOB_RECOVERY_BATCH_SIZE`、`JOB_RECOVERY_CALLBACK_BATCH_SIZE`。
 - 日志：`LOG_LEVEL`。
 
 `STORAGE_BACKEND=local` 是本地开发 / 单机 compose 模式；生产或多副本 API / worker 运行形态应使用外部对象存储后端。
@@ -625,25 +625,29 @@ callback_failed
 
 | 表 | ORM | 职责 |
 |---|---|---|
-| `jobs` | `Job` | Job 状态、调用方、幂等、进度、runtime refs、result、callback 摘要和软删除。 |
-| `job_attempts` | `JobAttempt` | 执行 attempt、发布状态、运行租约、heartbeat、失败和重试。 |
-| `callback_outbox` | `CallbackOutbox` | 终态 Callback 事件、投递尝试、lease、dead letter 和幂等事件 id。 |
-| `job_events` | `JobEvent` | attempt、callback 和状态迁移事件记录。 |
-| `ai_call_logs` | `AiCallLog` | 每次真实 AI provider 调用的 ledger、usage、cost estimate、scope 归属和诊断状态。 |
+| `job_submission_keys` | `JobSubmissionKey` | Submit 幂等事实；`caller_id + key_kind + key_value` 唯一，并保存 request fingerprint 到 Job 绑定。 |
+| `job_aggregates` | `Job` | Job aggregate；对外状态、调用方投影、进度、runtime refs、result、callback 摘要和软删除。 |
+| `job_execution_attempts` | `JobAttempt` | 执行 attempt、worker claim、运行租约、heartbeat、失败分类和执行 retry。 |
+| `dispatch_outbox` | `DispatchOutbox` | Taskiq publish 意图、publisher lease、publish retry、应用级 dead letter 和最小 task payload。 |
+| `callback_outbox` | `CallbackOutbox` | 终态 Callback 事件、冻结 callback URL、投递尝试、lease、retry、dead letter 和幂等事件 id。 |
+| `job_audit_events` | `JobEvent` | attempt、dispatch、callback 和状态迁移事件记录。 |
+| `ai_call_ledger_entries` | `AiCallLog` | 每次真实 AI provider 调用的 ledger、usage、cost estimate、scope 归属和诊断状态。 |
 
-`jobs` 表是对外查询状态和终态结果的权威。active `job_attempts` 是 dispatch、claim、lease 和 attempt retry 的权威。`callback_outbox` 是终态 Callback 投递的权威。`job_events` 只用于审计和排障，不是状态或恢复权威。`ai_call_logs` 是模型调用和成本估算的事实源。Taskiq 消息、worker 日志和 callback 投递结果都是执行旁证或副作用状态。
+`job_aggregates` 表是对外查询状态和终态结果的权威。`job_submission_keys` 是 submit 幂等权威。active `job_execution_attempts` 是 worker claim、lease 和 execution retry 的权威。`dispatch_outbox` 是 Taskiq publish 的权威。`callback_outbox` 是终态 Callback 投递的权威。`job_audit_events` 只用于审计和排障，不是状态或恢复权威。`ai_call_ledger_entries` 是模型调用和成本估算的事实源。Taskiq 消息、worker 日志和 callback 投递结果都是执行旁证或副作用状态。
 
 当前 Repository 规则：
 
 - `JobRepo` 负责 SQL 查询、锁、状态迁移、outbox 和事件写入。
 - `AiCallLogRepo` 负责 AI call ledger 的 pending、terminal 和 stale pending recovery 写入。
-- 幂等入口使用 PostgreSQL advisory transaction lock。
+- 幂等入口使用 PostgreSQL advisory transaction lock 加 `job_submission_keys` 唯一约束。
+- 首个 execution attempt 和 `dispatch_outbox` 在同一 DB transaction 内创建。
+- Taskiq publish 状态只写入 `dispatch_outbox`，不写入 execution attempt。
 - attempt 领取使用 `with_for_update()` 和 active attempt 条件。
 - running attempt 使用 lease token 和 lease expiry。
 - Job 成功 / 失败使用 `execution_token` 防止过期执行写回。
-- callback 投递使用 outbox lease 和 `delivery_attempt` 限制。
+- callback 投递使用 outbox lease 和 `delivery_attempts` 限制。
 - cleanup 只软删除已过期且已收敛的终态 Job。
-- recovery loop 使用 PostgreSQL advisory lock 串行执行 Job dispatch、stale running attempt、Callback 和 stale pending AI call ledger 收敛。
+- recovery loop 使用 PostgreSQL advisory lock 串行执行 dispatch outbox、stale running attempt、Callback 和 stale pending AI call ledger 收敛。
 
 ## Integrations
 
@@ -655,7 +659,7 @@ callback_failed
 | `app/integrations/storage.py` | 统一本地开发对象存储 / OSS 存储接口；多副本运行必须使用外部对象存储后端。 |
 | `app/integrations/aliyun_oss.py` | 阿里云 OSS 适配。 |
 | `app/services/ai_gateway_facade.py` | AI gateway 应用服务门面，编排 model gate、AI call ledger、LiteLLM adapter、usage 提取和成本估算。 |
-| `app/services/billing.py` | 从 `ai_call_logs` 聚合 Job scope billing read model。 |
+| `app/services/billing.py` | 从 `ai_call_ledger_entries` 聚合 Job scope billing read model。 |
 | `app/services/callbacks.py` | Callback HTTP 投递、签名、ack 校验和错误摘要。 |
 
 AI gateway / runtime adapter 的当前内部边界见 [`ai-gateway-runtime-boundary.md`](ai-gateway-runtime-boundary.md)。该边界不是公开 HTTP 合同；公开合同以 [`service-contract-boundary.md`](service-contract-boundary.md) 为准。

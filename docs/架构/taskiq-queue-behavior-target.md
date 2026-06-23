@@ -347,7 +347,7 @@ provider failure:
 ## 最小可信落地路径
 
 1. 冻结本队列行为文档和七张表状态集合。
-2. 引入 broker factory，至少区分 `local_redis_list`、`redis_stream`、`rabbitmq` 三种目标；本地默认可以保持 Redis List，生产 profile 默认 `redis_stream`，不允许 `ListQueueBroker`。
+2. 引入 broker factory，当前默认 `redis_stream`；`redis_list` 只允许显式本地便利模式；`rabbitmq` 作为后续可演进目标，不在第一阶段实现。
 3. 新增 `dispatch_outbox` publisher loop，所有 `jobs.run_attempt` publish 只从该 loop 发起。
 4. Worker 只接受 `attempt_id`，执行前必须 claim `job_execution_attempts`。
 5. 新增 callback publisher loop，独立处理 `callback_outbox`。

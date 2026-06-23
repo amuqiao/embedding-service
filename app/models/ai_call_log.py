@@ -10,16 +10,16 @@ from app.core.database import Base
 
 
 class AiCallLog(Base):
-    __tablename__ = "ai_call_logs"
+    __tablename__ = "ai_call_ledger_entries"
     __table_args__ = (
-        Index("ix_ai_call_logs_scope_created", "scope_type", "scope_id", "created_at"),
-        Index("ix_ai_call_logs_caller_created", "caller_id", "created_at"),
-        Index("ix_ai_call_logs_operation_created", "operation", "created_at"),
-        Index("ix_ai_call_logs_job_created", "job_id", "created_at"),
-        Index("ix_ai_call_logs_attempt_created", "attempt_id", "created_at"),
-        Index("ix_ai_call_logs_model_created", "model_id", "created_at"),
-        Index("ix_ai_call_logs_provider_model_created", "provider", "provider_model", "created_at"),
-        Index("ix_ai_call_logs_status_created", "status", "created_at"),
+        Index("ix_ai_call_ledger_entries_scope_created", "scope_type", "scope_id", "created_at"),
+        Index("ix_ai_call_ledger_entries_caller_created", "caller_id", "created_at"),
+        Index("ix_ai_call_ledger_entries_operation_created", "operation", "created_at"),
+        Index("ix_ai_call_ledger_entries_job_created", "job_id", "created_at"),
+        Index("ix_ai_call_ledger_entries_attempt_created", "attempt_id", "created_at"),
+        Index("ix_ai_call_ledger_entries_model_created", "model_id", "created_at"),
+        Index("ix_ai_call_ledger_entries_provider_model_created", "provider", "provider_model", "created_at"),
+        Index("ix_ai_call_ledger_entries_status_created", "status", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -31,8 +31,10 @@ class AiCallLog(Base):
     request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
-    job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=True)
-    attempt_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("job_attempts.id"), nullable=True)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("job_aggregates.id"), nullable=True)
+    attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("job_execution_attempts.id"), nullable=True
+    )
     job_type: Mapped[str | None] = mapped_column(String(96), nullable=True)
 
     model_id: Mapped[str] = mapped_column(String(128), nullable=False)

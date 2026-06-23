@@ -316,11 +316,12 @@ async def create_job(
         }
     request_fingerprint = _request_fingerprint(payload, caller_id, job_params)
     await JobRepo.advisory_lock_for_client_request(db, caller_id, payload.client_request_id)
-    existing = await JobRepo.get_recent_by_client_request(
+    existing_submission = await JobRepo.get_submission_by_client_request(
         db, caller_id=caller_id, client_request_id=payload.client_request_id
     )
-    if existing:
-        if existing.request_fingerprint != request_fingerprint:
+    if existing_submission:
+        existing, submission_key = existing_submission
+        if submission_key.request_fingerprint != request_fingerprint:
             raise AppError(
                 "CLIENT_REQUEST_ID_CONFLICT",
                 "client_request_id already used with a different request payload",
@@ -354,7 +355,6 @@ async def create_job(
         caller_id=caller_id,
         client_request_id=payload.client_request_id,
         job_type=payload.job_type,
-        request_fingerprint=request_fingerprint,
         metadata=payload.metadata,
         priority=payload.options.priority if payload.options else "normal",
         timeout_seconds=timeout_seconds,
@@ -363,7 +363,13 @@ async def create_job(
         callback_url=payload.callback.url if payload.callback else None,
         callback_events=payload.callback.events if payload.callback else None,
     )
-    job.idempotency_key = payload.client_request_id
+    await JobRepo.create_submission_key(
+        db,
+        caller_id=caller_id,
+        client_request_id=payload.client_request_id,
+        request_fingerprint=request_fingerprint,
+        job=job,
+    )
     job_params_hash = payload_hash(job_params)
     output_target = configured_output_target(job.id)
     job.job_params_hash = job_params_hash
