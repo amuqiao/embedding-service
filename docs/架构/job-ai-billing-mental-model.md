@@ -36,12 +36,7 @@ Headless AI Job Platform Service
 - 价格配置、成本计算公式和 `BillingEnvelope` 字段合同。
 - 用户余额、扣款、发票、退款、税务或最终财务对账。
 
-相关细节文档：
-
-- [架构总览](架构总览.md)
-- [Taskiq Job 数据模型设计](../设计文档/taskiq-job-model-design.md)
-- [Headless AI Job Platform Service 设计文档](../设计文档/headless-ai-job-platform-service-design.md)
-- [新增 job_type 标准接入规范](../接口层/job-type-extension-standard.md)
+阅读路径和相关文档统一在 [`../README.md`](../README.md) 维护；本文不单独维护文档索引。
 
 ## 1. 总体心智模型
 

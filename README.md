@@ -208,9 +208,4 @@ Job 只读排障由 `jobs.sh` 承接：
 
 ## 说明文档
 
-- [文档导航](docs/README.md)
-- [项目规范与骨架（代码事实版）](docs/架构/project-standards-code-facts.md)
-- [新增 HTTP 接口标准接入规范](docs/接口层/http-api-extension-standard.md)
-- [新增 job_type 标准接入规范](docs/接口层/job-type-extension-standard.md)
-- [Taskiq Job MVP 数据模型设计](docs/设计文档/taskiq-job-model-design.md)
-- [架构总览](docs/架构/架构总览.md)
+- [文档地图](docs/README.md)

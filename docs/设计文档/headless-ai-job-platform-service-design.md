@@ -42,13 +42,7 @@ Change Reason: 补充 Job 终态后返回计费 envelope 的稳定设计，明�
 - 任一具体业务能力的 Prompt 内容、业务标签体系或业务流程。
 - 长期保存模型 transcript、完整 Prompt、完整模型输出或供应商原始响应。
 
-相关基础文档：
-
-- [`../架构/project-standards-code-facts.md`](../架构/project-standards-code-facts.md)
-- [`../架构/架构总览.md`](../架构/架构总览.md)
-- [`taskiq-job-model-design.md`](taskiq-job-model-design.md)
-- [`callback-job-unified-envelope-design.md`](callback-job-unified-envelope-design.md)
-- [`../接口层/job-type-extension-standard.md`](../接口层/job-type-extension-standard.md)
+阅读路径和相关文档统一在 [`../README.md`](../README.md) 维护；本文不单独维护文档索引。
 
 ## 2. 当前代码基线
 
