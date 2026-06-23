@@ -12,9 +12,9 @@
 |---|---|
 | [`架构/project-standards-code-facts.md`](架构/project-standards-code-facts.md) | 项目规范与骨架（代码事实版）：当前代码中的 envelope、输入输出 schema、异常、配置、日志、ORM、Repository 和验证基线 |
 | [`架构/service-contract-boundary.md`](架构/service-contract-boundary.md) | 当前 HTTP、Job、Error、Callback、Billing envelope 的合同边界和内部事实 owner |
+| [`架构/job-lifecycle-state-model.md`](架构/job-lifecycle-state-model.md) | 当前 Job、Attempt、Dispatch、Callback、Recovery 和 AI call ledger 的内部生命周期状态权威；不是对外 envelope 合同 |
 | [`接口层/http-api-extension-standard.md`](接口层/http-api-extension-standard.md) | 新增业务 HTTP 接口时的 schema、operation registry、错误、日志和测试接入规范 |
 | [`接口层/job-type-extension-standard.md`](接口层/job-type-extension-standard.md) | 新增 `job_type` 时的 Params、Runtime、Result、`JobExecutor`、错误、日志和测试接入规范 |
-| [`设计文档/taskiq-job-model-design.md`](设计文档/taskiq-job-model-design.md) | Taskiq Job MVP 的数据模型、生命周期、Attempt、Callback Outbox 和 Event 设计 |
 | [`设计文档/FastAPI 统一响应信封架构设计文档.md`](设计文档/FastAPI%20统一响应信封架构设计文档.md) | HTTP 成功/错误统一响应信封设计 |
 | [`架构/job-ai-billing-mental-model.md`](架构/job-ai-billing-mental-model.md) | `Job`、AI gateway、AI call ledger、Billing read model 和 `model_id` 的分层心智模型 |
 
@@ -22,7 +22,7 @@
 
 | 文档 | 用途 |
 |---|---|
-| [`架构/架构总览.md`](架构/架构总览.md) | 服务边界和整体架构入口；执行引擎细节以 Taskiq 设计文档和当前代码为准 |
+| [`架构/架构总览.md`](架构/架构总览.md) | 服务边界和整体架构入口；执行引擎细节以生命周期状态模型和当前代码为准 |
 | [`架构/refactor-plan.md`](架构/refactor-plan.md) | 规范先行重构路线和阶段性检查清单 |
 | [`接口层/language-codes.md`](接口层/language-codes.md) | 业务语种合约资料；仅在接入相关业务能力时使用 |
 
@@ -37,6 +37,7 @@
 | 文档 | 状态 | 用途 |
 |---|---|---|
 | [`设计文档/callback-job-unified-envelope-design.md`](设计文档/callback-job-unified-envelope-design.md) | Candidate | Job 轮询结果与 Callback envelope 的一致性设计候选；当前合同以 `service-contract-boundary.md` 和代码事实为准 |
+| [`设计文档/taskiq-job-model-design.md`](设计文档/taskiq-job-model-design.md) | Historical / Partially Superseded | Taskiq Job MVP 长设计记录；当前公开合同以 `service-contract-boundary.md` 为准，当前内部生命周期状态权威以 `job-lifecycle-state-model.md` 为准 |
 | [`设计文档/ai-gateway-layer-design.md`](设计文档/ai-gateway-layer-design.md) | Accepted Target Baseline | AI gateway layer、模型调用账本、pricing、billing read model 和 Job scope 投影设计；不是当前已实现合同 |
 
 ## 快速阅读路径
@@ -48,7 +49,7 @@
   ↓
 架构/service-contract-boundary.md
   ↓
-设计文档/taskiq-job-model-design.md
+架构/job-lifecycle-state-model.md
   ↓
 架构/架构总览.md
 ```
@@ -72,7 +73,7 @@
   ↓
 接口层/job-type-extension-standard.md
   ↓
-设计文档/taskiq-job-model-design.md
+架构/job-lifecycle-state-model.md
 ```
 
 ## 维护规则

@@ -625,10 +625,10 @@ callback_failed
 | `job_attempts` | `JobAttempt` | 执行 attempt、发布状态、运行租约、heartbeat、失败和重试。 |
 | `callback_outbox` | `CallbackOutbox` | 终态 Callback 事件、投递尝试、lease、dead letter 和幂等事件 id。 |
 | `job_events` | `JobEvent` | attempt、callback 和状态迁移事件记录。 |
-| `reconciler_leases` | `ReconcilerLease` | recovery / reconciler 租约。 |
+| `reconciler_leases` | `ReconcilerLease` | 已建表的 recovery / reconciler 租约预留；当前主 recovery 路径使用 PostgreSQL advisory lock，未使用该表。 |
 | `ai_call_logs` | `AiCallLog` | 每次真实 AI provider 调用的 ledger、usage、cost estimate、scope 归属和诊断状态。 |
 
-`jobs` 表是对外查询状态和终态结果的权威。`ai_call_logs` 是模型调用和成本估算的事实源。Taskiq 消息、worker 日志和 callback 投递结果都是执行旁证或副作用状态。
+`jobs` 表是对外查询状态和终态结果的权威。active `job_attempts` 是 dispatch、claim、lease 和 attempt retry 的权威；`jobs` 上的 publish 摘要字段不作为 dispatch 状态源。`callback_outbox` 是终态 Callback 投递的权威。`job_events` 只用于审计和排障，不是状态或恢复权威。`ai_call_logs` 是模型调用和成本估算的事实源。Taskiq 消息、worker 日志和 callback 投递结果都是执行旁证或副作用状态。
 
 当前 Repository 规则：
 

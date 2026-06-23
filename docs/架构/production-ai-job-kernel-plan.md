@@ -17,11 +17,11 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 - 对内部，实现可靠 submit、dispatch、claim、run、retry、terminal、callback、recovery 和 cleanup 生命周期。
 - 对新增 `job_type`，提供注册式、可验证、可演进的 Job plugin 合同，而不是散落的自定义解析和执行分支。
 - 对 AI 能力，保持 AI gateway / runtime adapter 与 Job kernel 解耦；Job 是 AI gateway 的消费者，不是 billing 或 provider 调用事实源。
-- 对计费，使用 AI call ledger + billing read model；Job billing 只是 `scope_type="job"` 的投影，不进入 Job 主状态。
+- 对计费，使用 AI call ledger rows + billing read model；Job billing 只是 `scope_type="job"` 的投影，不进入 Job 主状态。
 
 ## 架构选择
 
-本轮采用成熟的 `state machine + transactional boundary + outbox/lease/reconciler + registry plugin + append-only ledger + read model` 组合。
+本轮采用成熟的 `state machine + transactional boundary + outbox/lease/reconciler + registry plugin + ledger rows + read model` 组合。
 
 | 关注点 | 成熟模式 | 本项目取舍 |
 |---|---|---|
@@ -30,7 +30,7 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 | Worker 执行权 | Lease、heartbeat、CAS 写回、幂等 consumer | 继续以 attempt lease、execution token 和 active attempt 约束保护终态写回。 |
 | 新增 Job 类型 | Registry / plugin contract | 保留 `JobExecutor`，先升级 metadata、runtime、retry 和 side effect 声明；AI usage / cost 归属声明等 gateway 和 ledger invariant 冻结后再进入 plugin 合同。 |
 | AI 调用 | Gateway facade + provider adapter | Gateway 只处理模型能力、provider 调用、usage 和 ledger，不控制 Job 状态机。 |
-| Billing | Append-only ledger + read model | `ai_call_logs` 是事实源；`BillingEnvelope` 是投影；不新增独立财务事实表。 |
+| Billing | Ledger rows + read model | `ai_call_logs` 是事实源；当前行先创建 `pending` 再原地更新为 terminal；`BillingEnvelope` 是投影；不新增独立财务事实表。 |
 | 迁移 | Versioned contracts + compatibility tests | 先冻结合同和生命周期，再改 kernel；每阶段保留公开 API 兼容。 |
 
 不采用的方案：
@@ -59,8 +59,8 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 已知差距：
 
 - 部分设计文档仍混有目标态和旧实现描述，需要持续按 current / contract / plan 分层对账。
-- 生命周期状态机还没有一份独立、可执行化的 transition contract。
-- submit publish 可靠性目前依赖 `job_attempts` publish 字段和 recovery，尚未明确命名为 dispatch outbox 或定义完整故障矩阵。
+- 生命周期状态权威已经冻结在 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md)；Phase 3 仍需把其中的剩余硬化项落到代码和测试，例如 uncertain publish 全链路、stale terminal write 和 retry policy。
+- submit publish 可靠性已经确定由 active `job_attempts` 承载 attempt-backed dispatch ledger；Phase 3 继续硬化 publish / recovery 测试，不再把 dispatch outbox 归属作为开放架构选择。
 - `JobExecutor` metadata 仍偏轻，未完整声明 execution mode、platform retry policy、side effect policy、resource profile 和 compatibility version；AI/provider usage attribution 与 cost policy 必须等 AI gateway 和 ledger 语义冻结后再进入 plugin 合同。
 - AI gateway 已有 facade，但 provider adapter、runtime adapter、ledger failure recovery 和 provider error normalization 还没有稳定边界文档。
 - Billing 已有 Job scope read model，但没有 ledger reconciler、retention/export 规则和非 Job scope 公开合同。
@@ -150,6 +150,7 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 - 明确每个迁移的 owner、DB lock/CAS 条件、失败后状态、可恢复路径和测试入口。
 - 明确 publish failure、worker crash、lease expired、terminal write conflict、callback retry、billing incomplete 的故障矩阵。
 - 定义对外 `job_status` 与内部状态的映射，不扩散内部状态到公开合同。
+- 冻结结果见 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md)：当前不拆 `job_dispatch_outbox`，dispatch 权威归属 active `job_attempts`；`reconciler_leases` 当前未接入主 recovery 路径。
 
 验收：
 
@@ -164,7 +165,7 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 
 范围：
 
-- 按 Phase 2 决策硬化 dispatch 模型：继续强化 `job_attempts` publish 字段，或实现独立 `job_dispatch_outbox`。
+- 按 Phase 2 决策继续强化 `job_attempts` publish 字段；只有出现 fan-out、多 dispatch channel、独立 replay / dead letter / retention 或独立 publisher 扩缩容需求时，才重新评估独立 `job_dispatch_outbox`。
 - 升级 `JobTypeSpec`：增加 execution mode、platform retry policy、side effect policy、resource profile、contract version。
 - 将 Job kernel retry 从 `max_attempts + catch all` 升级为显式平台错误分类；AI/provider 特有重试、usage attribution 和 cost policy 等 AI gateway / ledger invariant 冻结后再进入 plugin 合同。
 - 把成功 side effect 和 callback outbox 的顺序、失败语义和补偿边界写入 kernel contract。
@@ -241,18 +242,17 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 
 ## 下一阶段入口
 
-Phase 0 完成后，进入 Phase 1：合同边界冻结。
+Phase 2 完成后，进入 Phase 3：Job kernel 硬化。
 
-Phase 1 的第一批文件应优先检查：
+Phase 3 的第一批文件应优先检查：
 
 - `docs/架构/project-standards-code-facts.md`
-- `docs/接口层/http-api-extension-standard.md`
-- `docs/接口层/job-type-extension-standard.md`
-- `docs/设计文档/FastAPI 统一响应信封架构设计文档.md`
-- `docs/设计文档/callback-job-unified-envelope-design.md`
+- `docs/架构/service-contract-boundary.md`
+- `docs/架构/job-lifecycle-state-model.md`
 - `docs/架构/job-ai-billing-mental-model.md`
-- `app/api/operations.py`
-- `app/schemas/jobs.py`
-- `app/schemas/billing.py`
-- `app/schemas/errors.py`
-- `app/core/error_registry.py`
+- `docs/接口层/job-type-extension-standard.md`
+- `app/repositories/job_repo.py`
+- `app/tasks/jobs.py`
+- `app/tasks/recovery.py`
+- `app/jobs/runner.py`
+- `app/jobs/registry.py`
