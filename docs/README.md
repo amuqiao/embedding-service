@@ -33,6 +33,7 @@
 |---|---|---|
 | [`架构/production-ai-job-kernel-plan.md`](架构/production-ai-job-kernel-plan.md) | Plan | 生产级 AI Job 生命周期内核重构计划；覆盖合同边界、生命周期模型、Job kernel、AI gateway / runtime adapter、AI ledger / billing 和迁移验证 |
 | [`架构/transactional-outbox-job-kernel-data-model.md`](架构/transactional-outbox-job-kernel-data-model.md) | Target Opinion / Plan | 新项目目标 Job kernel 数据模型意见；严格采用 Transactional Outbox，重新划分核心表和辅助表 |
+| [`架构/taskiq-queue-behavior-target.md`](架构/taskiq-queue-behavior-target.md) | Target Opinion / Plan | 生产级 Job kernel 第一阶段 TaskIQ 队列行为目标；配合 Transactional Outbox 数据模型约束 broker、publisher、worker 和 recovery 边界 |
 
 ## 设计基线
 

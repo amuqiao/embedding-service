@@ -7,7 +7,7 @@ Scope: new-project Job kernel data model, queue reliability, callback delivery, 
 Current truth: code, tests, docs/架构/project-standards-code-facts.md
 ```
 
-本文重新设计新项目目标数据模型，不要求兼容当前实现的表名、字段或迁移历史。当前代码事实仍以代码、测试和 [`project-standards-code-facts.md`](project-standards-code-facts.md) 为准；本文是后续重构和新项目建模的架构意见。
+本文重新设计新项目目标数据模型，不要求兼容当前实现的表名、字段或迁移历史。当前代码事实仍以代码、测试和 [`project-standards-code-facts.md`](project-standards-code-facts.md) 为准；本文是后续重构和新项目建模的架构意见。TaskIQ broker、dispatch publisher、worker claim、callback publisher 和 recovery 行为目标见 [`taskiq-queue-behavior-target.md`](taskiq-queue-behavior-target.md)。
 
 ## 真实需求
 
