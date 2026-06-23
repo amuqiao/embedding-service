@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from app.models.job import CallbackOutbox, Job, JobAttempt
+from app.models.job import CallbackOutbox, Job, JobAttempt, JobEvent
 from app.repositories.job_repo import JobRepo
 
 
@@ -105,6 +105,58 @@ async def test_claim_attempt_for_execution_waits_for_specific_attempt_lock():
     sql = _compile(db.statements[0])
     assert "FOR UPDATE" in sql
     assert "SKIP LOCKED" not in sql
+
+
+@pytest.mark.asyncio
+async def test_claim_attempt_for_execution_accepts_queued_attempt_after_uncertain_publish():
+    attempt_id = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="uncertain-publish",
+        job_type="job_test_echo",
+        status="queued",
+        active_attempt_id=attempt_id,
+        progress_percent=0,
+        execution_attempts=0,
+        execution_generation=1,
+        metadata_={},
+    )
+    attempt = JobAttempt(
+        id=attempt_id,
+        job_id=job.id,
+        attempt_no=1,
+        status="queued",
+        timeout_seconds=60,
+    )
+    db = _FakeDB()
+    db.results.append(_OneRowResult((job, attempt)))
+
+    claimed = await JobRepo.claim_attempt_for_execution(
+        db,
+        attempt_id,
+        worker_id="worker-uncertain",
+        lease_seconds=60,
+    )
+
+    assert claimed is not None
+    claimed_job, claimed_attempt, lease_token = claimed
+    assert claimed_job is job
+    assert claimed_attempt is attempt
+    assert lease_token == attempt.lease_token
+    assert attempt.status == "running"
+    assert attempt.worker_id == "worker-uncertain"
+    assert attempt.lease_expires_at is not None
+    assert attempt.heartbeat_at is not None
+    assert job.status == "running"
+    assert job.execution_token == str(attempt_id)
+    assert job.execution_attempts == 1
+    assert db.flushed is True
+    events = [obj for obj in db.added if isinstance(obj, JobEvent)]
+    assert len(events) == 1
+    assert events[0].event_type == "attempt.claimed"
+    assert events[0].from_status == "queued"
+    assert events[0].to_status == "running"
 
 
 @pytest.mark.asyncio

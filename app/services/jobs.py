@@ -173,7 +173,6 @@ def _job_payload(job: Job) -> dict[str, Any]:
         raise AppError(
             "JOB_VIEW_CONTRACT_INVALID",
             "stored job view does not match job_type contract",
-            status_code=500,
             details={"job_id": str(job.id), "job_type": job.job_type},
         ) from exc
 
@@ -325,14 +324,12 @@ async def create_job(
             raise AppError(
                 "CLIENT_REQUEST_ID_CONFLICT",
                 "client_request_id already used with a different request payload",
-                status_code=409,
                 details={"client_request_id": payload.client_request_id, "existing_job_id": str(existing.id)},
             )
         if not payload.options or payload.options.idempotency_mode == "reject_duplicate":
             raise AppError(
                 "CLIENT_REQUEST_ID_CONFLICT",
                 "client_request_id already used",
-                status_code=409,
                 details={"client_request_id": payload.client_request_id, "existing_job_id": str(existing.id)},
             )
         return existing, False
@@ -347,7 +344,6 @@ async def create_job(
             raise AppError(
                 "QUEUE_FULL",
                 "服务当前繁忙，请稍后重试",
-                status_code=503,
                 details={"active_jobs": active, "limit": settings.job.max_active_jobs},
             )
 
@@ -472,14 +468,14 @@ def _load_input_text(job: Job) -> str:
     except AppError:
         raise
     except Exception as exc:
-        raise AppError("OSS_FETCH_FAILED", "OSS 对象读取失败", status_code=422) from exc
+        raise AppError("OSS_FETCH_FAILED", "OSS 对象读取失败") from exc
 
     data = text.encode("utf-8")
     if len(data) > settings.job.oss_input_max_bytes:
-        raise AppError("INPUT_TOO_LARGE", "OSS input exceeds service limit", status_code=422)
+        raise AppError("INPUT_TOO_LARGE", "OSS input exceeds service limit")
     expected_hash = oss_payload.get("content_hash")
     if expected_hash and sha256_digest(data) != expected_hash:
-        raise AppError("INPUT_HASH_MISMATCH", "OSS input content_hash mismatch", status_code=422)
+        raise AppError("INPUT_HASH_MISMATCH", "OSS input content_hash mismatch")
     return text
 
 

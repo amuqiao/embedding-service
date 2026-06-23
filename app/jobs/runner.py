@@ -79,7 +79,6 @@ async def execute_job(
         raise AppError(
             "INVALID_JOB_TYPE",
             "stored job references an unregistered job_type",
-            status_code=500,
             details={"job_id": str(job.id), "job_type": job.job_type},
         ) from exc
     claimed_execute = await _update_current_progress(
@@ -100,7 +99,6 @@ async def execute_job(
             raise AppError(
                 "JOB_RUNTIME_NOT_SUPPORTED",
                 "job_type 未配置可执行运行时",
-                status_code=500,
                 details={"job_type": job.job_type},
             )
         model_attempt_id = attempt_id or job.active_attempt_id
@@ -108,7 +106,6 @@ async def execute_job(
             raise AppError(
                 "JOB_RUNTIME_NOT_SUPPORTED",
                 "job scope model execution requires an active attempt",
-                status_code=500,
                 details={"job_id": str(job.id), "job_type": job.job_type},
             )
         result = await run_ai_job(
@@ -184,7 +181,6 @@ async def execute_job(
         raise AppError(
             "JOB_STATE_TRANSITION_CONFLICT",
             "job could not be marked succeeded after success side effect",
-            status_code=500,
             details={"job_id": str(job_id), "execution_token": job.execution_token},
         )
     if attempt_id is not None and lease_token is not None:
@@ -193,7 +189,6 @@ async def execute_job(
             raise AppError(
                 "JOB_STATE_TRANSITION_CONFLICT",
                 "attempt could not be marked succeeded with job result",
-                status_code=500,
                 details={"job_id": str(job_id), "attempt_id": str(attempt_id)},
             )
     await db.commit()

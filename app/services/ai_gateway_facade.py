@@ -47,7 +47,6 @@ def _usage_units(result: TextGenerationResult) -> dict[str, int]:
         raise AppError(
             "MODEL_USAGE_MISSING",
             "provider response did not include token usage",
-            status_code=502,
         )
     input_tokens = int(result.prompt_tokens)
     output_tokens = int(result.completion_tokens)
@@ -126,7 +125,6 @@ async def _mark_failed_and_commit(
             raise AppError(
                 "AI_LEDGER_UPDATE_FAILED",
                 "pending ai call ledger row could not be marked failed",
-                status_code=500,
                 details={"ai_call_log_id": str(call_id), "failure_phase": failure_phase},
             )
         await db.commit()
@@ -215,7 +213,7 @@ async def generate_text_with_ledger(
             error_message=str(exc) or "model call timeout",
             billable_status="unknown",
         )
-        raise AppError("MODEL_CALL_TIMEOUT", "model call timeout", status_code=504) from exc
+        raise AppError("MODEL_CALL_TIMEOUT", "model call timeout") from exc
     except Exception as exc:
         await _mark_failed_and_commit(
             ledger_session_factory,
@@ -225,7 +223,7 @@ async def generate_text_with_ledger(
             error_message=str(exc) or type(exc).__name__,
             billable_status="unknown",
         )
-        raise AppError("MODEL_CALL_FAILED", "ai provider failed", status_code=502) from exc
+        raise AppError("MODEL_CALL_FAILED", "ai provider failed") from exc
 
     response_hash, output_size_bytes = _hash_text(result.text)
     try:
@@ -253,7 +251,7 @@ async def generate_text_with_ledger(
             billable_status="unknown",
             cost_calculation_status="failed",
         )
-        raise AppError("MODEL_COST_CALCULATION_FAILED", "model cost calculation failed", status_code=502) from exc
+        raise AppError("MODEL_COST_CALCULATION_FAILED", "model cost calculation failed") from exc
 
     async with ledger_session_factory() as db:
         marked = await AiCallLogRepo.mark_succeeded(
@@ -270,7 +268,6 @@ async def generate_text_with_ledger(
             raise AppError(
                 "AI_LEDGER_UPDATE_FAILED",
                 "pending ai call ledger row could not be marked succeeded",
-                status_code=500,
                 details={"ai_call_log_id": str(call_id)},
             )
         await db.commit()

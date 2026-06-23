@@ -27,7 +27,7 @@ Supersedes for current lifecycle authority: docs/设计文档/taskiq-job-model-d
 - publisher 需要彻底异步化，并独立于 API / recovery 扩缩容。
 - 需要同时支持多类 dispatch channel，且每个 channel 有独立状态和重试策略。
 
-当前 dispatch 权威冻结在 `job_attempts`。`jobs` 中与 publish 相关的 job 级字段只能作为 legacy / 非权威摘要看待，不进入状态表、恢复判断或公开合同。
+当前 dispatch 权威冻结在 `job_attempts`。`jobs` 不保存 job 级 publish 摘要字段；dispatch 状态、重发判断和 publish 诊断只能来自 active `job_attempts`。
 
 ## 状态权威
 
@@ -37,7 +37,6 @@ Supersedes for current lifecycle authority: docs/设计文档/taskiq-job-model-d
 | `job_attempts` | 单次执行 attempt、dispatch 子状态、publish 尝试、worker claim、lease、heartbeat、attempt 失败和重试衔接。 | 不对外暴露，不保存 Job 公开结果。 |
 | `callback_outbox` | 终态 Callback 事件投递账本、投递 lease、retry、dead letter、幂等 `event_id`。 | 不改变 Job 终态；`jobs.callback_*` 只是摘要投影。 |
 | `job_events` | 生命周期事件审计和排障辅助。 | 不是当前状态源；事件内容不得反推覆盖权威表。 |
-| `reconciler_leases` | 已建表，预留给恢复协调租约。 | 当前主 recovery 路径未使用该表；当前使用 PostgreSQL advisory lock。 |
 | `ai_call_logs` | 每次 AI provider call 的 ledger、usage、cost estimate、scope 归属和诊断状态。 | 不控制 Job 状态；`BillingEnvelope` 只是读取投影。 |
 
 `job_events` 当前不能作为状态真值源。比如 worker 领取时，代码允许从 `queued` 或 `published` attempt claim，但 `attempt.claimed` 事件的 `from_status` 仍可能写成 `published`；因此事件只用于审计，不用于驱动迁移或生成公开状态。
@@ -46,8 +45,8 @@ Supersedes for current lifecycle authority: docs/设计文档/taskiq-job-model-d
 
 | 对象 | 当前代码实际产生状态 | DB / schema 兼容状态 | 说明 |
 |---|---|---|---|
-| `Job.status` / `JobEnvelope.job_status` | `queued`、`running`、`succeeded`、`failed` | DB 仍允许 legacy `canceled`；公开 schema 不包含。 | 对外只暴露小集合。取消不是当前公开合同。 |
-| `JobAttempt.status` | `queued`、`published`、`running`、`succeeded`、`failed` | DB 还允许 `timed_out`、`cancelled`。 | 当前 stale running recovery 写成 `failed`，并用错误分类表达 timeout。 |
+| `Job.status` / `JobEnvelope.job_status` | `queued`、`running`、`succeeded`、`failed` | DB check 与公开 schema 对齐。 | 对外只暴露小集合。取消不是当前公开合同。 |
+| `JobAttempt.status` | `queued`、`published`、`running`、`succeeded`、`failed` | DB check 与当前迁移集合对齐。 | 当前 stale running recovery 写成 `failed`，并用错误分类表达 timeout。 |
 | `CallbackOutbox.status` | `pending`、`leased`、`delivered`、`failed`、`dead_letter`、`skipped` | 与 DB check 对齐。 | `skipped` 是内部 outbox 状态，不直接作为公开 callback status。 |
 | `JobEnvelope.callback.status` | `not_configured`、`pending`、`delivering`、`delivered`、`retrying`、`failed` | schema 当前不包含 `skipped`。 | 服务视图会把内部 `skipped` 映射为 `not_configured` 或 `failed`。 |
 | `AiCallLog.status` | `pending`、`succeeded`、`failed` | 与 DB check 对齐。 | Provider call ledger 主状态。 |
@@ -167,7 +166,7 @@ Owner：
 - `app/repositories/job_repo.py:find_due_callbacks`
 - `app/repositories/job_repo.py:cleanup_expired_jobs`
 
-当前 recovery 使用 PostgreSQL advisory lock `job_recovery_loop` 做单飞协调。`reconciler_leases` 表已存在，但未接入当前主路径。
+当前 recovery 使用 PostgreSQL advisory lock `job_recovery_loop` 做单飞协调。恢复正确性依赖权威表、row lock、active attempt、lease 和 CAS 条件，不依赖单实例部署。
 
 当前扫描：
 
@@ -247,7 +246,7 @@ Job billing 查询只在 Job 到达 `succeeded` 或 `failed` 后开放。Billing
 
 - 新增公开 Job 状态必须先升级 `JobEnvelope` 合同、OpenAPI、测试和调用方文档。
 - 新增内部 Attempt 状态必须同步 DB check、repository transition、recovery 查询、event 和测试。
-- Dispatch 相关查询只能以 active `job_attempts` 为权威；不得使用 `jobs` publish 摘要字段决定是否重发。
+- Dispatch 相关查询只能以 active `job_attempts` 为权威；不得把 job 级字段重新引入为 dispatch 状态源。
 - Callback 投递只能以 `callback_outbox` 为权威；`jobs.callback_*` 仅用于公开摘要。
 - Billing 只能以 `ai_call_logs` 为权威；不得把 usage / cost 写入 `jobs` 作为事实源。
-- 未接入主路径的表、字段或早期设计状态必须标注为 legacy、reserved 或 future，不能写成 current contract。
+- 未接入主路径的表、字段或早期设计状态不得写成 current contract；需要保留历史背景时只能放在历史设计文档中。

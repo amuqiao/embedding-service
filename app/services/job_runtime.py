@@ -43,10 +43,10 @@ def build_runtime_snapshot(
 
 def _validate_output_target(target: Any) -> dict[str, Any]:
     if not isinstance(target, dict):
-        raise AppError("RUNTIME_REF_INVALID", "运行时输出目标必须是 JSON object", status_code=500)
+        raise AppError("RUNTIME_REF_INVALID", "运行时输出目标必须是 JSON object")
     for key in ("oss_bucket", "oss_prefix", "oss_region"):
         if not isinstance(target.get(key), str) or not target[key]:
-            raise AppError("RUNTIME_REF_INVALID", f"运行时输出目标缺少 {key}", status_code=500)
+            raise AppError("RUNTIME_REF_INVALID", f"运行时输出目标缺少 {key}")
     return target
 
 
@@ -65,11 +65,11 @@ def write_runtime_json(job: Job, name: str, payload: dict[str, Any]) -> dict[str
 
 def read_runtime_json(ref: dict[str, Any] | None) -> dict[str, Any]:
     if not ref:
-        raise AppError("RUNTIME_REF_MISSING", "运行时引用不存在", status_code=500)
+        raise AppError("RUNTIME_REF_MISSING", "运行时引用不存在")
     if ref.get("storage") == "db_inline":
         value = ref.get("payload")
         if not isinstance(value, dict):
-            raise AppError("RUNTIME_REF_INVALID", "运行时内联引用必须包含 JSON object payload", status_code=500)
+            raise AppError("RUNTIME_REF_INVALID", "运行时内联引用必须包含 JSON object payload")
         return value
     try:
         text = storage.read_text(bucket=ref["oss_bucket"], key=ref["oss_key"], region=ref["oss_region"])
@@ -77,22 +77,21 @@ def read_runtime_json(ref: dict[str, Any] | None) -> dict[str, Any]:
     except AppError:
         raise
     except Exception as exc:
-        raise AppError("RUNTIME_REF_INVALID", "运行时引用读取失败", status_code=500) from exc
+        raise AppError("RUNTIME_REF_INVALID", "运行时引用读取失败") from exc
     if not isinstance(value, dict):
-        raise AppError("RUNTIME_REF_INVALID", "运行时引用必须是 JSON object", status_code=500)
+        raise AppError("RUNTIME_REF_INVALID", "运行时引用必须是 JSON object")
     return value
 
 
 def job_params_from_job(job: Job) -> dict[str, Any]:
     params = read_runtime_json(job.job_params_ref)
     if not job.job_params_hash:
-        raise AppError("RUNTIME_HASH_MISSING", "运行时参数 hash 不存在", status_code=500)
+        raise AppError("RUNTIME_HASH_MISSING", "运行时参数 hash 不存在")
     actual_hash = payload_hash(params)
     if actual_hash != job.job_params_hash:
         raise AppError(
             "RUNTIME_HASH_MISMATCH",
             "运行时参数 hash 不匹配",
-            status_code=500,
             details={"expected": job.job_params_hash, "actual": actual_hash},
         )
     return params
@@ -101,18 +100,18 @@ def job_params_from_job(job: Job) -> dict[str, Any]:
 def runtime_snapshot_from_job(job: Job) -> dict[str, Any]:
     snapshot = read_runtime_json(job.runtime_ref)
     if not job.job_params_hash:
-        raise AppError("RUNTIME_HASH_MISSING", "运行时参数 hash 不存在", status_code=500)
+        raise AppError("RUNTIME_HASH_MISSING", "运行时参数 hash 不存在")
     if snapshot.get("job_type") != job.job_type:
-        raise AppError("RUNTIME_REF_INVALID", "运行时快照 job_type 不匹配", status_code=500)
+        raise AppError("RUNTIME_REF_INVALID", "运行时快照 job_type 不匹配")
     if snapshot.get("job_params_hash") != job.job_params_hash:
-        raise AppError("RUNTIME_HASH_MISMATCH", "运行时快照参数 hash 不匹配", status_code=500)
+        raise AppError("RUNTIME_HASH_MISMATCH", "运行时快照参数 hash 不匹配")
     return snapshot
 
 
 def runtime_fields_from_job(job: Job) -> dict[str, Any]:
     fields = runtime_snapshot_from_job(job).get("runtime_fields")
     if not isinstance(fields, dict):
-        raise AppError("RUNTIME_REF_INVALID", "运行时字段必须是 JSON object", status_code=500)
+        raise AppError("RUNTIME_REF_INVALID", "运行时字段必须是 JSON object")
     return fields
 
 

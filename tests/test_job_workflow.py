@@ -110,7 +110,7 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
     async def fake_execute_job(*_args, **_kwargs):
         from app.core.exceptions import AppError
 
-        raise AppError(error_code, error_code.lower(), status_code=500)
+        raise AppError(error_code, error_code.lower())
 
     async def fake_mark_attempt_failed(
         _db,

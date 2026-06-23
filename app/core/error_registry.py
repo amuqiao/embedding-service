@@ -250,20 +250,7 @@ _SPECS: dict[str, ErrorSpec] = {
     "CALLBACK_BODY_INVALID": ErrorSpec("900552", "CALLBACK_BODY_INVALID", "callback body invalid", 500, scope="callback", owner="callbacks"),
 }
 
-_STATUS_DEFAULTS: dict[int, ErrorSpec] = {
-    400: _SPECS["INVALID_INPUT"],
-    401: _SPECS["UNAUTHORIZED"],
-    403: _SPECS["FORBIDDEN"],
-    404: _SPECS["NOT_FOUND"],
-    405: _SPECS["METHOD_NOT_ALLOWED"],
-    500: _SPECS["INTERNAL_ERROR"],
-    502: _SPECS["AI_PROVIDER_FAILED"],
-    503: _SPECS["QUEUE_FULL"],
-    504: _SPECS["MODEL_CALL_TIMEOUT"],
-}
-
-
-def get_error_spec(reason: str, status_code: int | None = None) -> ErrorSpec:
+def get_error_spec(reason: str) -> ErrorSpec:
     spec = _SPECS.get(reason)
     if spec is None:
         raise KeyError(f"unknown error reason: {reason or 'INTERNAL_ERROR'}")

@@ -101,9 +101,6 @@ class JobExecutor(ABC):
     def validate_callback_response(self, response: CallbackResponseEnvelope) -> None:
         """Validate job-type-specific callback response data."""
 
-    def validate_extra(self, extra: dict[str, Any] | None) -> None:
-        """Validate legacy job-type-specific extra params. Prefer normalize_job_params()."""
-
     def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         if self.params_schema is not None:
             return self.params_schema.model_validate(job_params).model_dump()

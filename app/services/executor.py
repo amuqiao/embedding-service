@@ -50,7 +50,7 @@ def _is_model_refusal(text: str) -> bool:
 
 
 def _model_output_invalid(message: str) -> AppError:
-    return AppError("MODEL_OUTPUT_INVALID", message, status_code=502)
+    return AppError("MODEL_OUTPUT_INVALID", message)
 
 
 async def run_ai_job(

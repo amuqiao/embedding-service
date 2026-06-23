@@ -158,7 +158,6 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
                 raise AppError(
                     "JOB_STATE_TRANSITION_CONFLICT",
                     "attempt lease could not be extended",
-                    status_code=500,
                     details={"attempt_id": attempt_id, "phase": phase},
                 )
 
@@ -176,7 +175,7 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
 
         result = await _with_db(execute)
         if result.get("status") != "succeeded":
-            raise AppError("JOB_EXECUTION_FAILED", "job attempt finished without success", status_code=500, details=result)
+            raise AppError("JOB_EXECUTION_FAILED", "job attempt finished without success", details=result)
         return {"attempt_id": attempt_id, "job_id": str(job_id), "status": "succeeded", "result": result}
     except Exception as exc:
         logger.exception("taskiq_attempt_failed attempt_id=%s", attempt_id)

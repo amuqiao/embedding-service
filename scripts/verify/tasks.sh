@@ -22,6 +22,12 @@ run_workflow_smoke() {
   "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" --api-url "$API_URL"
 }
 
+run_migration_roundtrip() {
+  section "Migration Roundtrip"
+  require_project_python
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/migration_roundtrip.py"
+}
+
 run_script_syntax() {
   local script
   section "Script"
@@ -66,6 +72,7 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/dev/check_ports.py" \
     "$ROOT_DIR/scripts/verify/env_config_check.py" \
     "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" \
+    "$ROOT_DIR/scripts/verify/migration_roundtrip.py" \
     "$ROOT_DIR/scripts/verify/registry_check.py" \
     "$ROOT_DIR/scripts/jobs/__init__.py" \
     "$ROOT_DIR/scripts/jobs/cli.py" \

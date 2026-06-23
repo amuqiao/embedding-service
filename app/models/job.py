@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,6 +10,9 @@ from app.core.database import Base
 
 class Job(Base):
     __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_jobs_status"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     caller_id: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
@@ -31,17 +34,12 @@ class Job(Base):
     runtime_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     callback_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     callback_events: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    execution_plan: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     result_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     canonical_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     canonical_result_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     execution_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    execution_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    dispatch_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    first_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     execution_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     execution_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     active_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -71,9 +69,6 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    cancel_requested_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    cancel_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
     delete_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     deleted_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -91,6 +86,10 @@ class Job(Base):
 class JobAttempt(Base):
     __tablename__ = "job_attempts"
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'published', 'running', 'succeeded', 'failed')",
+            name="ck_job_attempts_status",
+        ),
         UniqueConstraint("job_id", "attempt_no", name="uq_job_attempts_job_attempt_no"),
         Index("ix_job_attempts_dispatch_due", "status", "next_dispatch_at", "created_at"),
         Index("ix_job_attempts_running_lease", "status", "lease_expires_at"),
@@ -173,16 +172,3 @@ class JobEvent(Base):
     reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
     payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
-
-
-class ReconcilerLease(Base):
-    __tablename__ = "reconciler_leases"
-
-    name: Mapped[str] = mapped_column(String(96), primary_key=True)
-    owner: Mapped[str] = mapped_column(String(255), nullable=False)
-    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-

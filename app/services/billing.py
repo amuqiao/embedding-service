@@ -135,7 +135,6 @@ async def get_job_billing(
         raise AppError(
             "BILLING_DISABLED",
             "billing query is disabled",
-            status_code=403,
             details={"request_id": request_id},
         )
     job = await JobRepo.get_for_caller(db, job_id, caller_id)
@@ -145,7 +144,6 @@ async def get_job_billing(
         raise AppError(
             "BILLING_SCOPE_NOT_TERMINAL",
             "job billing is only available after the job reaches a terminal status",
-            status_code=409,
             details={"job_id": str(job_id), "job_status": job.status},
         )
     return await get_scope_billing(db, scope_type="job", scope_id=str(job_id), caller_id=caller_id)

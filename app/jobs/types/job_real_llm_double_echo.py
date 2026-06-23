@@ -65,7 +65,6 @@ class JobRealLlmDoubleEchoJob(JobExecutor):
             raise AppError(
                 "JOB_RUNTIME_NOT_SUPPORTED",
                 "job_real_llm_double_echo requires active_attempt_id",
-                status_code=500,
             )
         input_text = _load_input_text(job)
         request_id = trigger_request_id_from_job(job)

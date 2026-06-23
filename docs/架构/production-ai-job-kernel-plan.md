@@ -1,13 +1,13 @@
 # 生产级 AI Job Kernel 重构计划
 
 ```text
-Status: Plan
+Status: Implemented Baseline + Active Hardening Backlog
 Owner: architecture
 Scope: contract boundary, lifecycle model, Job kernel, AI gateway/runtime adapter, AI ledger/billing, migration verification
 Current truth: code, tests, docs/架构/project-standards-code-facts.md
 ```
 
-本文是后续生产级重构计划，不是当前实现事实。当前实现事实以代码、测试和 [`project-standards-code-facts.md`](project-standards-code-facts.md) 为准。
+本文记录生产级 AI Job kernel 的已实现 baseline 和剩余 hardening backlog，不是当前实现事实的替代来源。当前实现事实以代码、测试和 [`project-standards-code-facts.md`](project-standards-code-facts.md) 为准；公开合同以 [`service-contract-boundary.md`](service-contract-boundary.md) 为准；内部生命周期权威以 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md) 为准。
 
 ## 最终目标
 
@@ -56,15 +56,15 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 - `ai_call_logs`、AI gateway facade、pricing cost estimate、`GET /api/v1/ai-jobs/jobs/{job_id}/billing` 和 `BillingEnvelope` 已落地首个 Job scope 计费路径。
 - `scripts/real-flow.sh` 是手动真实 LLM 流程入口，必须显式 `--confirm-cost`。
 
-已知差距：
+剩余 hardening backlog：
 
-- 部分设计文档仍混有目标态和旧实现描述，需要持续按 current / contract / plan 分层对账。
-- 生命周期状态权威已经冻结在 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md)；Phase 3 仍需把其中的剩余硬化项落到代码和测试，例如 uncertain publish 全链路、stale terminal write 和 retry policy。
-- submit publish 可靠性已经确定由 active `job_attempts` 承载 attempt-backed dispatch ledger；Phase 3 继续硬化 publish / recovery 测试，不再把 dispatch outbox 归属作为开放架构选择。
-- `JobExecutor` metadata 已初步覆盖 execution mode、platform retry policy 和 side effect policy；resource profile、compatibility version、AI/provider usage attribution 与 cost policy 必须等出现真实 consumer 或 AI gateway / ledger 语义冻结后再进入 plugin 合同。
-- AI gateway / runtime adapter 当前内部边界已经冻结在 [`ai-gateway-runtime-boundary.md`](ai-gateway-runtime-boundary.md)；provider 成功后的 ledger terminal 更新失败已冻结为不可自动重试。usage normalization 和 provider error taxonomy 仍属后续工作。
-- Billing 已有 Job scope read model 和最小 stale pending ledger recovery；retention/export 规则和非 Job scope 公开合同仍未开放。
-- metrics 和全量结构化日志仍未落地。
+- 历史设计文档仍包含 `cancelled`、`timed_out`、`reconciler_leases` 等早期目标态，只能作为历史设计阅读，不能覆盖 current contract。
+- Dispatch 权威已经收敛到 active `job_attempts`；后续需要补齐 publish failure dead-letter / ops 视图、uncertain publish 全链路故障注入测试和低基数 metrics。
+- `JobExecutor` metadata 已覆盖 execution mode、platform retry policy 和 side effect policy；resource profile、contract version、AI/provider usage attribution 与 cost policy 必须等出现真实 consumer 后再进入 plugin 合同。
+- AI gateway / runtime adapter 当前内部边界已经冻结在 [`ai-gateway-runtime-boundary.md`](ai-gateway-runtime-boundary.md)；usage normalization、provider error taxonomy 和真实 LLM retry 边界仍属后续工作。
+- Billing 已有 Job scope read model 和最小 stale pending ledger recovery；retention/export、settlement/adjustment ledger 和非 Job scope 公开合同仍未开放。
+- Error v1 合同继续保持 `ErrorEnvelope.data` 直接承载 details 或 `null`；若升级统一 `data.error`，必须作为版本化合同迁移处理。
+- metrics、结构化日志和 runbook-visible ops 查询仍未完整落地。
 
 ## 合同边界
 
@@ -150,7 +150,7 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 - 明确每个迁移的 owner、DB lock/CAS 条件、失败后状态、可恢复路径和测试入口。
 - 明确 publish failure、worker crash、lease expired、terminal write conflict、callback retry、billing incomplete 的故障矩阵。
 - 定义对外 `job_status` 与内部状态的映射，不扩散内部状态到公开合同。
-- 冻结结果见 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md)：当前不拆 `job_dispatch_outbox`，dispatch 权威归属 active `job_attempts`；`reconciler_leases` 当前未接入主 recovery 路径。
+- 冻结结果见 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md)：当前不拆 `job_dispatch_outbox`，dispatch 权威归属 active `job_attempts`。
 
 验收：
 
@@ -242,9 +242,7 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 
 ## 下一阶段入口
 
-Phase 2 完成后，进入 Phase 3：Job kernel 硬化。
-
-Phase 3 的第一批文件应优先检查：
+下一阶段进入 production hardening，不再重复已完成的合同冻结和生命周期建模。第一批文件应优先检查：
 
 - `docs/架构/project-standards-code-facts.md`
 - `docs/架构/service-contract-boundary.md`

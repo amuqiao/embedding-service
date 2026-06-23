@@ -8,6 +8,7 @@ from app.core.exceptions import AppError
 from app.core.prompt_templates import list_prompt_templates
 from app.core.security import require_service_auth
 from app.main import API_PREFIX, app
+from app.schemas.errors import build_error_envelope
 from app.schemas.jobs import CreateJobRequest, JobResult
 from app.services.executor import _prompt_messages
 from app.services.jobs import _validate_create_request, validate_job_status_payload
@@ -157,9 +158,6 @@ def test_create_job_validation_allows_non_model_runtime(monkeypatch):
         def runtime_job_fields(self, job_params):
             return {}
 
-        def validate_extra(self, extra):
-            pass
-
         def validate_normalized_job_params(self, job_params):
             pass
 
@@ -191,7 +189,7 @@ def test_create_job_validation_preserves_runtime_app_error(monkeypatch):
             return job_params
 
         def validate_normalized_job_params(self, job_params):
-            raise AppError("RUNTIME_CONFIG_MISSING", "runtime config missing", status_code=500)
+            raise AppError("RUNTIME_CONFIG_MISSING", "runtime config missing")
 
         def runtime_job_fields(self, job_params):
             return {}
@@ -577,6 +575,40 @@ def test_invalid_request_id_returns_error_envelope(monkeypatch):
     _assert_iso_server_time(body["server_time"])
 
 
+def test_request_validation_error_uses_unified_error_envelope(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    _patch_security_settings(monkeypatch)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        f"{API_PREFIX}/jobs",
+        headers={"Authorization": "Bearer test-token", "X-Request-ID": "contract-validation"},
+        json={"client_request_id": "missing-job-type"},
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert set(body) == {"code", "msg", "data", "request_id", "server_time"}
+    assert body["code"] == "100001"
+    assert body["msg"] == "invalid input"
+    assert body["request_id"] == "contract-validation"
+    assert "detail" not in body
+    assert isinstance(body["data"]["errors"], list)
+    assert response.headers["X-Request-ID"] == "contract-validation"
+    _assert_iso_server_time(body["server_time"])
+
+
+def test_error_envelope_builder_uses_error_registry_status():
+    status_code, body = build_error_envelope(reason="HTTP_ERROR", request_id="contract-error")
+
+    assert status_code == 400
+    assert body["code"] == "100004"
+    assert body["msg"] == "http error"
+    assert body["data"] is None
+    assert body["request_id"] == "contract-error"
+
+
 def test_method_not_allowed_uses_unified_error_envelope():
     from fastapi.testclient import TestClient
 
@@ -604,7 +636,7 @@ def test_generic_http_exception_uses_unified_error_envelope():
     client = TestClient(app, raise_server_exceptions=False)
     response = client.get(route_path)
 
-    assert response.status_code == 400
+    assert response.status_code == 418
     body = response.json()
     assert body["code"] == "100004"
     assert body["data"] is None

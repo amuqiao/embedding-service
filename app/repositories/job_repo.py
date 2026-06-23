@@ -334,6 +334,7 @@ class JobRepo:
             return None
         job, attempt = row
         now = datetime.now(timezone.utc)
+        previous_attempt_status = attempt.status
         lease_token = uuid.uuid4()
         attempt.status = "running"
         attempt.worker_id = worker_id
@@ -359,7 +360,7 @@ class JobRepo:
                 job_id=job.id,
                 attempt_id=attempt.id,
                 event_type="attempt.claimed",
-                from_status="published",
+                from_status=previous_attempt_status,
                 to_status="running",
                 payload={"worker_id": worker_id},
             )

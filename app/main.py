@@ -179,7 +179,6 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
                     "header": "X-Request-ID",
                     "allowed": "ASCII letters, digits, dot, underscore, colon, and hyphen; length 1-128",
                 },
-                status_code=400,
             )
             return JSONResponse(
                 status_code=status_code,
@@ -303,7 +302,6 @@ def install_exception_handlers(application: FastAPI) -> None:
             reason=exc.code,
             request_id=_request_id(request),
             details=exc.details,
-            status_code=exc.status_code,
         )
         return JSONResponse(
             status_code=status_code,
@@ -324,7 +322,6 @@ def install_exception_handlers(application: FastAPI) -> None:
             reason="INVALID_INPUT",
             request_id=_request_id(request),
             details={"errors": errors},
-            status_code=400,
         )
         return JSONResponse(
             status_code=status_code,
@@ -341,8 +338,9 @@ def install_exception_handlers(application: FastAPI) -> None:
             reason=reason,
             request_id=_request_id(request),
             details=None,
-            status_code=exc.status_code,
         )
+        if reason == "HTTP_ERROR":
+            status_code = exc.status_code
         return JSONResponse(
             status_code=status_code,
             content=jsonable_encoder(body),
@@ -356,7 +354,6 @@ def install_exception_handlers(application: FastAPI) -> None:
             reason="INTERNAL_ERROR",
             request_id=_request_id(request),
             details={},
-            status_code=500,
         )
         return JSONResponse(
             status_code=status_code,

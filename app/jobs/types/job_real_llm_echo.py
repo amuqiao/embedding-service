@@ -41,7 +41,7 @@ class JobRealLlmEchoJob(JobExecutor):
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise AppError("MODEL_OUTPUT_INVALID", "job_real_llm_echo output must be JSON", status_code=502) from exc
+            raise AppError("MODEL_OUTPUT_INVALID", "job_real_llm_echo output must be JSON") from exc
         if not isinstance(payload, dict):
-            raise AppError("MODEL_OUTPUT_INVALID", "job_real_llm_echo output must be a JSON object", status_code=502)
+            raise AppError("MODEL_OUTPUT_INVALID", "job_real_llm_echo output must be a JSON object")
         return JobResult.model_validate(payload)

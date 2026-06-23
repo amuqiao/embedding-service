@@ -19,19 +19,11 @@ class CallbackErrorDetail(StrictBaseModel):
     retryable: bool = False
 
 
-ErrorDetail = JobErrorDetail
-
-
-class ErrorData(StrictBaseModel):
-    error: JobErrorDetail
-
-
 def build_error_envelope(
     *,
     reason: str,
     request_id: str,
     details: dict[str, Any] | None = None,
-    status_code: int = 500,
 ) -> tuple[int, dict[str, Any]]:
     spec = get_error_spec(reason)
     body = error_resp(

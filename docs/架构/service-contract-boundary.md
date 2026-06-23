@@ -85,6 +85,7 @@ owner：
 当前规则：
 
 - `ErrorEnvelope.data` 直接承载 details 或 `null`。
+- HTTP status 以 error registry 的 `ErrorSpec.http_status` 为准，不由 route、service 或 exception handler 调用点临时覆盖。
 - 当前 HTTP 错误不使用 `{"error": ...}` 嵌套结构。
 - 如果未来升级统一 `ErrorDetail` 嵌套结构，必须作为独立合同迁移处理，并同步 OpenAPI、测试和调用方文档。
 
@@ -177,7 +178,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}/billing
 - `job_attempts` 的内部状态、publish status、worker id、lease token、heartbeat 和 timeout 细节。
 - `jobs.execution_token`、`execution_generation`、runtime refs、对象存储内部路径和 cleanup 标记。
 - `callback_outbox` 的 lease、dead letter、delivery deadline、HTTP 原始响应体。
-- `job_events` 和 `reconciler_leases`。
+- `job_events`。
 - `ai_call_logs` 的 provider 原始错误、request / response hash、usage detail、pricing snapshot 内部字段。
 - Prompt 全文、模型完整输出、密钥、provider 原始响应或高基数诊断字段。
 
