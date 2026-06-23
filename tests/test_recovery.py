@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.models.job import JobAttempt
-from app.tasks.recovery import _run_recovery
+from app.tasks.recovery import _run_recovery, _stale_pending_ai_call_before
 
 
 class _ScalarResult:
@@ -34,6 +34,10 @@ async def _cleanup(*_args, **_kwargs):
     return 0
 
 
+async def _no_ai_ledger_reconciliation(*_args, **_kwargs):
+    return 0
+
+
 def _attempt(status: str = "published") -> JobAttempt:
     return JobAttempt(
         id=uuid.uuid4(),
@@ -57,6 +61,10 @@ def _patch_common_recovery(monkeypatch, *, due_attempts=None, stale_attempts=Non
     )
     monkeypatch.setattr("app.tasks.recovery.JobRepo.find_due_callbacks", _no_attempts)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.cleanup_expired_jobs", _cleanup)
+    monkeypatch.setattr(
+        "app.tasks.recovery.AiCallLogRepo.mark_stale_pending_failed",
+        _no_ai_ledger_reconciliation,
+    )
 
 
 @pytest.mark.asyncio
@@ -169,3 +177,38 @@ async def test_recovery_delivers_due_callbacks(monkeypatch):
 
     assert result["callbacks"] == 1
     assert delivered == [str(due_job.id)]
+
+
+@pytest.mark.asyncio
+async def test_recovery_reconciles_stale_pending_ai_call_logs(monkeypatch):
+    recorded: dict[str, object] = {}
+
+    async def mark_stale_pending_failed(_db, *, before, limit):
+        recorded["before"] = before
+        recorded["limit"] = limit
+        return 2
+
+    _patch_common_recovery(monkeypatch)
+    monkeypatch.setattr("app.tasks.recovery.AiCallLogRepo.mark_stale_pending_failed", mark_stale_pending_failed)
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["ai_ledger_reconciled"] == 2
+    assert result["recovered"] == 0
+    assert result["failed"] == 0
+    assert recorded["before"].tzinfo is not None
+    assert recorded["before"] < datetime.now(timezone.utc)
+    assert isinstance(recorded["limit"], int)
+    assert recorded["limit"] > 0
+
+
+def test_ai_ledger_stale_pending_cutoff_is_after_job_stale_window():
+    now = datetime.now(timezone.utc)
+    before = _stale_pending_ai_call_before(now)
+    age_seconds = (now - before).total_seconds()
+
+    from app.core.config import settings
+
+    assert age_seconds == settings.job_stale_running_seconds + 60
+    assert age_seconds > settings.job_stale_running_seconds
+    assert age_seconds > settings.worker_hard_time_limit

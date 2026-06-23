@@ -61,7 +61,7 @@ app/services/billing.py
 - 通用 `GET /billing/scopes/{scope_type}/{scope_id}` 公开查询。
 - caller 时间窗口 billing 聚合、批量导出或长期 warehouse 对接。
 - `ai_call_logs` 的长期财务账本语义；当前仍是成本估算和审计 ledger。
-- provider 调用成功但 terminal ledger 更新失败后的专门 reconciler；当前错误已收敛为不可自动重试的 `AI_LEDGER_UPDATE_FAILED`，不能通过重放 provider call 修复。
+- provider 调用成功但 terminal ledger 更新失败后的完整人工结算或外部对账；当前 recovery 只把长期 pending ledger 行收敛为 failed / unknown，不能通过重放 provider call 修复。
 - metrics endpoint 和全量结构化日志。
 - 当前内置 `workflow-smoke` 不调用真实模型。
 

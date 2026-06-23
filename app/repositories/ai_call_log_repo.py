@@ -133,6 +133,36 @@ class AiCallLogRepo:
         return True
 
     @staticmethod
+    async def mark_stale_pending_failed(
+        db: AsyncSession,
+        *,
+        before: datetime,
+        limit: int,
+    ) -> int:
+        result = await db.execute(
+            select(AiCallLog)
+            .where(AiCallLog.status == "pending", AiCallLog.created_at <= before)
+            .order_by(AiCallLog.created_at.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        rows = list(result.scalars().all())
+        completed_at = datetime.now(timezone.utc)
+        for row in rows:
+            row.status = "failed"
+            row.failure_phase = "recovery"
+            row.error_code = "AI_CALL_PENDING_TIMEOUT"
+            row.error_message = "pending ai call ledger row exceeded recovery threshold; provider outcome unknown"
+            row.billable_status = "unknown"
+            row.cost_calculation_status = "not_applicable"
+            row.completed_at = completed_at
+            row.duration_ms = _duration_ms(row.started_at, completed_at)
+            row.updated_at = completed_at
+        if rows:
+            await db.flush()
+        return len(rows)
+
+    @staticmethod
     async def list_for_scope(
         db: AsyncSession,
         *,

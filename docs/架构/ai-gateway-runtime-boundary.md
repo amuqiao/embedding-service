@@ -57,7 +57,7 @@ AI gateway facade 当前使用两阶段 ledger 写入：
 5. 如果 provider 成功但缺 usage 或成本计算失败，尝试把 ledger 标记为 failed，且 `billable_status=unknown`、`cost_calculation_status=failed`。
 6. 如果 provider 已成功但 terminal ledger 更新无法 claim 该 pending row，抛不可自动重试的 `AI_LEDGER_UPDATE_FAILED`。
 
-`AI_LEDGER_UPDATE_FAILED` 不能作为自动重放 provider 调用的依据。真实模型调用可能已经发生；当前没有自动修复路径，运维排障必须保留 ledger 行和 scope 上下文。
+`AI_LEDGER_UPDATE_FAILED` 不能作为自动重放 provider 调用的依据。真实模型调用可能已经发生；recovery 只会把长期未收敛的 `pending` ledger 行收敛为 `failed + billable_status=unknown`，运维排障必须保留 ledger 行和 scope 上下文。
 
 ## Scope 规则
 
@@ -87,15 +87,17 @@ AI gateway facade 当前使用两阶段 ledger 写入：
 | `MODEL_COST_CALCULATION_FAILED` | provider 已返回且有 usage，但成本估算失败，ledger 标记 failed / unknown。 |
 | `AI_LEDGER_UPDATE_FAILED` | ledger terminal 更新无法完成；不可自动重试，不重放 provider 调用。 |
 
-当前没有专用 ledger reconciler。若出现 pending / unknown ledger 行，当前 billing read model 只能显式表达 `incomplete` 或 `failed`，不能靠重新调用 provider 修复账本。
+当前 recovery loop 会扫描超过 `JOB_STALE_RUNNING_SECONDS + 60s` 的 `pending` ledger 行，并把它们标记为 `failed`、`failure_phase=recovery`、`error_code=AI_CALL_PENDING_TIMEOUT`、`billable_status=unknown`、`cost_calculation_status=not_applicable`。该阈值晚于 worker hard timeout 和 stale running 窗口，避免抢先收敛仍可能合法写 terminal 的 live worker。若出现 `unknown` ledger 行，当前 billing read model 显式表达 `incomplete`，不能靠重新调用 provider 修复账本。
 
 ## 验证
 
 当前边界由以下测试覆盖：
 
 - `tests/test_ai_gateway_facade.py`
+- `tests/test_ai_call_log_repo.py`
 - `tests/test_billing_service.py`
 - `tests/test_registry_contract.py`
 - `tests/test_job_workflow.py`
+- `tests/test_recovery.py`
 
 真实 LLM Job billing 只通过 `./scripts/real-flow.sh ... --confirm-cost` 手动触发，不属于默认 `workflow-smoke`。

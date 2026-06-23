@@ -119,6 +119,7 @@ def test_scope_billing_with_pending_or_unknown_rows_is_incomplete():
     for row in (
         _row(status="pending", billable_status="pending"),
         _row(status="succeeded", billable_status="unknown"),
+        _row(status="failed", billable_status="unknown", cost_calculation_status="not_applicable"),
     ):
         billing = build_scope_billing_envelope(scope_type="job", scope_id="job-3", rows=[row])
 

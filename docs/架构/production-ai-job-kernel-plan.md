@@ -62,8 +62,8 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 - 生命周期状态权威已经冻结在 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md)；Phase 3 仍需把其中的剩余硬化项落到代码和测试，例如 uncertain publish 全链路、stale terminal write 和 retry policy。
 - submit publish 可靠性已经确定由 active `job_attempts` 承载 attempt-backed dispatch ledger；Phase 3 继续硬化 publish / recovery 测试，不再把 dispatch outbox 归属作为开放架构选择。
 - `JobExecutor` metadata 已初步覆盖 execution mode、platform retry policy 和 side effect policy；resource profile、compatibility version、AI/provider usage attribution 与 cost policy 必须等出现真实 consumer 或 AI gateway / ledger 语义冻结后再进入 plugin 合同。
-- AI gateway / runtime adapter 当前内部边界已经冻结在 [`ai-gateway-runtime-boundary.md`](ai-gateway-runtime-boundary.md)；provider 成功后的 ledger terminal 更新失败已冻结为不可自动重试。ledger recovery、usage normalization 和 provider error taxonomy 仍属后续工作。
-- Billing 已有 Job scope read model，但没有 ledger reconciler、retention/export 规则和非 Job scope 公开合同。
+- AI gateway / runtime adapter 当前内部边界已经冻结在 [`ai-gateway-runtime-boundary.md`](ai-gateway-runtime-boundary.md)；provider 成功后的 ledger terminal 更新失败已冻结为不可自动重试。usage normalization 和 provider error taxonomy 仍属后续工作。
+- Billing 已有 Job scope read model 和最小 stale pending ledger recovery；retention/export 规则和非 Job scope 公开合同仍未开放。
 - metrics 和全量结构化日志仍未落地。
 
 ## 合同边界
@@ -205,8 +205,8 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 - 定义 `ai_call_logs` ledger 状态机：pending、succeeded、failed、cost failed、billable/unbillable。
 - 定义 incomplete / failed billing 的 `diagnostic_reason` 枚举和公开语义。
 - 明确 pricing snapshot 冻结规则，历史账本不因当前 pricing 文件变化重算。
-- 定义 ledger reconciler 的输入、扫描范围、可修复状态和不可修复状态；真实 provider 调用已经发生时，只修复账本状态，不重放 provider 调用。
-- 落地 ledger reconciler 的最小可靠性边界；retention policy、只读导出或 materialized read model 可以按证据分阶段设计。
+- 已落地 ledger reconciler 的最小可靠性边界：扫描超时 `pending` 行并收敛为 failed / unknown；真实 provider 调用已经发生时，只修复账本状态，不重放 provider 调用。
+- retention policy、只读导出或 materialized read model 可以按证据分阶段设计。
 - 只有当真实查询压力证明需要时，才新增派生 summary；summary 不能成为事实源。
 
 验收：
@@ -214,7 +214,7 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 - `BillingEnvelope` 只从 ledger 聚合。
 - 失败 Job 内已发生的 LLM 调用仍可出现在 billing 中。
 - 无 AI call 的 Job 返回 `not_billable`，不是伪造 `estimated 0`。
-- pending / unknown ledger 行有明确 reconciler 处理路径和公开 `incomplete` 诊断语义。
+- pending / unknown ledger 行有明确 reconciler 处理路径和 `incomplete` 诊断语义。
 
 ### Phase 6：迁移验证
 

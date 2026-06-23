@@ -637,12 +637,14 @@ callback_failed
 当前 Repository 规则：
 
 - `JobRepo` 负责 SQL 查询、锁、状态迁移、outbox 和事件写入。
+- `AiCallLogRepo` 负责 AI call ledger 的 pending、terminal 和 stale pending recovery 写入。
 - 幂等入口使用 PostgreSQL advisory transaction lock。
 - attempt 领取使用 `with_for_update()` 和 active attempt 条件。
 - running attempt 使用 lease token 和 lease expiry。
 - Job 成功 / 失败使用 `execution_token` 防止过期执行写回。
 - callback 投递使用 outbox lease 和 `delivery_attempt` 限制。
 - cleanup 只软删除已过期且已收敛的终态 Job。
+- recovery loop 使用 PostgreSQL advisory lock 串行执行 Job dispatch、stale running attempt、Callback 和 stale pending AI call ledger 收敛。
 
 ## Integrations
 
@@ -717,6 +719,7 @@ AI gateway / runtime adapter 的当前内部边界见 [`ai-gateway-runtime-bound
 - HTTP success envelope 和错误 envelope 有 contract tests。
 - Job billing route、BillingEnvelope 和 Job scope billing read model 有合同和服务测试。
 - AI gateway facade 的 pending ledger、terminal ledger、usage missing、cost calculation failed 和 terminal ledger update failed 语义有服务测试。
+- AI call ledger stale pending recovery 有 repository 和 recovery loop 测试。
 - Job 创建、查询、idempotency、caller 隔离、终态结果、Callback、recovery、repository 和内置 job workflow 有测试覆盖。
 - env key 和配置派生约束有测试覆盖。
 

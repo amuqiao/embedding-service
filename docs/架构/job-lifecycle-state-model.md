@@ -194,7 +194,7 @@ Owner：
 
 | 场景 | Ledger 写入 | Billing 投影 |
 |---|---|---|
-| 调用 provider 前 | 创建 `ai_call_logs.status=pending`，保存 scope、model、pricing、request hash。 | 若此状态残留，scope billing 为 `incomplete`。 |
+| 调用 provider 前 | 创建 `ai_call_logs.status=pending`，保存 scope、model、pricing、request hash。 | 若此状态短期残留，scope billing 为 `incomplete`；超过 `JOB_STALE_RUNNING_SECONDS + 60s` 后由 recovery 收敛。 |
 | provider 成功、usage 和 cost 成功 | `status=succeeded`，`billable_status=billable`，`cost_calculation_status=estimated`，冻结 usage / cost。 | `estimated`。 |
 | provider timeout / failed | `status=failed`，`billable_status=unknown`，`cost_calculation_status=not_applicable`。 | `incomplete`，因为是否 billable 未知。 |
 | usage 缺失或 pricing 计算失败 | `status=failed`，`billable_status=unknown`，`cost_calculation_status=failed`。 | `failed`，`diagnostic_reason=cost_calculation_failed`。 |
@@ -202,7 +202,7 @@ Owner：
 
 Job billing 查询只在 Job 到达 `succeeded` 或 `failed` 后开放。Billing read model 不反向修改 Job、attempt、callback 或 provider 调用结果。
 
-当前已知缺口：provider 调用已经成功，但 ledger terminal update 失败时，代码会抛不可自动重试的 `AI_LEDGER_UPDATE_FAILED`。该错误不会触发 Job platform retry；当前没有专用 ledger recovery 路径，且不能用“重放真实 provider 调用”修复该缺口。
+当前已知边界：provider 调用已经成功，但 ledger terminal update 失败时，代码会抛不可自动重试的 `AI_LEDGER_UPDATE_FAILED`。该错误不会触发 Job platform retry；recovery 只能把长期 pending ledger 行收敛为 failed / unknown，不能用“重放真实 provider 调用”修复该缺口或自动补出 cost。
 
 ## 故障矩阵
 
@@ -218,8 +218,8 @@ Job billing 查询只在 Job 到达 `succeeded` 或 `failed` 后开放。Billing
 | 成功前副作用失败 | Job running，provider call 可能已发生 | Job 标记 failed，terminal callback outbox 创建 | Job `failed`；billing 仍可能有 billable call。 |
 | Callback endpoint 失败 | Job 已终态，outbox failed 或 dead_letter | callback retry / dead letter；Job 终态不变 | Job status 不变，callback 摘要变化。 |
 | Callback worker 崩溃 | outbox leased，lease 最终过期 | recovery 重新领取 due callback | Job status 不变。 |
-| AI ledger 存在 pending / unknown | `ai_call_logs` 未收敛或是否 billable 未知 | 当前无专用 reconciler；billing read model 显示 incomplete | Job status 不变，billing `incomplete`。 |
-| provider 成功但 ledger terminal update 失败 | pending ledger row 可能残留，模型调用已真实发生 | 抛不可自动重试的 `AI_LEDGER_UPDATE_FAILED`；后续必须通过 ledger recovery / 人工诊断处理，不能重放 provider call | Job 可能 failed；billing 可能 incomplete。 |
+| AI ledger 存在 pending / unknown | `ai_call_logs` 未收敛或是否 billable 未知 | recovery 把超时 pending 收敛为 failed / unknown；billing read model 显示 incomplete | Job status 不变，billing `incomplete`。 |
+| provider 成功但 ledger terminal update 失败 | pending ledger row 可能残留，模型调用已真实发生 | 抛不可自动重试的 `AI_LEDGER_UPDATE_FAILED`；recovery 后仍保持 unknown，不重放 provider call | Job 可能 failed；billing 可能 incomplete。 |
 
 ## 验收边界
 
@@ -234,13 +234,13 @@ Job billing 查询只在 Job 到达 `succeeded` 或 `failed` 后开放。Billing
 - Job 成功路径同时终结 attempt。
 - Callback delivery failure 不改变 Job 终态。
 - Job scope billing 对 pending / unknown / cost failed ledger 行给出 `incomplete` 或 `failed` 投影。
+- recovery 会把超时 pending AI call ledger 行收敛为 failed / unknown。
 
-后续 Phase 3 / Phase 4 应补齐或强化：
+后续应补齐或强化：
 
 - uncertain publish 全链路测试：broker message 已到达但 `attempt.published` 未写回时，只能 claim 一次并保持终态幂等。
 - stale worker 晚到 terminal write 的显式 repository / workflow 测试。
 - `job_events` 仅作审计的测试或文档 guard，避免把事件当状态源。
-- provider 成功但 ledger terminal update 失败时，不允许自动重复真实模型调用。
 - job_type retry policy、platform error classification 和真实 LLM retry 边界。
 
 ## 实现演进规则

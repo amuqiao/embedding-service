@@ -3,21 +3,29 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
+from app.repositories.ai_call_log_repo import AiCallLogRepo
 from app.repositories.job_repo import JobRepo
 
 logger = logging.getLogger(__name__)
+
+_AI_LEDGER_STALE_PENDING_AFTER_JOB_STALE_SECONDS = 60
 
 
 def _make_session():
     engine = create_async_engine(settings.database.url, poolclass=NullPool)
     return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+def _stale_pending_ai_call_before(now: datetime) -> datetime:
+    threshold_seconds = settings.job_stale_running_seconds + _AI_LEDGER_STALE_PENDING_AFTER_JOB_STALE_SECONDS
+    return now - timedelta(seconds=threshold_seconds)
 
 
 async def _run_recovery(db: AsyncSession) -> dict:
@@ -26,12 +34,20 @@ async def _run_recovery(db: AsyncSession) -> dict:
     callback_due: list[str] = []
     deleted = 0
     dispatch_attempts: list[uuid.UUID] = []
+    ai_ledger_reconciled = 0
 
     lock_result = await db.execute(text("SELECT pg_try_advisory_lock(hashtext('job_recovery_loop'))"))
     locked = bool(lock_result.scalar_one())
     if not locked:
         logger.info("recovery: another worker holds recovery lock, skipping")
-        return {"recovered": recovered, "failed": failed, "callbacks": 0, "deleted": deleted, "locked": False}
+        return {
+            "recovered": recovered,
+            "failed": failed,
+            "callbacks": 0,
+            "deleted": deleted,
+            "ai_ledger_reconciled": ai_ledger_reconciled,
+            "locked": False,
+        }
 
     try:
         now = datetime.now(timezone.utc)
@@ -78,6 +94,14 @@ async def _run_recovery(db: AsyncSession) -> dict:
         )
         callback_due.extend(str(job.id) for job in due_callbacks)
 
+        ai_ledger_reconciled = await AiCallLogRepo.mark_stale_pending_failed(
+            db,
+            before=_stale_pending_ai_call_before(now),
+            limit=settings.job.recovery_batch_size,
+        )
+        if ai_ledger_reconciled:
+            logger.warning("recovery: reconciled stale pending ai call logs count=%s", ai_ledger_reconciled)
+
         deleted = await JobRepo.cleanup_expired_jobs(db)
         await db.commit()
     finally:
@@ -111,6 +135,7 @@ async def _run_recovery(db: AsyncSession) -> dict:
         "failed": failed,
         "callbacks": len(callback_due),
         "deleted": deleted,
+        "ai_ledger_reconciled": ai_ledger_reconciled,
         "locked": True,
     }
 
