@@ -11,11 +11,11 @@
 | 文档 | 用途 |
 |---|---|
 | [`架构/project-standards-code-facts.md`](架构/project-standards-code-facts.md) | 项目规范与骨架（代码事实版）：当前代码中的 envelope、输入输出 schema、异常、配置、日志、ORM、Repository 和验证基线 |
+| [`架构/service-contract-boundary.md`](架构/service-contract-boundary.md) | 当前 HTTP、Job、Error、Callback、Billing envelope 的合同边界和内部事实 owner |
 | [`接口层/http-api-extension-standard.md`](接口层/http-api-extension-standard.md) | 新增业务 HTTP 接口时的 schema、operation registry、错误、日志和测试接入规范 |
 | [`接口层/job-type-extension-standard.md`](接口层/job-type-extension-standard.md) | 新增 `job_type` 时的 Params、Runtime、Result、`JobExecutor`、错误、日志和测试接入规范 |
 | [`设计文档/taskiq-job-model-design.md`](设计文档/taskiq-job-model-design.md) | Taskiq Job MVP 的数据模型、生命周期、Attempt、Callback Outbox 和 Event 设计 |
 | [`设计文档/FastAPI 统一响应信封架构设计文档.md`](设计文档/FastAPI%20统一响应信封架构设计文档.md) | HTTP 成功/错误统一响应信封设计 |
-| [`设计文档/callback-job-unified-envelope-design.md`](设计文档/callback-job-unified-envelope-design.md) | Job 轮询结果与 Callback envelope 的一致性设计 |
 | [`架构/job-ai-billing-mental-model.md`](架构/job-ai-billing-mental-model.md) | `Job`、AI gateway、AI call ledger、Billing read model 和 `model_id` 的分层心智模型 |
 
 ## 辅助文档
@@ -36,6 +36,7 @@
 
 | 文档 | 状态 | 用途 |
 |---|---|---|
+| [`设计文档/callback-job-unified-envelope-design.md`](设计文档/callback-job-unified-envelope-design.md) | Candidate | Job 轮询结果与 Callback envelope 的一致性设计候选；当前合同以 `service-contract-boundary.md` 和代码事实为准 |
 | [`设计文档/ai-gateway-layer-design.md`](设计文档/ai-gateway-layer-design.md) | Accepted Target Baseline | AI gateway layer、模型调用账本、pricing、billing read model 和 Job scope 投影设计；不是当前已实现合同 |
 
 ## 快速阅读路径
@@ -44,6 +45,8 @@
 
 ```text
 架构/project-standards-code-facts.md
+  ↓
+架构/service-contract-boundary.md
   ↓
 设计文档/taskiq-job-model-design.md
   ↓
@@ -55,6 +58,8 @@
 ```text
 架构/project-standards-code-facts.md
   ↓
+架构/service-contract-boundary.md
+  ↓
 接口层/http-api-extension-standard.md
 ```
 
@@ -62,6 +67,8 @@
 
 ```text
 架构/project-standards-code-facts.md
+  ↓
+架构/service-contract-boundary.md
   ↓
 接口层/job-type-extension-standard.md
   ↓
@@ -74,6 +81,6 @@
 - `docs/` 下的文档地图、集中索引和阅读路径只在本文维护；普通文档不新增导航型索引，避免多处互相引用后难以同步。
 - 子目录默认不维护 README；只有当单个子目录中文档数量明显增多，且确实需要目录级边界规则时，才考虑新增子目录 README。
 - 当前实现事实优先以代码、测试和 `project-standards-code-facts.md` 为准；设计文档用于解释已接受的结构和边界。
-- `Plan` 文档只表达后续工作，不得覆盖 current 事实或对外合同。
+- `Plan` 文档可以引用 current truth 作为背景，但只能服务于后续工作；不得覆盖 current 事实或对外合同。
 - 新增 HTTP 接口时同步检查接口规范、operation registry、schema registry 和合同测试。
 - 新增 `job_type` 时同步检查 `job_type` 规范、executor metadata、schema registry、Callback 投影和 workflow smoke。

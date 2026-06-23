@@ -43,6 +43,8 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 
 ## 当前事实基线
 
+本节只摘录 current truth 作为后续重构背景，不自建新的事实源；如果与代码、测试或 `project-standards-code-facts.md` 冲突，以 current truth 为准。
+
 已落地事实：
 
 - HTTP 成功响应由中间件包装为 `code/msg/data/request_id/server_time` envelope；route `response_model` 仍声明裸 `DataSchema`。
@@ -50,7 +52,7 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 - `POST /api/v1/ai-jobs/jobs` 以 `caller_id + client_request_id` 做幂等语义，创建 `jobs` 和初始 `job_attempts` 后提交事务，再发布 Taskiq attempt。
 - Taskiq worker 消息只携带 `attempt_id`；worker 领取 active attempt，写入 lease、heartbeat 和 running 状态。
 - Job 成功 / 失败通过 repository 受控迁移写回；callback 使用 outbox 和投递 lease。
-- `JobExecutor` 和 `job_type` registry 已存在，新增类型必须声明 schema、result、callback、错误码和日志 metadata。
+- `JobExecutor` 和 `job_type` registry 已存在，当前强制校验 params、runtime fields、canonical result 和 public result schema；callback、错误码和日志 metadata 已在 `JobTypeSpec` 中表达，但治理强度仍需在后续阶段继续硬化。
 - `ai_call_logs`、AI gateway facade、pricing cost estimate、`GET /api/v1/ai-jobs/jobs/{job_id}/billing` 和 `BillingEnvelope` 已落地首个 Job scope 计费路径。
 - `scripts/real-flow.sh` 是手动真实 LLM 流程入口，必须显式 `--confirm-cost`。
 
