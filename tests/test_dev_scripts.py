@@ -84,8 +84,28 @@ def test_jobs_cli_help_is_available_without_db():
     assert "types" in result.stdout
 
 
+def test_real_flow_cli_help_is_available_without_api():
+    result = subprocess.run(
+        ["./scripts/real-flow.sh", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "真实业务流程验证入口" in result.stdout
+    assert "llm-job-billing" in result.stdout
+    assert "llm-job-double-billing" in result.stdout
+
+
 def test_shell_entrypoints_require_command_without_help():
-    for script in ("./scripts/dev.sh", "./scripts/deploy.sh", "./scripts/verify.sh", "./scripts/jobs.sh"):
+    for script in (
+        "./scripts/dev.sh",
+        "./scripts/deploy.sh",
+        "./scripts/verify.sh",
+        "./scripts/jobs.sh",
+        "./scripts/real-flow.sh",
+    ):
         result = subprocess.run(
             [script],
             cwd=ROOT_DIR,
@@ -111,6 +131,8 @@ def test_jobs_types_json_is_machine_readable_without_app_log_noise():
     payload = json.loads(result.stdout)
     job_types = {item["job_type"] for item in payload["job_types"]}
     assert {"arithmetic", "job_test_add", "job_test_echo"} <= job_types
+    assert "job_real_llm_echo" in job_types
+    assert "job_real_llm_double_echo" in job_types
     assert result.stderr == ""
 
 

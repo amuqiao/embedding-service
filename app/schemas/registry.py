@@ -15,6 +15,12 @@ from app.schemas.jobs import (
     JobTestEchoParams,
     JobTestEchoResult,
     JobTestEchoRuntimeFields,
+    JobRealLlmEchoParams,
+    JobRealLlmEchoResult,
+    JobRealLlmEchoRuntimeFields,
+    JobRealLlmDoubleEchoParams,
+    JobRealLlmDoubleEchoResult,
+    JobRealLlmDoubleEchoRuntimeFields,
 )
 from app.schemas.meta import ModelsResponse, PromptTemplatesResponse
 
@@ -35,6 +41,12 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
         JobTestEchoParams,
         JobTestEchoRuntimeFields,
         JobTestEchoResult,
+        JobRealLlmEchoParams,
+        JobRealLlmEchoRuntimeFields,
+        JobRealLlmEchoResult,
+        JobRealLlmDoubleEchoParams,
+        JobRealLlmDoubleEchoRuntimeFields,
+        JobRealLlmDoubleEchoResult,
         ModelsResponse,
         PromptTemplatesResponse,
     )

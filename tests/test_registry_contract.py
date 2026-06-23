@@ -90,6 +90,24 @@ def test_job_type_registry_exposes_required_metadata():
     assert arithmetic_spec.allow_callback is True
     assert arithmetic_spec.error_codes <= all_error_reasons()
 
+    assert "job_real_llm_echo" in specs
+    real_llm_spec = specs["job_real_llm_echo"]
+    assert real_llm_spec.params_schema == "JobRealLlmEchoParams"
+    assert real_llm_spec.runtime_fields_schema == "JobRealLlmEchoRuntimeFields"
+    assert real_llm_spec.canonical_result_schema == "JobRealLlmEchoResult"
+    assert real_llm_spec.public_result_schema == "JobRealLlmEchoResult"
+    assert real_llm_spec.allow_callback is False
+    assert real_llm_spec.error_codes <= all_error_reasons()
+
+    assert "job_real_llm_double_echo" in specs
+    double_llm_spec = specs["job_real_llm_double_echo"]
+    assert double_llm_spec.params_schema == "JobRealLlmDoubleEchoParams"
+    assert double_llm_spec.runtime_fields_schema == "JobRealLlmDoubleEchoRuntimeFields"
+    assert double_llm_spec.canonical_result_schema == "JobRealLlmDoubleEchoResult"
+    assert double_llm_spec.public_result_schema == "JobRealLlmDoubleEchoResult"
+    assert double_llm_spec.allow_callback is False
+    assert double_llm_spec.error_codes <= all_error_reasons()
+
 
 def test_registry_consistency_check_passes():
     register_all_job_types()
@@ -102,7 +120,13 @@ def test_register_all_job_types_reregisters_after_clear():
 
     register_all_job_types()
 
-    assert {"arithmetic", "job_test_add", "job_test_echo"} <= set(job_registry.all_job_types())
+    assert {
+        "arithmetic",
+        "job_test_add",
+        "job_test_echo",
+        "job_real_llm_echo",
+        "job_real_llm_double_echo",
+    } <= set(job_registry.all_job_types())
 
 
 def test_worker_startup_validates_model_catalog(monkeypatch):

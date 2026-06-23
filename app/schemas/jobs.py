@@ -12,6 +12,7 @@ from app.schemas.common import StrictBaseModel
 from app.schemas.errors import CallbackErrorDetail, JobErrorDetail
 
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+REAL_LLM_ECHO_INLINE_MAX_BYTES = 4096
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
 ProgressStage = Literal[
@@ -220,6 +221,51 @@ class JobTestEchoResult(StrictBaseModel):
     message: str
     repeated: list[str]
     count: int = Field(ge=1, le=5)
+
+
+class JobRealLlmEchoParams(StrictBaseModel):
+    model_id: str = Field(min_length=1, max_length=128)
+    instruction: str = Field(default="用一句话确认真实 LLM 计费链路可用。", min_length=1, max_length=1000)
+    source: dict[str, Any]
+
+    @field_validator("source")
+    @classmethod
+    def validate_inline_source(cls, value: dict[str, Any]) -> dict[str, Any]:
+        inline = value.get("inline")
+        if not isinstance(inline, dict):
+            raise ValueError("source.inline is required")
+        text = inline.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("source.inline.text is required")
+        if len(text.encode("utf-8")) > REAL_LLM_ECHO_INLINE_MAX_BYTES:
+            raise ValueError(f"source.inline.text must be at most {REAL_LLM_ECHO_INLINE_MAX_BYTES} bytes")
+        return value
+
+
+class JobRealLlmEchoRuntimeFields(StrictBaseModel):
+    model_id: str
+    prompt_payload: dict[str, Any]
+
+
+class JobRealLlmEchoResult(StrictBaseModel):
+    artifacts: list[Artifact | dict[str, Any]] = Field(default_factory=list)
+    signals: dict[str, Any] = Field(default_factory=dict)
+
+
+class JobRealLlmDoubleEchoParams(JobRealLlmEchoParams):
+    first_instruction: str = Field(default="第一次调用：用一句话确认真实 LLM 计费链路可用。", min_length=1, max_length=1000)
+    second_instruction: str = Field(default="第二次调用：用另一句话确认同一 Job 的多次 LLM 计费可汇总。", min_length=1, max_length=1000)
+
+
+class JobRealLlmDoubleEchoRuntimeFields(StrictBaseModel):
+    model_id: str
+    first_prompt_payload: dict[str, Any]
+    second_prompt_payload: dict[str, Any]
+
+
+class JobRealLlmDoubleEchoResult(StrictBaseModel):
+    artifacts: list[Artifact | dict[str, Any]] = Field(default_factory=list)
+    signals: dict[str, Any]
 
 
 class ArithmeticParams(StrictBaseModel):
