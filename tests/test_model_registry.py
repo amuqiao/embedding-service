@@ -39,6 +39,7 @@ class _SettingsProxy:
         self.callback = settings_obj.callback
         self.ai_provider = settings_obj.ai_provider
         self.registry = settings_obj.registry
+        self.billing = settings_obj.billing
         self.job = settings_obj.job
         self.observability = settings_obj.observability
 
@@ -65,6 +66,7 @@ models:
     name: Custom Model
     provider: openai
     litellm_model: openai/custom-model
+    pricing_ref: openai:custom-model@2026-06-23
     enabled: true
     context_window: 12345
     supports_json_output: true
@@ -95,6 +97,26 @@ def test_model_registry_loads_available_models_from_yaml(tmp_path, monkeypatch):
     assert response.default_model_id == "custom-model"
     assert [model.id for model in response.models] == ["custom-model"]
     assert response.models[0].context_window == 12345
+    assert response.billing_enabled is None
+    assert response.cost_estimate_available is None
+
+
+def test_model_registry_exposes_billing_capability_when_enabled(tmp_path, monkeypatch):
+    config_path = tmp_path / "models.yaml"
+    _write_model_config(config_path)
+    test_settings = _build_settings(
+        OPENAI_API_KEY="test-key",
+        DEFAULT_MODEL_ID="custom-model",
+        MODEL_CONFIG_PATH=str(config_path),
+        BILLING_ENABLED="false",
+        MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY="true",
+    )
+    monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
+
+    response = model_registry.list_models_response()
+
+    assert response.billing_enabled is False
+    assert response.cost_estimate_available is False
 
 
 def test_model_registry_hides_models_when_required_env_is_missing(tmp_path, monkeypatch):
@@ -134,11 +156,16 @@ def test_model_registry_rejects_invalid_model_config(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_text_uses_model_generation_config(monkeypatch):
+async def test_generate_text_uses_provider_request_config(monkeypatch):
     calls = {}
-    model = SimpleNamespace(
+
+    request = ai_gateway.TextGenerationRequest(
         litellm_model="openai/custom-model",
+        messages=[{"role": "user", "content": "hello"}],
         temperature=0.2,
+        timeout_seconds=30,
+        api_key="test-key",
+        api_base="https://example.test/v1",
         num_retries=1,
         drop_params=False,
     )
@@ -150,15 +177,46 @@ async def test_generate_text_uses_model_generation_config(monkeypatch):
             usage=SimpleNamespace(prompt_tokens=3, completion_tokens=4),
         )
 
-    monkeypatch.setattr(ai_gateway, "get_enabled_model", lambda model_id: model)
     monkeypatch.setattr(ai_gateway.litellm, "acompletion", fake_acompletion)
 
-    result = await ai_gateway.generate_text("custom-model", [{"role": "user", "content": "hello"}])
+    result = await ai_gateway.generate_text(request)
 
     assert result.text == "result"
     assert result.prompt_tokens == 3
     assert result.completion_tokens == 4
     assert calls["model"] == "openai/custom-model"
+    assert calls["messages"] == [{"role": "user", "content": "hello"}]
     assert calls["temperature"] == 0.2
+    assert calls["timeout"] == 30
+    assert calls["api_key"] == "test-key"
+    assert calls["api_base"] == "https://example.test/v1"
     assert calls["num_retries"] == 1
     assert calls["drop_params"] is False
+
+
+@pytest.mark.asyncio
+async def test_generate_text_extracts_dict_usage(monkeypatch):
+    request = ai_gateway.TextGenerationRequest(
+        litellm_model="openai/custom-model",
+        messages=[{"role": "user", "content": "hello"}],
+        temperature=0.2,
+        timeout_seconds=30,
+        api_key=None,
+        api_base=None,
+        num_retries=1,
+        drop_params=False,
+    )
+
+    async def fake_acompletion(**_kwargs):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=" result "))],
+            usage={"prompt_tokens": 7, "completion_tokens": 8},
+        )
+
+    monkeypatch.setattr(ai_gateway.litellm, "acompletion", fake_acompletion)
+
+    result = await ai_gateway.generate_text(request)
+
+    assert result.prompt_tokens == 7
+    assert result.completion_tokens == 8
+    assert result.usage == {"prompt_tokens": 7, "completion_tokens": 8}

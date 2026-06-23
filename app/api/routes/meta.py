@@ -12,6 +12,7 @@ router = APIRouter(tags=["meta"], dependencies=[Depends(require_service_auth)])
 @router.get(
     "/models",
     response_model=ModelsResponse,
+    response_model_exclude_none=True,
     operation_id=OperationID.LIST_MODELS,
 )
 async def list_models():

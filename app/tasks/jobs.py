@@ -29,8 +29,10 @@ class TaskiqPublishDeferredError(RuntimeError):
 
 def _ensure_workflows_registered() -> None:
     from app.jobs.types.register import register_all_job_types
+    from app.core.model_registry import validate_model_catalog
 
     register_all_job_types()
+    validate_model_catalog()
 
 
 def _session_factory():

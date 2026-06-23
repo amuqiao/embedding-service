@@ -103,3 +103,18 @@ def test_register_all_job_types_reregisters_after_clear():
     register_all_job_types()
 
     assert {"arithmetic", "job_test_add", "job_test_echo"} <= set(job_registry.all_job_types())
+
+
+def test_worker_startup_validates_model_catalog(monkeypatch):
+    from app.tasks import jobs as task_jobs
+
+    called = {}
+
+    def fake_validate_model_catalog():
+        called["model_catalog"] = True
+
+    monkeypatch.setattr("app.core.model_registry.validate_model_catalog", fake_validate_model_catalog)
+
+    task_jobs._ensure_workflows_registered()
+
+    assert called == {"model_catalog": True}

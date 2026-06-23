@@ -1,7 +1,8 @@
 import logging
+import uuid
 
 from app.core.exceptions import AppError
-from app.integrations.ai_gateway import generate_text
+from app.services.ai_gateway_facade import generate_text_with_ledger
 from app.core.prompt_templates import get_output_contract, get_system_prompt
 from app.schemas.jobs import JobResult
 
@@ -52,11 +53,33 @@ def _model_output_invalid(message: str) -> AppError:
     return AppError("MODEL_OUTPUT_INVALID", message, status_code=502)
 
 
-async def run_ai_job(job_type: str, model_id: str, prompt_payload: dict, input_text: str) -> JobResult:
+async def run_ai_job(
+    *,
+    job_type: str,
+    model_id: str,
+    prompt_payload: dict,
+    input_text: str,
+    caller_id: str,
+    job_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+    request_id: str | None,
+) -> JobResult:
     from app.jobs.factory import get_job_executor
 
     executor = get_job_executor(job_type)
-    result = await generate_text(model_id, _prompt_messages(prompt_payload, input_text, job_type))
+    result = await generate_text_with_ledger(
+        caller_id=caller_id,
+        scope_type="job",
+        scope_id=str(job_id),
+        operation=f"{job_type}.execute",
+        step_name="calling_model",
+        request_id=request_id,
+        job_id=job_id,
+        attempt_id=attempt_id,
+        job_type=job_type,
+        model_id=model_id,
+        messages=_prompt_messages(prompt_payload, input_text, job_type),
+    )
     text = result.text.strip()
     if _is_model_refusal(text):
         raise _model_output_invalid(f"{job_type} 模型拒绝执行请求")

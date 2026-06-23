@@ -12,7 +12,7 @@ from app.repositories.job_repo import JobRepo
 from app.services.executor import run_ai_job
 from app.services.job_lifecycle import SUCCESS_SIDE_EFFECT_DONE_STAGE, SUCCESS_SIDE_EFFECT_STAGE
 from app.services.job_runtime import model_id_from_job, prompt_payload_from_job
-from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404
+from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404, trigger_request_id_from_job
 
 
 def _execution_generation(job: Job) -> int:
@@ -103,7 +103,24 @@ async def execute_job(
                 status_code=500,
                 details={"job_type": job.job_type},
             )
-        result = await run_ai_job(job.job_type, model_id, prompt_payload_from_job(job), _load_input_text(job))
+        model_attempt_id = attempt_id or job.active_attempt_id
+        if model_attempt_id is None:
+            raise AppError(
+                "JOB_RUNTIME_NOT_SUPPORTED",
+                "job scope model execution requires an active attempt",
+                status_code=500,
+                details={"job_id": str(job.id), "job_type": job.job_type},
+            )
+        result = await run_ai_job(
+            job_type=job.job_type,
+            model_id=model_id,
+            prompt_payload=prompt_payload_from_job(job),
+            input_text=_load_input_text(job),
+            caller_id=job.caller_id,
+            job_id=job.id,
+            attempt_id=model_attempt_id,
+            request_id=trigger_request_id_from_job(job),
+        )
         result_data = result.model_dump()
     else:
         result_data = custom_result

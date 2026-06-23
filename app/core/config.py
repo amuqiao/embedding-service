@@ -51,6 +51,9 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "DEFAULT_MODEL_ID": ("registry", "default_model_id"),
     "MODEL_CONFIG_PATH": ("registry", "model_config_path_raw"),
     "MODEL_CALL_TIMEOUT_SECONDS": ("ai_provider", "model_call_timeout_seconds"),
+    "BILLING_ENABLED": ("billing", "enabled"),
+    "MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY": ("billing", "model_catalog_expose_billing_capability"),
+    "PRICING_CONFIG_PATH": ("billing", "pricing_config_path_raw"),
     "MAX_ACTIVE_JOBS": ("job", "max_active_jobs"),
     "OSS_INPUT_MAX_BYTES": ("job", "oss_input_max_bytes"),
     "CALLBACK_TIMEOUT_SECONDS": ("callback", "timeout_seconds"),
@@ -341,6 +344,29 @@ class RegistrySettings(ConfigSection):
         return _resolve_repo_path(self.prompt_config_path_raw)
 
 
+class BillingSettings(ConfigSection):
+    enabled: bool = True
+    model_catalog_expose_billing_capability: bool = False
+    pricing_config_path_raw: str = "app/core/pricing.yaml"
+
+    @field_validator("enabled", "model_catalog_expose_billing_capability", mode="before")
+    @classmethod
+    def validate_billing_flags(cls, value: object) -> object:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized == "true":
+                return True
+            if normalized == "false":
+                return False
+        raise ValueError("billing flags must be boolean true or false")
+
+    @property
+    def pricing_config_path(self) -> Path:
+        return _resolve_repo_path(self.pricing_config_path_raw)
+
+
 class JobSettings(ConfigSection):
     max_active_jobs: int = 5000
     oss_input_max_bytes: int = 5_242_880
@@ -381,6 +407,7 @@ class Settings(BaseSettings):
     callback: CallbackSettings
     ai_provider: AIProviderSettings = Field(default_factory=AIProviderSettings)
     registry: RegistrySettings = Field(default_factory=RegistrySettings)
+    billing: BillingSettings = Field(default_factory=BillingSettings)
     job: JobSettings = Field(default_factory=JobSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 
@@ -451,10 +478,13 @@ class Settings(BaseSettings):
     def _validate_registry_files(self) -> None:
         model_path = self.registry.model_config_path
         prompt_path = self.registry.prompt_config_path
+        pricing_path = self.billing.pricing_config_path
         if not model_path.exists():
             raise ValueError(f"model config not found: {model_path}")
         if not prompt_path.exists():
             raise ValueError(f"prompt config not found: {prompt_path}")
+        if not pricing_path.exists():
+            raise ValueError(f"pricing config not found: {pricing_path}")
         try:
             raw = yaml.safe_load(model_path.read_text(encoding="utf-8"))
         except yaml.YAMLError as exc:

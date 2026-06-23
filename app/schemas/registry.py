@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from app.schemas.billing import BillingEnvelope, JobBillingResponseData, ScopeBillingResponseData
 from app.schemas.jobs import (
     ArithmeticParams,
     ArithmeticResult,
@@ -22,6 +23,9 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
     for schema in (
         CreateJobRequest,
         JobResponseData,
+        BillingEnvelope,
+        JobBillingResponseData,
+        ScopeBillingResponseData,
         ArithmeticParams,
         ArithmeticRuntimeFields,
         ArithmeticResult,

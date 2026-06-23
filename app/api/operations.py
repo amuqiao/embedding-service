@@ -12,6 +12,7 @@ class OperationID:
     LIST_PROMPT_TEMPLATES = "list_prompt_templates"
     CREATE_AI_JOB = "create_ai_job"
     GET_AI_JOB = "get_ai_job"
+    GET_JOB_BILLING = "get_job_billing"
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,26 @@ _OPERATIONS: dict[str, OperationSpec] = {
                 *_SERVICE_AUTH_ERRORS,
                 "JOB_NOT_FOUND",
                 "JOB_VIEW_CONTRACT_INVALID",
+            }
+        ),
+        idempotency_key=None,
+        side_effects=(),
+        log_events=("request_completed", "request_failed"),
+    ),
+    OperationID.GET_JOB_BILLING: OperationSpec(
+        operation_id=OperationID.GET_JOB_BILLING,
+        channel="http",
+        method="GET",
+        path="/jobs/{job_id}/billing",
+        auth_boundary=f"{_SERVICE_AUTH_BOUNDARY} + caller owned job",
+        request_schema=None,
+        response_data_schema="JobBillingResponseData",
+        error_codes=frozenset(
+            {
+                *_SERVICE_AUTH_ERRORS,
+                "JOB_NOT_FOUND",
+                "BILLING_DISABLED",
+                "BILLING_SCOPE_NOT_TERMINAL",
             }
         ),
         idempotency_key=None,

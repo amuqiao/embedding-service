@@ -255,6 +255,9 @@ def _request_id(request: Request) -> str:
 
 def bootstrap_runtime() -> None:
     register_all_job_types()
+    from app.core.model_registry import validate_model_catalog
+
+    validate_model_catalog()
     configure_logging()
     logger.info("app_start service=%s version=0.1.0", settings.service.name)
 

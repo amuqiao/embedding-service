@@ -14,6 +14,8 @@ class ModelOut(BaseModel):
 class ModelsResponse(BaseModel):
     default_model_id: str
     models: list[ModelOut]
+    billing_enabled: bool | None = None
+    cost_estimate_available: bool | None = None
 
 
 class PromptBlockTemplate(BaseModel):
