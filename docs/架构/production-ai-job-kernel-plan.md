@@ -9,6 +9,8 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 
 本文记录生产级 AI Job kernel 的已实现 baseline 和剩余 hardening backlog，不是当前实现事实的替代来源。当前实现事实以代码、测试和 [`project-standards-code-facts.md`](project-standards-code-facts.md) 为准；公开合同以 [`service-contract-boundary.md`](service-contract-boundary.md) 为准；内部生命周期权威以 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md) 为准。
 
+新项目目标数据模型和严格 `Transactional Outbox` 裁决见 [`transactional-outbox-job-kernel-data-model.md`](transactional-outbox-job-kernel-data-model.md)。该文档不改变当前实现事实，但覆盖后续绿地设计和大重构目标。
+
 ## 最终目标
 
 把本项目收敛成一个生产级 AI Job 生命周期内核：
@@ -26,7 +28,7 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 | 关注点 | 成熟模式 | 本项目取舍 |
 |---|---|---|
 | Job 状态 | 显式状态机和受控迁移 | 外部状态保持 `queued/running/succeeded/failed`，内部细化 attempt、dispatch、callback 和 recovery。 |
-| 可靠投递 | Transactional outbox 或等价提交后发布账本 | 当前已有 `job_attempts` publish 字段和 recovery；Phase 2 先冻结 dispatch 状态权威和 outbox 归属，再进入实现硬化。 |
+| 可靠投递 | Transactional outbox | 当前实现仍是 `job_attempts` publish 字段和 recovery；目标模型裁决为独立 `dispatch_outbox`，详见 Transactional Outbox 数据模型意见。 |
 | Worker 执行权 | Lease、heartbeat、CAS 写回、幂等 consumer | 继续以 attempt lease、execution token 和 active attempt 约束保护终态写回。 |
 | 新增 Job 类型 | Registry / plugin contract | 保留 `JobExecutor`，先升级 metadata、runtime、retry 和 side effect 声明；AI usage / cost 归属声明等 gateway 和 ledger invariant 冻结后再进入 plugin 合同。 |
 | AI 调用 | Gateway facade + provider adapter | Gateway 只处理模型能力、provider 调用、usage 和 ledger，不控制 Job 状态机。 |
@@ -146,11 +148,11 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 范围：
 
 - 定义 Job、Attempt、Dispatch、Callback、Billing ledger 的状态归属和迁移表。
-- 决定 dispatch outbox 归属：继续把 `job_attempts` publish 字段作为等价 dispatch outbox，或拆出独立 `job_dispatch_outbox`；该决策必须先于 Job kernel 实现硬化。
+- 决定 dispatch outbox 归属：当前实现事实仍由 `job_attempts` publish 字段承载；目标模型已经裁决为独立 `dispatch_outbox`。
 - 明确每个迁移的 owner、DB lock/CAS 条件、失败后状态、可恢复路径和测试入口。
 - 明确 publish failure、worker crash、lease expired、terminal write conflict、callback retry、billing incomplete 的故障矩阵。
 - 定义对外 `job_status` 与内部状态的映射，不扩散内部状态到公开合同。
-- 冻结结果见 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md)：当前不拆 `job_dispatch_outbox`，dispatch 权威归属 active `job_attempts`。
+- 当前实现冻结结果见 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md)：当前 dispatch 权威归属 active `job_attempts`。新项目 / 大重构目标见 [`transactional-outbox-job-kernel-data-model.md`](transactional-outbox-job-kernel-data-model.md)：dispatch publish 事实归属独立 `dispatch_outbox`。
 
 验收：
 
@@ -165,7 +167,7 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 
 范围：
 
-- 按 Phase 2 决策继续强化 `job_attempts` publish 字段；只有出现 fan-out、多 dispatch channel、独立 replay / dead letter / retention 或独立 publisher 扩缩容需求时，才重新评估独立 `job_dispatch_outbox`。
+- 按 Transactional Outbox 目标模型迁出 `job_attempts` publish 字段，新增独立 `dispatch_outbox`、dispatch publisher 和对应 recovery / dead letter / ops 查询边界。
 - 继续升级 `JobTypeSpec`：当前先落地 execution mode、platform retry policy 和 side effect policy；resource profile、contract version 等字段必须等出现真实 consumer 后再进入合同。
 - 将 Job kernel retry 从 `max_attempts + catch all` 继续收敛为显式平台错误分类；AI/provider 特有重试、usage attribution 和 cost policy 等 AI gateway / ledger invariant 冻结后再进入 plugin 合同。
 - 把成功 side effect 和 callback outbox 的顺序、失败语义和补偿边界写入 kernel contract。
