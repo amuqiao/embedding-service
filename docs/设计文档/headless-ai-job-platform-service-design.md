@@ -1,12 +1,12 @@
 # Headless AI Job Platform Service 设计文档
 
 ```text
-Version: 0.2.0
-Status: Proposed / Design Baseline Candidate
-Date: 2026-06-22
+Version: 0.3.0
+Status: Accepted / MVP Design Baseline
+Date: 2026-06-23
 Scope: model catalog v2, ai_call_logs, pricing config, BillingEnvelope, structured_llm 示例 job_type
 Change Policy: 进入开发后，任何模型目录合同、usage/cost 账本字段、BillingEnvelope 合同、pricing 规则、结构化 LLM 运行时、公开 API 字段或数据保留策略变化都必须升版本并记录变更原因。
-Change Reason: 补充 Job 终态后返回计费 envelope 的稳定设计，明确 billing 与 JobEnvelope、ai_call_logs、外部 billing 系统的边界。
+Change Reason: 收口 MVP 计费开关、模型能力暴露、内部 usage 排查、外部导出、保留期和 LiteLLM SDK 模式决策，并按 4 层架构明确实现落位。
 ```
 
 本文定义本项目从 AI Job 执行模板升级为无业务状态 Headless AI Job Platform Service 时，模型目录、模型调用账本、成本估算、Job 级计费 envelope 和结构化 LLM 示例能力的设计边界。
@@ -14,11 +14,14 @@ Change Reason: 补充 Job 终态后返回计费 envelope 的稳定设计，明�
 核心结论：
 
 - 本服务可以作为 **Headless AI Job Platform Service**，但不是纯无状态 API 网关；在共享 PostgreSQL、Redis 和外部对象存储的前提下，API / worker 进程可以无状态横向扩展，Job、Attempt、Callback 和模型调用账本仍以 PostgreSQL 为事实源。
-- `model catalog v2` 是本服务对外暴露和创建期校验的模型事实源；LiteLLM 只是模型调用适配层，LiteLLM Proxy 如接入也只能作为外部模型网关。
+- `model catalog v2` 是本服务对外暴露和创建期校验的模型事实源；MVP 使用 LiteLLM SDK 模式，本服务直接调用 LiteLLM SDK，LiteLLM Proxy 只作为可选外部 endpoint 示例，不成为本服务部署入口或公共合同。
 - `ai_call_logs` 是服务内部 usage ledger 和 cost estimate 账本，不是钱包、支付、发票、税务或最终对账系统。
 - `BillingEnvelope` 是按 `job_id` 聚合 `ai_call_logs` 后得到的计费估算返回合同；它回答“这个 Job 已记录的模型调用成本估算是多少”，不回答“用户是否已扣款或应收账款是否成立”。
 - 首版不把 `BillingEnvelope` 塞进通用 `JobEnvelope` 顶层；调用方如需 Job 结束后的计费信息，应通过明确的 billing 查询接口或运营导出获取。若未来必须让轮询和 Callback 都内联 `billing` 字段，必须同步升级 `callback-job-unified-envelope-design.md` 和所有 Job/Callback schema。
-- `pricing config` 只负责把 provider usage 转换为可审计的成本估算；价格缺失、模型缺失或配置漂移必须 fail-fast。
+- 计费公共能力由服务级 `BILLING_ENABLED` 控制，不提供单模型计费开关。所有 `enabled=true` 模型都必须可估算成本；价格缺失、模型缺失或配置漂移必须 fail-fast。
+- `/models` 是否公开 `pricing_available` / `cost_estimate_available` 摘要由 `MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY` 控制；该开关只影响公开发现字段，不放宽内部 pricing 校验。
+- MVP 不新增内部 usage 明细 HTTP 端点，不新增独立 `billing_outbox`，不在本服务内建设长期成本数据仓库。内部排查使用只读脚本或数据库视图；外部 billing / analytics 使用批量只读导出；`BillingEnvelope` 和 `ai_call_logs` 跟随 Job TTL。
+- `pricing config` 只负责把 provider usage 转换为可审计的成本估算；不能表达真实扣款、折扣结算、发票或供应商最终账单。
 - `structured_llm` 只能作为一个真实 LLM `job_type` 示例，验证 Job / usage / cost / Callback 完整链路，不得引入第二套 Job 外壳或业务编排框架。
 
 ## 1. 文档职责
@@ -113,7 +116,7 @@ Headless AI Job Platform Service
   └─ 不反向改写 Job 执行事实
 ```
 
-调用方的稳定理解应分成两条读取路径：
+调用方的稳定理解应分成三条读取路径：
 
 ```text
 POST /jobs
@@ -138,7 +141,36 @@ GET /jobs/{job_id}/billing
 | `pricing snapshot` | 这次调用按哪个价格版本估算 | `pricing config` + 调用时冻结字段 |
 | 外部 billing | 谁应该付费、是否扣款、是否开票、是否退款 | 外部业务 / 财务系统 |
 
-`BillingEnvelope` 是第四类稳定返回对象，不是 `JobEnvelope` 的内部字段。它可以作为 `HttpEnvelope[JobBillingResponseData]` 的 `data.billing` 返回，也可以作为运营导出事件输出；默认不进入 `CallbackEnvelope.job`。若产品要求 Callback 也携带 billing，必须让轮询和 Callback 读取同一份 billing 投影，并把该变更登记为公共合同升级。
+`BillingEnvelope` 是第四类稳定返回对象，不是 `JobEnvelope` 的内部字段。它可以作为 `HttpEnvelope[JobBillingResponseData]` 的 `data.billing` 返回，也可以作为批量只读导出的聚合结果；默认不进入 `CallbackEnvelope.job`。若产品要求 Callback 也携带 billing，必须让轮询和 Callback 读取同一份 billing 投影，并把该变更登记为公共合同升级。
+
+### 3.1 按 4 层架构落位
+
+本设计沿用 [`../架构/架构总览.md`](../架构/架构总览.md) 中的 FastAPI 4 层主干，不新增 `app/domain/`，也不让 LiteLLM、pricing 或 billing 形成第二套状态机。
+
+| 设计对象 | 目录落位 | 职责 |
+|---|---|---|
+| `/models` | `app/api/routes/meta.py` + `app/core/` | 继续沿用架构总览中的轻量发现接口受控例外：路由可直接读取 model / pricing registry 生成同步发现响应，但不得访问 Job 账本或实现业务编排。 |
+| `/jobs/{job_id}/billing` | `app/api/routes/` + `app/services/` | 路由只处理 HTTP 入口、依赖注入、鉴权和 response schema 绑定；Job 权限判断和 billing 聚合编排进入 service 层。 |
+| `ModelsResponse`、`BillingEnvelope`、`JobBillingResponseData` | `app/schemas/` | 定义公开合同、枚举、字段版本和错误数据结构。 |
+| Job 创建、模型 gate、billing 查询编排 | `app/services/` | 串联 registry、repository 和 Job 权限边界；不直接写 SQL。 |
+| `ai_call_logs` 写入和 Job 级聚合查询 | `app/repositories/` | 封装 pending / terminal row 写入、聚合、只读导出查询和行级筛选。 |
+| `ai_call_logs` ORM | `app/models/` | 定义持久化字段、索引和 Alembic 迁移对应结构。 |
+| `models.yaml`、`pricing.yaml`、配置开关、启动校验 | `app/core/` | 维护模型目录、pricing registry、Settings、配置一致性检查和 fail-fast。 |
+| LiteLLM SDK 调用 | `app/integrations/` | 封装 provider / LiteLLM SDK 适配、usage 提取和 provider 错误归一化。 |
+| `structured_llm` 示例能力 | `app/jobs/` | 作为 `JobExecutor` 扩展点验证真实模型调用链路，不复制通用 Job 状态机。 |
+| Taskiq worker 入口 | `app/tasks/` | 领取 attempt 后调用 services / jobs runner；不直接实现 billing 聚合或 provider 业务逻辑。 |
+
+稳定依赖方向必须保持为：
+
+```text
+app/api/routes -> app/services -> app/repositories -> app/models
+app/services -> app/core / app/integrations / app/jobs
+app/tasks -> app/services / app/jobs.runner / app/repositories
+```
+
+任何新增 billing、usage 或 model catalog 能力都应优先落在上述位置；如果实现时需要跨层调用，必须先判断是否是已有 4 层骨架无法表达的例外，而不是直接引入新主层。
+
+`/models` 是现有受控例外：只要它仍是同步 registry 发现接口，可以直接读取 `app/core` 中的 model / pricing registry。若后续 `/models` 需要读取数据库、调用外部系统、融合 Job/caller 状态或承载运营策略，必须收回到 `app/services/` 编排。
 
 ## 4. 设计原则
 
@@ -162,7 +194,9 @@ LiteLLM SDK 负责：
 - timeout、retry 等调用参数。
 - 返回 provider response 和 usage。
 
-LiteLLM Proxy 可以作为外部模型网关使用，但不应把以下概念直接抬升为本服务公共合同：
+MVP 固定使用 LiteLLM SDK 模式：本服务在 `app/integrations/` 中封装 LiteLLM SDK 调用，由 SDK 调用 OpenAI、Anthropic 或其它 provider。LiteLLM Proxy 不进入 MVP 部署模式，也不作为模型、pricing 或 billing 的事实源。
+
+如果某个部署已有 LiteLLM Proxy，只能把它配置为 SDK 上游 endpoint。即使这样，也不应把以下 Proxy 概念直接抬升为本服务公共合同：
 
 - virtual key 管理。
 - team / user budget。
@@ -340,6 +374,46 @@ Worker 调用前：
 - 如果模型已被禁用，应让 Job 失败为稳定错误，不得自动替换。
 - 如果模型仍可用，应使用调用时目录字段和 runtime snapshot 共同构造请求。
 
+### 5.4 `/models` 计费能力摘要
+
+`/models` 的计费能力暴露由服务级开关控制：
+
+```text
+MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY=false
+  不返回 pricing_available / cost_estimate_available 摘要。
+
+MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY=true
+  在 ModelsResponse 中返回服务级 billing_capability 摘要。
+```
+
+摘要应作为 `ModelsResponse` 的服务级字段返回，不放到每个模型项中。原因是 MVP 已规定所有 `enabled=true` 模型都必须可估算成本；如果把 `pricing_available=false` 或 `cost_estimate_available=false` 做成单模型合法状态，会重新打开“部分模型可计费、部分模型不可计费”的分支。
+
+建议结构：
+
+```json
+{
+  "default_model_id": "gpt-4.1-mini",
+  "billing_capability": {
+    "billing_enabled": true,
+    "pricing_available": true,
+    "cost_estimate_available": true,
+    "kind": "cost_estimate"
+  },
+  "models": []
+}
+```
+
+字段规则：
+
+| 字段 | 规则 |
+|---|---|
+| `billing_enabled` | 等于服务级 `BILLING_ENABLED`。 |
+| `pricing_available` | 启动期 model catalog 与 pricing config 校验通过后为 `true`；校验失败时服务不得启动。 |
+| `cost_estimate_available` | `BILLING_ENABLED=true` 且 pricing 校验通过时为 `true`；`BILLING_ENABLED=false` 时为 `false`。 |
+| `kind` | 首版固定为 `cost_estimate`，不得被调用方理解为实际扣款。 |
+
+`/models` 不公开价格数值、`pricing_ref`、`pricing_version`、provider 私有参数、LiteLLM Proxy 路由或内部 usage policy。
+
 ## 6. pricing config
 
 ### 6.1 职责
@@ -349,10 +423,11 @@ Worker 调用前：
 它必须满足：
 
 - 配置化新增价格，不改业务代码。
-- v1 所有生产启用模型必须能找到价格；不提供 `cost_required=false` 的生产路径。
+- MVP 所有 `enabled=true` 模型必须能找到价格；不提供单模型 `cost_required=false` 或 `billing_enabled=false` 路径。
 - 每次调用冻结 `pricing_ref`、`pricing_version` 和计算输入摘要。
 - 历史 `ai_call_logs` 不因价格文件更新而重新解释。
 - 金额使用 decimal，不使用 float 做最终存储。
+- `BILLING_ENABLED=false` 只关闭公共 billing 查询、公开计费能力和批量导出，不允许 enabled 模型缺少 pricing。这样可以避免同一模型目录在不同环境中出现合法性漂移。
 
 ### 6.2 配置结构建议
 
@@ -552,8 +627,8 @@ pending row 写入成功后，才允许调用 provider
 允许的表达方式：
 
 - 普通调用方在 Job 终态后通过 `GET /jobs/{job_id}/billing` 查询 `BillingEnvelope`。
-- 内部只读运维查询接口按 `job_id` 查询 `ai_call_logs` 明细。
-- 外部 billing / analytics 系统读取脱敏后的 `BillingEnvelope` 或聚合导出事件。
+- MVP 内部排查通过只读脚本、受控只读 SQL 或数据库 view 查询 `ai_call_logs` 明细。
+- 外部 billing / analytics 系统通过批量只读导出读取脱敏后的 `BillingEnvelope` 或聚合结果。
 - 特定 `job_type` 的 `public_result` 可以选择公开业务相关的成本摘要，但必须是该能力自己的公开结果合同，不等同于平台级 `BillingEnvelope`。
 
 不允许：
@@ -567,11 +642,11 @@ pending row 写入成功后，才允许调用 provider
 
 ### 7.5 保留期
 
-MVP 中 `ai_call_logs` 必须与 Job 保留期对齐，不作为长期财务账本保存。只要普通调用方还能查询到某个 Job，就必须能查询该 Job 的 `BillingEnvelope`；不存在“Job 仍可查但 billing 已过期”的首版状态。
+MVP 中 `ai_call_logs` 必须与 Job 保留期对齐，不作为长期财务账本保存。在 `BILLING_ENABLED=true` 的部署中，只要普通调用方还能查询到某个 Job，就必须能查询该 Job 的 `BillingEnvelope`；不存在“Job 仍可查但 billing 已过期”的首版状态。`BILLING_ENABLED=false` 表示该部署不提供公共 billing 合同，查询 billing 时返回 `BILLING_DISABLED`，不属于 billing 事实源过期。
 
 如果未来需要让 `ai_call_logs` 使用独立 TTL，必须同时定义 `BillingEnvelope.status="expired"` 或等价错误合同，并同步修改 Job 保留期、导出策略和契约测试。未完成这些设计前，不得单独清理仍可查询 Job 的 billing 事实源。
 
-如果需要长期成本分析，应通过外部数据仓库、运营导出或 billing 系统接收脱敏后的聚合事件。这样可以避免 Job 服务承担长期 transcript、审计归档和财务对账职责。
+如果需要长期成本分析，应通过外部数据仓库、批量只读导出或 billing 系统接收脱敏后的聚合结果。这样可以避免 Job 服务承担长期 transcript、审计归档和财务对账职责。选择批量只读导出意味着导出任务必须在 Job TTL 内完成；超过 TTL 后，本服务不承诺还能恢复已清理的 usage/cost 历史。
 
 ## 8. BillingEnvelope
 
@@ -642,6 +717,7 @@ GET /jobs/{job_id}/billing -> HttpEnvelope[JobBillingResponseData]
 
 | 场景 | 返回 |
 |---|---|
+| `BILLING_ENABLED=false` | `BILLING_DISABLED`，HTTP `404`，使用统一错误 envelope；不得返回空 billing 或伪造 `0` 成本。 |
 | Job 不存在或不属于当前 `caller_id` | `JOB_NOT_FOUND`，不泄露 Job 是否属于其它调用方。 |
 | Job 尚未终态 | 首版返回 `JOB_NOT_TERMINAL` 和 HTTP `409`，不返回最终 `BillingEnvelope`；`status="pending"` 只作为后续流式或预估接口的保留枚举。 |
 | Job 终态且没有真实 provider 调用 | `BillingEnvelope.status="not_billable"`，金额为 `"0.00000000"`，调用计数为 `0`。 |
@@ -740,15 +816,21 @@ ai_call_logs
 ```text
 job_billing_summaries
   不作为独立表落地。
+
+billing_outbox
+  不新增独立 billing / analytics 投递 outbox。
 ```
 
 原因：
 
 - `ai_call_logs` 已经包含 Job 级聚合所需事实。
 - 额外 summary 表会引入第二份事实，需要回填、修复、CAS 和一致性处理。
+- 额外 outbox 会引入新的投递状态、幂等键、重试、保留期和补偿语义；这些属于准实时外部 billing 集成，不是 MVP 的必要边界。
 - MVP 查询量可先通过索引、只读 view 或应用层聚合解决。
 
 如果后续读压、导出窗口或保留期要求证明应用层聚合不足，可以新增只读数据库 view、materialized view 或 `job_billing_summaries` 投影表。但该表只能是 `ai_call_logs` 的派生读模型，不能成为新的计费事实源。
+
+如果后续外部 billing 系统要求准实时、幂等投递和失败重试，再单独设计 `billing_outbox`。该设计必须明确事件 schema、幂等键、投递状态机、重试策略、保留期和与 `callback_outbox` 的关系；不得复用 `callback_outbox` 暗中投递 billing 事件。
 
 ### 8.7 与 Callback 的关系
 
@@ -766,6 +848,24 @@ job_billing_summaries
 - Callback payload 中的 billing 必须与 `GET /jobs/{job_id}/billing` 使用同一聚合规则。
 - Callback 重试使用同一份 payload，不重新计算 billing。
 - 该变更必须同步升级 Callback 合同文档和契约测试。
+
+### 8.8 运维查询和外部导出
+
+MVP 只提供两类非调用方读取路径：
+
+| 路径 | 形态 | 边界 |
+|---|---|---|
+| 内部 usage 明细排查 | 只读脚本、受控只读 SQL 或数据库 view | 面向开发、运维和故障排查；不得返回完整 Prompt、完整输出、密钥或 provider 原始响应。 |
+| 外部 billing / analytics 导出 | 批量只读导出 | 面向外部 billing、财务或 analytics 系统；由外部系统处理余额、发票、对账、长期留存和报表。 |
+
+MVP 不新增：
+
+- `GET /internal/jobs/{job_id}/ai-call-logs`。
+- `billing_outbox`。
+- billing event publisher。
+- 服务内长期 billing warehouse。
+
+批量只读导出的事实源只能是 `ai_call_logs` 或其只读派生 view。导出应按 `caller_id`、时间窗口、`job_type`、`model_id`、`currency` 等维度聚合，并只输出脱敏后的 usage/cost estimate 字段。
 
 ## 9. structured_llm 示例 job_type
 
@@ -908,9 +1008,29 @@ GET /jobs/{job_id}/billing 返回 BillingEnvelope
 
 ## 11. 配置与启动校验
 
+MVP 新增稳定配置项：
+
+| 配置项 | 默认建议 | 语义 |
+|---|---:|---|
+| `BILLING_ENABLED` | `true` | 控制公共 billing 查询、`/models` 计费能力摘要中的 `cost_estimate_available` 和批量只读导出是否可用；不允许作为跳过 pricing 校验的理由。 |
+| `MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY` | `false` | 控制 `/models` 是否公开服务级 `billing_capability` 摘要；不影响内部 model / pricing 校验。 |
+| `PRICING_CONFIG_PATH` | `app/core/pricing.yaml` | pricing config 文件路径。 |
+
+配置规则：
+
+- 不新增单模型 `billing_enabled`、`cost_required`、`pricing_available` 或 `cost_estimate_available` 开关。
+- 所有 `enabled=true` 模型都必须有合法 `pricing_ref`、可解析价格和 `usage_policy.usage_required=true`。
+- `BILLING_ENABLED=false` 时，`GET /jobs/{job_id}/billing` 返回稳定 `BILLING_DISABLED`；批量 billing / analytics 导出不可用；`/models` 如公开 `billing_capability`，必须表达 `billing_enabled=false` 和 `cost_estimate_available=false`。
+- `MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY=false` 时，`/models` 不返回计费能力摘要；调用方不得通过模型列表推断 pricing 细节。
+
 启动期必须执行以下检查：
 
 ```text
+settings:
+  [ ] BILLING_ENABLED 可解析为 bool
+  [ ] MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY 可解析为 bool
+  [ ] PRICING_CONFIG_PATH 指向可读取配置文件
+
 model catalog:
   [ ] YAML version 支持
   [ ] models 是列表
@@ -947,32 +1067,37 @@ billing:
   [ ] BillingEnvelope schema version 支持
   [ ] billing status / billable_status 枚举登记
   [ ] diagnostic_reason 稳定 reason 登记
+  [ ] BILLING_DISABLED 稳定错误 reason 登记
   [ ] JOB_NOT_TERMINAL 等 billing 查询错误 reason 登记
   [ ] 普通 caller billing 查询权限规则与 Job 查询权限一致
+  [ ] MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY 开启时 ModelsResponse schema 登记 billing_capability
 ```
 
 任何检查失败都应阻止服务启动或阻止 Job 创建，不允许降级启动。
 
 ## 12. API 表面
 
-首版新增一个 billing 查询端点，其余 Job 主流程端点保持原有外壳。
+当 `BILLING_ENABLED=true` 时，首版新增一个 billing 查询端点，其余 Job 主流程端点保持原有外壳。当 `BILLING_ENABLED=false` 时，billing 查询端点返回稳定 `BILLING_DISABLED` 错误，不返回空 envelope 或 `0` 成本。
 
 | 端点 | 演进 |
 |---|---|
-| `GET /models` | 返回 `model catalog v2` 的公开可用模型和能力摘要。 |
+| `GET /models` | 返回 `model catalog v2` 的公开可用模型；仅当 `MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY=true` 时返回服务级 `billing_capability` 摘要。 |
 | `GET /prompt-templates` | 返回结构化 LLM 可用模板摘要，不返回完整敏感 Prompt。 |
 | `POST /jobs` | 支持 `structured_llm` 示例 `job_type`。 |
 | `GET /jobs/{job_id}` | 仍返回统一 `JobEnvelope`，不默认暴露完整 usage/cost。 |
 | `GET /jobs/{job_id}/billing` | Job 终态后返回 `BillingEnvelope`，用于调用方获取本服务可审计的成本估算摘要。 |
 
-后续可选的内部运维查询形态：
+MVP 不提供内部 usage 明细 HTTP 端点。内部排查固定使用：
 
 ```text
-GET /internal/jobs/{job_id}/ai-call-logs
-只读脚本或数据库视图按 caller_id / since / until 聚合 usage
+只读脚本
+受控只读 SQL
+数据库只读 view
 ```
 
-`GET /jobs/{job_id}/billing` 是普通调用方合同，必须遵守 caller 隔离、脱敏和版本化 schema。首版权限规则固定为：调用方能查询 `GET /jobs/{job_id}` 时，也能查询同一 Job 的 `GET /jobs/{job_id}/billing`。`GET /internal/jobs/{job_id}/ai-call-logs` 是内部运维能力，允许暴露更多排障字段，但不得返回完整 Prompt、完整输出、密钥或 provider 原始响应。
+Future 如需产品化运维后台，可新增 `GET /internal/jobs/{job_id}/ai-call-logs` 或等价内部接口。该接口必须单独设计内部鉴权、字段脱敏、查询限流、审计日志和 schema，不进入 MVP。
+
+`GET /jobs/{job_id}/billing` 是 `BILLING_ENABLED=true` 时的普通调用方合同，必须遵守 caller 隔离、脱敏和版本化 schema。首版权限规则固定为：调用方能查询 `GET /jobs/{job_id}` 时，也能查询同一 Job 的 `GET /jobs/{job_id}/billing`。`BILLING_ENABLED=false` 时该端点返回 `BILLING_DISABLED`，不进入 caller 级 Job 权限判断。内部排查路径允许看到比普通调用方更多的排障字段，但不得返回完整 Prompt、完整输出、密钥或 provider 原始响应。
 
 ## 13. 数据一致性
 
@@ -1078,9 +1203,11 @@ request_hash / response_hash:
 
 - 扩展 `models.yaml` 到 v2。
 - 新增 `pricing.yaml`。
+- 新增 `BILLING_ENABLED`、`MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY` 和 `PRICING_CONFIG_PATH` 配置。
 - 新增 registry consistency 检查。
 - 补模型和价格 drift tests。
 - 保持 `/models` 兼容或显式升版本。
+- 如公开 billing capability，只在 `ModelsResponse` 返回服务级摘要，不在模型项中返回 per-model billing flag。
 
 ### Phase 3: ai_call_logs
 
@@ -1094,6 +1221,7 @@ request_hash / response_hash:
 
 - 新增 `BillingEnvelope` schema 和 `JobBillingResponseData`。
 - 新增 `GET /jobs/{job_id}/billing`。
+- `BILLING_ENABLED=false` 时返回 `BILLING_DISABLED`。
 - 按 `job_id` 聚合 `ai_call_logs`，返回 `not_billable`、`estimated`、`incomplete` 或 `failed`。
 - 补 failed-but-billed、多 attempt、多 pricing_ref 和 incomplete ledger 测试。
 - 保持 Callback payload 不携带 billing。
@@ -1109,8 +1237,10 @@ request_hash / response_hash:
 
 ### Phase 6: 运维查询和导出
 
-- 按需新增只读脚本、数据库视图或内部 usage 查询。
-- 按需导出聚合事件给外部 billing / analytics。
+- 按需新增只读脚本或数据库 view，用于内部 usage 明细排查。
+- 按需提供批量只读导出，用于外部 billing / analytics。
+- 不新增内部 usage 明细 HTTP 端点。
+- 不新增 `billing_outbox`，也不复用 `callback_outbox` 投递 billing 事件。
 - 不在本服务内实现支付和发票。
 
 ### Future: 多模态和其它计价方式
@@ -1119,6 +1249,9 @@ request_hash / response_hash:
 - `per_image`、`per_second`、`per_call` pricing。
 - provider / 区域 / 分辨率 / 参考素材等更复杂价格矩阵。
 - 按能力类型拆分 Taskiq 队列或 worker 角色。
+- 内部 usage 明细 HTTP 端点。
+- 准实时 `billing_outbox` 或外部 billing event publisher。
+- LiteLLM Proxy 可选接入示例；Proxy 仍只能作为外部 endpoint，不进入公共模型合同、pricing 事实源或 billing 事实源。
 
 这些能力不进入 v1 必做范围，必须在 `structured_llm + per_token` 链路稳定后单独设计和验证。
 
@@ -1128,6 +1261,10 @@ request_hash / response_hash:
 
 ```text
 配置:
+  [ ] BILLING_ENABLED=false 时 billing 查询返回 BILLING_DISABLED
+  [ ] MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY=false 时 /models 不返回 billing_capability
+  [ ] MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY=true 时 /models 返回服务级 billing_capability
+  [ ] 模型项中不存在 per-model billing flag
   [ ] model catalog v2 合法配置可启动
   [ ] 重复 model id 启动失败
   [ ] enabled 模型缺 pricing_ref 启动失败
@@ -1168,6 +1305,13 @@ structured_llm:
   [ ] ai_call_logs 不保存完整 Prompt
   [ ] ai_call_logs 不保存密钥
   [ ] error_message 有长度和脱敏限制
+
+MVP 边界:
+  [ ] 不存在 GET /internal/jobs/{job_id}/ai-call-logs
+  [ ] 不存在 billing_outbox
+  [ ] 不复用 callback_outbox 投递 billing 事件
+  [ ] 批量导出只读取 ai_call_logs 或只读派生 view
+  [ ] LiteLLM 调用通过 SDK 适配层完成
 ```
 
 项目级验证仍优先使用：
@@ -1186,15 +1330,18 @@ structured_llm:
 
 如果 `structured_llm` 需要 mock provider，应优先把 mock smoke 做成可重复、不访问真实供应商、不产生真实费用的模板级验证。
 
-## 17. 开放问题
+## 17. 已收口决策
 
-进入实现前需要确认：
+进入实现前，以下问题已收口为 MVP 基线：
 
-1. 是否允许 dev/test 模型显式跳过成本估算，还是所有启用模型都必须可估算成本。
-2. `/models` 是否公开 `pricing_available` / `cost_estimate_available` 摘要。
-3. 内部 usage 明细查询是否需要 HTTP 端点，还是只通过只读脚本或数据库视图排查。
-4. 外部 billing / analytics 导出是否需要独立 outbox，还是先使用批量只读导出。
-5. 长期成本分析是否需要独立数据仓库保留策略；这不影响 MVP 中 `GET /jobs/{job_id}/billing` 跟随 Job TTL。
-6. LiteLLM Proxy 是否只作为外部 endpoint，还是需要在部署文档中提供可选接入示例。
+| 问题 | 决策 |
+|---|---|
+| dev/test 模型是否可跳过成本估算 | 不允许。所有 `enabled=true` 模型都必须有合法 `pricing_ref`、可解析价格和 `usage_required=true`。 |
+| 是否支持计费 | 使用服务级 `BILLING_ENABLED` 控制公共 billing 查询、公开计费能力和批量导出；不提供单模型计费开关。 |
+| `/models` 是否公开 pricing / cost 摘要 | 使用 `MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY` 控制；公开时只返回服务级 `billing_capability` 摘要，不返回 per-model billing flag，不暴露价格和内部 pricing 引用。 |
+| 内部 usage 明细查询 | MVP 不做内部 HTTP 端点；先使用只读脚本、受控只读 SQL 或数据库 view 排查。 |
+| 外部 billing / analytics 导出 | MVP 使用批量只读导出，不新增 `billing_outbox`，不复用 `callback_outbox` 投递 billing 事件。 |
+| 长期成本分析 | 不在本服务内建设长期数据仓库；`ai_call_logs` 和 `BillingEnvelope` 跟随 Job TTL。批量导出必须在 Job TTL 内完成，长期分析交给外部 billing / analytics / warehouse。 |
+| LiteLLM 接入模式 | MVP 使用 LiteLLM SDK 模式；LiteLLM Proxy 不进入 MVP，如未来提供接入示例，也只能作为外部 endpoint。 |
 
-这些问题未确认前，不应把本文升为 Accepted。
+这些决策变更会影响公开 API 字段、配置语义、数据保留和实现落位。进入开发后，如需修改上述任一决策，必须按本文顶部 Change Policy 升版本并记录变更原因。
