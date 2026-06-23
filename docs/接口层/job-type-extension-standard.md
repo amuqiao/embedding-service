@@ -94,16 +94,18 @@ tests/test_<job_type>_workflow.py
 
 4. 定义 `PublicResultSchema`。
 
-   `JobEnvelope.job_result` 和 `CallbackEnvelope.job.job_result` 必须来自同一份 public result 投影。允许显式声明 public result 为 `null`，但轮询和 callback 必须一致。
+   `JobEnvelope.job_result` 和 `CallbackEnvelope.job.job_result` 必须来自同一份 public result 投影。当前 registry consistency 要求每个 `job_type` 声明非 `null` 的 `PublicResultSchema`；如果未来允许成功结果为 `null`，必须先升级 registry check、schema registry 和合同测试。
 
    `PublicResultSchema` 只能进入 `job_result`，不得扩展 `JobEnvelope` 公共顶层字段，也不得为 Callback 单独增加轮询接口不可见的业务字段。
 
 5. 实现 `JobExecutor` 子类。
 
-   executor 必须声明：
+   executor 必须通过 `JobTypeSpec` 暴露：
 
    ```text
    name
+   execution_mode
+   side_effect_policy
    params_schema
    runtime_fields_schema_name
    canonical_result_schema
@@ -111,12 +113,15 @@ tests/test_<job_type>_workflow.py
    allow_callback
    max_attempts
    timeout_seconds
+   platform_retry_policy
    large_artifact_keys
    allowed_error_codes
    log_events
    ```
 
-   `params_schema`、`runtime_fields_schema_name`、`canonical_result_schema` 和 `public_result_schema` 必须能在 `app/schemas/registry.py` 反查。当前未实际发射的日志事件不要提前写入 `log_events`，避免 registry 对可观测性做过度承诺。
+   `execution_mode` 和 `side_effect_policy` 由 `JobExecutor` 基类根据 `_execute()` / `run_success_side_effect()` 覆盖情况派生，不从请求体读取，也不进入公开 HTTP 合同。`params_schema`、`runtime_fields_schema_name`、`canonical_result_schema` 和 `public_result_schema` 必须能在 `app/schemas/registry.py` 反查。当前未实际发射的日志事件不要提前写入 `log_events`，避免 registry 对可观测性做过度承诺。
+
+   `platform_retry_policy` 默认是 `no_platform_retry`。如果 `max_attempts > 1`，registry consistency 会要求选择非默认策略；当前只接受 `retry_transient_platform_errors`，且 worker 只会把明确的平台超时类错误作为可重试，不会因为提高 `max_attempts` 自动重放 provider / model 调用。
 
    如果 `allow_callback=True`，该能力只声明是否允许终态通知，不得自定义 Callback 公共字段、HTTP 头、签名算法或 ACK 语义。Callback URL 安全、终态事件、稳定 `event_id`、签名头和 ACK 合同由公共 Callback 层统一负责。
 
@@ -193,7 +198,7 @@ MODEL_OUTPUT_INVALID
 [ ] ParamsSchema 已定义并拒绝未知字段
 [ ] RuntimeFieldsSchema 已定义或用稳定 schema 名称声明
 [ ] CanonicalResultSchema 已定义，内部结果会被校验
-[ ] PublicResultSchema 已定义；如为 null 已显式声明
+[ ] PublicResultSchema 已定义且不是 null
 [ ] 以上 schema 名称已登记到 app/schemas/registry.py
 [ ] JobExecutor 声明完整 JobTypeSpec metadata
 [ ] runtime_job_fields() 返回值符合 RuntimeFieldsSchema
@@ -201,6 +206,7 @@ MODEL_OUTPUT_INVALID
 [ ] allow_callback 策略明确
 [ ] allow_callback=True 时不自定义 Callback 公共外壳、传输头、签名或 ACK 合同
 [ ] max_attempts 和 timeout_seconds 策略明确
+[ ] max_attempts > 1 时已显式声明 platform_retry_policy，且不会重放不可幂等外部副作用
 [ ] large_artifact_keys 策略明确
 [ ] allowed_error_codes 全部已注册
 [ ] log_events 全部已注册

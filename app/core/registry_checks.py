@@ -6,6 +6,7 @@ from app.api.operations import all_operation_specs
 from app.core.config import settings
 from app.core.error_registry import all_error_reasons, all_error_specs
 from app.core.logging import all_log_events
+from app.jobs.base import EXECUTION_MODES, PLATFORM_RETRY_POLICIES, SIDE_EFFECT_POLICIES
 from app.jobs import registry as job_registry
 from app.schemas.registry import all_schema_names
 
@@ -72,6 +73,22 @@ def validate_job_type_registry() -> None:
             raise ValueError(f"job_type {spec.job_type} must declare canonical_result_schema")
         if not spec.public_result_schema or spec.public_result_schema == "null":
             raise ValueError(f"job_type {spec.job_type} must declare public_result_schema")
+        if spec.execution_mode not in EXECUTION_MODES:
+            raise ValueError(f"job_type {spec.job_type} declares invalid execution_mode: {spec.execution_mode}")
+        if spec.side_effect_policy not in SIDE_EFFECT_POLICIES:
+            raise ValueError(f"job_type {spec.job_type} declares invalid side_effect_policy: {spec.side_effect_policy}")
+        if spec.platform_retry_policy not in PLATFORM_RETRY_POLICIES:
+            raise ValueError(
+                f"job_type {spec.job_type} declares invalid platform_retry_policy: {spec.platform_retry_policy}"
+            )
+        if spec.max_attempts < 1:
+            raise ValueError(f"job_type {spec.job_type} must declare max_attempts >= 1")
+        if spec.timeout_seconds < 1:
+            raise ValueError(f"job_type {spec.job_type} must declare timeout_seconds >= 1")
+        if spec.max_attempts > 1 and spec.platform_retry_policy == "no_platform_retry":
+            raise ValueError(
+                f"job_type {spec.job_type} must declare platform_retry_policy when max_attempts > 1"
+            )
 
 
 def _operation_route_map(app) -> dict[str, APIRoute]:

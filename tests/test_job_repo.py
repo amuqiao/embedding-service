@@ -130,6 +130,56 @@ async def test_mark_attempt_published_sets_recovery_deadline():
 
 
 @pytest.mark.asyncio
+async def test_mark_attempt_published_allows_republish_of_same_attempt_intent():
+    attempt = JobAttempt(
+        id=uuid.uuid4(),
+        job_id=uuid.uuid4(),
+        attempt_no=1,
+        status="published",
+        timeout_seconds=60,
+        dispatch_attempts=2,
+        last_dispatch_error={"code": "TASKIQ_PUBLISH_FAILED"},
+    )
+    deadline = datetime.now(UTC) + timedelta(seconds=30)
+    db = _FakeDB()
+    db.results.append(_ScalarResult(attempt))
+
+    updated = await JobRepo.mark_attempt_published(db, attempt.id, next_dispatch_at=deadline)
+
+    assert updated is True
+    assert db.flushed is True
+    assert attempt.status == "published"
+    assert attempt.next_dispatch_at == deadline
+    assert attempt.dispatch_attempts == 3
+    assert attempt.last_dispatch_error is None
+
+
+@pytest.mark.asyncio
+async def test_mark_attempt_publish_failed_records_retry_for_already_published_attempt():
+    error = {"code": "TASKIQ_PUBLISH_FAILED", "message": "publish failed"}
+    attempt = JobAttempt(
+        id=uuid.uuid4(),
+        job_id=uuid.uuid4(),
+        attempt_no=1,
+        status="published",
+        timeout_seconds=60,
+        dispatch_attempts=1,
+    )
+    deadline = datetime.now(UTC) + timedelta(seconds=30)
+    db = _FakeDB()
+    db.results.append(_ScalarResult(attempt))
+
+    updated = await JobRepo.mark_attempt_publish_failed(db, attempt.id, error=error, next_dispatch_at=deadline)
+
+    assert updated is True
+    assert db.flushed is True
+    assert attempt.status == "published"
+    assert attempt.dispatch_attempts == 2
+    assert attempt.last_dispatch_error == error
+    assert attempt.next_dispatch_at == deadline
+
+
+@pytest.mark.asyncio
 async def test_find_dispatch_due_attempts_requires_deadline_for_published_attempts():
     db = _FakeDB()
     db.results.append(_ScalarListResult([]))
@@ -140,6 +190,19 @@ async def test_find_dispatch_due_attempts_requires_deadline_for_published_attemp
     assert "job_attempts.status =" in sql
     assert "job_attempts.next_dispatch_at IS NULL" in sql
     assert "job_attempts.next_dispatch_at <=" in sql
+
+
+@pytest.mark.asyncio
+async def test_find_dispatch_due_attempts_requires_active_queued_job():
+    db = _FakeDB()
+    db.results.append(_ScalarListResult([]))
+
+    await JobRepo.find_dispatch_due_attempts(db, datetime.now(UTC), limit=10)
+
+    sql = _compile(db.statements[0])
+    assert "jobs.status =" in sql
+    assert "jobs.active_attempt_id = job_attempts.id" in sql
+    assert "jobs.deleted_at IS NULL" in sql
 
 
 @pytest.mark.asyncio
@@ -172,6 +235,34 @@ async def test_mark_succeeded_persists_public_and_canonical_results():
     assert job.canonical_result_ref == {"oss_key": "result.json"}
     assert job.error is None
     assert job.callback_status == "not_configured"
+
+
+@pytest.mark.asyncio
+async def test_mark_succeeded_rejects_stale_execution_token():
+    job = Job(
+        id=uuid.uuid4(),
+        job_type="test.echo",
+        status="running",
+        execution_token="current-attempt",
+        progress_percent=30,
+        metadata_={},
+    )
+    db = _FakeDB()
+    db.results.append(_ScalarResult(None))
+
+    updated = await JobRepo.mark_succeeded(
+        db,
+        job.id,
+        execution_token="stale-attempt",
+        result={"public": True},
+    )
+
+    assert updated is False
+    assert db.flushed is False
+    assert job.status == "running"
+    assert job.result is None
+    sql = _compile(db.statements[0])
+    assert "jobs.execution_token =" in sql
 
 
 @pytest.mark.asyncio
@@ -219,6 +310,30 @@ async def test_mark_succeeded_creates_pending_callback_outbox_for_subscribed_eve
     assert outboxes[0].payload["job"]["callback"]["status"] == "pending"
     assert outboxes[0].payload["job"]["job_progress"]["stage"] == "completed"
     assert outboxes[0].payload["job"]["job_status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_rejects_stale_execution_token():
+    error = {"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {}}
+    job = Job(
+        id=uuid.uuid4(),
+        job_type="test.echo",
+        status="running",
+        execution_token="current-attempt",
+        progress_percent=30,
+        metadata_={},
+    )
+    db = _FakeDB()
+    db.results.append(_ScalarResult(None))
+
+    updated = await JobRepo.mark_failed(db, job.id, error, execution_token="stale-attempt")
+
+    assert updated is False
+    assert db.flushed is False
+    assert job.status == "running"
+    assert job.error is None
+    sql = _compile(db.statements[0])
+    assert "jobs.execution_token =" in sql
 
 
 @pytest.mark.asyncio
@@ -317,6 +432,39 @@ async def test_mark_attempt_failed_closes_attempt_when_job_already_failed():
     assert attempt.lease_token is None
     assert job.status == "failed"
     assert job.error == error
+
+
+@pytest.mark.asyncio
+async def test_mark_attempt_failed_rejects_stale_lease_token():
+    error = {"code": "JOB_TIMEOUT", "message": "timed out", "details": {}}
+    db = _FakeDB()
+    db.results.append(_NoRowResult())
+
+    updated = await JobRepo.mark_attempt_failed(
+        db,
+        uuid.uuid4(),
+        lease_token=uuid.uuid4(),
+        error=error,
+        retryable=True,
+    )
+
+    assert updated is False
+    assert db.flushed is False
+    sql = _compile(db.statements[0])
+    assert "job_attempts.lease_token =" in sql
+
+
+@pytest.mark.asyncio
+async def test_mark_attempt_succeeded_rejects_stale_lease_token():
+    db = _FakeDB()
+    db.results.append(_NoRowResult())
+
+    updated = await JobRepo.mark_attempt_succeeded(db, uuid.uuid4(), lease_token=uuid.uuid4())
+
+    assert updated is False
+    assert db.flushed is False
+    sql = _compile(db.statements[0])
+    assert "job_attempts.lease_token =" in sql
 
 
 @pytest.mark.asyncio

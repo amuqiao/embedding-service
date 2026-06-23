@@ -14,9 +14,17 @@ if TYPE_CHECKING:
     from app.schemas.jobs import JobResult
 
 
+EXECUTION_MODES = frozenset({"custom_executor", "builtin_llm_text_runtime"})
+PLATFORM_RETRY_POLICIES = frozenset({"no_platform_retry", "retry_transient_platform_errors"})
+SIDE_EFFECT_POLICIES = frozenset({"none", "success_side_effect"})
+
+
 @dataclass(frozen=True)
 class JobTypeSpec:
     job_type: str
+    execution_mode: str
+    platform_retry_policy: str
+    side_effect_policy: str
     params_schema: str
     runtime_fields_schema: str
     canonical_result_schema: str
@@ -41,6 +49,7 @@ class JobExecutor(ABC):
     allow_callback: bool = True
     max_attempts: int = 1
     timeout_seconds: int = 300
+    platform_retry_policy: str | None = None
     params_schema: type[BaseModel] | None = None
     canonical_result_schema: type[BaseModel] | None = None
     public_result_schema: type[BaseModel] | None = None
@@ -129,9 +138,24 @@ class JobExecutor(ABC):
             raise ValueError(f"{self.name} public result must be null")
         return self.public_result_schema.model_validate(result).model_dump(exclude_none=True)
 
+    def _execution_mode(self) -> str:
+        if type(self)._execute is JobExecutor._execute:
+            return "builtin_llm_text_runtime"
+        return "custom_executor"
+
+    def _side_effect_policy(self) -> str:
+        if type(self).run_success_side_effect is JobExecutor.run_success_side_effect:
+            return "none"
+        return "success_side_effect"
+
     def job_type_spec(self) -> JobTypeSpec:
         return JobTypeSpec(
             job_type=self.name,
+            execution_mode=self._execution_mode(),
+            platform_retry_policy=(
+                self.platform_retry_policy if self.platform_retry_policy is not None else "no_platform_retry"
+            ),
+            side_effect_policy=self._side_effect_policy(),
             params_schema=_schema_name(self.params_schema),
             runtime_fields_schema=self.runtime_fields_schema_name,
             canonical_result_schema=_schema_name(self.canonical_result_schema),

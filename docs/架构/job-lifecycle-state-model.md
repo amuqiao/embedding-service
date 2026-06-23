@@ -128,7 +128,7 @@ Owner：
 | running attempt -> failed, retryable | attempt running、active attempt、可选 lease token 命中、attempt_count 未耗尽 | old attempt failed；new attempt queued；Job 回到 queued；`execution_generation += 1`；清 execution token / error / finished_at | recovery 或 publish 链继续处理新 active attempt。 |
 | running attempt -> failed, terminal | attempt running、active attempt、可选 lease token 命中、attempt_count 耗尽或不可重试 | attempt failed；Job failed；terminal callback outbox | Job 终态不可被 callback 或旧 worker 改变。 |
 
-当前 `run_job_attempt` 捕获执行异常后会调用 `mark_attempt_failed(... retryable=True)`，最终是否创建新 attempt 仍受 `max_attempts` 约束。更细的 job_type retry policy、platform error classification 和真实 LLM 重试边界属于 Phase 3 / Phase 4 的硬化范围；当前不能把它们写成已完成能力。
+当前 `run_job_attempt` 捕获执行异常后会按 `JobTypeSpec.platform_retry_policy` 判断是否允许创建下一 attempt，最终仍受 `max_attempts` 约束。当前策略只允许显式平台超时类错误进入 retry；更完整的 error classification、provider 特有重试、usage attribution 和真实 LLM 重试边界属于 Phase 4 后续硬化范围。
 
 成功前副作用在 Job 终态成功之前运行。`run_success_side_effect` 失败时，当前路径将 Job 标记为 failed 并触发 terminal callback。已经发生的 AI provider call 不会因此从 billing ledger 中消失。
 

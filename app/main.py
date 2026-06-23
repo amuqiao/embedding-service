@@ -17,6 +17,7 @@ from app.api.routes import health, jobs, meta
 from app.core.exceptions import AppError
 from app.core.logging import configure_logging, set_request_id
 from app.core.config import settings
+from app.core.registry_checks import validate_all_registries
 from app.schemas.errors import build_error_envelope
 from app.schemas.envelope import success_resp
 from app.jobs.types.register import register_all_job_types
@@ -376,6 +377,7 @@ def create_app() -> FastAPI:
     install_middlewares(application)
     install_exception_handlers(application)
     include_routes(application)
+    validate_all_registries(application)
     return application
 
 

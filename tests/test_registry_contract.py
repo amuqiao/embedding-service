@@ -2,11 +2,13 @@ import ast
 from pathlib import Path
 
 from fastapi.routing import APIRoute
+import pytest
 
 from app.api.operations import all_operation_ids, all_operation_specs
 from app.core.error_registry import all_error_reasons
-from app.core.registry_checks import validate_all_registries
+from app.core.registry_checks import validate_all_registries, validate_job_type_registry
 from app.main import app
+from app.jobs.base import JobTypeSpec
 from app.jobs.types.register import register_all_job_types
 from app.jobs import registry as job_registry
 
@@ -79,6 +81,9 @@ def test_job_type_registry_exposes_required_metadata():
     assert spec.canonical_result_schema == "JobTestAddResult"
     assert spec.public_result_schema == "JobTestAddResult"
     assert spec.allow_callback is True
+    assert spec.execution_mode == "custom_executor"
+    assert spec.platform_retry_policy == "no_platform_retry"
+    assert spec.side_effect_policy == "none"
     assert spec.error_codes <= all_error_reasons()
 
     assert "arithmetic" in specs
@@ -88,7 +93,22 @@ def test_job_type_registry_exposes_required_metadata():
     assert arithmetic_spec.canonical_result_schema == "ArithmeticResult"
     assert arithmetic_spec.public_result_schema == "ArithmeticResult"
     assert arithmetic_spec.allow_callback is True
+    assert arithmetic_spec.execution_mode == "custom_executor"
+    assert arithmetic_spec.platform_retry_policy == "no_platform_retry"
+    assert arithmetic_spec.side_effect_policy == "none"
     assert arithmetic_spec.error_codes <= all_error_reasons()
+
+    assert "job_test_echo" in specs
+    echo_spec = specs["job_test_echo"]
+    assert echo_spec.params_schema == "JobTestEchoParams"
+    assert echo_spec.runtime_fields_schema == "JobTestEchoRuntimeFields"
+    assert echo_spec.canonical_result_schema == "JobTestEchoResult"
+    assert echo_spec.public_result_schema == "JobTestEchoResult"
+    assert echo_spec.allow_callback is True
+    assert echo_spec.execution_mode == "custom_executor"
+    assert echo_spec.platform_retry_policy == "no_platform_retry"
+    assert echo_spec.side_effect_policy == "none"
+    assert echo_spec.error_codes <= all_error_reasons()
 
     assert "job_real_llm_echo" in specs
     real_llm_spec = specs["job_real_llm_echo"]
@@ -97,6 +117,9 @@ def test_job_type_registry_exposes_required_metadata():
     assert real_llm_spec.canonical_result_schema == "JobRealLlmEchoResult"
     assert real_llm_spec.public_result_schema == "JobRealLlmEchoResult"
     assert real_llm_spec.allow_callback is False
+    assert real_llm_spec.execution_mode == "builtin_llm_text_runtime"
+    assert real_llm_spec.platform_retry_policy == "no_platform_retry"
+    assert real_llm_spec.side_effect_policy == "none"
     assert real_llm_spec.error_codes <= all_error_reasons()
 
     assert "job_real_llm_double_echo" in specs
@@ -106,12 +129,92 @@ def test_job_type_registry_exposes_required_metadata():
     assert double_llm_spec.canonical_result_schema == "JobRealLlmDoubleEchoResult"
     assert double_llm_spec.public_result_schema == "JobRealLlmDoubleEchoResult"
     assert double_llm_spec.allow_callback is False
+    assert double_llm_spec.execution_mode == "custom_executor"
+    assert double_llm_spec.platform_retry_policy == "no_platform_retry"
+    assert double_llm_spec.side_effect_policy == "none"
     assert double_llm_spec.error_codes <= all_error_reasons()
+
+
+def _job_type_spec(**overrides) -> JobTypeSpec:
+    values = {
+        "job_type": "job_test_add",
+        "execution_mode": "custom_executor",
+        "platform_retry_policy": "no_platform_retry",
+        "side_effect_policy": "none",
+        "params_schema": "JobTestAddParams",
+        "runtime_fields_schema": "JobTestAddRuntimeFields",
+        "canonical_result_schema": "JobTestAddResult",
+        "public_result_schema": "JobTestAddResult",
+        "callback_envelope_schema": "CallbackEnvelope[JobEnvelope]",
+        "allow_callback": True,
+        "large_artifact_keys": frozenset(),
+        "error_codes": frozenset({"INVALID_INPUT"}),
+        "log_events": (),
+        "max_attempts": 1,
+        "timeout_seconds": 60,
+    }
+    values.update(overrides)
+    return JobTypeSpec(**values)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"execution_mode": "sync"}, "execution_mode"),
+        ({"side_effect_policy": "unknown"}, "side_effect_policy"),
+        ({"platform_retry_policy": ""}, "platform_retry_policy"),
+        ({"platform_retry_policy": "retry_everything"}, "platform_retry_policy"),
+        ({"max_attempts": 0}, "max_attempts"),
+        ({"timeout_seconds": 0}, "timeout_seconds"),
+        ({"max_attempts": 2, "platform_retry_policy": "no_platform_retry"}, "platform_retry_policy"),
+    ],
+)
+def test_validate_job_type_registry_rejects_invalid_phase3_metadata(monkeypatch, overrides, message):
+    monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: {"job_test_add": _job_type_spec(**overrides)})
+
+    with pytest.raises(ValueError, match=message):
+        validate_job_type_registry()
 
 
 def test_registry_consistency_check_passes():
     register_all_job_types()
     validate_all_registries(app)
+
+
+def test_create_app_validates_registries_on_startup(monkeypatch):
+    from app import main
+
+    calls = {}
+
+    monkeypatch.setattr(main, "bootstrap_runtime", lambda: calls.setdefault("bootstrap", True))
+    monkeypatch.setattr(main, "install_openapi", lambda _app: calls.setdefault("openapi", True))
+    monkeypatch.setattr(main, "install_middlewares", lambda _app: calls.setdefault("middlewares", True))
+    monkeypatch.setattr(main, "install_exception_handlers", lambda _app: calls.setdefault("handlers", True))
+    monkeypatch.setattr(main, "include_routes", lambda _app: calls.setdefault("routes", True))
+
+    def fake_validate_all_registries(application):
+        calls["registry_app"] = application
+
+    monkeypatch.setattr(main, "validate_all_registries", fake_validate_all_registries)
+
+    created = main.create_app()
+
+    assert calls["bootstrap"] is True
+    assert calls["registry_app"] is created
+
+
+def test_worker_registration_validates_job_type_registry(monkeypatch):
+    from app.tasks import jobs as task_jobs
+
+    calls = {}
+
+    monkeypatch.setattr("app.jobs.types.register.register_all_job_types", lambda: calls.setdefault("jobs", True))
+    monkeypatch.setattr("app.core.registry_checks.validate_job_type_registry", lambda: calls.setdefault("registry", True))
+    monkeypatch.setattr("app.core.model_registry.validate_model_catalog", lambda: calls.setdefault("models", True))
+
+    task_jobs._ensure_workflows_registered()
+
+    assert calls == {"jobs": True, "registry": True, "models": True}
 
 
 def test_register_all_job_types_reregisters_after_clear():

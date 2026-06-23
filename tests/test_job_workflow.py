@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -7,6 +8,7 @@ from app.models.job import Job
 from app.services.job_runtime import payload_hash
 from app.jobs.runner import execute_job, fail_job
 from app.jobs.types.register import register_all_job_types
+from app.tasks import jobs as task_jobs
 
 
 class _FakeDB:
@@ -43,6 +45,108 @@ def _running_add_job() -> Job:
         created_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
         updated_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
     )
+
+
+def test_should_retry_attempt_respects_platform_retry_policy(monkeypatch):
+    monkeypatch.setattr(
+        task_jobs,
+        "get_job_type_spec",
+        lambda _job_type: SimpleNamespace(platform_retry_policy="no_platform_retry"),
+    )
+
+    assert task_jobs._should_retry_attempt("job_test_add", {"code": "JOB_TIMEOUT"}) is False
+
+    monkeypatch.setattr(
+        task_jobs,
+        "get_job_type_spec",
+        lambda _job_type: SimpleNamespace(platform_retry_policy="retry_transient_platform_errors"),
+    )
+
+    assert task_jobs._should_retry_attempt("job_test_add", {"code": "JOB_TIMEOUT"}) is True
+    assert task_jobs._should_retry_attempt("job_test_add", {"code": "MODEL_CALL_FAILED"}) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "error_code", "expected_retryable"),
+    [
+        ("retry_transient_platform_errors", "JOB_TIMEOUT", True),
+        ("retry_transient_platform_errors", "MODEL_CALL_FAILED", False),
+        ("no_platform_retry", "JOB_TIMEOUT", False),
+    ],
+)
+async def test_run_job_attempt_failure_path_passes_policy_retryable(
+    monkeypatch,
+    policy,
+    error_code,
+    expected_retryable,
+):
+    attempt_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="job_test_add",
+        status="running",
+        execution_token=str(attempt_id),
+        execution_generation=1,
+        progress_percent=5,
+    )
+    marked: dict[str, object] = {}
+
+    async def fake_with_db(coro):
+        return await coro(_FakeDB())
+
+    async def fake_claim_attempt_for_execution(_db, received_attempt_id, *, worker_id, lease_seconds):
+        assert received_attempt_id == attempt_id
+        return job, SimpleNamespace(id=attempt_id), lease_token
+
+    async def fake_heartbeat_attempt(_db, received_attempt_id, *, lease_token: uuid.UUID, lease_seconds):
+        assert received_attempt_id == attempt_id
+        return True
+
+    async def fake_execute_job(*_args, **_kwargs):
+        from app.core.exceptions import AppError
+
+        raise AppError(error_code, error_code.lower(), status_code=500)
+
+    async def fake_mark_attempt_failed(
+        _db,
+        received_attempt_id,
+        *,
+        lease_token: uuid.UUID,
+        error,
+        retryable,
+        next_dispatch_at,
+    ):
+        marked["attempt_id"] = received_attempt_id
+        marked["lease_token"] = lease_token
+        marked["error"] = error
+        marked["retryable"] = retryable
+        marked["next_dispatch_at"] = next_dispatch_at
+        return True
+
+    async def fake_deliver_callback_for_job(_job_id):
+        return False
+
+    monkeypatch.setattr(task_jobs, "_ensure_workflows_registered", lambda: None)
+    monkeypatch.setattr(task_jobs, "_with_db", fake_with_db)
+    monkeypatch.setattr(task_jobs.JobRepo, "claim_attempt_for_execution", fake_claim_attempt_for_execution)
+    monkeypatch.setattr(task_jobs.JobRepo, "heartbeat_attempt", fake_heartbeat_attempt)
+    monkeypatch.setattr(task_jobs.JobRepo, "mark_attempt_failed", fake_mark_attempt_failed)
+    monkeypatch.setattr(task_jobs, "get_job_type_spec", lambda _job_type: SimpleNamespace(platform_retry_policy=policy))
+    monkeypatch.setattr(task_jobs, "deliver_callback_for_job", fake_deliver_callback_for_job)
+    monkeypatch.setattr("app.jobs.runner.execute_job", fake_execute_job)
+
+    with pytest.raises(Exception) as exc:
+        await task_jobs.run_job_attempt.original_func(str(attempt_id))
+
+    assert exc.value.code == error_code
+    assert marked["attempt_id"] == attempt_id
+    assert marked["lease_token"] == lease_token
+    assert marked["error"]["code"] == error_code
+    assert marked["retryable"] is expected_retryable
+    assert marked["next_dispatch_at"] is not None
 
 
 @pytest.mark.asyncio

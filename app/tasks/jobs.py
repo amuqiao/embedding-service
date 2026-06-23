@@ -12,12 +12,15 @@ from sqlalchemy.pool import NullPool
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.logging import set_request_id
+from app.jobs.registry import get_job_type_spec
 from app.repositories.job_repo import JobRepo
 from app.services.callbacks import deliver_callback
 from app.services.jobs import get_job_or_404
 from app.tasks.taskiq_app import broker
 
 logger = logging.getLogger(__name__)
+
+TRANSIENT_PLATFORM_RETRY_ERROR_CODES = frozenset({"JOB_TIMEOUT"})
 
 
 class TaskiqPublishDeferredError(RuntimeError):
@@ -29,9 +32,11 @@ class TaskiqPublishDeferredError(RuntimeError):
 
 def _ensure_workflows_registered() -> None:
     from app.jobs.types.register import register_all_job_types
+    from app.core.registry_checks import validate_job_type_registry
     from app.core.model_registry import validate_model_catalog
 
     register_all_job_types()
+    validate_job_type_registry()
     validate_model_catalog()
 
 
@@ -63,6 +68,16 @@ def _job_error_from_exception(exc: Exception) -> dict[str, Any]:
         "message": "模型调用失败或内部处理失败",
         "details": {"type": type(exc).__name__, "message": str(exc)[:500]},
     }
+
+
+def _should_retry_attempt(job_type: str, error: dict[str, Any]) -> bool:
+    try:
+        policy = get_job_type_spec(job_type).platform_retry_policy
+    except KeyError:
+        return False
+    if policy != "retry_transient_platform_errors":
+        return False
+    return str(error.get("code") or "") in TRANSIENT_PLATFORM_RETRY_ERROR_CODES
 
 
 async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
@@ -174,7 +189,7 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
                     attempt_uuid,
                     lease_token=lease_token,
                     error=error,
-                    retryable=True,
+                    retryable=_should_retry_attempt(job.job_type, error),
                     next_dispatch_at=datetime.now(timezone.utc),
                 )
                 await db.commit()

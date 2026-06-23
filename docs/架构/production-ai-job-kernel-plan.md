@@ -61,7 +61,7 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 - 部分设计文档仍混有目标态和旧实现描述，需要持续按 current / contract / plan 分层对账。
 - 生命周期状态权威已经冻结在 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md)；Phase 3 仍需把其中的剩余硬化项落到代码和测试，例如 uncertain publish 全链路、stale terminal write 和 retry policy。
 - submit publish 可靠性已经确定由 active `job_attempts` 承载 attempt-backed dispatch ledger；Phase 3 继续硬化 publish / recovery 测试，不再把 dispatch outbox 归属作为开放架构选择。
-- `JobExecutor` metadata 仍偏轻，未完整声明 execution mode、platform retry policy、side effect policy、resource profile 和 compatibility version；AI/provider usage attribution 与 cost policy 必须等 AI gateway 和 ledger 语义冻结后再进入 plugin 合同。
+- `JobExecutor` metadata 已初步覆盖 execution mode、platform retry policy 和 side effect policy；resource profile、compatibility version、AI/provider usage attribution 与 cost policy 必须等出现真实 consumer 或 AI gateway / ledger 语义冻结后再进入 plugin 合同。
 - AI gateway 已有 facade，但 provider adapter、runtime adapter、ledger failure recovery 和 provider error normalization 还没有稳定边界文档。
 - Billing 已有 Job scope read model，但没有 ledger reconciler、retention/export 规则和非 Job scope 公开合同。
 - metrics 和全量结构化日志仍未落地。
@@ -166,8 +166,8 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 范围：
 
 - 按 Phase 2 决策继续强化 `job_attempts` publish 字段；只有出现 fan-out、多 dispatch channel、独立 replay / dead letter / retention 或独立 publisher 扩缩容需求时，才重新评估独立 `job_dispatch_outbox`。
-- 升级 `JobTypeSpec`：增加 execution mode、platform retry policy、side effect policy、resource profile、contract version。
-- 将 Job kernel retry 从 `max_attempts + catch all` 升级为显式平台错误分类；AI/provider 特有重试、usage attribution 和 cost policy 等 AI gateway / ledger invariant 冻结后再进入 plugin 合同。
+- 继续升级 `JobTypeSpec`：当前先落地 execution mode、platform retry policy 和 side effect policy；resource profile、contract version 等字段必须等出现真实 consumer 后再进入合同。
+- 将 Job kernel retry 从 `max_attempts + catch all` 继续收敛为显式平台错误分类；AI/provider 特有重试、usage attribution 和 cost policy 等 AI gateway / ledger invariant 冻结后再进入 plugin 合同。
 - 把成功 side effect 和 callback outbox 的顺序、失败语义和补偿边界写入 kernel contract。
 - 增加低基数日志字段和最小 metrics 设计，不把 prompt、provider 原文、job_id 等高基数字段放入指标标签。
 

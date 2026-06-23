@@ -389,6 +389,8 @@ CallbackResponseEnvelope
 - `canonical_result_schema` 校验内部结果事实。
 - `public_result_schema` 校验对外 `job_result`。
 - `allow_callback` 控制该 `job_type` 是否接受 callback。
+- `execution_mode` 和 `side_effect_policy` 由基类按执行入口覆盖情况派生。
+- `platform_retry_policy` 默认 `no_platform_retry`；`max_attempts > 1` 时 registry consistency 要求声明非默认策略。
 - `large_artifact_keys` 控制哪些 artifact content 需要持久化到对象存储。
 
 新增 `job_type` 至少需要同步：
