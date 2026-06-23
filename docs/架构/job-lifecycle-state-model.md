@@ -202,7 +202,7 @@ Owner：
 
 Job billing 查询只在 Job 到达 `succeeded` 或 `failed` 后开放。Billing read model 不反向修改 Job、attempt、callback 或 provider 调用结果。
 
-当前已知缺口：provider 调用已经成功，但 ledger terminal update 失败时，代码会抛 `AI_LEDGER_UPDATE_FAILED`，目前没有专用 ledger reconciler。后续不能用“重放真实 provider 调用”修复该缺口；应在 Phase 4 / Phase 5 设计 ledger recovery 或人工诊断路径。
+当前已知缺口：provider 调用已经成功，但 ledger terminal update 失败时，代码会抛不可自动重试的 `AI_LEDGER_UPDATE_FAILED`。该错误不会触发 Job platform retry；当前没有专用 ledger recovery 路径，且不能用“重放真实 provider 调用”修复该缺口。
 
 ## 故障矩阵
 
@@ -219,7 +219,7 @@ Job billing 查询只在 Job 到达 `succeeded` 或 `failed` 后开放。Billing
 | Callback endpoint 失败 | Job 已终态，outbox failed 或 dead_letter | callback retry / dead letter；Job 终态不变 | Job status 不变，callback 摘要变化。 |
 | Callback worker 崩溃 | outbox leased，lease 最终过期 | recovery 重新领取 due callback | Job status 不变。 |
 | AI ledger 存在 pending / unknown | `ai_call_logs` 未收敛或是否 billable 未知 | 当前无专用 reconciler；billing read model 显示 incomplete | Job status 不变，billing `incomplete`。 |
-| provider 成功但 ledger terminal update 失败 | pending ledger row 可能残留，模型调用已真实发生 | 当前缺口；后续必须通过 ledger recovery / 人工诊断处理，不能重放 provider call | Job 可能 failed；billing 可能 incomplete。 |
+| provider 成功但 ledger terminal update 失败 | pending ledger row 可能残留，模型调用已真实发生 | 抛不可自动重试的 `AI_LEDGER_UPDATE_FAILED`；后续必须通过 ledger recovery / 人工诊断处理，不能重放 provider call | Job 可能 failed；billing 可能 incomplete。 |
 
 ## 验收边界
 

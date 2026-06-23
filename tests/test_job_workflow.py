@@ -64,6 +64,7 @@ def test_should_retry_attempt_respects_platform_retry_policy(monkeypatch):
 
     assert task_jobs._should_retry_attempt("job_test_add", {"code": "JOB_TIMEOUT"}) is True
     assert task_jobs._should_retry_attempt("job_test_add", {"code": "MODEL_CALL_FAILED"}) is False
+    assert task_jobs._should_retry_attempt("job_test_add", {"code": "AI_LEDGER_UPDATE_FAILED"}) is False
 
 
 @pytest.mark.asyncio
@@ -72,6 +73,7 @@ def test_should_retry_attempt_respects_platform_retry_policy(monkeypatch):
     [
         ("retry_transient_platform_errors", "JOB_TIMEOUT", True),
         ("retry_transient_platform_errors", "MODEL_CALL_FAILED", False),
+        ("retry_transient_platform_errors", "AI_LEDGER_UPDATE_FAILED", False),
         ("no_platform_retry", "JOB_TIMEOUT", False),
     ],
 )

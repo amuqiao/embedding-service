@@ -260,3 +260,20 @@ def test_get_jobs_returns_response_envelope_with_standard_job_fields(monkeypatch
     assert job["job_status"] == "succeeded"
     assert job["job_result"] == {"a": 2, "b": 3, "result": 5}
     assert job["job_result"]["result"] == job["job_result"]["a"] + job["job_result"]["b"]
+
+
+def test_ai_ledger_update_failed_job_error_is_not_retryable():
+    from app.services.jobs import _job_error_detail
+
+    detail = _job_error_detail(
+        {
+            "code": "AI_LEDGER_UPDATE_FAILED",
+            "details": {"ai_call_log_id": "00000000-0000-0000-0000-000000000001"},
+        }
+    )
+
+    assert detail == {
+        "reason": "AI_LEDGER_UPDATE_FAILED",
+        "details": {"ai_call_log_id": "00000000-0000-0000-0000-000000000001"},
+        "retryable": False,
+    }

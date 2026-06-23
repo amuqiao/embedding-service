@@ -151,7 +151,6 @@ _SPECS: dict[str, ErrorSpec] = {
         "AI_LEDGER_UPDATE_FAILED",
         "ai call ledger update failed",
         500,
-        retryable=True,
         scope="integration",
         owner="ai",
     ),

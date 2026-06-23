@@ -31,7 +31,7 @@ Scope: AI gateway facade, model catalog, LiteLLM adapter, AI call ledger, pricin
 
 ## 1. 当前基线
 
-当前代码已经落地 AI gateway / billing 的首个 Job scope 实现切片。当前事实以 [`../架构/project-standards-code-facts.md`](../架构/project-standards-code-facts.md) 为准，本文只保留目标边界和后续扩展规则。
+当前代码已经落地 AI gateway / billing 的首个 Job scope 实现切片。当前事实以 [`../架构/project-standards-code-facts.md`](../架构/project-standards-code-facts.md) 为准；当前 AI gateway / runtime adapter 内部边界以 [`../架构/ai-gateway-runtime-boundary.md`](../架构/ai-gateway-runtime-boundary.md) 为准。本文只保留目标边界和后续扩展规则。
 
 已落地的主要模块：
 
@@ -61,7 +61,7 @@ app/services/billing.py
 - 通用 `GET /billing/scopes/{scope_type}/{scope_id}` 公开查询。
 - caller 时间窗口 billing 聚合、批量导出或长期 warehouse 对接。
 - `ai_call_logs` 的长期财务账本语义；当前仍是成本估算和审计 ledger。
-- provider 调用成功但 terminal ledger 更新失败后的专门 reconciler。
+- provider 调用成功但 terminal ledger 更新失败后的专门 reconciler；当前错误已收敛为不可自动重试的 `AI_LEDGER_UPDATE_FAILED`，不能通过重放 provider call 修复。
 - metrics endpoint 和全量结构化日志。
 - 当前内置 `workflow-smoke` 不调用真实模型。
 

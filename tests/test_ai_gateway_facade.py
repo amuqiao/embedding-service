@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.exceptions import AppError
+from app.core.error_registry import get_error_spec
 from app.integrations.ai_gateway import TextGenerationResult
 from app.services import ai_gateway_facade
 
@@ -176,4 +177,206 @@ async def test_gateway_freezes_usage_and_cost_on_success(monkeypatch):
     }
     assert recorded["cost_amount"] == Decimal("0.00200000")
     assert recorded["currency"] == "USD"
+    assert [session.commits for session in session_factory.sessions] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_gateway_marks_provider_timeout_as_failed_unknown(monkeypatch):
+    session_factory = _FakeSessionFactory()
+    call_id = uuid.uuid4()
+    recorded: dict = {}
+
+    async def fake_create_pending(*_args, **_kwargs):
+        return SimpleNamespace(id=call_id)
+
+    async def fake_generate_text(*_args, **_kwargs):
+        raise TimeoutError("provider timed out")
+
+    async def fake_mark_failed(_db, received_call_id, **kwargs):
+        recorded["call_id"] = received_call_id
+        recorded.update(kwargs)
+        return True
+
+    async def fail_mark_succeeded(*_args, **_kwargs):
+        raise AssertionError("provider timeout must not be marked succeeded")
+
+    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+
+    with pytest.raises(AppError) as exc:
+        await _call(session_factory)
+
+    assert exc.value.code == "MODEL_CALL_TIMEOUT"
+    assert exc.value.status_code == 504
+    assert recorded["call_id"] == call_id
+    assert recorded["failure_phase"] == "provider"
+    assert recorded["error_code"] == "MODEL_CALL_TIMEOUT"
+    assert recorded["error_message"] == "provider timed out"
+    assert recorded["billable_status"] == "unknown"
+    assert [session.commits for session in session_factory.sessions] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_gateway_marks_provider_failure_as_failed_unknown(monkeypatch):
+    session_factory = _FakeSessionFactory()
+    call_id = uuid.uuid4()
+    recorded: dict = {}
+
+    async def fake_create_pending(*_args, **_kwargs):
+        return SimpleNamespace(id=call_id)
+
+    async def fake_generate_text(*_args, **_kwargs):
+        raise RuntimeError("provider exploded")
+
+    async def fake_mark_failed(_db, received_call_id, **kwargs):
+        recorded["call_id"] = received_call_id
+        recorded.update(kwargs)
+        return True
+
+    async def fail_mark_succeeded(*_args, **_kwargs):
+        raise AssertionError("provider failure must not be marked succeeded")
+
+    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+
+    with pytest.raises(AppError) as exc:
+        await _call(session_factory)
+
+    assert exc.value.code == "MODEL_CALL_FAILED"
+    assert exc.value.status_code == 502
+    assert recorded["call_id"] == call_id
+    assert recorded["failure_phase"] == "provider"
+    assert recorded["error_code"] == "MODEL_CALL_FAILED"
+    assert recorded["error_message"] == "provider exploded"
+    assert recorded["billable_status"] == "unknown"
+    assert [session.commits for session in session_factory.sessions] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_gateway_does_not_replay_provider_when_terminal_ledger_update_fails(monkeypatch):
+    session_factory = _FakeSessionFactory()
+    call_id = uuid.uuid4()
+    provider_calls = 0
+
+    async def fake_create_pending(*_args, **_kwargs):
+        return SimpleNamespace(id=call_id)
+
+    async def fake_generate_text(*_args, **_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        return TextGenerationResult(
+            text="ok",
+            prompt_tokens=100,
+            completion_tokens=50,
+            usage={"prompt_tokens": 100, "completion_tokens": 50},
+        )
+
+    async def fake_mark_succeeded(_db, received_call_id, **_kwargs):
+        assert received_call_id == call_id
+        return False
+
+    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+
+    with pytest.raises(AppError) as exc:
+        await _call(session_factory)
+
+    assert exc.value.code == "AI_LEDGER_UPDATE_FAILED"
+    assert exc.value.details == {"ai_call_log_id": str(call_id)}
+    assert provider_calls == 1
+    assert [session.commits for session in session_factory.sessions] == [1, 0]
+    assert get_error_spec("AI_LEDGER_UPDATE_FAILED").retryable is False
+
+
+@pytest.mark.asyncio
+async def test_gateway_raises_ai_ledger_update_failed_when_failed_terminal_update_cannot_claim_row(monkeypatch):
+    session_factory = _FakeSessionFactory()
+    call_id = uuid.uuid4()
+
+    async def fake_create_pending(*_args, **_kwargs):
+        return SimpleNamespace(id=call_id)
+
+    async def fake_generate_text(*_args, **_kwargs):
+        return TextGenerationResult(text="ok", prompt_tokens=None, completion_tokens=None, usage=None)
+
+    async def fake_mark_failed(_db, received_call_id, **kwargs):
+        assert received_call_id == call_id
+        assert kwargs["failure_phase"] == "usage"
+        assert kwargs["error_code"] == "MODEL_USAGE_MISSING"
+        return False
+
+    async def fail_mark_succeeded(*_args, **_kwargs):
+        raise AssertionError("usage missing must not be marked succeeded")
+
+    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+
+    with pytest.raises(AppError) as exc:
+        await _call(session_factory)
+
+    assert exc.value.code == "AI_LEDGER_UPDATE_FAILED"
+    assert exc.value.details == {"ai_call_log_id": str(call_id), "failure_phase": "usage"}
+    assert [session.commits for session in session_factory.sessions] == [1, 0]
+
+
+@pytest.mark.asyncio
+async def test_gateway_marks_cost_calculation_failed_and_raises_app_error_when_pricing_fails(monkeypatch):
+    session_factory = _FakeSessionFactory()
+    call_id = uuid.uuid4()
+    recorded: dict = {}
+
+    async def fake_create_pending(*_args, **_kwargs):
+        return SimpleNamespace(id=call_id)
+
+    async def fake_generate_text(*_args, **_kwargs):
+        return TextGenerationResult(
+            text="ok",
+            prompt_tokens=100,
+            completion_tokens=50,
+            usage={"prompt_tokens": 100, "completion_tokens": 50},
+        )
+
+    def fail_calculate_token_cost(*_args, **_kwargs):
+        raise RuntimeError("price table broken")
+
+    async def fake_mark_failed(_db, received_call_id, **kwargs):
+        recorded["call_id"] = received_call_id
+        recorded.update(kwargs)
+        return True
+
+    async def fail_mark_succeeded(*_args, **_kwargs):
+        raise AssertionError("pricing failure must not be marked succeeded")
+
+    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_gateway_facade, "calculate_token_cost", fail_calculate_token_cost)
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+
+    with pytest.raises(AppError) as exc:
+        await _call(session_factory)
+
+    assert exc.value.code == "MODEL_COST_CALCULATION_FAILED"
+    assert recorded["call_id"] == call_id
+    assert recorded["failure_phase"] == "pricing"
+    assert recorded["error_code"] == "MODEL_COST_CALCULATION_FAILED"
+    assert recorded["billable_status"] == "unknown"
+    assert recorded["cost_calculation_status"] == "failed"
     assert [session.commits for session in session_factory.sessions] == [1, 1]

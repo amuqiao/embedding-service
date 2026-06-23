@@ -13,6 +13,7 @@
 | [`架构/project-standards-code-facts.md`](架构/project-standards-code-facts.md) | 项目规范与骨架（代码事实版）：当前代码中的 envelope、输入输出 schema、异常、配置、日志、ORM、Repository 和验证基线 |
 | [`架构/service-contract-boundary.md`](架构/service-contract-boundary.md) | 当前 HTTP、Job、Error、Callback、Billing envelope 的合同边界和内部事实 owner |
 | [`架构/job-lifecycle-state-model.md`](架构/job-lifecycle-state-model.md) | 当前 Job、Attempt、Dispatch、Callback、Recovery 和 AI call ledger 的内部生命周期状态权威；不是对外 envelope 合同 |
+| [`架构/ai-gateway-runtime-boundary.md`](架构/ai-gateway-runtime-boundary.md) | 当前 AI gateway、Job runtime、provider adapter、AI call ledger 和 Billing read model 的内部依赖边界 |
 | [`接口层/http-api-extension-standard.md`](接口层/http-api-extension-standard.md) | 新增业务 HTTP 接口时的 schema、operation registry、错误、日志和测试接入规范 |
 | [`接口层/job-type-extension-standard.md`](接口层/job-type-extension-standard.md) | 新增 `job_type` 时的 Params、Runtime、Result、`JobExecutor`、错误、日志和测试接入规范 |
 | [`设计文档/FastAPI 统一响应信封架构设计文档.md`](设计文档/FastAPI%20统一响应信封架构设计文档.md) | HTTP 成功/错误统一响应信封设计 |
@@ -50,6 +51,8 @@
 架构/service-contract-boundary.md
   ↓
 架构/job-lifecycle-state-model.md
+  ↓
+架构/ai-gateway-runtime-boundary.md
   ↓
 架构/架构总览.md
 ```

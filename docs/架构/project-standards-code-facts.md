@@ -332,6 +332,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}/billing -> ResponseEnvelope[JobBillingResponse
 - `BILLING_ENABLED=false` 时公开查询返回 `BILLING_DISABLED`，不返回伪造的空 envelope。
 - Billing read model 只从 `ai_call_logs` 聚合，不反向修改 Job、attempt 或 provider 调用结果。
 - `JobEnvelope` 不默认携带 billing；公开计费信息通过独立 billing 查询获取。
+- Provider 已经调用成功但 AI call ledger terminal 更新失败时，当前抛不可自动重试的 `AI_LEDGER_UPDATE_FAILED`；不能通过重放 provider call 修复账本。
 
 ## Callback 合同
 
@@ -486,6 +487,7 @@ CallbackResponseEnvelope
 | `INTERNAL_ERROR` | `900500` | 500 | false |
 | `JOB_STATE_TRANSITION_CONFLICT` | `900506` | 500 | true |
 | `AI_PROVIDER_FAILED` | `900502` | 502 | true |
+| `AI_LEDGER_UPDATE_FAILED` | `900533` | 500 | false |
 | `TASKIQ_PUBLISH_FAILED` | `900526` | 502 | true |
 | `QUEUE_FULL` | `900503` | 503 | true |
 | `MODEL_CALL_TIMEOUT` | `900504` | 504 | true |
@@ -655,6 +657,8 @@ callback_failed
 | `app/services/billing.py` | 从 `ai_call_logs` 聚合 Job scope billing read model。 |
 | `app/services/callbacks.py` | Callback HTTP 投递、签名、ack 校验和错误摘要。 |
 
+AI gateway / runtime adapter 的当前内部边界见 [`ai-gateway-runtime-boundary.md`](ai-gateway-runtime-boundary.md)。该边界不是公开 HTTP 合同；公开合同以 [`service-contract-boundary.md`](service-contract-boundary.md) 为准。
+
 当前没有 `integrations/rs`。外部写回能力尚未作为稳定模块落地。
 
 ## Entrypoints
@@ -712,6 +716,7 @@ callback_failed
 - 错误码 code 不重复。
 - HTTP success envelope 和错误 envelope 有 contract tests。
 - Job billing route、BillingEnvelope 和 Job scope billing read model 有合同和服务测试。
+- AI gateway facade 的 pending ledger、terminal ledger、usage missing、cost calculation failed 和 terminal ledger update failed 语义有服务测试。
 - Job 创建、查询、idempotency、caller 隔离、终态结果、Callback、recovery、repository 和内置 job workflow 有测试覆盖。
 - env key 和配置派生约束有测试覆盖。
 
