@@ -2,6 +2,8 @@
 
 本文定义后续重构的实施顺序：以 [AI Job 服务项目规范与骨架（代码事实版）](project-standards-code-facts.md) 为当前标准，先明确项目规范和骨架，再让接口、Job、Workflow、配置、日志、异常和 ORM 逐步适配标准。
 
+本文是既有“规范先行”重构路线。生产级 AI Job 生命周期内核的后续重构计划见 [生产级 AI Job Kernel 重构计划](production-ai-job-kernel-plan.md)；两者冲突时，当前事实仍以代码、测试和 `project-standards-code-facts.md` 为准。
+
 ## 文档职责
 
 本文负责回答：

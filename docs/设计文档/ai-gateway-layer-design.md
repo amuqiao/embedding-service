@@ -31,25 +31,41 @@ Scope: AI gateway facade, model catalog, LiteLLM adapter, AI call ledger, pricin
 
 ## 1. 当前基线
 
-当前代码已经有一个很薄的 LiteLLM 调用适配器：
+当前代码已经落地 AI gateway / billing 的首个 Job scope 实现切片。当前事实以 [`../架构/project-standards-code-facts.md`](../架构/project-standards-code-facts.md) 为准，本文只保留目标边界和后续扩展规则。
+
+已落地的主要模块：
 
 ```text
 app/integrations/ai_gateway.py
   generate_text(model_id, messages)
     -> LiteLLM acompletion()
     -> TextGenerationResult(text, prompt_tokens, completion_tokens)
+
+app/services/ai_gateway_facade.py
+  generate_text_with_ledger(...)
+    -> model gate
+    -> pending ai_call_logs
+    -> LiteLLM adapter
+    -> usage extraction
+    -> pricing snapshot cost estimate
+    -> terminal ai_call_logs
+
+app/services/billing.py
+  get_job_billing(job_id)
+    -> aggregate ai_call_logs where scope_type="job" and scope_id=job_id
+    -> BillingEnvelope
 ```
 
-当前限制：
+当前仍未开放或未完整落地的能力：
 
-- `generate_text()` 只返回文本和 token 数。
-- token usage 没有落库。
-- 没有 `pricing config`。
-- 没有 `ai_call_logs`。
-- 没有 billing 查询接口。
+- 通用 `GET /billing/scopes/{scope_type}/{scope_id}` 公开查询。
+- caller 时间窗口 billing 聚合、批量导出或长期 warehouse 对接。
+- `ai_call_logs` 的长期财务账本语义；当前仍是成本估算和审计 ledger。
+- provider 调用成功但 terminal ledger 更新失败后的专门 reconciler。
+- metrics endpoint 和全量结构化日志。
 - 当前内置 `workflow-smoke` 不调用真实模型。
 
-因此，本文后续的 AI call ledger、pricing、billing read model 和通用 AI gateway facade 均为目标设计，不是当前已落地事实。
+因此，本文后续章节中的通用 scope 查询、非 Job scope、批量导出、长期保留和运维增强仍是目标设计；已经落地的 Job scope billing 事实以代码和 `project-standards-code-facts.md` 为准。
 
 ## 2. 核心定调
 
@@ -433,16 +449,16 @@ single call billing:
 Job billing 是 scope billing 的一个特例：
 
 ```text
-GET /jobs/{job_id}/billing
+GET /api/v1/ai-jobs/jobs/{job_id}/billing
   -> scope_type = "job"
   -> scope_id = job_id
 ```
 
 ### 10.1 统一 BillingEnvelope 合同
 
-`BillingEnvelope` 是本项目唯一的平台级计费返回对象。所有 Job billing、scope billing、单次调用 billing 和后续 caller 时间窗口聚合，都必须复用同一组字段、状态和错误语义；具体 `job_type`、同步 HTTP 接口或内部任务不得各自定义计费 envelope。
+`BillingEnvelope` 是本项目当前唯一已公开的平台级计费返回对象。已落地的 Job billing 必须使用这组字段、状态和错误语义；后续若开放 scope billing、单次调用 billing 或 caller 时间窗口聚合，应优先复用同一 envelope，并在 Phase 1 的合同边界中单独冻结公开语义。
 
-HTTP 响应外层仍然使用全局 `HttpEnvelope[T]`：
+已落地 Job billing 和后续若开放的 billing 查询接口，HTTP 响应外层都应使用全局 `HttpEnvelope[T]`：
 
 ```text
 HttpEnvelope[JobBillingResponseData]
@@ -601,7 +617,7 @@ route handler
 
 当 `BILLING_ENABLED=false`：
 
-- `GET /jobs/{job_id}/billing` 或通用 scope billing 查询返回稳定 `BILLING_DISABLED`。
+- `GET /api/v1/ai-jobs/jobs/{job_id}/billing` 或通用 scope billing 查询返回稳定 `BILLING_DISABLED`。
 - 批量 billing / analytics 导出不可用。
 - `/models` 如公开 billing capability，必须表达 `billing_enabled=false` 和 `cost_estimate_available=false`。
 - AI gateway 仍不得因为公共查询关闭而允许 enabled 模型缺 pricing。
@@ -641,7 +657,7 @@ Job 相关规则：
 - Job failed 不等于 not billable。
 - provider 调用成功但 Job 输出 schema 校验失败时，应能表达 `failed-but-billed`。
 - 多 attempt、多步骤、多模型调用都聚合到同一个 Job scope。
-- Callback payload 首版不默认携带 billing；如未来携带，必须与 `GET /jobs/{job_id}/billing` 使用同一聚合规则。
+- Callback payload 首版不默认携带 billing；如未来携带，必须与 `GET /api/v1/ai-jobs/jobs/{job_id}/billing` 使用同一聚合规则。
 
 ## 12. 非 Job 调用如何计费
 
@@ -791,7 +807,7 @@ billing:
 应废弃：
 
 - `ai_call_logs.job_id not null`。
-- 把 `/jobs/{job_id}/billing` 当作 billing 的概念中心。
+- 把 `/api/v1/ai-jobs/jobs/{job_id}/billing` 当作 billing 的概念中心。
 - 让具体 `job_type` 或同步 HTTP 接口各自定义 `cost` / `usage` / `billing` 字段合同。
 - 把 `job_type` 和 `step_name` 当作所有 AI call 的天然主归属。
 - 把 AI call ledger 的保留期绝对绑定到 Job TTL。

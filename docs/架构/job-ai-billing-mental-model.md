@@ -46,7 +46,14 @@ AI gateway 层目标设计见 [`../设计文档/ai-gateway-layer-design.md`](../
   └─ 接收 Callback
 ```
 
-当前代码尚未实现 AI call ledger、pricing config 或 billing 查询接口。本文后续的 Job billing、scope billing 和非 Job scope 计费均是目标设计心智模型，不是当前已落地 API。
+当前代码已经落地首个 Job scope billing 路径：
+
+- `ai_call_logs` 记录每次真实 AI provider 调用的 ledger、usage、cost estimate 和 scope 归属。
+- `app/services/ai_gateway_facade.py` 统一编排 model gate、ledger、LiteLLM adapter、usage 提取和成本估算。
+- `GET /api/v1/ai-jobs/jobs/{job_id}/billing` 返回 `JobBillingResponseData(billing=BillingEnvelope)`。
+- `scripts/real-flow.sh` 可在显式 `--confirm-cost` 后手动触发真实 LLM Job 并查询 billing 证据。
+
+通用 scope billing 查询、caller 时间窗口聚合、批量导出和非 Job scope 的公开 HTTP 合同仍是目标设计，不是当前已开放 API。
 
 AI cost 的底层事实不应由 Job 表拥有，而应由 AI gateway 统一创建调用账本。
 
@@ -169,7 +176,7 @@ pricing config
   把 provider usage 转换成内部 cost estimate 的配置事实源。
 ```
 
-首版需要新增 `ai_call_logs`。首版不需要新增 `job_billing_summaries` 事实表；如果后续读压或导出要求需要投影表，它也只能是 `ai_call_logs` 的派生读模型。
+当前已新增 `ai_call_logs` 作为 AI call ledger。当前不需要新增 `job_billing_summaries` 事实表；如果后续读压或导出要求需要投影表，它也只能是 `ai_call_logs` 的派生读模型。
 
 ## 4. 允许的依赖方向
 
@@ -215,26 +222,26 @@ Billing service
 当前调用方以 Job 为中心工作：
 
 ```text
-POST /jobs
+POST /api/v1/ai-jobs/jobs
   创建一次异步执行，返回 JobEnvelope。
 
-GET /jobs/{job_id}
+GET /api/v1/ai-jobs/jobs/{job_id}
   查询执行状态、公开结果或公开错误。
 
 Callback
   接收终态通知。
 ```
 
-目标设计中，Job billing 应作为 Job scope 的独立查询投影，而不是 `JobEnvelope` 顶层字段：
+当前设计和实现中，Job billing 是 Job scope 的独立查询投影，而不是 `JobEnvelope` 顶层字段：
 
 ```text
-GET /jobs/{job_id}/billing
+GET /api/v1/ai-jobs/jobs/{job_id}/billing
   -> scope_type = "job"
   -> scope_id = job_id
   -> Job 终态后查询该 Job scope 的成本估算摘要
 ```
 
-该接口尚未实现；落地时必须按 HTTP 接口规范补齐 operation registry、schema registry、错误码、OpenAPI 和合同测试。
+该接口已经作为首个公开 billing 投影落地；当前合同是 `JobBillingResponseData(billing=BillingEnvelope)`，并已进入 operation registry、schema registry、错误码和 route contract tests。
 
 后续如果新增同步 AI 能力接口，应让该接口复用 AI gateway 和 `ai_call_logs`：
 

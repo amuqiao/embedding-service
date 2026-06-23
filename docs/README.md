@@ -26,6 +26,12 @@
 | [`架构/refactor-plan.md`](架构/refactor-plan.md) | 规范先行重构路线和阶段性检查清单 |
 | [`接口层/language-codes.md`](接口层/language-codes.md) | 业务语种合约资料；仅在接入相关业务能力时使用 |
 
+## 进行中计划
+
+| 文档 | 状态 | 用途 |
+|---|---|---|
+| [`架构/production-ai-job-kernel-plan.md`](架构/production-ai-job-kernel-plan.md) | Plan | 生产级 AI Job 生命周期内核重构计划；覆盖合同边界、生命周期模型、Job kernel、AI gateway / runtime adapter、AI ledger / billing 和迁移验证 |
+
 ## 设计基线
 
 | 文档 | 状态 | 用途 |
@@ -68,5 +74,6 @@
 - `docs/` 下的文档地图、集中索引和阅读路径只在本文维护；普通文档不新增导航型索引，避免多处互相引用后难以同步。
 - 子目录默认不维护 README；只有当单个子目录中文档数量明显增多，且确实需要目录级边界规则时，才考虑新增子目录 README。
 - 当前实现事实优先以代码、测试和 `project-standards-code-facts.md` 为准；设计文档用于解释已接受的结构和边界。
+- `Plan` 文档只表达后续工作，不得覆盖 current 事实或对外合同。
 - 新增 HTTP 接口时同步检查接口规范、operation registry、schema registry 和合同测试。
 - 新增 `job_type` 时同步检查 `job_type` 规范、executor metadata、schema registry、Callback 投影和 workflow smoke。

@@ -158,6 +158,7 @@ repositories -> SQLAlchemy model + 查询/状态迁移
 | `GET /api/v1/ai-jobs/prompt-templates` | 是 | 是 |
 | `POST /api/v1/ai-jobs/jobs` | 是 | 是 |
 | `GET /api/v1/ai-jobs/jobs/{job_id}` | 是 | 是 |
+| `GET /api/v1/ai-jobs/jobs/{job_id}/billing` | 是 | 是 |
 
 除健康检查、OpenAPI、Swagger / ReDoc 页面外，API 前缀下的 JSON `200` 响应由 `SuccessEnvelopeMiddleware` 包装为：
 
@@ -231,6 +232,7 @@ repositories -> SQLAlchemy model + 查询/状态迁移
 ```text
 POST /api/v1/ai-jobs/jobs -> ResponseEnvelope[JobResponseData]
 GET /api/v1/ai-jobs/jobs/{job_id} -> ResponseEnvelope[JobResponseData]
+GET /api/v1/ai-jobs/jobs/{job_id}/billing -> ResponseEnvelope[JobBillingResponseData]
 ```
 
 `JobResponseData` 只包含一个字段：
@@ -288,6 +290,49 @@ retrying
 failed
 ```
 
+## Billing HTTP 合同
+
+当前公开 billing 合同只开放 Job scope 查询：
+
+```text
+GET /api/v1/ai-jobs/jobs/{job_id}/billing -> ResponseEnvelope[JobBillingResponseData]
+```
+
+`JobBillingResponseData` 只包含一个字段：
+
+```json
+{
+  "billing": {}
+}
+```
+
+`BillingEnvelope` 当前字段：
+
+| 字段 | 类型 | 规则 |
+|---|---|---|
+| `schema_version` | literal | 当前为 `"1"`。 |
+| `scope_type` | `string` | Job billing 固定为 `"job"`。 |
+| `scope_id` | `string` | Job billing 固定为 `job_id` 的字符串表达。 |
+| `status` | enum | `estimated`、`not_billable`、`incomplete`、`failed`。 |
+| `kind` | literal | 当前为 `"cost_estimate"`。 |
+| `currency` | `string \| null` | 成本币种；无可计费调用时可以来自 pricing 默认币种。 |
+| `total_cost_amount` | `string` | Decimal 字符串，不用 float 表达成本。 |
+| `usage_units` | `object` | 聚合后的 token usage。 |
+| `pricing_refs` | `array` | 聚合涉及的 pricing snapshot 引用。 |
+| `ai_call_count` | `int` | scope 内 AI call ledger 行数。 |
+| `billable_call_count` | `int` | 可计费调用数。 |
+| `unbillable_call_count` | `int` | 不计费调用数。 |
+| `failed_call_count` | `int` | provider 或成本计算失败调用数。 |
+| `diagnostic_reason` | `string \| null` | `incomplete` 或 `failed` 时的机器可读原因。 |
+| `finalized_at` | `datetime \| null` | 聚合中最后一个已完成调用时间。 |
+
+当前规则：
+
+- Job billing 只在 Job 到达 `succeeded` 或 `failed` 后可查询；非终态返回 `BILLING_SCOPE_NOT_TERMINAL`。
+- `BILLING_ENABLED=false` 时公开查询返回 `BILLING_DISABLED`，不返回伪造的空 envelope。
+- Billing read model 只从 `ai_call_logs` 聚合，不反向修改 Job、attempt 或 provider 调用结果。
+- `JobEnvelope` 不默认携带 billing；公开计费信息通过独立 billing 查询获取。
+
 ## Callback 合同
 
 当前 Callback 使用独立 envelope，不套 HTTP `code/msg/data`：
@@ -324,13 +369,15 @@ CallbackResponseEnvelope
 
 ## Job Type 注册
 
-当前 `register_all_job_types()` 注册三个内置示例 `job_type`：
+当前 `register_all_job_types()` 注册五个内置示例 / 验证用 `job_type`：
 
 | job_type | ParamsSchema | RuntimeFieldsSchema | ResultSchema | 执行方式 |
 |---|---|---|---|---|
 | `arithmetic` | `ArithmeticParams` | `ArithmeticRuntimeFields` | `ArithmeticResult` | 自定义 Python executor，返回加减乘除。 |
 | `job_test_add` | `JobTestAddParams` | `JobTestAddRuntimeFields` | `JobTestAddResult` | 自定义 Python executor，返回加法结果。 |
 | `job_test_echo` | `JobTestEchoParams` | `JobTestEchoRuntimeFields` | `JobTestEchoResult` | 自定义 Python executor，返回重复消息。 |
+| `job_real_llm_echo` | `JobRealLlmEchoParams` | `JobRealLlmEchoRuntimeFields` | `JobRealLlmEchoResult` | 真实 LLM 验证用 Job，走共享 LLM runtime 并产生一条 AI call ledger。 |
+| `job_real_llm_double_echo` | `JobRealLlmDoubleEchoParams` | `JobRealLlmDoubleEchoRuntimeFields` | `JobRealLlmDoubleEchoResult` | 真实 LLM 验证用 Job，在同一 Job 内调用两次 LLM 并聚合 billing。 |
 
 当前 `JobExecutor` 约定：
 
@@ -355,7 +402,7 @@ CallbackResponseEnvelope
 
 ## Job 创建与执行流程
 
-当前 `POST /jobs` 主流程：
+当前 `POST /api/v1/ai-jobs/jobs` 主流程：
 
 1. route 调用 `submit_job_request()`。
 2. 服务读取 `caller_id`，校验 `job_type`、`job_params`、callback 和模型可用性。
@@ -509,7 +556,7 @@ InternalAppError
 当前安全边界：
 
 - `/health` 和 `/healthz` 不需要鉴权。
-- `/models`、`/prompt-templates`、`/jobs` 和 `/jobs/{job_id}` 需要 `Authorization: Bearer <SERVICE_API_KEY>`。
+- `/api/v1/ai-jobs/models`、`/api/v1/ai-jobs/prompt-templates`、`/api/v1/ai-jobs/jobs`、`/api/v1/ai-jobs/jobs/{job_id}` 和 `/api/v1/ai-jobs/jobs/{job_id}/billing` 需要 `Authorization: Bearer <SERVICE_API_KEY>`。
 - `X-AI-Service-Caller-ID` 可选；未传时使用 `default`。
 - `caller_id` 只允许 `^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,63}$`。
 - `DISABLE_HTTP_AUTH_HEADER=true` 可跳过 Bearer 校验，但配置层要求 DB / Redis 指向 loopback。
@@ -579,8 +626,9 @@ callback_failed
 | `callback_outbox` | `CallbackOutbox` | 终态 Callback 事件、投递尝试、lease、dead letter 和幂等事件 id。 |
 | `job_events` | `JobEvent` | attempt、callback 和状态迁移事件记录。 |
 | `reconciler_leases` | `ReconcilerLease` | recovery / reconciler 租约。 |
+| `ai_call_logs` | `AiCallLog` | 每次真实 AI provider 调用的 ledger、usage、cost estimate、scope 归属和诊断状态。 |
 
-`jobs` 表是对外查询状态和终态结果的权威。Taskiq 消息、worker 日志和 callback 投递结果都是执行旁证或副作用状态。
+`jobs` 表是对外查询状态和终态结果的权威。`ai_call_logs` 是模型调用和成本估算的事实源。Taskiq 消息、worker 日志和 callback 投递结果都是执行旁证或副作用状态。
 
 当前 Repository 规则：
 
@@ -598,9 +646,11 @@ callback_failed
 
 | 模块 | 职责 |
 |---|---|
-| `app/integrations/ai_gateway.py` | 通过 LiteLLM 执行文本生成。 |
+| `app/integrations/ai_gateway.py` | 通过 LiteLLM 执行文本生成，返回文本和 token usage。 |
 | `app/integrations/storage.py` | 统一本地开发对象存储 / OSS 存储接口；多副本运行必须使用外部对象存储后端。 |
 | `app/integrations/aliyun_oss.py` | 阿里云 OSS 适配。 |
+| `app/services/ai_gateway_facade.py` | AI gateway 应用服务门面，编排 model gate、AI call ledger、LiteLLM adapter、usage 提取和成本估算。 |
+| `app/services/billing.py` | 从 `ai_call_logs` 聚合 Job scope billing read model。 |
 | `app/services/callbacks.py` | Callback HTTP 投递、签名、ack 校验和错误摘要。 |
 
 当前没有 `integrations/rs`。外部写回能力尚未作为稳定模块落地。
@@ -614,17 +664,20 @@ callback_failed
 | `./scripts/dev.sh` | 本地服务生命周期：bootstrap、start、stop、restart、status、logs、migrate、ports。 |
 | `./scripts/verify.sh` | 一次性验证：test、workflow-smoke、env-config、check。 |
 | `./scripts/deploy.sh` | compose 部署形态检查和管理。 |
+| `./scripts/real-flow.sh` | 手动真实业务流程验证入口；可显式触发真实 LLM 调用并查询 Job billing。 |
 
 当前 `./scripts/verify.sh check` 执行：
 
 1. shell 脚本语法检查。
-2. `dev.sh`、`verify.sh`、`deploy.sh` help smoke。
-3. Python 验证脚本 `py_compile`。
+2. `dev.sh`、`verify.sh`、`deploy.sh`、`jobs.sh`、`real-flow.sh` help smoke。
+3. Python 验证脚本、`scripts/jobs/` 和 `scripts/real_flow/` `py_compile`。
 4. env 配置键检查。
 5. registry consistency check。
 6. pytest。
 
 当前 `workflow-smoke` 使用内置 `job_test_echo` 验证本地 Job 创建、Taskiq 执行和状态轮询，不调用真实模型或外部对象存储。
+
+当前 `real-flow.sh` 的真实流程子命令不属于 `check` 或 `workflow-smoke` 默认执行链路；`check` 只验证 help 入口。真实流程必须由开发者显式传入 `--confirm-cost` 后才会通过本地公开 HTTP API 触发真实 LLM Job。
 
 ## 验收基线
 
@@ -656,6 +709,7 @@ callback_failed
 - job type 必须声明 params、runtime fields、canonical result 和 public result schema。
 - 错误码 code 不重复。
 - HTTP success envelope 和错误 envelope 有 contract tests。
+- Job billing route、BillingEnvelope 和 Job scope billing read model 有合同和服务测试。
 - Job 创建、查询、idempotency、caller 隔离、终态结果、Callback、recovery、repository 和内置 job workflow 有测试覆盖。
 - env key 和配置派生约束有测试覆盖。
 
@@ -663,7 +717,7 @@ callback_failed
 
 - metrics 采集和导出。
 - JSON 结构化日志字段全量覆盖。
-- 正式业务 `job_type` 的真实模型 e2e。
+- 默认自动化检查中的真实模型 e2e；真实 LLM 流程只由 `real-flow.sh --confirm-cost` 手动触发。
 - 外部 RS 写回 integration。
 - 错误 envelope 中统一 `ErrorDetail` 嵌套结构。
 - 数字型错误 code 和 Unix 秒级 `server_time`。
