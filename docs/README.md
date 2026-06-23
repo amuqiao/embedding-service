@@ -1,6 +1,6 @@
 # fastapi-best-ai-architecture 文档地图
 
-本文是 `docs/` 目录当前唯一的文档地图和集中索引。当前主线是 FastAPI + Taskiq 的 AI Job 能力层服务；文档按项目标准、接口接入、执行模型和设计记录分层维护。
+本文是 `docs/` 目录当前唯一的文档地图和集中索引。当前主线是 FastAPI + Taskiq 的 AI Job 能力层服务；文档按当前事实、接口接入、运行边界和目标设计分层维护。
 
 其他文档不单独维护导航型索引或阅读路径；只有在正文确实依赖某个事实源、前置规范或冲突裁决规则时，才在上下文中保留必要链接。
 
@@ -24,23 +24,14 @@
 | 文档 | 用途 |
 |---|---|
 | [`架构/架构总览.md`](架构/架构总览.md) | 服务边界和整体架构入口；执行引擎细节以生命周期状态模型和当前代码为准 |
-| [`架构/refactor-plan.md`](架构/refactor-plan.md) | 规范先行重构路线和阶段性检查清单 |
 | [`接口层/language-codes.md`](接口层/language-codes.md) | 业务语种合约资料；仅在接入相关业务能力时使用 |
 
-## 进行中计划
+## 目标设计
 
 | 文档 | 状态 | 用途 |
 |---|---|---|
-| [`架构/production-ai-job-kernel-plan.md`](架构/production-ai-job-kernel-plan.md) | Plan | 生产级 AI Job 生命周期内核重构计划；覆盖合同边界、生命周期模型、Job kernel、AI gateway / runtime adapter、AI ledger / billing 和迁移验证 |
 | [`架构/transactional-outbox-job-kernel-data-model.md`](架构/transactional-outbox-job-kernel-data-model.md) | Target Opinion / Plan | 新项目目标 Job kernel 数据模型意见；严格采用 Transactional Outbox，重新划分核心表和辅助表 |
 | [`架构/taskiq-queue-behavior-target.md`](架构/taskiq-queue-behavior-target.md) | Target Opinion / Plan | 生产级 Job kernel 第一阶段 TaskIQ 队列行为目标；配合 Transactional Outbox 数据模型约束 broker、publisher、worker 和 recovery 边界 |
-
-## 设计基线
-
-| 文档 | 状态 | 用途 |
-|---|---|---|
-| [`设计文档/callback-job-unified-envelope-design.md`](设计文档/callback-job-unified-envelope-design.md) | Candidate | Job 轮询结果与 Callback envelope 的一致性设计候选；当前合同以 `service-contract-boundary.md` 和代码事实为准 |
-| [`设计文档/taskiq-job-model-design.md`](设计文档/taskiq-job-model-design.md) | Historical / Partially Superseded | Taskiq Job MVP 长设计记录；当前公开合同以 `service-contract-boundary.md` 为准，当前内部生命周期状态权威以 `job-lifecycle-state-model.md` 为准 |
 | [`设计文档/ai-gateway-layer-design.md`](设计文档/ai-gateway-layer-design.md) | Accepted Target Baseline | AI gateway layer、模型调用账本、pricing、billing read model 和 Job scope 投影设计；不是当前已实现合同 |
 
 ## 快速阅读路径
@@ -86,7 +77,8 @@
 - 文档地图只引用当前仓库内实际存在的文件。
 - `docs/` 下的文档地图、集中索引和阅读路径只在本文维护；普通文档不新增导航型索引，避免多处互相引用后难以同步。
 - 子目录默认不维护 README；只有当单个子目录中文档数量明显增多，且确实需要目录级边界规则时，才考虑新增子目录 README。
-- 当前实现事实优先以代码、测试和 `project-standards-code-facts.md` 为准；设计文档用于解释已接受的结构和边界。
+- `docs/archived/` 只保存历史设计、旧计划和已被 current 文档吸收的记录；归档文档不进入快速阅读路径，也不能覆盖当前事实、公开合同或目标设计。
+- 当前实现事实优先以代码、测试和 `project-standards-code-facts.md` 为准；目标设计文档用于解释已接受的结构和边界，不覆盖 current contract。
 - `Plan` 文档可以引用 current truth 作为背景，但只能服务于后续工作；不得覆盖 current 事实或对外合同。
 - 新增 HTTP 接口时同步检查接口规范、operation registry、schema registry 和合同测试。
 - 新增 `job_type` 时同步检查 `job_type` 规范、executor metadata、schema registry、Callback 投影和 workflow smoke。

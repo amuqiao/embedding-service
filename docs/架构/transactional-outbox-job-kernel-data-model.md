@@ -498,11 +498,11 @@ job_artifact_refs               optional, only if multi-artifact indexing is req
 
 `dispatch_outbox` 和 `callback_outbox` 都是 Transactional Outbox，但必须分表。它们共享模式，不共享表。共享模式包括 `pending -> leased -> terminal`、`next_attempt_at`、lease、backoff、dead letter 和 operator replay；分表保留 broker publish 与 webhook delivery 的不同语义。
 
-## 与当前实现的差异
+## 历史旧结构迁移映射
 
-当前实现可以作为信息来源，但不是目标模型约束。
+本节只记录早期实现或旧设计中的命名如何映射到目标模型，不描述当前实现事实。当前实现事实以代码、测试和 [`project-standards-code-facts.md`](project-standards-code-facts.md) 为准。
 
-| 当前信息 | 目标归属 |
+| 旧信息 | 目标归属 |
 |---|---|
 | `jobs` 中的 Job 对外状态、结果、callback 摘要 | 归入目标 `job_aggregates`。 |
 | `jobs` 中的 client request id、idempotency key、fingerprint | 幂等事实迁入目标 `job_submission_keys`；公开 `client_request_id` 回显可作为 immutable projection 保留在 `job_aggregates`。 |

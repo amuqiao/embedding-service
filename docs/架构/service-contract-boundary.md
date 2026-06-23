@@ -15,7 +15,6 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 - HTTP 错误响应由 exception handler 和 error registry 生成 `ErrorEnvelope`。
 - Job、Callback 和 Billing 各自回答不同问题，不能互相嵌入未版本化字段。
 - 当前实现事实只以 current truth 为准；Target Design、Candidate 和 Plan 文档不能覆盖当前合同。
-- `callback-job-unified-envelope-design.md` 当前仍是 Candidate；Job / Callback 的 current contract 以本文和 current truth 为准。
 - `ai-gateway-layer-design.md` 是 Target Design Baseline；当前公开 Billing 合同以本文、`project-standards-code-facts.md` 和代码为准。
 
 ## HTTP 合同
@@ -114,6 +113,7 @@ failed
 - `succeeded` 不允许携带 `job_error`。
 - `failed` 必须携带 `job_error`，且不允许携带 `job_result`。
 - `JobEnvelope.callback` 总是存在；未配置 callback 时为 `not_configured`。
+- `status_url` 当前是 API prefix 下的相对查询路径，不是反向代理后的绝对公网 URL。
 - `client_request_id` 当前 schema 允许 `null`，正常创建路径会使用调用方传入值；当前公开视图在缺失时可能归一为 `""`，调用方不应依赖 `null` 或空字符串表达业务语义。
 - `job_error.details` 当前会直接承载规范化后的错误 details；调用方可以用于诊断展示，但不应依赖其中未在错误合同中冻结的内部键。后续实现不得新增泄漏异常栈、provider 原文、SQL、runtime refs 或对象存储内部路径的 details 键。
 - `JobEnvelope` 不承诺 attempt id、worker id、lease token、execution token、provider 原始响应、AI call ledger 行或 billing 明细。
@@ -133,9 +133,12 @@ owner：
 
 - Callback body 不套 HTTP `code/msg/data`。
 - Callback URL 在创建 Job 时执行安全校验；非本地默认不允许不安全回调 URL。
-- Callback 投递会带 `X-Callback-Timestamp` 和 `X-Callback-Signature`，接收方应按双方共享 secret 验签。
+- Callback 投递会带 `Content-Type: application/json`、`X-Callback-Timestamp` 和 `X-Callback-Signature`。
+- Callback 签名输入是 `timestamp + "." + raw_body_bytes`，签名算法是 HMAC-SHA256，签名值使用 `sha256=<hex>` 形式。
+- `event` 和 `event_id` 以 payload 字段为准，当前不通过额外 HTTP header 传递事件名或事件 ID。
 - `event` 只允许 `job.succeeded` 或 `job.failed`，且必须和 `job.job_status` 匹配。
 - `job` 必须是终态 `JobEnvelope`。
+- Callback payload 中的 `job.callback` 是生成 payload 时的投递状态快照，不表示接收方看到本次 payload 时本次投递已经成功；本次投递结果只能由 ACK 后的后续查询体现。
 - Callback 是 at-least-once 投递语义；接收方必须使用稳定 `event_id` 做幂等。
 - Callback ACK 必须是 JSON object，并至少包含布尔字段 `accepted`。
 - `204`、空 body、非 JSON、非 object、缺少 `accepted` 或 `accepted` 非 bool 都不是合法 ACK。

@@ -17,10 +17,9 @@ Scope: AI gateway facade, model catalog, LiteLLM adapter, AI call ledger, pricin
 
 - AI gateway 在 FastAPI 4 层架构中的位置。
 - `model catalog`、LiteLLM adapter、pricing config、AI call ledger 和 billing read model 的事实源关系。
-- `ai_call_logs` 如何表达一次真实模型调用，而不是强绑定某一种上层入口。
+- AI call ledger 如何表达一次真实模型调用，而不是强绑定某一种上层入口。
 - Job 如何作为 `scope_type="job"` 的一种消费者获得 Job 级 billing。
 - 非 Job 接口后续如何复用同一套 AI cost 账本。
-- 旧 `headless-ai-job-platform-service-design.md` 中应吸收和应废弃的设计边界。
 
 本文不负责：
 
@@ -31,36 +30,13 @@ Scope: AI gateway facade, model catalog, LiteLLM adapter, AI call ledger, pricin
 
 ## 1. 当前基线
 
-当前代码已经落地 AI gateway / billing 的首个 Job scope 实现切片。当前事实以 [`../架构/project-standards-code-facts.md`](../架构/project-standards-code-facts.md) 为准；当前 AI gateway / runtime adapter 内部边界以 [`../架构/ai-gateway-runtime-boundary.md`](../架构/ai-gateway-runtime-boundary.md) 为准。本文只保留目标边界和后续扩展规则。
-
-已落地的主要模块：
-
-```text
-app/integrations/ai_gateway.py
-  generate_text(model_id, messages)
-    -> LiteLLM acompletion()
-    -> TextGenerationResult(text, prompt_tokens, completion_tokens)
-
-app/services/ai_gateway_facade.py
-  generate_text_with_ledger(...)
-    -> model gate
-    -> pending ai_call_logs
-    -> LiteLLM adapter
-    -> usage extraction
-    -> pricing snapshot cost estimate
-    -> terminal ai_call_logs
-
-app/services/billing.py
-  get_job_billing(job_id)
-    -> aggregate ai_call_logs where scope_type="job" and scope_id=job_id
-    -> BillingEnvelope
-```
+当前代码已经落地 AI gateway / billing 的首个 Job scope 实现切片。当前事实以 [`../架构/project-standards-code-facts.md`](../架构/project-standards-code-facts.md) 为准；当前 AI gateway / runtime adapter 内部边界以 [`../架构/ai-gateway-runtime-boundary.md`](../架构/ai-gateway-runtime-boundary.md) 为准。本文只保留目标边界和后续扩展规则，不重复维护当前模块清单。
 
 当前仍未开放或未完整落地的能力：
 
 - 通用 `GET /billing/scopes/{scope_type}/{scope_id}` 公开查询。
 - caller 时间窗口 billing 聚合、批量导出或长期 warehouse 对接。
-- `ai_call_logs` 的长期财务账本语义；当前仍是成本估算和审计 ledger。
+- AI call ledger 的长期财务账本语义；当前仍是成本估算和审计 ledger。
 - provider 调用成功但 terminal ledger 更新失败后的完整人工结算或外部对账；当前 recovery 只把长期 pending ledger 行收敛为 failed / unknown，不能通过重放 provider call 修复。
 - metrics endpoint 和全量结构化日志。
 - 当前内置 `workflow-smoke` 不调用真实模型。
@@ -76,7 +52,7 @@ AI gateway facade
   ↓
 每次真实 LiteLLM / provider call
   ↓
-ai_call_logs 一行调用账本
+ai_call_ledger_entries 一行调用账本
   ↓
 scope billing 读模型
   ├─ Job billing
@@ -87,11 +63,12 @@ scope billing 读模型
 
 关键判断：
 
-- `ai_call_logs` 是 AI call ledger，不是 `jobs` 表扩展。
+- `ai_call_ledger_entries` 是 AI call ledger 的物理表；ORM 类名当前仍为 `AiCallLog`。
+- AI call ledger 不是 `job_aggregates` 表扩展。
 - `job_id` 是一种可选归属上下文，不是 AI cost 的唯一主键。
 - LiteLLM 是执行适配器，不是本服务的计费事实源。
 - `pricing config` 是成本估算规则，不是真实扣款系统。
-- Billing read model 只从已冻结的 `ai_call_logs` 聚合，不用当前价格文件重算历史调用。
+- Billing read model 只从已冻结的 AI call ledger 聚合，不用当前价格文件重算历史调用。
 - Job billing 是 `scope_type="job"` 的公开投影，不是独立账本。
 
 ## 3. 分层心智模型
@@ -106,16 +83,16 @@ scope billing 读模型
 AI gateway facade（应用服务层）
   ├─ 校验 model_id
   ├─ 绑定 scope
-  ├─ 创建 pending ai_call_logs
+  ├─ 创建 pending AI call ledger row
   ├─ 调用 LiteLLM adapter
   ├─ 提取 usage
   ├─ 按 pricing snapshot 估算 cost
-  └─ 更新 terminal ai_call_logs
+  └─ 更新 terminal AI call ledger row
         ↓
 调用方拿到模型输出或稳定错误
 
 billing query / export
-  └─ 从 ai_call_logs 聚合，不反向控制调用入口状态
+  └─ 从 AI call ledger 聚合，不反向控制调用入口状态
 ```
 
 对象职责：
@@ -125,9 +102,9 @@ billing query / export
 | `model catalog` | 哪些服务模型可用，映射到哪个 provider model，支持什么能力 | `app/core/models.yaml` 或后续 registry |
 | LiteLLM adapter | 如何把一次请求发送给 provider，并拿回 provider response / usage | `app/integrations/` |
 | `pricing config` | usage 如何换算成 cost estimate | `app/core/pricing.yaml` 或后续 registry |
-| `ai_call_logs` | 哪次模型调用发生了，usage 和 cost estimate 是多少 | PostgreSQL |
-| billing read model | 某个 scope 或时间窗口的 usage/cost 聚合是什么 | `ai_call_logs` 聚合 |
-| Job runtime | Job 状态、Attempt、结果投影和 Callback | `jobs`、`job_attempts`、`callback_outbox` |
+| AI call ledger | 哪次模型调用发生了，usage 和 cost estimate 是多少 | `ai_call_ledger_entries` |
+| billing read model | 某个 scope 或时间窗口的 usage/cost 聚合是什么 | AI call ledger 聚合 |
+| Job runtime | Job 状态、Attempt、Dispatch、结果投影和 Callback | `job_aggregates`、`job_execution_attempts`、`dispatch_outbox`、`callback_outbox` |
 
 ## 4. 架构落位
 
@@ -138,8 +115,8 @@ AI gateway 不新增第五层，也不引入 `app/domain/`。
 | AI gateway facade | `app/services/` | 对上层入口提供统一模型调用门面，编排 model gate、ledger、adapter、usage extraction 和 cost estimate。 |
 | LiteLLM / provider adapter | `app/integrations/` | 只负责 provider 协议适配、超时、错误归一化和 usage 提取所需原始响应。 |
 | model catalog / pricing config | `app/core/` | 维护模型、能力、provider 映射、价格版本和启动期 fail-fast 校验。 |
-| `ai_call_logs` repository | `app/repositories/` | 封装 pending / terminal 写入、按 scope 聚合、导出查询和行级筛选。 |
-| `ai_call_logs` ORM | `app/models/` | 定义持久化字段、索引和 Alembic 迁移对应结构。 |
+| AI call ledger repository | `app/repositories/` | 封装 pending / terminal 写入、按 scope 聚合、导出查询和行级筛选。 |
+| AI call ledger ORM | `app/models/` | ORM 类名当前为 `AiCallLog`，物理表为 `ai_call_ledger_entries`。 |
 | billing schema | `app/schemas/` | 定义唯一公开 `BillingEnvelope`、response data wrapper、状态、错误和版本化合同。 |
 | Job 使用方 | `app/jobs/` + `app/services/` | `JobExecutor` 通过 gateway facade 调用模型，并传入 `scope_type="job"`。 |
 
@@ -149,19 +126,19 @@ AI gateway 不新增第五层，也不引入 `app/domain/`。
 api/routes 或 jobs/runner
   -> app/services/ai_gateway_facade
   -> app/core model/pricing registry
-  -> app/repositories ai_call_logs
+  -> app/repositories AI call ledger
   -> app/integrations LiteLLM adapter
 
 billing service
-  -> app/repositories ai_call_logs
+  -> app/repositories AI call ledger
   -> app/schemas BillingEnvelope
 ```
 
 不允许：
 
-- LiteLLM adapter 直接写 `jobs.status`。
+- LiteLLM adapter 直接写 `job_aggregates.status`。
 - LiteLLM adapter 直接创建 Callback。
-- Billing 查询反向修改 `ai_call_logs` 明细。
+- Billing 查询反向修改 AI call ledger 明细。
 - Job 状态机依赖 `cost_amount` 判断 succeeded / failed。
 - 缺 usage、缺价格或成本估算失败时静默写 `0` 后继续成功。
 
@@ -258,7 +235,7 @@ AI gateway facade
   ↓
 构造 request hash / size 摘要
   ↓
-写 ai_call_logs pending
+写 ai_call_ledger_entries pending
   ↓
 pending 写入成功后才调用 LiteLLM adapter
   ↓
@@ -268,7 +245,7 @@ LiteLLM / provider call
   ↓
 计算 cost estimate
   ↓
-更新 ai_call_logs succeeded / failed
+更新 ai_call_ledger_entries succeeded / failed
   ↓
 返回模型输出或稳定错误
 ```
@@ -281,14 +258,14 @@ LiteLLM / provider call
 - pricing 缺失应在启动期失败；运行期成本计算异常时，本次调用失败，不得写 `0` 或 `null` 后继续成功。
 - provider 已调用成功但上层业务输出校验失败时，AI call 仍可为 `billable`，上层 scope 可以失败。
 
-## 8. `ai_call_logs`
+## 8. `ai_call_ledger_entries`
 
-`ai_call_logs` 是每次真实 LiteLLM / provider 调用的内部账本。
+`ai_call_ledger_entries` 是每次真实 LiteLLM / provider 调用的内部账本。
 
 建议表结构：
 
 ```text
-ai_call_logs
+ai_call_ledger_entries
   id uuid primary key
 
   caller_id varchar(64) not null
@@ -356,7 +333,7 @@ ai_call_logs
 (status, created_at)
 ```
 
-`ai_call_logs` 不保存：
+`ai_call_ledger_entries` 不保存：
 
 - 完整 Prompt。
 - 完整输入。
@@ -409,7 +386,7 @@ runtime context:
   request metadata needed for pricing
 ```
 
-输出必须冻结到 `ai_call_logs`：
+输出必须冻结到 `ai_call_ledger_entries`：
 
 ```text
 usage_detail
@@ -426,12 +403,12 @@ billable_status
 
 - 金额使用 decimal，不使用 float 做最终存储。
 - 所有 `enabled=true` 模型都必须能找到合法价格。
-- 历史 `ai_call_logs` 不因价格文件更新而重算。
+- 历史 `ai_call_ledger_entries` 不因价格文件更新而重算。
 - `BILLING_ENABLED=false` 只关闭公共 billing 查询、公开计费能力和批量导出，不允许 enabled 模型缺少 pricing。
 
 ## 10. Billing read model
 
-Billing read model 是从 `ai_call_logs` 派生的读取投影，不是新的支付事实。
+Billing read model 是从 `ai_call_ledger_entries` 派生的读取投影，不是新的支付事实。
 
 通用聚合维度：
 
@@ -443,7 +420,7 @@ caller window billing:
   caller_id + time window + optional operation/model/currency filters
 
 single call billing:
-  ai_call_logs.id
+  ai_call_ledger_entries.id
 ```
 
 Job billing 是 scope billing 的一个特例：
@@ -600,7 +577,7 @@ route handler
 
 聚合规则：
 
-- 只聚合调用时冻结在 `ai_call_logs` 中的 `cost_amount`、`currency`、`pricing_ref`、`pricing_version` 和 `usage_units`。
+- 只聚合调用时冻结在 `ai_call_ledger_entries` 中的 `cost_amount`、`currency`、`pricing_ref`、`pricing_version` 和 `usage_units`。
 - 不使用当前 `pricing.yaml` 重新解释历史调用。
 - 同一 envelope 出现多个 currency 时，首版返回 `failed` 或 `incomplete`，不自动汇率换算。
 - `total_cost_amount` 使用 decimal 精确求和。
@@ -612,7 +589,7 @@ route handler
 
 | 开关 | 控制范围 | 不控制 |
 |---|---|---|
-| `BILLING_ENABLED` | 公共 billing 查询、公开计费能力摘要和批量导出是否可用。 | 不允许 enabled 模型缺 pricing；不允许真实 LLM 调用绕过 `ai_call_logs`。 |
+| `BILLING_ENABLED` | 公共 billing 查询、公开计费能力摘要和批量导出是否可用。 | 不允许 enabled 模型缺 pricing；不允许真实 LLM 调用绕过 `ai_call_ledger_entries`。 |
 | `MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY` | `/models` 是否公开服务级 billing capability 摘要。 | 不影响内部 model / pricing 校验，不暴露价格数值。 |
 
 当 `BILLING_ENABLED=false`：
@@ -622,7 +599,7 @@ route handler
 - `/models` 如公开 billing capability，必须表达 `billing_enabled=false` 和 `cost_estimate_available=false`。
 - AI gateway 仍不得因为公共查询关闭而允许 enabled 模型缺 pricing。
 
-真实 LLM 调用是否落账不应交给每个 Job 或 HTTP 接口单独决定。只要调用经过 AI gateway facade，就必须尝试写 `ai_call_logs`；pending row 写失败时不得调用 provider。
+真实 LLM 调用是否落账不应交给每个 Job 或 HTTP 接口单独决定。只要调用经过 AI gateway facade，就必须尝试写 `ai_call_ledger_entries`；pending row 写失败时不得调用 provider。
 
 ## 11. 与 Job runtime 的关系
 
@@ -643,7 +620,7 @@ AI gateway facade.call(
     ...
   )
   ↓
-ai_call_logs(scope_type="job", scope_id=job_id, ...)
+ai_call_ledger_entries(scope_type="job", scope_id=job_id, ...)
   ↓
 JobExecutor 校验模型输出并生成 result
   ↓
@@ -661,7 +638,7 @@ Job 相关规则：
 
 ## 12. 非 Job 调用如何计费
 
-同步接口或内部任务只要通过 AI gateway facade 调用模型，也可以写入同一张 `ai_call_logs`。
+同步接口或内部任务只要通过 AI gateway facade 调用模型，也可以写入同一张 `ai_call_ledger_entries`。
 
 示例：
 
@@ -677,7 +654,7 @@ AI gateway facade.call(
     ...
   )
   ↓
-ai_call_logs(scope_type="sync_api", scope_id=request_id, operation="rewrite.text")
+ai_call_ledger_entries(scope_type="sync_api", scope_id=request_id, operation="rewrite.text")
 ```
 
 这样该同步接口不需要创建 Job，也能保留：
@@ -694,7 +671,7 @@ ai_call_logs(scope_type="sync_api", scope_id=request_id, operation="rewrite.text
 - service 调用 AI gateway facade，并传入 `caller_id`、`scope_type`、`scope_id`、`operation`、`model_id`。
 - 接口若需要公开计费信息，必须通过统一 scope billing 查询返回 `ScopeBillingResponseData(billing=BillingEnvelope)`。
 - 不允许同步接口在自己的业务 response data 中临时增加未版本化 `cost`、`usage` 或 `billing` 字段。
-- 不允许绕过 AI gateway 直接调用 LiteLLM 或手写 `ai_call_logs`。
+- 不允许绕过 AI gateway 直接调用 LiteLLM 或手写 `ai_call_ledger_entries`。
 
 但是否公开同步 AI 能力接口、是否提供 `GET /billing/scopes/{scope_type}/{scope_id}` 或 caller 时间窗口查询，必须作为独立 HTTP 合同设计，不能因为有 ledger 就隐式开放。
 
@@ -721,14 +698,14 @@ ai_call_logs(scope_type="sync_api", scope_id=request_id, operation="rewrite.text
 
 ## 14. 保留期和导出
 
-`ai_call_logs` 首版不作为长期财务账本保存。
+`ai_call_ledger_entries` 首版不作为长期财务账本保存。
 
 建议规则：
 
 - Job scope 的账本保留期应至少覆盖 Job 可查询期，避免 Job 可查但 Job billing 不可查。
 - 非 Job scope 的保留期由对应 scope owner 或 billing/export 策略定义。
 - 长期成本分析交给外部 billing、analytics 或 warehouse。
-- 批量只读导出只能读取 `ai_call_logs` 或其只读派生 view。
+- 批量只读导出只能读取 `ai_call_ledger_entries` 或其只读派生 view。
 - 导出只输出脱敏后的 usage/cost estimate 字段，不输出完整 Prompt、完整输出、密钥或 provider 原始响应。
 
 首版不新增：
@@ -739,7 +716,7 @@ job_billing_summaries 事实表
 内部 usage 明细 HTTP 端点
 ```
 
-后续如果读压或导出窗口证明需要投影表，可以新增 `job_billing_summaries` 或 scope billing materialized view，但它只能是 `ai_call_logs` 的派生读模型，不能成为新事实源。
+后续如果读压或导出窗口证明需要投影表，可以新增 `job_billing_summaries` 或 scope billing materialized view，但它只能是 `ai_call_ledger_entries` 的派生读模型，不能成为新事实源。
 
 ## 15. 启动期校验
 
@@ -806,7 +783,7 @@ billing:
 
 应废弃：
 
-- `ai_call_logs.job_id not null`。
+- `ai_call_ledger_entries.job_id not null`。
 - 把 `/api/v1/ai-jobs/jobs/{job_id}/billing` 当作 billing 的概念中心。
 - 让具体 `job_type` 或同步 HTTP 接口各自定义 `cost` / `usage` / `billing` 字段合同。
 - 把 `job_type` 和 `step_name` 当作所有 AI call 的天然主归属。
@@ -825,11 +802,11 @@ AI gateway:
   [ ] LiteLLM adapter 不直接写 Job 状态或 Callback。
 
 Ledger:
-  [ ] 每次真实 provider 调用一行 ai_call_logs。
+  [ ] 每次真实 provider 调用一行 ai_call_ledger_entries。
   [ ] scope_type / scope_id 支持 job 和非 job 归属。
   [ ] usage 和 cost estimate 成功冻结。
   [ ] 缺 usage 不写 0。
-  [ ] ai_call_logs 不保存完整 Prompt、完整输出、密钥或 provider 原始响应。
+  [ ] ai_call_ledger_entries 不保存完整 Prompt、完整输出、密钥或 provider 原始响应。
 
 Pricing:
   [ ] enabled 模型缺 pricing 时启动失败。

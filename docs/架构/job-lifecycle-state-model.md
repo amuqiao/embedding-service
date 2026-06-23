@@ -5,7 +5,7 @@ Status: Current Internal Contract
 Owner: job-kernel
 Scope: Job, Attempt, Dispatch, Callback outbox, Recovery, AI call ledger projection
 Current truth: code, tests, docs/架构/project-standards-code-facts.md
-Supersedes for current lifecycle authority: docs/设计文档/taskiq-job-model-design.md
+Historical lifecycle designs are not maintained as current authority.
 ```
 
 本文冻结当前代码已经落地的 Job 生命周期状态权威。公开 HTTP、Job、Callback、Billing envelope 的对外合同以 [AI Job 服务合同边界](service-contract-boundary.md) 为准；本文只定义内部状态机、dispatch 归属、恢复入口和故障矩阵。
@@ -117,10 +117,10 @@ Owner：
 | 迁移 | CAS / lock 条件 | 权威写入 | 恢复语义 |
 |---|---|---|---|
 | `pending attempt -> running` | active attempt、`Job.status=queued`、attempt row lock | attempt lease、worker、heartbeat、`Job.status=running`、`execution_token=str(attempt_id)`、`execution_attempts += 1` | 未 claim 的消息可重发；已 claim 的消息由 lease 管理。 |
-| running progress update | `job_id + execution_token + execution_generation` | `jobs.progress_*`、`updated_at` | stale generation 返回未更新，不覆盖新 attempt。 |
-| running Job -> succeeded | `Job.status=running`、execution token 命中 | `jobs.status=succeeded`、公开 / canonical result、finished_at、terminal callback outbox | Callback 继续独立投递；Job 终态不可被旧消息覆盖。 |
+| running progress update | `job_id + execution_token + execution_generation` | `job_aggregates.progress_*`、`updated_at` | stale generation 返回未更新，不覆盖新 attempt。 |
+| running Job -> succeeded | `Job.status=running`、execution token 命中 | `job_aggregates.status=succeeded`、公开 / canonical result、finished_at、terminal callback outbox | Callback 继续独立投递；Job 终态不可被旧消息覆盖。 |
 | running attempt -> succeeded | attempt running、active attempt、lease token 命中、Job 已 succeeded | attempt terminal fields，清 lease | 与 Job 成功同一成功路径内提交。 |
-| running Job -> failed | `Job.status in queued/running`，可带 execution token | `jobs.status=failed`、公开错误、finished_at、terminal callback outbox | Callback 继续独立投递。 |
+| running Job -> failed | `Job.status in queued/running`，可带 execution token | `job_aggregates.status=failed`、公开错误、finished_at、terminal callback outbox | Callback 继续独立投递。 |
 | running attempt -> failed, retryable | attempt running、active attempt、可选 lease token 命中、attempt_count 未耗尽 | old attempt failed；new attempt pending；Job 回到 queued；`execution_generation += 1`；创建新 `dispatch_outbox`；清 execution token / error / finished_at | recovery 或 publish 链继续处理新 active attempt。 |
 | running attempt -> failed, terminal | attempt running、active attempt、可选 lease token 命中、attempt_count 耗尽或不可重试 | attempt failed；Job failed；terminal callback outbox | Job 终态不可被 callback 或旧 worker 改变。 |
 

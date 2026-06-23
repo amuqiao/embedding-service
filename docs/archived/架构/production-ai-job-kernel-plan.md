@@ -1,5 +1,7 @@
 # 生产级 AI Job Kernel 重构计划
 
+> 归档说明：本文只保留历史 hardening 计划，不再作为当前事实、公开合同或执行计划。当前文档入口以 [`../../README.md`](../../README.md) 为准。
+
 ```text
 Status: Implemented Baseline + Active Hardening Backlog
 Owner: architecture
@@ -7,9 +9,9 @@ Scope: contract boundary, lifecycle model, Job kernel, AI gateway/runtime adapte
 Current truth: code, tests, docs/架构/project-standards-code-facts.md
 ```
 
-本文记录生产级 AI Job kernel 的已实现 baseline 和剩余 hardening backlog，不是当前实现事实的替代来源。当前实现事实以代码、测试和 [`project-standards-code-facts.md`](project-standards-code-facts.md) 为准；公开合同以 [`service-contract-boundary.md`](service-contract-boundary.md) 为准；内部生命周期权威以 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md) 为准。
+本文记录生产级 AI Job kernel 的已实现 baseline 和剩余 hardening backlog，不是当前实现事实的替代来源。当前实现事实以代码、测试和 [`project-standards-code-facts.md`](../../架构/project-standards-code-facts.md) 为准；公开合同以 [`service-contract-boundary.md`](../../架构/service-contract-boundary.md) 为准；内部生命周期权威以 [`job-lifecycle-state-model.md`](../../架构/job-lifecycle-state-model.md) 为准。
 
-新项目目标数据模型和严格 `Transactional Outbox` 裁决见 [`transactional-outbox-job-kernel-data-model.md`](transactional-outbox-job-kernel-data-model.md)。该文档不改变当前实现事实，但覆盖后续绿地设计和大重构目标。
+新项目目标数据模型和严格 `Transactional Outbox` 裁决见 [`transactional-outbox-job-kernel-data-model.md`](../../架构/transactional-outbox-job-kernel-data-model.md)。该文档不改变当前实现事实，但覆盖后续绿地设计和大重构目标。
 
 ## 最终目标
 
@@ -63,7 +65,7 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 - 历史设计文档仍包含 `cancelled`、`timed_out`、`reconciler_leases` 等早期目标态，只能作为历史设计阅读，不能覆盖 current contract。
 - Dispatch 权威已经收敛到 active `job_attempts`；后续需要补齐 publish failure dead-letter / ops 视图、uncertain publish 全链路故障注入测试和低基数 metrics。
 - `JobExecutor` metadata 已覆盖 execution mode、platform retry policy 和 side effect policy；resource profile、contract version、AI/provider usage attribution 与 cost policy 必须等出现真实 consumer 后再进入 plugin 合同。
-- AI gateway / runtime adapter 当前内部边界已经冻结在 [`ai-gateway-runtime-boundary.md`](ai-gateway-runtime-boundary.md)；usage normalization、provider error taxonomy 和真实 LLM retry 边界仍属后续工作。
+- AI gateway / runtime adapter 当前内部边界已经冻结在 [`ai-gateway-runtime-boundary.md`](../../架构/ai-gateway-runtime-boundary.md)；usage normalization、provider error taxonomy 和真实 LLM retry 边界仍属后续工作。
 - Billing 已有 Job scope read model 和最小 stale pending ledger recovery；retention/export、settlement/adjustment ledger 和非 Job scope 公开合同仍未开放。
 - Error v1 合同继续保持 `ErrorEnvelope.data` 直接承载 details 或 `null`；若升级统一 `data.error`，必须作为版本化合同迁移处理。
 - metrics、结构化日志和 runbook-visible ops 查询仍未完整落地。
@@ -152,7 +154,7 @@ Current truth: code, tests, docs/架构/project-standards-code-facts.md
 - 明确每个迁移的 owner、DB lock/CAS 条件、失败后状态、可恢复路径和测试入口。
 - 明确 publish failure、worker crash、lease expired、terminal write conflict、callback retry、billing incomplete 的故障矩阵。
 - 定义对外 `job_status` 与内部状态的映射，不扩散内部状态到公开合同。
-- 当前实现冻结结果见 [`job-lifecycle-state-model.md`](job-lifecycle-state-model.md)：当前 dispatch 权威归属 active `job_attempts`。新项目 / 大重构目标见 [`transactional-outbox-job-kernel-data-model.md`](transactional-outbox-job-kernel-data-model.md)：dispatch publish 事实归属独立 `dispatch_outbox`。
+- 当前实现冻结结果见 [`job-lifecycle-state-model.md`](../../架构/job-lifecycle-state-model.md)：当前 dispatch 权威归属 active `job_attempts`。新项目 / 大重构目标见 [`transactional-outbox-job-kernel-data-model.md`](../../架构/transactional-outbox-job-kernel-data-model.md)：dispatch publish 事实归属独立 `dispatch_outbox`。
 
 验收：
 

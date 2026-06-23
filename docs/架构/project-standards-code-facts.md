@@ -208,7 +208,7 @@ repositories -> SQLAlchemy model + 查询/状态迁移
 | `job_type` | `string` | 必填；必须能从 `app.jobs.registry` 找到 executor。 |
 | `job_params` | `object` | 默认 `{}`；由对应 `job_type.params_schema` 归一化和校验。 |
 | `callback` | `CallbackConfig \| null` | 可选；传入时会校验 URL 安全性和 `job_type.allow_callback`。 |
-| `metadata` | `object` | 默认 `{}`；持久化到 `jobs.metadata`。 |
+| `metadata` | `object` | 默认 `{}`；持久化到 `job_aggregates.metadata`。 |
 | `options` | `JobOptions \| null` | 可选；控制优先级和幂等模式。 |
 
 `CallbackConfig` 当前字段：
@@ -355,7 +355,7 @@ CallbackEnvelope
 - `event` 必须和 `job.job_status` 匹配。
 - `job` 必须是终态 `JobEnvelope`。
 - `event_id` 使用 `uuid5(NAMESPACE_URL, "ai-job-callback:{job.id}:{event}")` 生成，保证同一 Job 同一终态事件稳定。
-- Callback 请求体使用 `CALLBACK_SIGNING_SECRET` 生成 `X-Callback-Timestamp` 和 `X-Callback-Signature`。
+- Callback 请求体使用 `CALLBACK_SIGNING_SECRET` 生成 `X-Callback-Timestamp` 和 `X-Callback-Signature`；签名输入是 `timestamp + "." + raw_body_bytes`。
 - Callback 接收方必须返回 JSON ack：至少包含布尔字段 `accepted`。
 - `204`、非 JSON、空 body、非对象、缺少 `accepted` 或 `accepted` 非布尔都会被视为 ack 合同不合法。
 
@@ -367,6 +367,20 @@ CallbackResponseEnvelope
   msg: string | null = null
   details: object = {}
 ```
+
+当前 Callback URL 安全校验：
+
+- URL 必须包含 host。
+- 默认要求 HTTPS 和标准 443 端口。
+- 本地开发允许在 `ALLOW_INSECURE_CALLBACKS=true` 时使用 `http://127.0.0.1` 或 `http://localhost`。
+- 禁止 URL fragment、userinfo、解析到 private / loopback / link-local / unspecified / multicast / metadata IP 的地址。
+- 创建 Job 时会校验 Callback URL，投递前也会再次校验。
+
+当前 Callback 投递和重试事实：
+
+- `deliver_callback()` 单次调用只执行一次 HTTP 投递尝试。
+- 投递失败、ACK 合同不合法或 `accepted=false` 时，状态写回 `callback_outbox`，由 recovery 按 `CALLBACK_RETRY_DELAY_SECONDS` 和 `CALLBACK_MAX_DELIVERY_ATTEMPTS` 补偿。
+- Callback 投递耗尽后进入内部 `dead_letter`，公开投影收敛为 `failed`。
 
 ## Job Type 注册
 
@@ -419,6 +433,8 @@ CallbackResponseEnvelope
 10. 提交 DB 事务。
 11. `publish_job_attempt()` lease 对应 `dispatch_outbox` 后发布 Taskiq `jobs.run_attempt`。
 12. 返回 `JobResponseData(job=JobEnvelope)`。
+
+当前 request fingerprint 输入包括 `caller_id`、`client_request_id`、`job_type`、规范化后的 `job_params`、规范化后的 `callback` 和规范化后的 `options`，不包含 `metadata`。Callback URL 在计算 fingerprint 前会规范化 scheme、IDNA host、默认 HTTPS 443 端口、path、query 和 events；URL fragment 在安全校验阶段被拒绝。
 
 当前 `jobs.run_attempt` 主流程：
 

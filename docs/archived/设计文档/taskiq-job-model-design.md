@@ -1,5 +1,7 @@
 # Taskiq Job MVP 数据模型设计
 
+> 归档说明：本文只保留历史长设计记录，不再作为当前事实、公开合同或生命周期权威。当前文档入口以 [`../../README.md`](../../README.md) 为准。
+
 ```text
 Version: 1.2.0
 Status: Historical / Partially Superseded
@@ -12,7 +14,7 @@ Current internal lifecycle authority: docs/架构/job-lifecycle-state-model.md
 
 本文定义移除 Celery、改用 Taskiq 后的 Job MVP 心智模型、数据模型和实现骨架。
 
-本文是早期长设计记录，包含部分目标态和未完整接入的状态，例如 `cancelled`、`timed_out`、旧请求形状、旧 callback 摘要示例以及基于 `reconciler_leases` 的恢复协调。当前公开 HTTP、Job、Error、Callback 和 Billing 合同以 [`AI Job 服务合同边界`](../架构/service-contract-boundary.md) 为准；当前内部 Job 生命周期状态、dispatch 权威、Callback outbox、Recovery 和 AI call ledger 边界，以 [`Job 生命周期状态模型与 Dispatch 权威`](../架构/job-lifecycle-state-model.md) 以及代码、测试为准。以下正文按历史设计阅读，不再代表 current contract 或 current lifecycle authority。
+本文是早期长设计记录，包含部分目标态和未完整接入的状态，例如 `cancelled`、`timed_out`、旧请求形状、旧 callback 摘要示例以及基于 `reconciler_leases` 的恢复协调。当前公开 HTTP、Job、Error、Callback 和 Billing 合同以 [`AI Job 服务合同边界`](../../架构/service-contract-boundary.md) 为准；当前内部 Job 生命周期状态、dispatch 权威、Callback outbox、Recovery 和 AI call ledger 边界，以 [`Job 生命周期状态模型与 Dispatch 权威`](../../架构/job-lifecycle-state-model.md) 以及代码、测试为准。以下正文按历史设计阅读，不再代表 current contract 或 current lifecycle authority。
 
 核心结论：
 
