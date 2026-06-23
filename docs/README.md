@@ -16,7 +16,7 @@
 | [`设计文档/taskiq-job-model-design.md`](设计文档/taskiq-job-model-design.md) | Taskiq Job MVP 的数据模型、生命周期、Attempt、Callback Outbox 和 Event 设计 |
 | [`设计文档/FastAPI 统一响应信封架构设计文档.md`](设计文档/FastAPI%20统一响应信封架构设计文档.md) | HTTP 成功/错误统一响应信封设计 |
 | [`设计文档/callback-job-unified-envelope-design.md`](设计文档/callback-job-unified-envelope-design.md) | Job 轮询结果与 Callback envelope 的一致性设计 |
-| [`架构/job-ai-billing-mental-model.md`](架构/job-ai-billing-mental-model.md) | `Job`、AI 能力层、`ai_call_logs`、`BillingEnvelope` 和 `model_id` 的分层边界 |
+| [`架构/job-ai-billing-mental-model.md`](架构/job-ai-billing-mental-model.md) | `Job`、AI gateway、AI call ledger、Billing read model 和 `model_id` 的分层心智模型 |
 
 ## 辅助文档
 
@@ -30,7 +30,7 @@
 
 | 文档 | 状态 | 用途 |
 |---|---|---|
-| [`设计文档/headless-ai-job-platform-service-design.md`](设计文档/headless-ai-job-platform-service-design.md) | Accepted MVP Baseline | Headless AI Job Platform Service 的模型目录、模型调用账本、成本估算和结构化 LLM 示例设计；不是当前已实现合同 |
+| [`设计文档/ai-gateway-layer-design.md`](设计文档/ai-gateway-layer-design.md) | Accepted Target Baseline | AI gateway layer、模型调用账本、pricing、billing read model 和 Job scope 投影设计；不是当前已实现合同 |
 
 ## 快速阅读路径
 

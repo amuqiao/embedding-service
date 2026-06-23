@@ -1,88 +1,93 @@
-# Job / AI / Billing 心智模型
+# Job / AI Gateway / Billing 心智模型
 
-本文为本项目定调：本服务是 **Headless AI Job Platform Service**，`Job` 是平台执行外壳，AI 是底层能力层，Billing 是对可计量调用的账本和读模型。
+本文为本项目定调：`Job` 是当前主要异步执行外壳，AI gateway 是模型调用能力层，Billing 是对 AI call ledger 的读模型。计费事实应先围绕“真实模型调用”建立，Job billing 只是其中一种 scope 投影。
 
 ```text
-Headless AI Job Platform Service
-  Job 是平台执行外壳
-  AI 是底层能力层
-  Billing 是对可计量调用的账本 / 读模型
+AI gateway
+  统一模型调用入口
+
+AI call ledger
+  每次真实 LiteLLM / provider call 一行账本
+
+Billing read model
+  从 AI call ledger 聚合，不反控 Job 或 provider 调用
+
+Job runtime
+  当前主要异步执行外壳，是 AI gateway 的一种消费者
 ```
-
-这一定调决定了后续所有实现边界：
-
-- 对外主入口围绕 Job，而不是同步 AI gateway。
-- Job 状态机不保存 AI provider 细节，也不保存成本明细。
-- AI capability layer 可以被 Job 调用，但不直接控制 Job 状态机。
-- Billing 绑定 `job_id` 做查询和归因，但不属于 Job 状态机。
-- `ai_call_logs` 是 AI provider call 明细账本，不是 `jobs` 表的扩展字段集合。
-
-本文说明 `Job`、AI 能力层和 AI cost / billing 之间的分层关系，避免实现时把执行状态、模型调用和计费账本写成互相强绑定的单体。
 
 ## 文档职责
 
 本文负责回答：
 
-- `Job` 在本项目中是什么。
-- AI 能力层在 Job 平台中的位置是什么。
-- AI cost / billing 与 Job、AI provider call 的关系是什么。
-- `model_id`、runtime snapshot、`ai_call_logs` 和 `BillingEnvelope` 分别保存什么事实。
+- `Job`、AI gateway 和 Billing 分别是什么。
+- `model_id`、runtime snapshot、`ai_call_logs` 和 Billing read model 分别保存什么事实。
+- 为什么 `ai_call_logs` 不应强绑定 `job_id`。
+- Job 如何通过 `scope_type="job"` 获得 Job 级 billing。
 - 哪些依赖方向是允许的，哪些依赖方向应避免。
 
 本文不负责：
 
 - Taskiq Job 状态机、Attempt lease、Callback outbox 的字段级设计。
 - 具体 `job_type` 的参数、Prompt、模型输出 schema。
-- 价格配置、成本计算公式和 `BillingEnvelope` 字段合同。
+- 价格配置、成本计算公式和 billing envelope 字段合同。
 - 用户余额、扣款、发票、退款、税务或最终财务对账。
 
-阅读路径和相关文档统一在 [`../README.md`](../README.md) 维护；本文不单独维护文档索引。
+AI gateway 层目标设计见 [`../设计文档/ai-gateway-layer-design.md`](../设计文档/ai-gateway-layer-design.md)。阅读路径和相关文档统一在 [`../README.md`](../README.md) 维护。
 
 ## 1. 总体心智模型
 
-本项目应被理解为 **Headless AI Job Platform Service**：
+当前本服务的主要对外工作方式仍是 AI Job：
 
 ```text
 调用方 / 业务后端
-  ├─ 管理用户、项目、业务状态和业务重试
-  └─ 创建 Job，查询 Job，接收 Callback，查询 BillingEnvelope
+  ├─ 创建 Job
+  ├─ 查询 Job
+  └─ 接收 Callback
+```
 
-Headless AI Job Platform Service
-  ├─ Job runtime
-  │   ├─ 创建 Job / Attempt
-  │   ├─ 管理状态、租约、恢复、结果投影和 Callback
-  │   └─ 调用具体 job_type 的执行器
-  ├─ AI capability layer
-  │   ├─ 解析 model_id
-  │   ├─ 调用内部 AI gateway / provider adapter
-  │   └─ 返回模型输出和 provider usage
-  └─ AI cost / billing layer
-      ├─ 写入 ai_call_logs
-      ├─ 按 pricing snapshot 估算成本
-      └─ 按 job_id 聚合 BillingEnvelope
+当前代码尚未实现 AI call ledger、pricing config 或 billing 查询接口。本文后续的 Job billing、scope billing 和非 Job scope 计费均是目标设计心智模型，不是当前已落地 API。
+
+AI cost 的底层事实不应由 Job 表拥有，而应由 AI gateway 统一创建调用账本。
+
+```text
+Job runtime
+  ├─ 创建 Job / Attempt
+  ├─ 管理状态、租约、恢复、结果投影和 Callback
+  └─ 调用 JobExecutor
+        ↓
+AI gateway
+  ├─ 校验 model_id
+  ├─ 调用 LiteLLM / provider adapter
+  ├─ 写入 ai_call_logs
+  └─ 返回模型输出、usage 或稳定错误
+        ↓
+Billing read model
+  └─ 按 scope_type / scope_id 聚合 ai_call_logs
 ```
 
 核心判断：
 
 - `Job` 是平台执行外壳，不是 AI provider call。
-- AI 是底层能力，可以被某些 `job_type` 使用，但不是所有 Job 的必需组成。
-- Billing 是对可计量调用的账本和读模型，不是 Job 状态机的一部分。
-- `BillingEnvelope` 绑定 `job_id` 是查询维度，不表示计费明细属于 `jobs` 表。
+- AI gateway 是模型调用能力层，不直接控制 Job 状态机。
+- `ai_call_logs` 是 AI provider call 明细账本，不是 `jobs` 表的扩展字段集合。
+- Billing 依赖可计量调用事实，不依赖 Job 状态机。
+- Job billing 绑定 `scope_type="job"` 和 `scope_id=job_id`，不表示所有 AI 计费都必须来自 Job。
 
 ## 2. 三个对象分别回答什么
 
 | 对象 | 回答的问题 | 事实源 | 对外形态 |
 |---|---|---|---|
 | `Job` | 这次异步执行现在是什么状态，公开结果或公开错误是什么 | `jobs`、`job_attempts`、`callback_outbox`、`job_events` | `JobEnvelope` |
-| AI capability | 这次能力是否需要模型，应该调用哪个 provider model，模型返回了什么 | `model catalog`、runtime snapshot、provider response | 具体 `job_type` 的执行结果 |
-| AI cost / billing | 哪些模型调用发生了，usage 是多少，按哪个价格版本估算了多少成本 | `ai_call_logs`、pricing snapshot | `BillingEnvelope`、内部明细查询或导出 |
+| AI gateway | 这次模型调用应该使用哪个服务模型、provider model，并返回什么模型输出和 usage | `model catalog`、LiteLLM adapter、provider response | 上层调用方的执行结果 |
+| Billing | 哪些模型调用发生了，usage 是多少，按哪个价格版本估算了多少成本 | `ai_call_logs`、pricing snapshot | scope billing、Job billing、内部明细查询或导出 |
 
 这三类事实不能混成一张表或一个公共外壳。
 
 ```text
 JobEnvelope 不保存 usage/cost 明细。
 ai_call_logs 不保存 Job 当前状态。
-BillingEnvelope 不决定 Job succeeded / failed。
+Billing read model 不决定 Job succeeded / failed。
 AI gateway 不直接投递 Callback。
 ```
 
@@ -104,9 +109,6 @@ callback_outbox
 
 job_events
   保存生命周期事件，用于排障和审计。
-
-reconciler_leases
-  保存恢复任务租约。
 ```
 
 Job 表不应保存：
@@ -117,34 +119,37 @@ Job 表不应保存：
 - 成本计算明细。
 - provider 私有参数。
 
-### 3.2 AI 相关数据
+### 3.2 AI gateway 相关数据
 
-AI 能力层保存或读取模型调用所需事实：
+AI gateway 读取或冻结模型调用所需事实：
 
 ```text
 model catalog
   模型目录事实源。首版可以是 app/core/models.yaml。
 
 runtime snapshot
-  Job 创建时冻结本次执行需要的 model_id、Prompt、输出目标等运行时字段。
+  Job 创建时冻结本次 Job 执行需要的 model_id、Prompt、输出目标等运行时字段。
 
-AI gateway / provider adapter
+AI gateway facade
+  应用服务层门面，编排 model gate、ledger、LiteLLM adapter、usage extraction 和 cost estimate。
+
+LiteLLM / provider adapter
   把服务内 model_id 映射到 provider / LiteLLM model，并执行真实调用。
 ```
 
-`model_id` 的流向应是：
+`model_id` 在 Job scope 中的流向应是：
 
 ```text
 model catalog
   ↓ 创建期校验
 runtime snapshot.runtime_fields.model_id
   ↓ Worker 执行期读取和再次 gate
-AI gateway / provider adapter
+AI gateway facade
   ↓ 调用时审计复制
 ai_call_logs.model_id / provider / provider_model / pricing_ref
 ```
 
-因此，`jobs` 表不需要顶层 `model_id`。如果某个 Job 不调用模型，`runtime_fields.model_id` 可以不存在；如果某个 Job 调用多个模型，每次调用也应分别进入 `ai_call_logs`，而不是把多个模型硬塞进 Job 顶层字段。
+因此，`jobs` 表不需要顶层 `model_id`。如果某个 Job 不调用模型，`runtime_fields.model_id` 可以不存在；如果某个 Job 调用多个模型，每次调用也应分别进入 `ai_call_logs`。
 
 ### 3.3 AI cost / billing 相关数据
 
@@ -152,10 +157,13 @@ AI cost / billing 保存可计量调用事实和聚合投影：
 
 ```text
 ai_call_logs
-  每次真实 provider / LiteLLM 调用一行，保存调用状态、usage、pricing snapshot 和成本估算。
+  每次真实 provider / LiteLLM 调用一行，保存 scope、调用状态、usage、pricing snapshot 和成本估算。
 
-BillingEnvelope
-  按 job_id 聚合 ai_call_logs 得到的 Job 级成本估算返回对象。
+scope billing
+  按 scope_type / scope_id 聚合 ai_call_logs 得到的成本估算返回对象。
+
+Job billing
+  scope_type="job" 且 scope_id=job_id 的 scope billing 投影。
 
 pricing config
   把 provider usage 转换成内部 cost estimate 的配置事实源。
@@ -168,26 +176,28 @@ pricing config
 推荐依赖方向：
 
 ```text
-Job runner
-  -> JobExecutor
-  -> AI capability layer
-  -> AI gateway / provider adapter
+Job runner 或 HTTP route
+  -> capability service / JobExecutor
+  -> AI gateway facade
+  -> AI gateway ledger + LiteLLM adapter
 
-AI capability layer
-  -> usage ledger
-  -> pricing / cost estimator
+AI gateway facade
+  -> model catalog
+  -> pricing config
+  -> ai_call_logs repository
+  -> LiteLLM / provider adapter
 
 Billing service
-  -> ai_call_logs
-  -> BillingEnvelope
+  -> ai_call_logs repository
+  -> billing schema
 ```
 
 允许：
 
-- Job runner 把 `job_id`、`attempt_id`、`caller_id`、`job_type`、`model_id` 等上下文传给 AI capability layer。
-- AI capability layer 返回模型输出、usage 和稳定错误。
-- usage ledger 根据 Job 上下文写入 `ai_call_logs`。
-- Billing service 按 `job_id` 聚合 `ai_call_logs`。
+- Job runner 把 `job_id`、`attempt_id`、`caller_id`、`job_type`、`model_id` 等上下文作为 `scope_type="job"` 传给 AI gateway。
+- 同步接口把 `request_id` 或业务请求 id 作为 `scope_type="sync_api"` 传给 AI gateway。
+- AI gateway 返回模型输出、usage 和稳定错误。
+- Billing service 按 scope 聚合 `ai_call_logs`。
 
 不允许：
 
@@ -198,11 +208,11 @@ Billing service
 - `jobs` 表直接保存 provider usage / cost 明细。
 - 缺 usage、缺价格或成本计算失败时静默写 `0` 后继续成功。
 
-一句话：Job 可以调用 AI，AI 可以产生 usage，Billing 可以聚合 usage；反过来 AI 和 Billing 都不应控制 Job 状态机。
+一句话：Job 或其它入口可以调用 AI gateway，AI gateway 可以产生 usage，Billing 可以聚合 usage；反过来 AI gateway 和 Billing 都不应控制 Job 状态机。
 
 ## 5. 对外 API 心智模型
 
-调用方以 Job 为中心工作：
+当前调用方以 Job 为中心工作：
 
 ```text
 POST /jobs
@@ -211,34 +221,65 @@ POST /jobs
 GET /jobs/{job_id}
   查询执行状态、公开结果或公开错误。
 
-GET /jobs/{job_id}/billing
-  Job 终态后查询该 Job 的成本估算摘要。
-
 Callback
-  接收终态通知；首版不默认携带 BillingEnvelope。
+  接收终态通知。
 ```
 
-这意味着：
+目标设计中，Job billing 应作为 Job scope 的独立查询投影，而不是 `JobEnvelope` 顶层字段：
 
-- `POST /jobs` 成功只表示服务接单，不表示模型调用已经发生。
-- `GET /jobs/{job_id}` 只回答执行状态和公开结果，不回答完整成本明细。
-- `GET /jobs/{job_id}/billing` 只回答成本估算，不改变 Job 状态。
-- Callback 投递失败只影响 Callback 状态，不影响 Job 终态，也不新增模型费用。
+```text
+GET /jobs/{job_id}/billing
+  -> scope_type = "job"
+  -> scope_id = job_id
+  -> Job 终态后查询该 Job scope 的成本估算摘要
+```
+
+该接口尚未实现；落地时必须按 HTTP 接口规范补齐 operation registry、schema registry、错误码、OpenAPI 和合同测试。
+
+后续如果新增同步 AI 能力接口，应让该接口复用 AI gateway 和 `ai_call_logs`：
+
+```text
+POST /some-sync-api
+  -> AI gateway(scope_type="sync_api", scope_id=request_id)
+  -> ai_call_logs
+```
+
+但同步接口的 HTTP 路径、查询权限、billing 查询方式和保留期必须单独设计，不能因为有 ledger 就隐式开放。
 
 ## 6. 常见误区
 
 ### 6.1 “AI Job Service 是否就是 AI Gateway？”
 
-不是。更准确的说法是：
+不是。
 
 ```text
-本项目对外是 Headless AI Job Platform Service。
-AI gateway 是内部能力层，用于连接 model catalog、provider adapter、usage ledger 和 cost estimate。
+当前对外主入口：AI Job Service
+内部模型调用层：AI gateway
+执行适配器：LiteLLM / provider adapter
 ```
 
-首版不应对外提供绕过 Job runtime 的同步 AI 网关接口，例如直接 `POST /ai/chat`。这类接口会绕过 Attempt、恢复、Callback 和 BillingEnvelope 主流程，必须另行设计。
+AI gateway 是内部能力层，用于连接 model catalog、LiteLLM adapter、usage ledger 和 cost estimate。它可以被 Job 使用，也可以被未来同步 API 或内部任务使用。
 
-### 6.2 “model_id 是否应该放在 jobs 表顶层？”
+### 6.2 “计费是否必须绑定 Job？”
+
+不应该。
+
+Job billing 是重要的首个公开投影，但 AI cost 的底层事实应是：
+
+```text
+scope_type + scope_id + ai_call_logs
+```
+
+Job 只是：
+
+```text
+scope_type = "job"
+scope_id = job_id
+```
+
+这样未来非 Job 调用也能计费，而不需要创建假 Job。
+
+### 6.3 “model_id 是否应该放在 jobs 表顶层？”
 
 不建议。
 
@@ -249,7 +290,7 @@ AI gateway 是内部能力层，用于连接 model catalog、provider adapter、
 - 模型选择属于具体 `job_type` 的运行时事实，应冻结在 runtime snapshot。
 - 每次真实调用的模型审计事实应进入 `ai_call_logs`。
 
-### 6.3 “BillingEnvelope 是否应该放进 JobEnvelope？”
+### 6.4 “BillingEnvelope 是否应该放进 JobEnvelope？”
 
 首版不建议。
 
@@ -260,11 +301,11 @@ AI gateway 是内部能力层，用于连接 model catalog、provider adapter、
 - Billing 的修复、导出、保留期和 Job 状态机不同。
 - Callback 与轮询必须同源，贸然内联会扩大公共合同变化面。
 
-### 6.4 “计费是否只服务 AI？”
+### 6.5 “计费是否只服务 AI？”
 
 MVP 中是，因为当前可计量对象是 AI provider call。
 
-但抽象上，计费服务依赖的是“可计量调用事实”，不是 AI 这个业务名词。未来如果出现非 AI 的可计量能力，应单独设计通用 metered usage，而不是提前把首版 `ai_call_logs` 泛化成过宽的表。
+抽象上，计费服务依赖的是“可计量调用事实”，不是 AI 这个业务名词。未来如果出现非 AI 的可计量能力，应单独设计通用 metered usage，而不是提前把首版 `ai_call_logs` 泛化成过宽的表。
 
 ## 7. 设计检查清单
 
@@ -275,22 +316,24 @@ Job:
   [ ] 是否只修改执行状态、结果投影、Callback 或 runtime snapshot。
   [ ] 是否避免把 provider usage / cost 明细塞进 jobs。
 
-AI:
+AI gateway:
   [ ] model_id 是否来自 model catalog。
-  [ ] model_id 是否在创建期冻结到 runtime snapshot。
-  [ ] Worker 调用前是否再次 gate。
+  [ ] Worker 或同步接口调用前是否再次 gate。
   [ ] AI gateway 是否没有直接推进 Job 状态机。
+  [ ] LiteLLM adapter 是否只做 provider 调用适配。
 
 Usage ledger:
   [ ] 真实 provider 调用前是否先写 pending row。
   [ ] 每次真实 provider 调用是否都有独立 ai_call_logs。
+  [ ] ai_call_logs 是否使用 scope_type / scope_id 表达归属。
   [ ] 缺 usage / 缺价格 / 成本计算失败是否 fail-fast。
 
 Billing:
-  [ ] BillingEnvelope 是否只从 ai_call_logs 聚合。
+  [ ] Billing read model 是否只从 ai_call_logs 聚合。
+  [ ] Job billing 是否只是 scope_type="job" 的投影。
   [ ] failed-but-billed 是否能表达。
-  [ ] Callback 重试是否不改变 BillingEnvelope。
-  [ ] 是否没有把 BillingEnvelope 当成扣款、发票或最终对账事实。
+  [ ] Callback 重试是否不改变 billing。
+  [ ] 是否没有把 Billing read model 当成扣款、发票或最终对账事实。
 ```
 
 如果某个实现需要打破这些规则，应先更新本文和对应设计文档，再进入开发。
