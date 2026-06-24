@@ -3,7 +3,7 @@
 ```text
 Status: Current Contract
 Scope: HTTP envelope, Job envelope, Error envelope, Callback envelope, Billing envelope
-Current truth: code, tests, docs/架构/project-standards-code-facts.md
+Current truth: code, tests, docs/current/architecture.md, docs/api/service-contract.md
 ```
 
 本文定义当前对外合同和内部事实 owner 的边界。它不重复所有字段细节；字段事实以代码、测试和 [AI Job 服务项目规范与骨架（代码事实版）](project-standards-code-facts.md) 为准。

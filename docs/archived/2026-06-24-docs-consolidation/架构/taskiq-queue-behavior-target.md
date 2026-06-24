@@ -4,8 +4,8 @@
 Status: Target Opinion / Plan
 Owner: architecture
 Scope: TaskIQ broker behavior, dispatch publisher, worker claim, callback delivery, recovery boundary
-Current truth: code, tests, docs/架构/project-standards-code-facts.md
-Pairs with: docs/架构/transactional-outbox-job-kernel-data-model.md
+Current truth: code, tests, docs/current/job-kernel.md
+Pairs with archived historical design: docs/archived/2026-06-24-docs-consolidation/架构/transactional-outbox-job-kernel-data-model.md
 ```
 
 本文定义生产级 Job kernel 第一阶段的 TaskIQ 队列行为目标。当前代码事实仍以代码、测试和 [`project-standards-code-facts.md`](project-standards-code-facts.md) 为准；本文不改变当前实现事实。

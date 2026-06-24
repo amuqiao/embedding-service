@@ -31,7 +31,7 @@ Change Reason: 简化 Callback 第一阶段请求头，只保留 Content-Type、
 - Callback 接收方的业务处理逻辑。
 - 生产部署、监控平台、签名密钥分发或第三方调用方 SDK 实现。
 
-本文以 [`FastAPI 统一响应信封架构设计文档.md`](../../设计文档/FastAPI%20统一响应信封架构设计文档.md) 为 HTTP 外层协议标准。若本文与该标准在 HTTP 顶层字段、`request_id`、`server_time`、HTTP 状态码或业务 `code` 语义上冲突，以该标准为准。
+本文是历史设计记录。当前 HTTP、Job 和 Callback 合同以 [`../../api/service-contract.md`](../../api/service-contract.md) 为准；旧统一响应信封设计已归档到 [`../2026-06-24-docs-consolidation/设计文档/FastAPI 统一响应信封架构设计文档.md`](../2026-06-24-docs-consolidation/设计文档/FastAPI%20统一响应信封架构设计文档.md)。
 
 本文当前状态仍为 Candidate，不直接作为 Accepted 基线使用。升为 Accepted 前必须至少完成本文第 15 节的验证标准，并确认调用方能够接受 HTTP 成功码、业务码、时间格式、Callback 安全头和 ACK 合同的外部语义。
 

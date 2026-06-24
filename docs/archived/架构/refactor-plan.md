@@ -2,7 +2,7 @@
 
 > 归档说明：本文只保留历史重构路线，不再作为当前事实、公开合同或执行计划。当前文档入口以 [`../../README.md`](../../README.md) 为准。
 
-本文定义后续重构的实施顺序：以 [AI Job 服务项目规范与骨架（代码事实版）](../../架构/project-standards-code-facts.md) 为当前标准，先明确项目规范和骨架，再让接口、Job、Workflow、配置、日志、异常和 ORM 逐步适配标准。
+本文定义后续重构的实施顺序。当前标准已收敛到 [`../../current/architecture.md`](../../current/architecture.md)、[`../../current/job-kernel.md`](../../current/job-kernel.md) 和 [`../../api/service-contract.md`](../../api/service-contract.md)；本文只保留历史重构背景。
 
 本文是既有“规范先行”重构路线。生产级 AI Job 生命周期内核的后续重构计划见 [生产级 AI Job Kernel 重构计划](production-ai-job-kernel-plan.md)；两者冲突时，当前事实仍以代码、测试和 `project-standards-code-facts.md` 为准。
 
@@ -15,7 +15,7 @@
 - 每个阶段的目标、禁止事项和验证入口。
 - 如何覆盖 `claude_blueprint/rules/backend` 的标准。
 
-本文不负责重复定义所有规范细节。规范细节见 [AI Job 服务项目规范与骨架（代码事实版）](../../架构/project-standards-code-facts.md)。
+本文不负责重复定义所有规范细节。当前规范细节见 [`../../current/architecture.md`](../../current/architecture.md) 和 [`../../api/service-contract.md`](../../api/service-contract.md)。
 
 ## 核心原则
 
@@ -48,7 +48,7 @@
 
 | 真源 | 目标文件或模块 |
 |---|---|
-| 项目规范与骨架（代码事实版） | `docs/架构/project-standards-code-facts.md` |
+| 当前架构事实 | `docs/current/architecture.md` |
 | HTTP envelope / ErrorDetail / JobResponseData / JobEnvelope / CallbackEnvelope | `app/schemas/envelope.py`、`app/schemas/errors.py`、`app/schemas/jobs.py`、`app/schemas/callbacks.py` |
 | 错误码注册表 | `app/core/error_registry.py` 或等价结构 |
 | operation registry | `app/core/operation_registry.py` 或等价结构 |
@@ -66,7 +66,7 @@
 
 范围：
 
-- 定稿 [AI Job 服务项目规范与骨架（代码事实版）](../../架构/project-standards-code-facts.md)。
+- 定稿当前架构事实文档。
 - 明确 HTTP 标准响应：`ResponseEnvelope[TData]`。
 - 明确错误响应：`ErrorDetail` + 错误码注册表。
 - 明确 Job 创建和查询：`ResponseEnvelope[JobResponseData[JobResult]]`，Job 字段只放在 `data.job`。
@@ -316,7 +316,7 @@
 
 每个 PR 先检查是否符合 `project-standards-code-facts.md`：
 
-- 是否符合 [项目规范与骨架（代码事实版）](../../架构/project-standards-code-facts.md)。
+- 是否符合当前架构事实和服务合同。
 - 是否使用标准 `ResponseEnvelope[TData]`。
 - 错误是否来自错误码注册表。
 - request schema 是否拒绝未知字段。

@@ -4,7 +4,7 @@
 Status: Current Internal Contract
 Owner: job-kernel
 Scope: Job, Attempt, Dispatch, Callback outbox, Recovery, AI call ledger projection
-Current truth: code, tests, docs/架构/project-standards-code-facts.md
+Current truth: code, tests, docs/current/job-kernel.md
 Historical lifecycle designs are not maintained as current authority.
 ```
 

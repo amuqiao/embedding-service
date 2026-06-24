@@ -8,13 +8,13 @@ Status: Historical / Partially Superseded
 Date: 2026-06-21
 Change Policy: 进入开发后，任何 API 合同、状态机、表结构、CAS 条件、重试语义变更都必须升版本并记录变更原因。
 Change Reason: 修正发布失败计数、lease 有效期、取消与超时收敛、Callback 安全合同，并裁剪 MVP 数据字段。
-Current public contract: docs/架构/service-contract-boundary.md
-Current internal lifecycle authority: docs/架构/job-lifecycle-state-model.md
+Current public contract: docs/api/service-contract.md
+Current internal lifecycle authority: docs/current/job-kernel.md
 ```
 
 本文定义移除 Celery、改用 Taskiq 后的 Job MVP 心智模型、数据模型和实现骨架。
 
-本文是早期长设计记录，包含部分目标态和未完整接入的状态，例如 `cancelled`、`timed_out`、旧请求形状、旧 callback 摘要示例以及基于 `reconciler_leases` 的恢复协调。当前公开 HTTP、Job、Error、Callback 和 Billing 合同以 [`AI Job 服务合同边界`](../../架构/service-contract-boundary.md) 为准；当前内部 Job 生命周期状态、dispatch 权威、Callback outbox、Recovery 和 AI call ledger 边界，以 [`Job 生命周期状态模型与 Dispatch 权威`](../../架构/job-lifecycle-state-model.md) 以及代码、测试为准。以下正文按历史设计阅读，不再代表 current contract 或 current lifecycle authority。
+本文是早期长设计记录，包含部分目标态和未完整接入的状态，例如 `cancelled`、`timed_out`、旧请求形状、旧 callback 摘要示例以及基于 `reconciler_leases` 的恢复协调。当前公开 HTTP、Job、Error、Callback 和 Billing 合同以 [`../../api/service-contract.md`](../../api/service-contract.md) 为准；当前内部 Job 生命周期状态、dispatch 权威、Callback outbox、Recovery 和 AI call ledger 边界以 [`../../current/job-kernel.md`](../../current/job-kernel.md) 以及代码、测试为准。以下正文按历史设计阅读，不再代表 current contract 或 current lifecycle authority。
 
 核心结论：
 
