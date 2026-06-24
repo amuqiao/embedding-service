@@ -155,6 +155,41 @@ def test_model_registry_rejects_invalid_model_config(tmp_path, monkeypatch):
         model_registry.list_models_response()
 
 
+def test_model_registry_validate_catalog_rejects_pricing_mismatch(tmp_path, monkeypatch):
+    config_path = tmp_path / "models.yaml"
+    config_path.write_text(
+        """\
+version: "1"
+models:
+  - id: custom-model
+    name: Custom Model
+    provider: openai
+    litellm_model: openai/custom-model
+    pricing_ref: openai:gpt-5.5@2026-06-23
+    enabled: true
+    context_window: 12345
+    supports_json_output: true
+    notes: ""
+    requires_env:
+      - OPENAI_API_KEY
+    generation:
+      temperature: 0.2
+      num_retries: 1
+      drop_params: false
+""",
+        encoding="utf-8",
+    )
+    test_settings = _build_settings(
+        OPENAI_API_KEY="test-key",
+        DEFAULT_MODEL_ID="custom-model",
+        MODEL_CONFIG_PATH=str(config_path),
+    )
+    monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
+
+    with pytest.raises(RuntimeError, match="does not match model custom-model"):
+        model_registry.validate_model_catalog()
+
+
 @pytest.mark.asyncio
 async def test_generate_text_uses_provider_request_config(monkeypatch):
     calls = {}

@@ -211,3 +211,27 @@ def test_calculate_cost_rejects_usage_kind_mismatch_and_bad_token_units():
                 "output_tokens": 1,
             },
         )
+
+
+def test_calculate_token_cost_rejects_non_token_price():
+    image_price = ImagePrice(
+        ref="image-ref",
+        model_id="model-1",
+        provider="openai",
+        provider_model="provider-model-1",
+        pricing_type="per_image",
+        currency="USD",
+        version="2026-06-24",
+        amount_per_image=Decimal("0.04"),
+    )
+
+    with pytest.raises(RuntimeError, match="per_token pricing"):
+        calculate_token_cost(
+            image_price,  # type: ignore[arg-type]
+            {
+                "input_tokens": 1,
+                "cached_input_tokens": 0,
+                "output_tokens": 1,
+                "total_tokens": 2,
+            },
+        )

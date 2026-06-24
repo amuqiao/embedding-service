@@ -4,8 +4,10 @@ import hashlib
 import json
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
+from app.core.ai_capabilities import ResolvedModel
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.core.exceptions import AppError, ValidationAppError
@@ -16,6 +18,12 @@ from app.integrations.ai_gateway import TextGenerationRequest, TextGenerationRes
 from app.repositories.ai_call_log_repo import AiCallLogRepo
 
 KNOWN_SCOPE_TYPES = {"job", "sync_api", "internal", "batch"}
+
+
+@dataclass(frozen=True)
+class ModelGateResult:
+    model: TextModel
+    resolved_model: ResolvedModel
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -100,6 +108,50 @@ def _require_model(model_id: str) -> TextModel:
     return model
 
 
+class ModelGate:
+    def resolve(self, model_id: str) -> ModelGateResult:
+        model = _require_model(model_id)
+        return ModelGateResult(
+            model=model,
+            resolved_model=ResolvedModel(
+                model_id=model.id,
+                provider=model.provider,
+                provider_model=model.provider_model,
+                litellm_model=model.litellm_model,
+                pricing_ref=model.pricing_ref,
+            ),
+        )
+
+
+class ProviderGateway:
+    async def generate_text(self, model: TextModel, messages: list[dict[str, str]]) -> TextGenerationResult:
+        return await generate_text(
+            TextGenerationRequest(
+                litellm_model=model.litellm_model,
+                messages=messages,
+                temperature=model.temperature,
+                timeout_seconds=settings.ai_provider.model_call_timeout_seconds,
+                api_key=settings.ai_provider.openai_api_key_value or None,
+                api_base=settings.ai_provider.openai_base_url or None,
+                num_retries=model.num_retries,
+                drop_params=model.drop_params,
+            )
+        )
+
+
+class UsageNormalizer:
+    def normalize_text(self, result: TextGenerationResult) -> dict[str, int]:
+        return _usage_units(result)
+
+
+class TypedPricingResolver:
+    def require_rule(self, pricing_ref: str) -> Any:
+        return require_price(pricing_ref)
+
+    def calculate_text_cost(self, price: Any, usage_units: dict[str, int]):
+        return calculate_token_cost(price, usage_units)
+
+
 async def _mark_failed_and_commit(
     session_factory: Callable[[], Any],
     call_id: uuid.UUID,
@@ -140,6 +192,70 @@ async def _create_pending_and_commit(
         return call_id
 
 
+class UsageLedgerWriter:
+    async def create_pending(self, session_factory: Callable[[], Any], **kwargs: Any) -> uuid.UUID:
+        return await _create_pending_and_commit(session_factory, **kwargs)
+
+    async def mark_failed(
+        self,
+        session_factory: Callable[[], Any],
+        call_id: uuid.UUID,
+        *,
+        failure_phase: str,
+        error_code: str,
+        error_message: str,
+        billable_status: str,
+        cost_calculation_status: str = "not_applicable",
+    ) -> None:
+        await _mark_failed_and_commit(
+            session_factory,
+            call_id,
+            failure_phase=failure_phase,
+            error_code=error_code,
+            error_message=error_message,
+            billable_status=billable_status,
+            cost_calculation_status=cost_calculation_status,
+        )
+
+    async def mark_succeeded(
+        self,
+        session_factory: Callable[[], Any],
+        call_id: uuid.UUID,
+        *,
+        usage_detail: dict[str, Any],
+        usage_units: dict[str, int],
+        cost_amount: Any,
+        currency: str,
+        response_hash: str | None,
+        output_size_bytes: int | None,
+    ) -> None:
+        async with session_factory() as db:
+            marked = await AiCallLogRepo.mark_succeeded(
+                db,
+                call_id,
+                usage_detail=usage_detail,
+                usage_units=usage_units,
+                cost_amount=cost_amount,
+                currency=currency,
+                response_hash=response_hash,
+                output_size_bytes=output_size_bytes,
+            )
+            if not marked:
+                raise AppError(
+                    "AI_LEDGER_UPDATE_FAILED",
+                    "pending ai call ledger row could not be marked succeeded",
+                    details={"ai_call_log_id": str(call_id)},
+                )
+            await db.commit()
+
+
+MODEL_GATE = ModelGate()
+PROVIDER_GATEWAY = ProviderGateway()
+USAGE_NORMALIZER = UsageNormalizer()
+TYPED_PRICING_RESOLVER = TypedPricingResolver()
+USAGE_LEDGER_WRITER = UsageLedgerWriter()
+
+
 async def generate_text_with_ledger(
     *,
     caller_id: str,
@@ -165,10 +281,12 @@ async def generate_text_with_ledger(
         attempt_id=attempt_id,
         job_type=job_type,
     )
-    model = _require_model(model_id)
-    price = require_price(model.pricing_ref)
+    gate_result = MODEL_GATE.resolve(model_id)
+    model = gate_result.model
+    resolved_model = gate_result.resolved_model
+    price = TYPED_PRICING_RESOLVER.require_rule(resolved_model.pricing_ref)
     request_hash, input_size_bytes = _hash_payload({"model_id": model_id, "messages": messages})
-    call_id = await _create_pending_and_commit(
+    call_id = await USAGE_LEDGER_WRITER.create_pending(
         ledger_session_factory,
         caller_id=caller_id,
         scope_type=scope_type,
@@ -180,10 +298,10 @@ async def generate_text_with_ledger(
         job_id=job_id,
         attempt_id=attempt_id,
         job_type=job_type,
-        model_id=model.id,
-        provider=model.provider,
-        provider_model=model.provider_model,
-        litellm_model=model.litellm_model,
+        model_id=resolved_model.model_id,
+        provider=resolved_model.provider,
+        provider_model=resolved_model.provider_model,
+        litellm_model=resolved_model.litellm_model,
         pricing_ref=price.ref,
         pricing_version=price.version,
         request_hash=request_hash,
@@ -191,20 +309,9 @@ async def generate_text_with_ledger(
     )
 
     try:
-        result = await generate_text(
-            TextGenerationRequest(
-                litellm_model=model.litellm_model,
-                messages=messages,
-                temperature=model.temperature,
-                timeout_seconds=settings.ai_provider.model_call_timeout_seconds,
-                api_key=settings.ai_provider.openai_api_key_value or None,
-                api_base=settings.ai_provider.openai_base_url or None,
-                num_retries=model.num_retries,
-                drop_params=model.drop_params,
-            )
-        )
+        result = await PROVIDER_GATEWAY.generate_text(model, messages)
     except TimeoutError as exc:
-        await _mark_failed_and_commit(
+        await USAGE_LEDGER_WRITER.mark_failed(
             ledger_session_factory,
             call_id,
             failure_phase="provider",
@@ -214,7 +321,7 @@ async def generate_text_with_ledger(
         )
         raise AppError("MODEL_CALL_TIMEOUT", "model call timeout") from exc
     except Exception as exc:
-        await _mark_failed_and_commit(
+        await USAGE_LEDGER_WRITER.mark_failed(
             ledger_session_factory,
             call_id,
             failure_phase="provider",
@@ -226,9 +333,9 @@ async def generate_text_with_ledger(
 
     response_hash, output_size_bytes = _hash_text(result.text)
     try:
-        usage_units = _usage_units(result)
+        usage_units = USAGE_NORMALIZER.normalize_text(result)
     except AppError as exc:
-        await _mark_failed_and_commit(
+        await USAGE_LEDGER_WRITER.mark_failed(
             ledger_session_factory,
             call_id,
             failure_phase="usage",
@@ -239,9 +346,9 @@ async def generate_text_with_ledger(
         )
         raise
     try:
-        cost_amount = calculate_token_cost(price, usage_units)
+        cost_amount = TYPED_PRICING_RESOLVER.calculate_text_cost(price, usage_units)
     except Exception as exc:
-        await _mark_failed_and_commit(
+        await USAGE_LEDGER_WRITER.mark_failed(
             ledger_session_factory,
             call_id,
             failure_phase="pricing",
@@ -252,22 +359,14 @@ async def generate_text_with_ledger(
         )
         raise AppError("MODEL_COST_CALCULATION_FAILED", "model cost calculation failed") from exc
 
-    async with ledger_session_factory() as db:
-        marked = await AiCallLogRepo.mark_succeeded(
-            db,
-            call_id,
-            usage_detail=result.usage or {},
-            usage_units=usage_units,
-            cost_amount=cost_amount,
-            currency=price.currency,
-            response_hash=response_hash,
-            output_size_bytes=output_size_bytes,
-        )
-        if not marked:
-            raise AppError(
-                "AI_LEDGER_UPDATE_FAILED",
-                "pending ai call ledger row could not be marked succeeded",
-                details={"ai_call_log_id": str(call_id)},
-            )
-        await db.commit()
+    await USAGE_LEDGER_WRITER.mark_succeeded(
+        ledger_session_factory,
+        call_id,
+        usage_detail=result.usage or {},
+        usage_units=usage_units,
+        cost_amount=cost_amount,
+        currency=price.currency,
+        response_hash=response_hash,
+        output_size_bytes=output_size_bytes,
+    )
     return result

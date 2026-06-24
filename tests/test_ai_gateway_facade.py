@@ -63,6 +63,99 @@ def _price() -> SimpleNamespace:
     )
 
 
+def test_model_gate_resolves_model_to_internal_capability(monkeypatch):
+    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
+
+    result = ai_gateway_facade.ModelGate().resolve("custom-model")
+
+    assert result.model.id == "custom-model"
+    assert result.resolved_model.model_id == "custom-model"
+    assert result.resolved_model.provider == "openai"
+    assert result.resolved_model.provider_model == "custom-model"
+    assert result.resolved_model.litellm_model == "openai/custom-model"
+    assert result.resolved_model.pricing_ref == "openai:custom-model@2026-06-23"
+
+
+@pytest.mark.asyncio
+async def test_provider_gateway_builds_text_generation_request_from_model(monkeypatch):
+    recorded: dict = {}
+
+    async def fake_generate_text(request):
+        recorded["request"] = request
+        return TextGenerationResult(text="ok", prompt_tokens=1, completion_tokens=1, usage={})
+
+    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+    monkeypatch.setattr(
+        ai_gateway_facade,
+        "settings",
+        SimpleNamespace(
+            ai_provider=SimpleNamespace(
+                model_call_timeout_seconds=45,
+                openai_api_key_value="test-key",
+                openai_base_url="https://example.test/v1",
+            )
+        ),
+    )
+
+    await ai_gateway_facade.ProviderGateway().generate_text(_model(), [{"role": "user", "content": "hello"}])
+
+    request = recorded["request"]
+    assert request.litellm_model == "openai/custom-model"
+    assert request.messages == [{"role": "user", "content": "hello"}]
+    assert request.temperature == 0.2
+    assert request.timeout_seconds == 45
+    assert request.api_key == "test-key"
+    assert request.api_base == "https://example.test/v1"
+    assert request.num_retries == 1
+    assert request.drop_params is False
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected_cached"),
+    [
+        ({"prompt_tokens_details": {"cached_tokens": 7}}, 7),
+        ({"input_token_details": {"cached_tokens": 8}}, 8),
+        ({"cache_read_input_tokens": 9}, 9),
+    ],
+)
+def test_usage_normalizer_reads_provider_cached_token_variants(usage, expected_cached):
+    result = TextGenerationResult(
+        text="ok",
+        prompt_tokens=100,
+        completion_tokens=50,
+        usage=usage,
+    )
+
+    usage_units = ai_gateway_facade.UsageNormalizer().normalize_text(result)
+
+    assert usage_units == {
+        "input_tokens": 100,
+        "cached_input_tokens": expected_cached,
+        "output_tokens": 50,
+        "total_tokens": 150,
+    }
+
+
+def test_typed_pricing_resolver_keeps_token_cost_patchable(monkeypatch):
+    calls = {}
+
+    def fake_calculate_token_cost(price, usage_units):
+        calls["price"] = price
+        calls["usage_units"] = usage_units
+        return Decimal("1.23000000")
+
+    monkeypatch.setattr(ai_gateway_facade, "calculate_token_cost", fake_calculate_token_cost)
+
+    amount = ai_gateway_facade.TypedPricingResolver().calculate_text_cost(
+        _price(),
+        {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "total_tokens": 2},
+    )
+
+    assert amount == Decimal("1.23000000")
+    assert calls["price"].ref == "openai:custom-model@2026-06-23"
+    assert calls["usage_units"]["total_tokens"] == 2
+
+
 async def _call(session_factory: _FakeSessionFactory):
     return await ai_gateway_facade.generate_text_with_ledger(
         caller_id="caller-1",
