@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
-from app.jobs.base import JobExecutor
+from app.jobs.base import JobExecutor, PromptSpec
 from app.jobs.registry import register_job_type
 from app.models.job import Job
 from app.schemas.jobs import (
@@ -16,6 +16,9 @@ from app.schemas.jobs import (
 from app.services.ai_gateway_facade import generate_text_with_ledger
 from app.services.job_runtime import job_params_from_job, runtime_fields_from_job
 from app.services.jobs import _load_input_text, trigger_request_id_from_job
+
+FIRST_LLM_STEP_NAME = "first_llm_call"
+SECOND_LLM_STEP_NAME = "second_llm_call"
 
 
 def _prompt_payload(instruction: str) -> dict[str, Any]:
@@ -48,6 +51,20 @@ class JobRealLlmDoubleEchoJob(JobExecutor):
     allow_callback = False
     max_attempts = 1
     timeout_seconds = 240
+    prompt_specs = (
+        PromptSpec(
+            step_name=FIRST_LLM_STEP_NAME,
+            runtime_field="first_prompt_payload",
+            prompt_ref="job_real_llm_double_echo.first",
+            output_schema_ref="JobRealLlmDoubleEchoResult",
+        ),
+        PromptSpec(
+            step_name=SECOND_LLM_STEP_NAME,
+            runtime_field="second_prompt_payload",
+            prompt_ref="job_real_llm_double_echo.second",
+            output_schema_ref="JobRealLlmDoubleEchoResult",
+        ),
+    )
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = JobRealLlmDoubleEchoParams.model_validate(job_params)
@@ -74,7 +91,7 @@ class JobRealLlmDoubleEchoJob(JobExecutor):
             scope_type="job",
             scope_id=str(job.id),
             operation="job_real_llm_double_echo.first",
-            step_name="first_llm_call",
+            step_name=FIRST_LLM_STEP_NAME,
             request_id=request_id,
             job_id=job.id,
             attempt_id=attempt_id,
@@ -87,7 +104,7 @@ class JobRealLlmDoubleEchoJob(JobExecutor):
             scope_type="job",
             scope_id=str(job.id),
             operation="job_real_llm_double_echo.second",
-            step_name="second_llm_call",
+            step_name=SECOND_LLM_STEP_NAME,
             request_id=request_id,
             job_id=job.id,
             attempt_id=attempt_id,

@@ -11,6 +11,7 @@ from app.core.database import AsyncSessionLocal
 from app.core.exceptions import AppError, ValidationAppError
 from app.core.model_registry import TextModel, get_enabled_model
 from app.core.pricing_registry import calculate_token_cost, require_price, validate_price_matches_model
+from app.core.usage_records import normalize_text_usage
 from app.integrations.ai_gateway import TextGenerationRequest, TextGenerationResult, generate_text
 from app.repositories.ai_call_log_repo import AiCallLogRepo
 
@@ -48,19 +49,17 @@ def _usage_units(result: TextGenerationResult) -> dict[str, int]:
             "MODEL_USAGE_MISSING",
             "provider response did not include token usage",
         )
-    input_tokens = int(result.prompt_tokens)
-    output_tokens = int(result.completion_tokens)
     cached_input_tokens = max(
         _nested_int(result.usage, ("prompt_tokens_details", "cached_tokens")),
         _nested_int(result.usage, ("input_token_details", "cached_tokens")),
         _nested_int(result.usage, ("cache_read_input_tokens",)),
     )
-    return {
-        "input_tokens": input_tokens,
-        "cached_input_tokens": cached_input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": input_tokens + output_tokens,
-    }
+    return normalize_text_usage(
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        cached_input_tokens=cached_input_tokens,
+        raw_usage=result.usage,
+    ).usage_units()
 
 
 def _validate_context(

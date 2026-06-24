@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from app.core.exceptions import AppError
-from app.jobs.base import JobExecutor
+from app.jobs.base import JobExecutor, PromptSpec
 from app.jobs.registry import register_job_type
 from app.schemas.jobs import JobRealLlmEchoParams, JobRealLlmEchoResult, JobRealLlmEchoRuntimeFields, JobResult
 
@@ -19,6 +19,14 @@ class JobRealLlmEchoJob(JobExecutor):
     allow_callback = False
     max_attempts = 1
     timeout_seconds = 180
+    prompt_specs = (
+        PromptSpec(
+            step_name="calling_model",
+            runtime_field="prompt_payload",
+            prompt_ref="job_real_llm_echo.calling_model",
+            output_schema_ref="JobRealLlmEchoResult",
+        ),
+    )
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = JobRealLlmEchoParams.model_validate(job_params)

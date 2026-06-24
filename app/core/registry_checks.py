@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.routing import APIRoute
 
 from app.api.operations import all_operation_specs
+from app.core import prompt_templates
 from app.core.config import settings
 from app.core.error_registry import all_error_reasons, all_error_specs
 from app.core.logging import all_log_events
@@ -13,6 +14,12 @@ from app.schemas.registry import all_schema_names
 
 def _missing(values: set[str], allowed: set[str]) -> list[str]:
     return sorted(values - allowed)
+
+
+def _required_metadata_str(value: object, *, field_name: str, owner: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{owner} requires non-empty string field: {field_name}")
+    return value.strip()
 
 
 def validate_error_registry() -> None:
@@ -49,7 +56,16 @@ def validate_job_type_registry() -> None:
     known_errors = all_error_reasons()
     known_events = all_log_events()
     known_schemas = all_schema_names()
-    for spec in job_registry.all_job_type_specs().values():
+    prompt_templates.validate_prompt_config_shape(known_output_schemas=known_schemas)
+    known_prompt_refs = prompt_templates.all_prompt_refs()
+    prompt_output_schemas = prompt_templates.prompt_output_schema_refs()
+    specs = job_registry.all_job_type_specs()
+    prompt_template_job_types = prompt_templates.prompt_template_job_types()
+    unknown_template_job_types = _missing(prompt_template_job_types, set(specs))
+    if unknown_template_job_types:
+        raise ValueError(f"prompt config references unknown job_types: {unknown_template_job_types}")
+
+    for spec in specs.values():
         missing_errors = _missing(set(spec.error_codes), known_errors)
         if missing_errors:
             raise ValueError(f"job_type {spec.job_type} references unknown errors: {missing_errors}")
@@ -89,6 +105,50 @@ def validate_job_type_registry() -> None:
             raise ValueError(
                 f"job_type {spec.job_type} must declare platform_retry_policy when max_attempts > 1"
             )
+        seen_prompt_steps: set[str] = set()
+        for prompt_spec in spec.prompt_specs:
+            owner = f"job_type {spec.job_type} prompt_spec"
+            step_name = _required_metadata_str(prompt_spec.step_name, field_name="step_name", owner=owner)
+            runtime_field = _required_metadata_str(prompt_spec.runtime_field, field_name="runtime_field", owner=owner)
+            prompt_ref = _required_metadata_str(prompt_spec.prompt_ref, field_name="prompt_ref", owner=owner)
+            output_schema_ref = _required_metadata_str(
+                prompt_spec.output_schema_ref,
+                field_name="output_schema_ref",
+                owner=owner,
+            )
+            if step_name in seen_prompt_steps:
+                raise ValueError(f"job_type {spec.job_type} has duplicate prompt step: {step_name}")
+            seen_prompt_steps.add(step_name)
+            if prompt_ref not in known_prompt_refs:
+                raise ValueError(
+                    f"job_type {spec.job_type} references unknown prompt_ref: {prompt_ref}"
+                )
+            if output_schema_ref not in known_schemas:
+                raise ValueError(
+                    f"job_type {spec.job_type} references unknown prompt output_schema_ref: "
+                    f"{output_schema_ref}"
+                )
+            configured_output_schema_ref = prompt_output_schemas.get(prompt_ref)
+            if configured_output_schema_ref is None:
+                raise ValueError(f"prompt {prompt_ref} must declare output_schema_ref")
+            if configured_output_schema_ref != output_schema_ref:
+                raise ValueError(
+                    f"job_type {spec.job_type} prompt {prompt_ref} output_schema_ref mismatch: "
+                    f"{configured_output_schema_ref} != {output_schema_ref}"
+                )
+        if spec.execution_mode == "builtin_llm_text_runtime":
+            if len(spec.prompt_specs) != 1:
+                raise ValueError(f"job_type {spec.job_type} builtin_llm_text_runtime requires one prompt_spec")
+            prompt_spec = spec.prompt_specs[0]
+            runtime_field = _required_metadata_str(
+                prompt_spec.runtime_field,
+                field_name="runtime_field",
+                owner=f"job_type {spec.job_type} prompt_spec",
+            )
+            if runtime_field != "prompt_payload":
+                raise ValueError(
+                    f"job_type {spec.job_type} builtin_llm_text_runtime prompt_spec must use prompt_payload"
+                )
 
 
 def _operation_route_map(app) -> dict[str, APIRoute]:

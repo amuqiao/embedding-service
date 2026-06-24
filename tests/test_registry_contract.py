@@ -6,9 +6,10 @@ import pytest
 
 from app.api.operations import all_operation_ids, all_operation_specs
 from app.core.error_registry import all_error_reasons
+from app.core import prompt_templates
 from app.core.registry_checks import validate_all_registries, validate_job_type_registry
 from app.main import app
-from app.jobs.base import JobTypeSpec
+from app.jobs.base import JobTypeSpec, PromptSpec
 from app.jobs.types.register import register_all_job_types
 from app.jobs import registry as job_registry
 
@@ -85,6 +86,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert spec.platform_retry_policy == "no_platform_retry"
     assert spec.side_effect_policy == "none"
     assert spec.error_codes <= all_error_reasons()
+    assert spec.prompt_specs == ()
 
     assert "arithmetic" in specs
     arithmetic_spec = specs["arithmetic"]
@@ -97,6 +99,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert arithmetic_spec.platform_retry_policy == "no_platform_retry"
     assert arithmetic_spec.side_effect_policy == "none"
     assert arithmetic_spec.error_codes <= all_error_reasons()
+    assert arithmetic_spec.prompt_specs == ()
 
     assert "job_test_echo" in specs
     echo_spec = specs["job_test_echo"]
@@ -109,6 +112,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert echo_spec.platform_retry_policy == "no_platform_retry"
     assert echo_spec.side_effect_policy == "none"
     assert echo_spec.error_codes <= all_error_reasons()
+    assert echo_spec.prompt_specs == ()
 
     assert "job_real_llm_echo" in specs
     real_llm_spec = specs["job_real_llm_echo"]
@@ -121,6 +125,14 @@ def test_job_type_registry_exposes_required_metadata():
     assert real_llm_spec.platform_retry_policy == "no_platform_retry"
     assert real_llm_spec.side_effect_policy == "none"
     assert real_llm_spec.error_codes <= all_error_reasons()
+    assert real_llm_spec.prompt_specs == (
+        PromptSpec(
+            step_name="calling_model",
+            runtime_field="prompt_payload",
+            prompt_ref="job_real_llm_echo.calling_model",
+            output_schema_ref="JobRealLlmEchoResult",
+        ),
+    )
 
     assert "job_real_llm_double_echo" in specs
     double_llm_spec = specs["job_real_llm_double_echo"]
@@ -133,6 +145,20 @@ def test_job_type_registry_exposes_required_metadata():
     assert double_llm_spec.platform_retry_policy == "no_platform_retry"
     assert double_llm_spec.side_effect_policy == "none"
     assert double_llm_spec.error_codes <= all_error_reasons()
+    assert double_llm_spec.prompt_specs == (
+        PromptSpec(
+            step_name="first_llm_call",
+            runtime_field="first_prompt_payload",
+            prompt_ref="job_real_llm_double_echo.first",
+            output_schema_ref="JobRealLlmDoubleEchoResult",
+        ),
+        PromptSpec(
+            step_name="second_llm_call",
+            runtime_field="second_prompt_payload",
+            prompt_ref="job_real_llm_double_echo.second",
+            output_schema_ref="JobRealLlmDoubleEchoResult",
+        ),
+    )
 
 
 def _job_type_spec(**overrides) -> JobTypeSpec:
@@ -173,6 +199,117 @@ def test_validate_job_type_registry_rejects_invalid_phase3_metadata(monkeypatch,
     monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: {"job_test_add": _job_type_spec(**overrides)})
 
     with pytest.raises(ValueError, match=message):
+        validate_job_type_registry()
+
+
+def _prompt_config(prompt_ref: str = "prompt.ref", output_schema_ref: str = "JobTestAddResult") -> dict:
+    return {
+        "version": "test",
+        "job_types": {},
+        "prompts": {
+            prompt_ref: {
+                "name": "Prompt",
+                "description": "Prompt description",
+                "output_schema_ref": output_schema_ref,
+                "prompt_blocks": {
+                    "user": {
+                        "role": "user",
+                        "label": "User",
+                        "content": "",
+                    }
+                },
+            }
+        },
+    }
+
+
+def test_validate_job_type_registry_rejects_missing_prompt_ref(monkeypatch):
+    monkeypatch.setattr(
+        job_registry,
+        "all_job_type_specs",
+        lambda: {
+            "job_test_add": _job_type_spec(
+                prompt_specs=(
+                    PromptSpec(
+                        step_name="calling_model",
+                        runtime_field="prompt_payload",
+                        prompt_ref="missing.prompt",
+                        output_schema_ref="JobTestAddResult",
+                    ),
+                )
+            )
+        },
+    )
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: _prompt_config())
+
+    with pytest.raises(ValueError, match="unknown prompt_ref"):
+        validate_job_type_registry()
+
+
+def test_validate_job_type_registry_rejects_prompt_output_schema_mismatch(monkeypatch):
+    monkeypatch.setattr(
+        job_registry,
+        "all_job_type_specs",
+        lambda: {
+            "job_test_add": _job_type_spec(
+                prompt_specs=(
+                    PromptSpec(
+                        step_name="calling_model",
+                        runtime_field="prompt_payload",
+                        prompt_ref="prompt.ref",
+                        output_schema_ref="JobTestAddResult",
+                    ),
+                )
+            )
+        },
+    )
+    monkeypatch.setattr(
+        prompt_templates,
+        "_load_prompt_config",
+        lambda: _prompt_config(output_schema_ref="JobTestEchoResult"),
+    )
+
+    with pytest.raises(ValueError, match="output_schema_ref mismatch"):
+        validate_job_type_registry()
+
+
+def test_validate_job_type_registry_rejects_builtin_llm_without_prompt_spec(monkeypatch):
+    monkeypatch.setattr(
+        job_registry,
+        "all_job_type_specs",
+        lambda: {
+            "job_test_add": _job_type_spec(
+                execution_mode="builtin_llm_text_runtime",
+                prompt_specs=(),
+            )
+        },
+    )
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
+
+    with pytest.raises(ValueError, match="requires one prompt_spec"):
+        validate_job_type_registry()
+
+
+def test_validate_job_type_registry_rejects_bad_prompt_spec_field_type(monkeypatch):
+    monkeypatch.setattr(
+        job_registry,
+        "all_job_type_specs",
+        lambda: {
+            "job_test_add": _job_type_spec(
+                prompt_specs=(
+                    PromptSpec(
+                        step_name=None,  # type: ignore[arg-type]
+                        runtime_field="prompt_payload",
+                        prompt_ref="prompt.ref",
+                        output_schema_ref="JobTestAddResult",
+                    ),
+                )
+            )
+        },
+    )
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: _prompt_config())
+
+    with pytest.raises(ValueError, match="step_name"):
         validate_job_type_registry()
 
 

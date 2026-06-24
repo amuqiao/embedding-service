@@ -1,2 +1,30 @@
 version: empty
 job_types: {}
+prompts:
+  job_real_llm_echo.calling_model:
+    name: "Real LLM echo"
+    description: "Single text generation step for the real LLM echo job."
+    output_schema_ref: "JobRealLlmEchoResult"
+    prompt_blocks:
+      user:
+        role: "user"
+        label: "Instruction"
+        content: ""
+  job_real_llm_double_echo.first:
+    name: "Real LLM double echo first step"
+    description: "First text generation step for the double echo job."
+    output_schema_ref: "JobRealLlmDoubleEchoResult"
+    prompt_blocks:
+      user:
+        role: "user"
+        label: "First instruction"
+        content: ""
+  job_real_llm_double_echo.second:
+    name: "Real LLM double echo second step"
+    description: "Second text generation step for the double echo job."
+    output_schema_ref: "JobRealLlmDoubleEchoResult"
+    prompt_blocks:
+      user:
+        role: "user"
+        label: "Second instruction"
+        content: ""

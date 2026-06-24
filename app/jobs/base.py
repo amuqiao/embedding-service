@@ -20,6 +20,14 @@ SIDE_EFFECT_POLICIES = frozenset({"none", "success_side_effect"})
 
 
 @dataclass(frozen=True)
+class PromptSpec:
+    step_name: str
+    runtime_field: str
+    prompt_ref: str
+    output_schema_ref: str
+
+
+@dataclass(frozen=True)
 class JobTypeSpec:
     job_type: str
     execution_mode: str
@@ -36,6 +44,7 @@ class JobTypeSpec:
     log_events: tuple[str, ...]
     max_attempts: int
     timeout_seconds: int
+    prompt_specs: tuple[PromptSpec, ...] = ()
 
 
 def _schema_name(schema: type[BaseModel] | None) -> str:
@@ -69,6 +78,7 @@ class JobExecutor(ABC):
     )
     log_events: tuple[str, ...] = ()
     large_artifact_keys: frozenset[str] = frozenset()
+    prompt_specs: tuple[PromptSpec, ...] = ()
 
     @property
     def job_type(self) -> str:
@@ -164,4 +174,5 @@ class JobExecutor(ABC):
             log_events=self.log_events,
             max_attempts=self.max_attempts,
             timeout_seconds=self.timeout_seconds,
+            prompt_specs=self.prompt_specs,
         )
