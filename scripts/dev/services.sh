@@ -395,6 +395,7 @@ status_service() {
     detail "health" "$API_HEALTH_URL"
     detail "log" "$display_log"
   else
+    detail "concurrency" "$WORKER_CONCURRENCY"
     detail "log" "$display_log"
   fi
 }

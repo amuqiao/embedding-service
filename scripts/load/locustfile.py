@@ -168,6 +168,7 @@ class JobLoadUser(HttpUser):
             return {
                 "message": f"load-{sequence}",
                 "repeat": int(env_value("LOAD_ECHO_REPEAT", "1") or "1"),
+                "sleep_seconds": env_float("LOAD_ECHO_SLEEP_SECONDS", 15.0),
             }
         raw = env_value("LOAD_JOB_PARAMS_JSON")
         if not raw:

@@ -395,6 +395,7 @@ JOB flow terminal latency
 | `LOAD_JOB_TYPE` | `job_test_echo` | 压测使用的 `job_type` |
 | `LOAD_JOB_PARAMS_JSON` | 无 | 非 `job_test_echo` 时使用的 `job_params` JSON |
 | `LOAD_ECHO_REPEAT` | `1` | `job_test_echo.repeat` |
+| `LOAD_ECHO_SLEEP_SECONDS` | `15` | 压测默认让 `job_test_echo` 模拟执行耗时 |
 | `LOAD_POLL_INTERVAL_SECONDS` | `0.5` | `flow` 轮询间隔 |
 | `LOAD_FLOW_TIMEOUT_SECONDS` | `30` | `flow` 单个 Job 等待终态超时 |
 | `LOAD_QUERY_JOB_IDS` | 无 | `query` 场景用逗号分隔 Job ID |

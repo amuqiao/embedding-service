@@ -211,6 +211,7 @@ class JobTestAddResult(StrictBaseModel):
 class JobTestEchoParams(StrictBaseModel):
     message: str = Field(min_length=1, max_length=512)
     repeat: int = Field(default=1, ge=1, le=5)
+    sleep_seconds: float = Field(default=0, ge=0, le=55)
 
 
 class JobTestEchoRuntimeFields(StrictBaseModel):

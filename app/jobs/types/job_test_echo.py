@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from app.jobs.base import JobExecutor
@@ -33,6 +34,8 @@ class JobTestEchoJob(JobExecutor):
 
     async def _execute(self, job, db) -> dict[str, Any] | None:
         params = JobTestEchoParams.model_validate(job_params_from_job(job))
+        if params.sleep_seconds:
+            await asyncio.sleep(params.sleep_seconds)
         return JobTestEchoResult(
             message=params.message,
             repeated=[params.message for _ in range(params.repeat)],
