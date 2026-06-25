@@ -29,6 +29,7 @@ usage() {
   smoke               无正式 job_type 时不可用；新增正式能力后再恢复。
   mock-smoke          无正式 job_type 时不可用；新增正式能力后再恢复。
   workflow-smoke      使用内置 job_test_echo 验证本地 Job 创建、Taskiq 执行和状态轮询流程。
+  workflow-modes-smoke 使用 6 个内置 workflow 测试 job_type 验证 chain/group/chord/map/starmap/chunks 的真实 Job e2e。
   migration-roundtrip 使用临时本地 PostgreSQL 数据库验证 Alembic upgrade/downgrade/re-upgrade。
   e2e                 无正式 job_type 时不可用；新增正式能力后再恢复。
   env-config          校验 env 文件键名；默认检查 .env.example 和已存在的本地/测试 env，可传文件路径。
@@ -49,6 +50,7 @@ usage() {
 幂等性和副作用：
   test/check/env-config 不修改服务状态。
   workflow-smoke 会向已运行的本地 API 创建一个内置 job_test_echo 测试 Job。
+  workflow-modes-smoke 会向已运行的本地 API 创建 6 个内置 workflow 测试 Job。
   migration-roundtrip 会创建并删除一个临时本地 PostgreSQL 数据库，不修改当前应用数据库。
 
 常用示例：
@@ -56,6 +58,7 @@ usage() {
   ./scripts/verify.sh test
   ./scripts/verify.sh env-config
   ./scripts/verify.sh workflow-smoke
+  ./scripts/verify.sh workflow-modes-smoke
   ./scripts/verify.sh migration-roundtrip
 
 Exit Codes:
@@ -93,6 +96,9 @@ case "$command" in
     ;;
   workflow-smoke)
     run_workflow_smoke
+    ;;
+  workflow-modes-smoke)
+    run_workflow_modes_smoke
     ;;
   migration-roundtrip)
     run_migration_roundtrip

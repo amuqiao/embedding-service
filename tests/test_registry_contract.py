@@ -114,6 +114,32 @@ def test_job_type_registry_exposes_required_metadata():
     assert echo_spec.error_codes <= all_error_reasons()
     assert echo_spec.prompt_specs == ()
 
+    assert "job_test_workflow" in specs
+    workflow_spec = specs["job_test_workflow"]
+    assert workflow_spec.params_schema == "JobTestWorkflowParams"
+    assert workflow_spec.runtime_fields_schema == "JobTestWorkflowRuntimeFields"
+    assert workflow_spec.canonical_result_schema == "JobTestWorkflowResult"
+    assert workflow_spec.public_result_schema == "JobTestWorkflowResult"
+    assert workflow_spec.allow_callback is True
+    assert workflow_spec.execution_mode == "custom_executor"
+    assert workflow_spec.platform_retry_policy == "no_platform_retry"
+    assert workflow_spec.side_effect_policy == "none"
+    assert workflow_spec.error_codes <= all_error_reasons()
+    assert workflow_spec.prompt_specs == ()
+
+    assert "job_test_collect" in specs
+    collect_spec = specs["job_test_collect"]
+    assert collect_spec.params_schema == "JobTestCollectParams"
+    assert collect_spec.runtime_fields_schema == "JobTestCollectRuntimeFields"
+    assert collect_spec.canonical_result_schema == "JobTestCollectResult"
+    assert collect_spec.public_result_schema == "JobTestCollectResult"
+    assert collect_spec.allow_callback is True
+    assert collect_spec.execution_mode == "custom_executor"
+    assert collect_spec.platform_retry_policy == "no_platform_retry"
+    assert collect_spec.side_effect_policy == "none"
+    assert collect_spec.error_codes <= all_error_reasons()
+    assert collect_spec.prompt_specs == ()
+
     assert "job_real_llm_echo" in specs
     real_llm_spec = specs["job_real_llm_echo"]
     assert real_llm_spec.params_schema == "JobRealLlmEchoParams"

@@ -76,7 +76,7 @@ class Job(Base):
     job_params_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     runtime_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     callback_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
-    callback_events: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    callback_events: Mapped[list | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     result_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     canonical_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

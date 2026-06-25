@@ -6,6 +6,11 @@ def register_all_job_types() -> None:
     from app.jobs.types.arithmetic import ArithmeticJob
     from app.jobs.types.job_test_add import JobTestAddJob
     from app.jobs.types.job_test_echo import JobTestEchoJob
+    from app.jobs.types.job_test_workflow import (
+        JobTestCollectJob,
+        JobTestWorkflowJob,
+        register_test_workflows,
+    )
     from app.jobs.types.job_real_llm_double_echo import JobRealLlmDoubleEchoJob
     from app.jobs.types.job_real_llm_echo import JobRealLlmEchoJob
 
@@ -13,7 +18,10 @@ def register_all_job_types() -> None:
         ArithmeticJob,
         JobTestAddJob,
         JobTestEchoJob,
+        JobTestCollectJob,
+        JobTestWorkflowJob,
         JobRealLlmEchoJob,
         JobRealLlmDoubleEchoJob,
     ):
         register(executor_cls())
+    register_test_workflows()

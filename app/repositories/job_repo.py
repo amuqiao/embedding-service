@@ -77,6 +77,8 @@ class JobRepo:
             raise ValueError("workflow_node_key requires internal job")
         if workflow_node_key is not None and root_job_id is None:
             raise ValueError("workflow_node_key requires root_job_id")
+        stored_callback_url = None if is_internal else callback_url
+        stored_callback_events = None if is_internal else callback_events
         job = Job(
             caller_id=caller_id,
             client_request_id=client_request_id,
@@ -96,9 +98,9 @@ class JobRepo:
             metadata_=metadata or {},
             job_params_ref=job_params_ref,
             job_params_hash=job_params_hash,
-            callback_url=callback_url,
-            callback_events=callback_events,
-            callback_status="pending" if callback_url else "not_configured",
+            callback_url=stored_callback_url,
+            callback_events=stored_callback_events,
+            callback_status="pending" if stored_callback_url else "not_configured",
         )
         db.add(job)
         await db.flush()

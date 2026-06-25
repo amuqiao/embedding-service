@@ -127,10 +127,11 @@
 3. **Runtime smoke**
    - `./scripts/dev.sh start`
    - `./scripts/verify.sh workflow-smoke`
+   - `./scripts/verify.sh workflow-modes-smoke`
    - `./scripts/dev.sh stop`
 
 4. **Business adoption checks**
-   - `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 至少覆盖 planner / runtime smoke。
+   - `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 至少覆盖 planner / `workflow-modes-smoke` runtime smoke。
    - 至少一个 provider / usage / pricing failure path。
    - descendant ledger 聚合到 root billing。
    - root terminal callback mock。

@@ -22,6 +22,12 @@ run_workflow_smoke() {
   "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" --api-url "$API_URL"
 }
 
+run_workflow_modes_smoke() {
+  section "Workflow Modes Smoke"
+  require_project_python
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/workflow_modes_smoke.py" --api-url "$API_URL"
+}
+
 run_migration_roundtrip() {
   section "Migration Roundtrip"
   require_project_python
@@ -74,6 +80,7 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" \
     "$ROOT_DIR/scripts/verify/migration_roundtrip.py" \
     "$ROOT_DIR/scripts/verify/registry_check.py" \
+    "$ROOT_DIR/scripts/verify/workflow_modes_smoke.py" \
     "$ROOT_DIR/scripts/jobs/__init__.py" \
     "$ROOT_DIR/scripts/jobs/cli.py" \
     "$ROOT_DIR/scripts/jobs/db.py" \

@@ -332,6 +332,27 @@ async def test_create_assigns_workflow_lineage_fields():
 
 
 @pytest.mark.asyncio
+async def test_create_internal_job_keeps_callback_columns_null():
+    root_job_id = uuid.uuid4()
+    db = _FakeDB()
+
+    job = await JobRepo.create(
+        db,
+        caller_id="caller-1",
+        client_request_id=None,
+        job_type="job_test_echo",
+        root_job_id=root_job_id,
+        parent_job_id=root_job_id,
+        is_internal=True,
+        workflow_node_key="node.echo",
+    )
+
+    assert job.callback_url is None
+    assert job.callback_events is None
+    assert job.callback_status == "not_configured"
+
+
+@pytest.mark.asyncio
 async def test_claim_attempt_for_execution_waits_for_specific_attempt_lock():
     db = _FakeDB()
     db.results.append(_NoRowResult())

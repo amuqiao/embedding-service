@@ -223,6 +223,34 @@ class JobTestEchoResult(StrictBaseModel):
     count: int = Field(ge=1, le=5)
 
 
+class JobTestCollectParams(StrictBaseModel):
+    items: list[str] = Field(min_length=1, max_length=10)
+
+
+class JobTestCollectRuntimeFields(StrictBaseModel):
+    operation: Literal["collect"]
+
+
+class JobTestCollectResult(StrictBaseModel):
+    items: list[str]
+    count: int = Field(ge=1, le=10)
+
+
+class JobTestWorkflowParams(StrictBaseModel):
+    mode: Literal["chain", "group", "chord", "map", "starmap", "chunks"]
+    label: str = Field(default="workflow-smoke", min_length=1, max_length=64)
+
+
+class JobTestWorkflowRuntimeFields(StrictBaseModel):
+    operation: Literal["workflow_root"]
+
+
+class JobTestWorkflowResult(StrictBaseModel):
+    schema_version: int
+    job_type: str
+    workflow: dict[str, Any]
+
+
 class JobRealLlmEchoParams(StrictBaseModel):
     model_id: str = Field(min_length=1, max_length=128)
     instruction: str = Field(default="用一句话确认真实 LLM 计费链路可用。", min_length=1, max_length=1000)

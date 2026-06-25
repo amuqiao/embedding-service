@@ -17,6 +17,7 @@ from app.workflows import (
     task,
 )
 from app.workflows import registry as workflow_registry
+from app.jobs.types.register import register_all_job_types
 
 
 def _nodes_by_key(plan):
@@ -189,6 +190,25 @@ def test_compiler_rejects_non_recoverable_json_payloads():
 
 def test_workflow_registry_compiles_registered_definition():
     workflow_registry.clear_for_tests()
+
+
+def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
+    register_all_job_types()
+
+    expected = {
+        "chain": ("a", "b", "c"),
+        "group": ("a", "b", "c"),
+        "chord": ("a", "b", "join"),
+        "map": ("item.0", "item.1"),
+        "starmap": ("pair.0", "pair.1"),
+        "chunks": ("chunk.0", "chunk.1", "chunk.2"),
+    }
+    for mode, node_keys in expected.items():
+        plan = compile_registered_workflow("job_test_workflow", {"mode": mode, "label": mode})
+        nodes = _nodes_by_key(plan)
+        assert plan["kind"] == "dag_lite"
+        assert plan["workflow_type"] == "job_test_workflow"
+        assert tuple(nodes) == node_keys
     definition = WorkflowDefinition(
         workflow_type="test.workflow",
         build=lambda params: chain(

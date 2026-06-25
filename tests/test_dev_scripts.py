@@ -13,6 +13,7 @@ from scripts.verify.env_config_check import (
     default_env_files,
 )
 from scripts.verify.job_workflow_smoke import job_from_envelope
+from scripts.verify.workflow_modes_smoke import WORKFLOW_MODE_CASES, _validate_result
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -130,7 +131,7 @@ def test_jobs_types_json_is_machine_readable_without_app_log_noise():
 
     payload = json.loads(result.stdout)
     job_types = {item["job_type"] for item in payload["job_types"]}
-    assert {"arithmetic", "job_test_add", "job_test_echo"} <= job_types
+    assert {"arithmetic", "job_test_add", "job_test_echo", "job_test_collect", "job_test_workflow"} <= job_types
     assert "job_real_llm_echo" in job_types
     assert "job_real_llm_double_echo" in job_types
     assert result.stderr == ""
@@ -236,3 +237,105 @@ def test_workflow_smoke_accepts_standard_string_success_code():
     )
 
     assert parsed is job
+
+
+def test_verify_sh_documents_workflow_modes_smoke_command():
+    result = subprocess.run(
+        ["./scripts/verify.sh", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    verify_sh = (ROOT_DIR / "scripts/verify.sh").read_text(encoding="utf-8")
+    tasks_sh = (ROOT_DIR / "scripts/verify/tasks.sh").read_text(encoding="utf-8")
+
+    assert "workflow-modes-smoke" in result.stdout
+    assert "workflow-modes-smoke)" in verify_sh
+    assert "run_workflow_modes_smoke" in verify_sh
+    assert "run_workflow_modes_smoke()" in tasks_sh
+
+
+def test_workflow_modes_smoke_validates_successful_root_result():
+    case = WORKFLOW_MODE_CASES[0]
+    job = {
+        "job_id": "job-1",
+        "job_status": "succeeded",
+        "job_result": {
+            "schema_version": 1,
+            "job_type": "job_test_workflow",
+            "workflow": {
+                "workflow_type": "job_test_workflow",
+                "outcome": "success",
+                "node_count": case.expected_node_count,
+                "nodes": [
+                    {
+                        "node_key": key,
+                        "job_id": f"child-{key}",
+                        "status": "succeeded",
+                        "result": {"message": key, "repeated": [key], "count": 1},
+                    }
+                    for key in case.expected_node_keys
+                ],
+            },
+        },
+    }
+
+    _validate_result(job, case)
+
+
+def test_workflow_modes_smoke_rejects_missing_child_node():
+    case = WORKFLOW_MODE_CASES[0]
+    job = {
+        "job_id": "job-1",
+        "job_status": "succeeded",
+        "job_result": {
+            "schema_version": 1,
+            "job_type": "job_test_workflow",
+            "workflow": {
+                "workflow_type": "job_test_workflow",
+                "outcome": "success",
+                "node_count": case.expected_node_count,
+                "nodes": [
+                    {
+                        "node_key": case.expected_node_keys[0],
+                        "job_id": "child-1",
+                        "status": "succeeded",
+                        "result": {"message": "a", "repeated": ["a"], "count": 1},
+                    }
+                ],
+            },
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="wrong node keys"):
+        _validate_result(job, case)
+
+
+def test_workflow_modes_smoke_rejects_invalid_child_result_shape():
+    case = WORKFLOW_MODE_CASES[4]
+    job = {
+        "job_id": "job-1",
+        "job_status": "succeeded",
+        "job_result": {
+            "schema_version": 1,
+            "job_type": "job_test_workflow",
+            "workflow": {
+                "workflow_type": "job_test_workflow",
+                "outcome": "success",
+                "node_count": case.expected_node_count,
+                "nodes": [
+                    {
+                        "node_key": key,
+                        "job_id": f"child-{key}",
+                        "status": "succeeded",
+                        "result": {"a": 1, "b": 2, "result": 999},
+                    }
+                    for key in case.expected_node_keys
+                ],
+            },
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="invalid add result"):
+        _validate_result(job, case)

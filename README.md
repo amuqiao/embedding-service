@@ -90,7 +90,7 @@ Authorization: Bearer dev-service-key
 ./scripts/verify.sh check
 ```
 
-`check` 是模板级最小质量门，不调用真实模型，也不访问外部对象存储。内置 `workflow-smoke` 只验证测试 `job_type` 的本地 Job 创建、异步执行和状态轮询流程。真实模型业务链路需要在接入正式 `job_type` 后另行恢复 `smoke` / `e2e` 验证。
+`check` 是模板级最小质量门，不调用真实模型，也不访问外部对象存储。内置 `workflow-smoke` 验证测试 `job_type` 的本地 Job 创建、异步执行和状态轮询流程；`workflow-modes-smoke` 验证 `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 六种 DAG-lite workflow 模式。真实模型业务链路需要在接入正式 `job_type` 后另行恢复 `smoke` / `e2e` 验证。
 
 ## 阿里云 OSS 连通性测试
 
@@ -160,6 +160,7 @@ OSS_PUBLIC_ENDPOINT=
 ```bash
 ./scripts/verify.sh test
 ./scripts/verify.sh workflow-smoke
+./scripts/verify.sh workflow-modes-smoke
 ./scripts/verify.sh env-config
 ./scripts/verify.sh check
 ./scripts/verify.sh --help
@@ -167,6 +168,7 @@ OSS_PUBLIC_ENDPOINT=
 
 - `test`：运行本地 pytest。
 - `workflow-smoke`：使用内置 `job_test_echo` 验证本地 Job 创建、异步执行和状态轮询流程，不调用真实模型或外部供应商。
+- `workflow-modes-smoke`：使用内置 `job_test_workflow` 验证 `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 的 root/child Job e2e。
 - `smoke` / `mock-smoke` / `e2e`：当前未接入正式 LLM `job_type`，命令保留但不可用，新增正式模型能力后再恢复对应验证。
 - `env-config`：校验 env 文件键名。
 - `check`：运行脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest。

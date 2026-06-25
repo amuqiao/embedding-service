@@ -105,6 +105,10 @@ def test_current_orm_declares_hardened_job_status_constraints():
     assert "cancelled" not in attempt_status
 
 
+def test_current_orm_binds_callback_events_none_as_sql_null():
+    assert Job.__table__.columns["callback_events"].type.none_as_null is True
+
+
 def test_cleanup_migration_tightens_legacy_status_constraints():
     migration_0013 = Path("alembic/versions/0013_cleanup_legacy_job_kernel_state.py").read_text()
     migration_0014 = Path("alembic/versions/0014_cleanup_unused_job_shell_fields.py").read_text()

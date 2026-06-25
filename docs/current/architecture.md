@@ -132,5 +132,6 @@ Job scope 调用必须传入：
 ```bash
 ./scripts/dev.sh start
 ./scripts/verify.sh workflow-smoke
+./scripts/verify.sh workflow-modes-smoke
 ./scripts/dev.sh stop
 ```
