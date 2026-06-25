@@ -81,6 +81,7 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/verify/migration_roundtrip.py" \
     "$ROOT_DIR/scripts/verify/registry_check.py" \
     "$ROOT_DIR/scripts/verify/workflow_modes_smoke.py" \
+    "$ROOT_DIR/scripts/load/locustfile.py" \
     "$ROOT_DIR/scripts/jobs/__init__.py" \
     "$ROOT_DIR/scripts/jobs/cli.py" \
     "$ROOT_DIR/scripts/jobs/db.py" \
@@ -92,6 +93,7 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/real_flow/flows/llm_job_billing.py"
   event "OK" "dev/check_ports.py" "py_compile"
   event "OK" "verify/*.py" "py_compile"
+  event "OK" "load/*.py" "py_compile"
   event "OK" "jobs/*.py" "py_compile"
   event "OK" "real_flow/*.py" "py_compile"
 }
