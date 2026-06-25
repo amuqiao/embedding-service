@@ -37,6 +37,7 @@ class JobRepo:
                 JobSubmissionKey.key_kind == SUBMISSION_KEY_KIND_CLIENT_REQUEST_ID,
                 JobSubmissionKey.key_value == client_request_id,
                 Job.deleted_at.is_(None),
+                Job.is_internal.is_(False),
             )
             .order_by(JobSubmissionKey.created_at.asc())
             .limit(1)
@@ -59,10 +60,30 @@ class JobRepo:
         job_params_hash: str | None = None,
         callback_url: str | None = None,
         callback_events: list[str] | None = None,
+        root_job_id: uuid.UUID | None = None,
+        parent_job_id: uuid.UUID | None = None,
+        is_internal: bool = False,
+        workflow_node_key: str | None = None,
     ) -> Job:
+        if is_internal and root_job_id is None:
+            raise ValueError("internal job must include root_job_id")
+        if is_internal and client_request_id is not None:
+            raise ValueError("internal job must not include client_request_id")
+        if is_internal and (callback_url is not None or callback_events is not None):
+            raise ValueError("internal job must not include callback")
+        if not is_internal and parent_job_id is not None:
+            raise ValueError("parent_job_id requires internal job")
+        if not is_internal and workflow_node_key is not None:
+            raise ValueError("workflow_node_key requires internal job")
+        if workflow_node_key is not None and root_job_id is None:
+            raise ValueError("workflow_node_key requires root_job_id")
         job = Job(
             caller_id=caller_id,
             client_request_id=client_request_id,
+            root_job_id=root_job_id,
+            parent_job_id=parent_job_id,
+            is_internal=is_internal,
+            workflow_node_key=workflow_node_key,
             job_type=job_type,
             status="queued",
             progress_percent=0,
@@ -744,9 +765,48 @@ class JobRepo:
     @staticmethod
     async def get_for_caller(db: AsyncSession, job_id: uuid.UUID, caller_id: str) -> Job | None:
         result = await db.execute(
-            select(Job).where(Job.id == job_id, Job.caller_id == caller_id, Job.deleted_at.is_(None))
+            select(Job).where(
+                Job.id == job_id,
+                Job.caller_id == caller_id,
+                Job.deleted_at.is_(None),
+                Job.is_internal.is_(False),
+            )
         )
         return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_internal_child_by_node_key(
+        db: AsyncSession,
+        *,
+        root_job_id: uuid.UUID,
+        workflow_node_key: str,
+    ) -> Job | None:
+        result = await db.execute(
+            select(Job).where(
+                Job.root_job_id == root_job_id,
+                Job.workflow_node_key == workflow_node_key,
+                Job.is_internal.is_(True),
+                Job.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def list_internal_children(
+        db: AsyncSession,
+        *,
+        root_job_id: uuid.UUID,
+        statuses: list[str] | None = None,
+    ) -> list[Job]:
+        conditions = [
+            Job.root_job_id == root_job_id,
+            Job.is_internal.is_(True),
+            Job.deleted_at.is_(None),
+        ]
+        if statuses is not None:
+            conditions.append(Job.status.in_(statuses))
+        result = await db.execute(select(Job).where(*conditions).order_by(Job.created_at.asc()))
+        return list(result.scalars().all())
 
     async def update_progress(
         db: AsyncSession,

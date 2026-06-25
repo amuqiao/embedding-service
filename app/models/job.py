@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -12,9 +12,54 @@ class Job(Base):
     __tablename__ = "job_aggregates"
     __table_args__ = (
         CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_job_aggregates_status"),
+        CheckConstraint("NOT is_internal OR root_job_id IS NOT NULL", name="ck_job_aggregates_internal_root_required"),
+        CheckConstraint(
+            "is_internal OR root_job_id IS NULL OR root_job_id = id",
+            name="ck_job_aggregates_public_root_self_or_null",
+        ),
+        CheckConstraint("parent_job_id IS NULL OR is_internal", name="ck_job_aggregates_parent_internal"),
+        CheckConstraint("workflow_node_key IS NULL OR is_internal", name="ck_job_aggregates_node_key_internal"),
+        CheckConstraint(
+            "NOT is_internal OR client_request_id IS NULL",
+            name="ck_job_aggregates_internal_no_client_request",
+        ),
+        CheckConstraint(
+            "NOT is_internal OR (callback_url IS NULL AND callback_events IS NULL)",
+            name="ck_job_aggregates_internal_no_callback",
+        ),
+        Index("ix_job_aggregates_root_job_id", "root_job_id"),
+        Index("ix_job_aggregates_parent_job_id", "parent_job_id"),
+        Index("ix_job_aggregates_root_status", "root_job_id", "status"),
+        Index(
+            "uq_job_aggregates_root_workflow_node_key",
+            "root_job_id",
+            "workflow_node_key",
+            unique=True,
+            postgresql_where=text("workflow_node_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    root_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "job_aggregates.id",
+            name="fk_job_aggregates_root_job_id_job_aggregates",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    parent_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "job_aggregates.id",
+            name="fk_job_aggregates_parent_job_id_job_aggregates",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    is_internal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    workflow_node_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     caller_id: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
     client_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     job_type: Mapped[str] = mapped_column(String(96), nullable=False)

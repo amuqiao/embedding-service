@@ -62,6 +62,9 @@ class _FakeDB:
     async def flush(self):
         self.flushed = True
 
+    async def refresh(self, _obj):
+        return None
+
     def add(self, obj):
         self.added.append(obj)
 
@@ -112,6 +115,154 @@ async def test_get_submission_by_client_request_keeps_expired_key_visible_until_
     assert "job_submission_keys.expires_at >" not in sql
     assert "job_submission_keys.key_value" in sql
     assert "job_aggregates.deleted_at IS NULL" in sql
+    assert "job_aggregates.is_internal IS false" in sql
+
+
+@pytest.mark.asyncio
+async def test_get_for_caller_hides_internal_jobs_from_public_reads():
+    db = _FakeDB()
+    db.results.append(_ScalarResult(None))
+
+    found = await JobRepo.get_for_caller(db, uuid.uuid4(), "caller-1")
+
+    assert found is None
+    sql = _compile(db.statements[0])
+    assert "job_aggregates.caller_id =" in sql
+    assert "job_aggregates.deleted_at IS NULL" in sql
+    assert "job_aggregates.is_internal IS false" in sql
+
+
+@pytest.mark.asyncio
+async def test_get_internal_child_by_node_key_reads_only_internal_child_for_root():
+    db = _FakeDB()
+    db.results.append(_ScalarResult(None))
+
+    found = await JobRepo.get_internal_child_by_node_key(
+        db,
+        root_job_id=uuid.uuid4(),
+        workflow_node_key="node.generate-title",
+    )
+
+    assert found is None
+    sql = _compile(db.statements[0])
+    assert "job_aggregates.root_job_id =" in sql
+    assert "job_aggregates.workflow_node_key =" in sql
+    assert "job_aggregates.is_internal IS true" in sql
+    assert "job_aggregates.deleted_at IS NULL" in sql
+
+
+@pytest.mark.asyncio
+async def test_list_internal_children_can_filter_by_root_and_statuses():
+    db = _FakeDB()
+    db.results.append(_ScalarListResult([]))
+
+    children = await JobRepo.list_internal_children(
+        db,
+        root_job_id=uuid.uuid4(),
+        statuses=["queued", "running"],
+    )
+
+    assert children == []
+    sql = _compile(db.statements[0])
+    assert "job_aggregates.root_job_id =" in sql
+    assert "job_aggregates.is_internal IS true" in sql
+    assert "job_aggregates.deleted_at IS NULL" in sql
+    assert "job_aggregates.status IN" in sql
+
+
+@pytest.mark.asyncio
+async def test_create_internal_job_requires_root_job_id():
+    db = _FakeDB()
+
+    with pytest.raises(ValueError, match="internal job must include root_job_id"):
+        await JobRepo.create(
+            db,
+            caller_id="caller-1",
+            client_request_id=None,
+            job_type="job_test_echo",
+            is_internal=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_internal_job_rejects_public_submission_identity():
+    db = _FakeDB()
+
+    with pytest.raises(ValueError, match="internal job must not include client_request_id"):
+        await JobRepo.create(
+            db,
+            caller_id="caller-1",
+            client_request_id="request-1",
+            job_type="job_test_echo",
+            root_job_id=uuid.uuid4(),
+            is_internal=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_internal_job_rejects_callback_intent():
+    db = _FakeDB()
+
+    with pytest.raises(ValueError, match="internal job must not include callback"):
+        await JobRepo.create(
+            db,
+            caller_id="caller-1",
+            client_request_id=None,
+            job_type="job_test_echo",
+            root_job_id=uuid.uuid4(),
+            is_internal=True,
+            callback_url="https://callback.example/jobs",
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_public_job_rejects_child_lineage_fields():
+    root_job_id = uuid.uuid4()
+    db = _FakeDB()
+
+    with pytest.raises(ValueError, match="parent_job_id requires internal job"):
+        await JobRepo.create(
+            db,
+            caller_id="caller-1",
+            client_request_id="request-1",
+            job_type="job_test_echo",
+            root_job_id=root_job_id,
+            parent_job_id=root_job_id,
+        )
+
+    with pytest.raises(ValueError, match="workflow_node_key requires internal job"):
+        await JobRepo.create(
+            db,
+            caller_id="caller-1",
+            client_request_id="request-1",
+            job_type="job_test_echo",
+            root_job_id=root_job_id,
+            workflow_node_key="node.generate-title",
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_assigns_workflow_lineage_fields():
+    root_job_id = uuid.uuid4()
+    db = _FakeDB()
+
+    job = await JobRepo.create(
+        db,
+        caller_id="caller-1",
+        client_request_id=None,
+        job_type="job_test_echo",
+        root_job_id=root_job_id,
+        parent_job_id=root_job_id,
+        is_internal=True,
+        workflow_node_key="node.generate-title",
+    )
+
+    assert job.root_job_id == root_job_id
+    assert job.parent_job_id == root_job_id
+    assert job.is_internal is True
+    assert job.workflow_node_key == "node.generate-title"
+    assert job in db.added
+    assert db.flushed is True
 
 
 @pytest.mark.asyncio
