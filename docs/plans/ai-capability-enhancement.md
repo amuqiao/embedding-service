@@ -120,6 +120,14 @@ UsageRecord
 
 当前阶段继续使用 YAML 管 reference config，使用 DB 管运行时事实。简化理解是：YAML 定义“允许什么、如何解释”，DB 记录“这次实际发生了什么”。
 
+Phase 1 的数据库/表边界如下：
+
+- 当前阶段不新增 AI 能力核心表；provider call、usage、cost estimate 和 failure diagnostic 继续只落在 `ai_call_ledger_entries`。
+- `ai_call_ledger_entries` 是唯一 AI call usage / cost estimate 事实源；Job result、callback payload、workflow summary 和 future summary table 都只能作为派生投影。
+- 当前阶段不新增 `job_cost_summary`。只有查询性能或 root projection 稳定性需要时，才评估把它作为可由 `ai_call_ledger_entries` 重建的 read model。
+- workflow / child Job 归因落地前，才评估给 `ai_call_ledger_entries` 增加 `root_job_id`、`workflow_id`、`workflow_node_id`、`child_job_id` 等列，或新增等价 attribution 辅助表。
+- `usage_kind`、`usage_schema_version` 当前不是已存在持久化列；如果后续需要按它们查询、过滤或建立索引，必须通过 Alembic migration 明确增加。
+
 | 对象 | 当前推荐存储 | 说明 |
 |---|---|---|
 | Model catalog | `app/core/models.yaml` | 可调用模型列表、provider 映射、能力标签、环境变量要求和生成参数约束 |
@@ -128,7 +136,7 @@ UsageRecord
 | Provider adapter capability | 代码 + catalog 字段 | adapter 是实现能力，catalog 负责声明可选择能力 |
 | AI call facts | DB `ai_call_ledger_entries` | provider call、usage、cost estimate 和 failure diagnostic |
 | Job / attempt / outbox | DB | Job kernel 的可靠执行事实 |
-| Cost summary | 暂不默认建表 | 未来只有查询性能或 root projection 需要时才新增派生 read model |
+| Cost summary | 当前不建表 | 未来只有查询性能或 root projection 需要时才新增可重建派生 read model |
 
 暂不把 model / pricing / prompt catalog 搬进数据库。只有出现以下条件时再评估 catalog DB 化：
 
@@ -178,6 +186,10 @@ UsageRecord
 - 保留 `generate_text_with_ledger()` 作为现有文本路径 facade，避免影响当前 `job_type`。
 - 明确业务 Job 只能通过 AI facade 调用 provider。
 - 明确成本估算细节归属 `ai-capability-cost-boundary-design.md`，本文只保留交接点。
+- 明确 Phase 1 不新增 AI 能力核心表，不新增 `job_cost_summary`，不要求修改当前 `ai_call_ledger_entries` 表结构。
+- 明确 `ai_call_ledger_entries` 是唯一 AI call usage / cost estimate 事实源。
+- 明确 workflow / child Job 归因落地前，才评估 `root_job_id`、`workflow_id`、`workflow_node_id`、`child_job_id` 加列或等价 attribution 辅助表。
+- 明确 `usage_kind`、`usage_schema_version` 如需持久化查询/索引，必须通过 migration 增加，不能写成当前已存在事实。
 
 ### Phase 2: Registry fail-fast
 
@@ -209,15 +221,24 @@ UsageRecord
 
 ## Acceptance
 
+Phase 1 验收：
+
 - `ai-capability-enhancement.md` 只定义 AI Capability Kernel，成本估算和非扣费边界由 `ai-capability-cost-boundary-design.md` 承担。
-- 业务 Job、workflow node 和 provider adapter 都不能绕过 AI facade 直接写 cost 或解析 provider raw usage。
-- 非法 `model_id`、`pricing_ref`、prompt ref、step prompt ref、output schema ref 在应用启动、worker 启动或 `./scripts/verify.sh check` 中直接失败。
+- 数据库/表边界已经说明清楚：不新增 AI 能力核心表，不新增 `job_cost_summary`，不要求修改当前 `ai_call_ledger_entries` 表结构。
+- `ai_call_ledger_entries` 被明确为唯一 AI call usage / cost estimate 事实源；Job result、callback payload、workflow summary 和 future summary table 都不是成本事实源。
+- `usage_kind`、`usage_schema_version` 没有被写成当前已存在 DB 事实；如需持久化查询/索引，验收条件必须包含 migration。
 - 现有文本 AI 调用路径保持不变：provider 调用前写 pending ledger，成功后写入 usage、cost、currency、pricing ref 和 terminal status。
 - 失败路径保持不变：provider 失败、usage 缺失、pricing 失败或 terminal ledger update 失败时，不能重放 provider 调用修账，billing 只能显式表现为 `incomplete` 或 `failed`，不能伪造零成本成功。
-- `tests/test_ai_gateway_facade.py` 覆盖 facade 正常路径、provider 失败、usage 缺失、pricing 失败和 terminal ledger update 失败。
-- `tests/test_model_registry.py` 覆盖 model gate、capability、required env 和 pricing ref 匹配。
 - 成本边界测试继续由 `ai-capability-cost-boundary-design.md` 约束；本文只要求 AI facade 交接点不被绕过。
 - 分层 drift check 通过：API 不直接调用 provider 或写 ledger，integrations 不写数据库，repositories 不承载业务规则，schemas 不暴露内部 provider raw usage。
+
+后续阶段验收：
+
+- Phase 2 后，非法 `model_id`、`pricing_ref`、prompt ref、step prompt ref、output schema ref 在应用启动、worker 启动或 `./scripts/verify.sh check` 中直接失败。
+- Phase 3 后，`tests/test_ai_gateway_facade.py` 覆盖 facade 正常路径、provider 失败、usage 缺失、pricing 失败和 terminal ledger update 失败。
+- Phase 3 后，`tests/test_model_registry.py` 覆盖 model gate、capability、required env 和 pricing ref 匹配。
+- Phase 4 前，workflow / child Job 归因必须完成设计选择：给 `ai_call_ledger_entries` 加 attribution 字段，或使用等价 attribution 辅助表 / scope 规则。
+- Phase 4 后，业务 Job、workflow node 和 provider adapter 都不能绕过 AI facade 直接写 cost 或解析 provider raw usage。
 - `./scripts/verify.sh check` 成为关闭本计划阶段性工作的最小验证入口；涉及真实 Job workflow 时，再运行 `./scripts/verify.sh workflow-smoke`。
 
 ## Non-goals

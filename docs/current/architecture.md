@@ -45,7 +45,7 @@ API 与 worker 可以多副本运行。并发安全依赖数据库唯一约束�
 | Schemas | `app/schemas/` | `HttpEnvelope` 内层 data、Job、Callback、Billing、Error 合同 |
 | Job kernel | `app/models/job.py`、`app/repositories/job_repo.py`、`app/tasks/jobs.py`、`app/tasks/recovery.py` | Job 聚合、Attempt、Dispatch outbox、Callback outbox、状态迁移和恢复 |
 | Job extension | `app/jobs/`、`app/services/job_runtime.py`、`app/services/executor.py` | `job_type` 注册、运行时快照、executor 执行和结果投影 |
-| AI gateway | `app/services/ai_gateway_facade.py`、`app/integrations/ai_gateway.py` | 模型启用校验、provider 调用、AI call ledger、usage 和 cost 记录 |
+| AI gateway | `app/services/ai_gateway_facade.py`、`app/services/ai_capability_kernel.py`、`app/integrations/ai_gateway.py` | 模型启用校验、provider 调用、AI call ledger、usage 和 cost 记录 |
 | Billing | `app/services/billing.py`、`app/schemas/billing.py` | 从 `ai_call_ledger_entries` 聚合 Job scope billing read model |
 
 ## 请求与响应边界
@@ -72,7 +72,7 @@ Callback 是服务主动向调用方发送的终态事件，不套 HTTP response
 
 ## AI Gateway 与 Billing
 
-`app/services/ai_gateway_facade.py` 是模型调用的业务入口。它负责：
+`app/services/ai_gateway_facade.py` 是模型调用的业务入口。它保留 `generate_text_with_ledger()` 文本 facade，并编排 `app/services/ai_capability_kernel.py` 中的职责组件：
 
 - 校验 `model_id` 已启用。
 - 校验 pricing 与模型配置匹配。
@@ -81,6 +81,8 @@ Callback 是服务主动向调用方发送的终态事件，不套 HTTP response
 - 校验 provider usage。
 - 计算 cost。
 - 将 ledger 行更新为 succeeded 或 failed。
+
+`app/services/ai_capability_kernel.py` 承载当前 AI Capability Kernel 组件：`ModelGate`、`ProviderGateway`、`UsageNormalizer`、`TypedPricingResolver` 和 `UsageLedgerWriter`。这些组件仍服务当前文本生成路径；多模态 provider path 和 workflow descendant attribution 不是当前事实。
 
 `app/integrations/ai_gateway.py` 只执行 provider 调用并返回 `TextGenerationResult`，不写 Job、Callback、Billing envelope 或数据库。
 

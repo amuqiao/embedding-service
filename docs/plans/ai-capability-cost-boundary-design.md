@@ -225,6 +225,16 @@ PricingRule
 
 ## AI Call Ledger
 
+### Phase 1 数据库/表边界
+
+Phase 1 只收口成本边界合同和验收语义，不新增 AI 成本核心表，也不把未来 workflow / child Job 归因字段写成当前表事实。
+
+- 当前阶段不新增第二套 AI call usage / cost 核心表；`ai_call_ledger_entries` 仍是唯一 AI provider call usage / cost estimate 事实源。
+- 当前阶段不新增 `job_cost_summary`。Job cost summary 继续从 `ai_call_ledger_entries` 查询聚合；只有后续证明查询性能或 root projection 稳定性需要时，才评估新增可重建 read model。
+- `job_cost_summary` 即使未来新增，也只能从 `ai_call_ledger_entries` 重建，不能保存 provider usage / pricing / cost 的新事实，不能成为扣费账本或事实源。
+- workflow / child Job 归因落地前，才评估在 `ai_call_ledger_entries` 增加 `root_job_id`、`workflow_id`、`workflow_node_id`、`child_job_id` 等列，或新增等价 attribution 辅助表。
+- `usage_kind`、`usage_schema_version` 当前不是已存在持久化列；如果后续需要按它们查询、过滤或建立索引，必须通过 Alembic migration 明确增加，不能只写入 JSON 后在文档中描述为表字段。
+
 ### 核心事实表：`ai_call_ledger_entries`
 
 `ai_call_ledger_entries` 是 AI 模型调用和成本估算的唯一事实源。
@@ -234,8 +244,8 @@ PricingRule
 | 字段类别 | 说明 |
 |---|---|
 | scope | `scope_type`、`scope_id`，当前公开 billing 使用 Job scope |
-| Job attribution | `job_id`、`attempt_id`、`job_type` |
-| Workflow attribution | 未来可增加 `workflow_id`、`workflow_node_id`、`child_job_id` |
+| Job attribution | 当前已持久化 `job_id`、`attempt_id`、`job_type` |
+| Workflow attribution | 当前不作为已存在表字段；未来落地 workflow / child Job 归因前，再评估 `root_job_id`、`workflow_id`、`workflow_node_id`、`child_job_id` 加列或等价辅助表 |
 | provider | `model_id`、`provider`、`provider_model`、adapter model |
 | operation | 文本生成、图片生成、TTS、视频生成等 |
 | request / response hash | 排障和幂等辅助 |
@@ -270,21 +280,26 @@ ledger 行级状态与公开 billing 状态必须有稳定映射，避免不同�
 
 如果未来 `job.cost` 作为更窄的总费用投影发布，它只能在 billing projection 可形成可信 total 时返回 `final=true`。如果底层 billing 状态是 `incomplete` 或 `failed`，不能伪造 `final=true` 的 0 成本。
 
-### Workflow Attribution 合同
+### Workflow Attribution 未来合同
 
-Workflow 开发前必须先冻结 descendant AI call 的归因策略。推荐第一版使用 root Job scope 聚合，同时保留 workflow / node / child Job 排障维度：
+Workflow 开发前必须先冻结 descendant AI call 的归因策略。以下字段或语义是未来 workflow / child Job 归因的候选合同，不是当前 Phase 1 已存在的数据库 schema。推荐第一版使用 root Job scope 聚合，同时保留 workflow / node / child Job 排障维度：
 
-| 字段或语义 | 说明 |
+| 候选字段或语义 | 说明 |
 |---|---|
 | `scope_type="job"` | 公开 billing scope 仍是 Job |
 | `scope_id=<root_job_id>` | descendant AI call 聚合到 root Job billing |
-| `root_job_id` | 对外 root Job，必须可用于 root cost summary |
-| `workflow_id` | 内部 workflow instance，可为空直到 workflow kernel 落地 |
-| `workflow_node_id` | 内部 node 归因，可为空直到 workflow kernel 落地 |
-| `child_job_id` | 实际执行 child Job，可为空于非 workflow 调用 |
+| `root_job_id` | 候选显式列：对外 root Job，必须可用于 root cost summary |
+| `workflow_id` | 候选显式列：内部 workflow instance |
+| `workflow_node_id` | 候选显式列：内部 node 归因 |
+| `child_job_id` | 候选显式列：实际执行 child Job |
 | `attempt_id` | 实际执行 attempt，继续用于排障和恢复 |
 
-如果不增加这些显式列，而采用等价 scope / side table，也必须在开发前证明：
+workflow / child Job 归因落地前，需要在两种实现之间做一次明确选择：
+
+- 通过 migration 给 `ai_call_ledger_entries` 增加 `root_job_id`、`workflow_id`、`workflow_node_id`、`child_job_id` 等归因列。
+- 保持 `ai_call_ledger_entries` 表结构更窄，并新增可重建、可校验的 attribution 辅助表或等价 scope 规则。
+
+无论采用显式列还是等价 attribution 辅助表，都必须在开发前证明：
 
 - `GET /jobs/{root_job_id}/billing` 能覆盖所有 descendant ledger 行。
 - cost summary 能按 workflow / node / child Job 排障。
@@ -294,6 +309,8 @@ Workflow 开发前必须先冻结 descendant AI call 的归因策略。推荐第
 不能先让 child Job ledger 写入 child Job scope，再在终态时从 `job_result` 或 callback payload 反推 root cost。
 
 ### 辅助表和派生投影
+
+Phase 1 不新增 AI 成本核心表，也不新增 `job_cost_summary`。下表用于说明当前 Job kernel 表与未来可选辅助表的边界；其中 workflow 相关对象和 `job_cost_summary` 只有在对应阶段落地时才进入当前事实。
 
 | 对象 | 职责 | 不能承担的职责 |
 |---|---|---|
@@ -305,7 +322,7 @@ Workflow 开发前必须先冻结 descendant AI call 的归因策略。推荐第
 | `workflow_child_jobs` | 可选归属辅助表，连接 root workflow node 和 child Job | 不保存价格事实 |
 | `job_cost_summary` / billing summary | 未来可选 read model，加速 Job 总费用查询 | 只能从 `ai_call_ledger_entries` 派生，可删除重建 |
 
-如未来新增 summary 表，必须满足：
+如未来新增 `job_cost_summary` 或等价 summary 表，必须满足：
 
 - 可由 ledger 重建。
 - 不能作为扣费或成本事实源。
@@ -364,7 +381,7 @@ BillingEnvelope / Cost summary projection
 - `pricing.yaml` 能表达该图片模型的真实计费方式。
 - `pricing_ref` 与 model catalog 启动期 fail-fast 校验。
 - 图片 provider adapter 返回可标准化 usage，或由 adapter 根据 provider response 与 request context 生成 typed usage。
-- `ai_call_ledger_entries` 能记录图片调用的 usage kind、usage units、raw usage、pricing ref 和 cost。
+- `ai_call_ledger_entries` 能记录图片调用的 `usage_units`、raw usage、pricing ref 和 cost；如果图片路径需要持久化 `usage_kind` 或 `usage_schema_version` 用于查询/索引，必须先通过 migration 增加对应列。
 - Job scope billing 能聚合 child Job / workflow descendant AI calls。
 - terminal root Job cost summary 只从 ledger 聚合，不从 `job_result.items[]` 反推。
 
@@ -402,7 +419,9 @@ BillingEnvelope / Cost summary projection
 - 明确 AI 层只做模型成本估算，不做真实扣费。
 - 在文档和代码命名中区分 `cost estimate`、`billing projection` 和 `payment / charge`。
 - 保持 `ai_call_ledger_entries` 是唯一 AI call usage / cost 事实源。
+- 明确 Phase 1 不新增 AI 成本核心表，不新增 `job_cost_summary`，不要求修改当前 `ai_call_ledger_entries` 表结构。
 - 明确 `job.cost`、callback cost 和 future summary table 都只是派生投影。
+- 明确 `usage_kind`、`usage_schema_version` 如需持久化查询/索引，必须通过 migration 增加，不能写成当前已存在事实。
 
 ### Phase 2: Catalog fail-fast
 
@@ -420,7 +439,7 @@ BillingEnvelope / Cost summary projection
 
 ### Phase 4: Workflow cost attribution
 
-- 为 workflow / node / child Job 增加 ledger attribution 字段或等价 scope。
+- 在 workflow / child Job 归因落地前，评估并选择：为 `ai_call_ledger_entries` 增加 `root_job_id`、`workflow_id`、`workflow_node_id`、`child_job_id` 等 attribution 字段，或使用等价 attribution 辅助表 / scope 规则。
 - root Job cost summary 必须覆盖 descendant AI calls。
 - workflow terminal、root Job terminal、cost summary 和 callback outbox 必须在同一终态投影路径中收敛。
 
@@ -433,12 +452,21 @@ BillingEnvelope / Cost summary projection
 
 ## Acceptance
 
+Phase 1 验收：
+
+- Phase 1 验收只要求数据库/表边界已说明清楚：不新增 AI 成本核心表，不新增 `job_cost_summary`，`ai_call_ledger_entries` 是唯一 AI call usage / cost estimate 事实源。
+- `job.cost`、callback cost 和 future summary table 都被定义为派生投影，不能成为 provider usage / pricing / cost 事实源。
+- `usage_kind`、`usage_schema_version` 没有被写成当前已存在 DB 事实；如需持久化查询/索引，验收条件必须包含 migration。
+- Phase 1 不要求 workflow descendant AI calls 已经落地，也不要求当前 `ai_call_ledger_entries` 增加 workflow / child Job attribution 字段。
+- `ai_call_ledger_entries` 覆盖当前 provider call、usage、pricing、cost 和 diagnostic status；未来多模态或 workflow 归因不能被写成当前已实现事实。
+
+后续阶段验收：
+
 - [`implementation-terminal-acceptance.md`](implementation-terminal-acceptance.md) 中的 cost boundary gates 已经通过。
 - `models.yaml` 和 `pricing.yaml` 的不一致会在启动或 verify 阶段失败。
 - `pricing_ref` 是 model catalog 与 pricing catalog 的唯一绑定点。
-- workflow descendant AI calls 的 root scope 与 attribution 策略已经冻结，并能支持 root Job billing 聚合。
-- `ai_call_ledger_entries` 覆盖 provider call、usage、pricing、cost 和 diagnostic status。
-- workflow descendant AI calls 能按 root Job scope 聚合。
+- workflow / child Job 归因字段或等价辅助表必须在 Phase 4 前完成设计选择。
+- workflow descendant AI calls 能按 root Job scope 聚合后，才可验收 Phase 4。
 - `./scripts/verify.sh check` 覆盖 model registry、pricing registry、AI gateway facade、billing service 和相关 fail-fast 测试。
 
 ## Non-goals

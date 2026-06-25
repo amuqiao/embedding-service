@@ -7,6 +7,7 @@ import pytest
 from app.core.exceptions import AppError
 from app.core.error_registry import get_error_spec
 from app.integrations.ai_gateway import TextGenerationResult
+from app.services import ai_capability_kernel
 from app.services import ai_gateway_facade
 
 
@@ -63,10 +64,18 @@ def _price() -> SimpleNamespace:
     )
 
 
-def test_model_gate_resolves_model_to_internal_capability(monkeypatch):
-    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
+def test_facade_does_not_reexport_kernel_helper_classes():
+    assert not hasattr(ai_gateway_facade, "ModelGate")
+    assert not hasattr(ai_gateway_facade, "ProviderGateway")
+    assert not hasattr(ai_gateway_facade, "UsageNormalizer")
+    assert not hasattr(ai_gateway_facade, "TypedPricingResolver")
+    assert not hasattr(ai_gateway_facade, "UsageLedgerWriter")
 
-    result = ai_gateway_facade.ModelGate().resolve("custom-model")
+
+def test_model_gate_resolves_model_to_internal_capability(monkeypatch):
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+
+    result = ai_capability_kernel.ModelGate().resolve("custom-model")
 
     assert result.model.id == "custom-model"
     assert result.resolved_model.model_id == "custom-model"
@@ -84,9 +93,9 @@ async def test_provider_gateway_builds_text_generation_request_from_model(monkey
         recorded["request"] = request
         return TextGenerationResult(text="ok", prompt_tokens=1, completion_tokens=1, usage={})
 
-    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+    monkeypatch.setattr(ai_capability_kernel, "generate_text", fake_generate_text)
     monkeypatch.setattr(
-        ai_gateway_facade,
+        ai_capability_kernel,
         "settings",
         SimpleNamespace(
             ai_provider=SimpleNamespace(
@@ -97,7 +106,7 @@ async def test_provider_gateway_builds_text_generation_request_from_model(monkey
         ),
     )
 
-    await ai_gateway_facade.ProviderGateway().generate_text(_model(), [{"role": "user", "content": "hello"}])
+    await ai_capability_kernel.ProviderGateway().generate_text(_model(), [{"role": "user", "content": "hello"}])
 
     request = recorded["request"]
     assert request.litellm_model == "openai/custom-model"
@@ -126,7 +135,7 @@ def test_usage_normalizer_reads_provider_cached_token_variants(usage, expected_c
         usage=usage,
     )
 
-    usage_units = ai_gateway_facade.UsageNormalizer().normalize_text(result)
+    usage_units = ai_capability_kernel.UsageNormalizer().normalize_text(result)
 
     assert usage_units == {
         "input_tokens": 100,
@@ -144,9 +153,9 @@ def test_typed_pricing_resolver_keeps_token_cost_patchable(monkeypatch):
         calls["usage_units"] = usage_units
         return Decimal("1.23000000")
 
-    monkeypatch.setattr(ai_gateway_facade, "calculate_token_cost", fake_calculate_token_cost)
+    monkeypatch.setattr(ai_capability_kernel, "calculate_token_cost", fake_calculate_token_cost)
 
-    amount = ai_gateway_facade.TypedPricingResolver().calculate_text_cost(
+    amount = ai_capability_kernel.TypedPricingResolver().calculate_text_cost(
         _price(),
         {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "total_tokens": 2},
     )
@@ -181,10 +190,10 @@ async def test_gateway_does_not_call_provider_when_pending_ledger_write_fails(mo
     async def fail_generate_text(*_args, **_kwargs):
         raise AssertionError("provider must not be called before pending ledger row exists")
 
-    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
-    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fail_create_pending)
-    monkeypatch.setattr(ai_gateway_facade, "generate_text", fail_generate_text)
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fail_create_pending)
+    monkeypatch.setattr(ai_capability_kernel, "generate_text", fail_generate_text)
 
     with pytest.raises(RuntimeError, match="ledger unavailable"):
         await _call(session_factory)
@@ -212,12 +221,12 @@ async def test_gateway_marks_usage_missing_as_failed_unknown_without_zero_cost(m
     async def fail_mark_succeeded(*_args, **_kwargs):
         raise AssertionError("usage missing must not be marked succeeded")
 
-    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
-    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fake_create_pending)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_failed", fake_mark_failed)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
-    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+    monkeypatch.setattr(ai_capability_kernel, "generate_text", fake_generate_text)
 
     with pytest.raises(AppError) as exc:
         await _call(session_factory)
@@ -252,11 +261,11 @@ async def test_gateway_freezes_usage_and_cost_on_success(monkeypatch):
         recorded.update(kwargs)
         return True
 
-    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
-    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fake_create_pending)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_succeeded", fake_mark_succeeded)
-    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr(ai_capability_kernel, "generate_text", fake_generate_text)
 
     result = await _call(session_factory)
 
@@ -293,12 +302,12 @@ async def test_gateway_marks_provider_timeout_as_failed_unknown(monkeypatch):
     async def fail_mark_succeeded(*_args, **_kwargs):
         raise AssertionError("provider timeout must not be marked succeeded")
 
-    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
-    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fake_create_pending)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_failed", fake_mark_failed)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
-    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+    monkeypatch.setattr(ai_capability_kernel, "generate_text", fake_generate_text)
 
     with pytest.raises(AppError) as exc:
         await _call(session_factory)
@@ -333,12 +342,12 @@ async def test_gateway_marks_provider_failure_as_failed_unknown(monkeypatch):
     async def fail_mark_succeeded(*_args, **_kwargs):
         raise AssertionError("provider failure must not be marked succeeded")
 
-    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
-    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fake_create_pending)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_failed", fake_mark_failed)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
-    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+    monkeypatch.setattr(ai_capability_kernel, "generate_text", fake_generate_text)
 
     with pytest.raises(AppError) as exc:
         await _call(session_factory)
@@ -376,11 +385,11 @@ async def test_gateway_does_not_replay_provider_when_terminal_ledger_update_fail
         assert received_call_id == call_id
         return False
 
-    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
-    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fake_create_pending)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_succeeded", fake_mark_succeeded)
-    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr(ai_capability_kernel, "generate_text", fake_generate_text)
 
     with pytest.raises(AppError) as exc:
         await _call(session_factory)
@@ -412,12 +421,12 @@ async def test_gateway_raises_ai_ledger_update_failed_when_failed_terminal_updat
     async def fail_mark_succeeded(*_args, **_kwargs):
         raise AssertionError("usage missing must not be marked succeeded")
 
-    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
-    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fake_create_pending)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_failed", fake_mark_failed)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
-    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+    monkeypatch.setattr(ai_capability_kernel, "generate_text", fake_generate_text)
 
     with pytest.raises(AppError) as exc:
         await _call(session_factory)
@@ -455,13 +464,13 @@ async def test_gateway_marks_cost_calculation_failed_and_raises_app_error_when_p
     async def fail_mark_succeeded(*_args, **_kwargs):
         raise AssertionError("pricing failure must not be marked succeeded")
 
-    monkeypatch.setattr(ai_gateway_facade, "_require_model", lambda _model_id: _model())
-    monkeypatch.setattr(ai_gateway_facade, "require_price", lambda _pricing_ref: _price())
-    monkeypatch.setattr(ai_gateway_facade, "calculate_token_cost", fail_calculate_token_cost)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "create_pending", fake_create_pending)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_failed", fake_mark_failed)
-    monkeypatch.setattr(ai_gateway_facade.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
-    monkeypatch.setattr(ai_gateway_facade, "generate_text", fake_generate_text)
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_capability_kernel, "calculate_token_cost", fail_calculate_token_cost)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+    monkeypatch.setattr(ai_capability_kernel, "generate_text", fake_generate_text)
 
     with pytest.raises(AppError) as exc:
         await _call(session_factory)
