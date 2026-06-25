@@ -31,14 +31,18 @@ def build_runtime_snapshot(
     job_params_hash: str,
     runtime_fields: dict[str, Any],
     output_target: dict[str, Any],
+    workflow_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    snapshot = {
         "schema_version": 1,
         "job_type": job_type,
         "job_params_hash": job_params_hash,
         "runtime_fields": runtime_fields,
         "output_target": output_target,
     }
+    if workflow_plan is not None:
+        snapshot["workflow_plan"] = workflow_plan
+    return snapshot
 
 
 def _validate_output_target(target: Any) -> dict[str, Any]:

@@ -28,6 +28,7 @@ from app.services.job_runtime import (
     runtime_fields_from_job,
     write_runtime_json,
 )
+from app.workflows.registry import compile_registered_workflow, has_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -335,6 +336,17 @@ async def create_job(
             )
         return existing, False
 
+    workflow_plan = None
+    if has_workflow(payload.job_type):
+        try:
+            workflow_plan = compile_registered_workflow(payload.job_type, job_params)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValidationAppError(
+                "INVALID_INPUT",
+                "workflow plan is invalid",
+                {"job_type": payload.job_type},
+            ) from exc
+
     if settings.job.max_active_jobs > 0:
         await db.execute(text("SELECT pg_advisory_lock(hashtext('max_active_jobs_gate'))"))
         try:
@@ -382,6 +394,7 @@ async def create_job(
             job_params_hash=job_params_hash,
             runtime_fields=runtime_fields,
             output_target=output_target,
+            workflow_plan=workflow_plan,
         ),
     )
     await JobRepo.create_initial_attempt(db, job, timeout_seconds=timeout_seconds)

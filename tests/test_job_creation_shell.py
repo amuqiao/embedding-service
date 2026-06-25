@@ -7,8 +7,10 @@ import pytest
 from app.core import config as config_module
 from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest
-from app.core.exceptions import AppError
+from app.core.exceptions import AppError, ValidationAppError
 from app.services.jobs import _request_fingerprint, create_job, validate_create_contract
+from app.workflows import WorkflowDefinition, chunks, task
+from app.workflows import registry as workflow_registry
 
 
 class _FakeDB:
@@ -169,6 +171,195 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     assert job.runtime_ref["payload_snapshot"]["job_params_hash"] == job.job_params_hash
     assert job.runtime_ref["payload_snapshot"]["runtime_fields"] == {}
     assert job.runtime_ref["payload_snapshot"]["output_target"]["type"] == "oss_prefix"
+    assert "workflow_plan" not in job.runtime_ref["payload_snapshot"]
+
+
+@pytest.mark.asyncio
+async def test_create_job_writes_registered_workflow_plan_to_runtime_ref(monkeypatch):
+    captured: dict = {}
+    now = datetime.now(timezone.utc)
+
+    async def fake_create(_db, **kwargs):
+        captured.update(kwargs)
+        return Job(
+            id=uuid.uuid4(),
+            caller_id=kwargs["caller_id"],
+            client_request_id=kwargs["client_request_id"],
+            job_type=kwargs["job_type"],
+            status="queued",
+            progress_percent=0,
+            progress_text="已排队",
+            callback_url=kwargs["callback_url"],
+            callback_events=kwargs["callback_events"],
+            metadata_=kwargs["metadata"],
+            priority=kwargs["priority"],
+            timeout_seconds=kwargs["timeout_seconds"],
+            created_at=now,
+            updated_at=now,
+        )
+
+    async def fake_advisory_lock(*_args):
+        pass
+
+    async def fake_get_recent(*_args, **_kwargs):
+        return None
+
+    async def fake_create_submission_key(_db, **kwargs):
+        captured["submission_key"] = kwargs
+
+    async def fake_create_initial_attempt(_db, created_job, *, timeout_seconds):
+        captured["initial_attempt"] = (created_job.id, timeout_seconds)
+
+    def fake_write_runtime_json(_job, _name, payload):
+        return {"storage": "db_inline", "type": "json", "name": _name, "payload_snapshot": payload}
+
+    _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=0)
+    monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
+    monkeypatch.setattr("app.services.jobs.JobRepo.create", fake_create)
+    monkeypatch.setattr("app.services.jobs.JobRepo.create_submission_key", fake_create_submission_key)
+    monkeypatch.setattr("app.services.jobs.JobRepo.create_initial_attempt", fake_create_initial_attempt)
+    monkeypatch.setattr("app.services.jobs.write_runtime_json", fake_write_runtime_json)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+
+    workflow_registry.clear_for_tests()
+
+    def build_workflow(job_params):
+        job_params["value"] = "mutated-in-builder"
+        return task("first", "job_test_echo", {"value": job_params["value"]})
+
+    workflow_registry.register(
+        WorkflowDefinition(
+            workflow_type="test.workflow",
+            build=build_workflow,
+            max_nodes=10,
+        )
+    )
+
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-workflow-1",
+            "job_type": "test.workflow",
+            "job_params": {"value": "hello"},
+            "metadata": {},
+            "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
+        }
+    )
+
+    try:
+        job, created = await create_job(_FakeDB(), payload, "caller-1")
+    finally:
+        workflow_registry.clear_for_tests()
+
+    assert created is True
+    assert captured["initial_attempt"] == (job.id, 300)
+    assert job.job_params_ref["payload_snapshot"] == {"value": "hello"}
+    assert job.runtime_ref["payload_snapshot"]["job_type"] == "test.workflow"
+    plan = job.runtime_ref["payload_snapshot"]["workflow_plan"]
+    assert plan["kind"] == "dag_lite"
+    assert plan["workflow_type"] == "test.workflow"
+    assert plan["nodes"][0]["job_params"] == {"value": "mutated-in-builder"}
+
+
+@pytest.mark.asyncio
+async def test_create_job_idempotent_existing_workflow_does_not_recompile(monkeypatch):
+    existing = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="req-workflow-1",
+        job_type="test.workflow",
+        status="queued",
+        progress_percent=0,
+        metadata_={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-workflow-1",
+            "job_type": "test.workflow",
+            "job_params": {"value": "hello"},
+            "metadata": {},
+            "options": {"priority": "normal", "idempotency_mode": "return_existing"},
+        }
+    )
+    request_fingerprint = _request_fingerprint(payload, "caller-1", {"value": "hello"})
+
+    async def fake_advisory_lock(*_args):
+        pass
+
+    async def fake_get_recent(*_args, **_kwargs):
+        return existing, SimpleNamespace(request_fingerprint=request_fingerprint)
+
+    async def fail_create(*_args, **_kwargs):
+        raise AssertionError("duplicate workflow request must not create a new job")
+
+    _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=0)
+    monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
+    monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+
+    workflow_registry.clear_for_tests()
+    workflow_registry.register(
+        WorkflowDefinition(
+            workflow_type="test.workflow",
+            build=lambda _params: (_ for _ in ()).throw(AssertionError("workflow must not compile")),
+        )
+    )
+
+    try:
+        job, created = await create_job(_FakeDB(), payload, "caller-1")
+    finally:
+        workflow_registry.clear_for_tests()
+
+    assert job is existing
+    assert created is False
+
+
+@pytest.mark.asyncio
+async def test_create_job_maps_invalid_workflow_plan_to_validation_error(monkeypatch):
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-invalid-workflow-1",
+            "job_type": "test.workflow",
+            "job_params": {"items": [1, 2]},
+            "metadata": {},
+            "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
+        }
+    )
+
+    async def fake_advisory_lock(*_args):
+        pass
+
+    async def fake_get_recent(*_args, **_kwargs):
+        return None
+
+    async def fail_create(*_args, **_kwargs):
+        raise AssertionError("invalid workflow plan must fail before job create")
+
+    _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=0)
+    monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
+    monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+
+    workflow_registry.clear_for_tests()
+    workflow_registry.register(
+        WorkflowDefinition(
+            workflow_type="test.workflow",
+            build=lambda params: chunks("chunk", "job_test_echo", params["items"], chunk_size=0),
+        )
+    )
+
+    try:
+        with pytest.raises(ValidationAppError) as exc:
+            await create_job(_FakeDB(), payload, "caller-1")
+    finally:
+        workflow_registry.clear_for_tests()
+
+    assert exc.value.code == "INVALID_INPUT"
+    assert exc.value.details == {"job_type": "test.workflow"}
 
 
 @pytest.mark.asyncio
