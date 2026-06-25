@@ -12,6 +12,7 @@
 | [`api/extension-guide.md`](api/extension-guide.md) | 新增 `job_type`、HTTP 接口、模型、Prompt 和对象存储产物的接入入口 |
 | [`plans/hardening.md`](plans/hardening.md) | 尚未完成的可靠性、billing、callback、deployment 和文档硬化事项 |
 | [`plans/ai-capability-enhancement.md`](plans/ai-capability-enhancement.md) | AI gateway、typed usage/pricing、Prompt fail-fast 和多模态能力的增强计划 |
+| [`plans/workflow-kernel-design.md`](plans/workflow-kernel-design.md) | 在当前 Job kernel 之上增加最小 durable workflow kernel 的设计计划 |
 
 ## 分层规则
 
