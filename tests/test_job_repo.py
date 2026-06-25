@@ -20,6 +20,14 @@ class _ScalarResult:
         return self.value
 
 
+class _ScalarOneResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one(self):
+        return self.value
+
+
 class _ScalarListResult:
     def __init__(self, values):
         self.values = values
@@ -819,6 +827,83 @@ async def test_mark_attempt_succeeded_rejects_stale_lease_token():
     assert db.flushed is False
     sql = _compile(db.statements[0])
     assert "job_execution_attempts.lease_token =" in sql
+
+
+@pytest.mark.asyncio
+async def test_mark_workflow_orchestration_attempt_succeeded_accepts_running_root_job():
+    lease_token = uuid.uuid4()
+    attempt_id = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        job_type="test.workflow",
+        status="running",
+        active_attempt_id=attempt_id,
+        execution_token=str(attempt_id),
+        progress_percent=15,
+        metadata_={},
+    )
+    attempt = JobAttempt(
+        id=attempt_id,
+        job_id=job.id,
+        attempt_no=1,
+        status="running",
+        lease_token=lease_token,
+        timeout_seconds=60,
+    )
+    db = _FakeDB()
+    db.results.append(_OneRowResult((job, attempt)))
+
+    updated = await JobRepo.mark_workflow_orchestration_attempt_succeeded(
+        db,
+        attempt_id,
+        lease_token=lease_token,
+    )
+
+    assert updated is True
+    assert db.flushed is True
+    assert job.status == "running"
+    assert job.active_attempt_id is None
+    assert job.execution_token is None
+    assert job.progress_percent == 20
+    assert job.progress_stage == "planning"
+    assert attempt.status == "succeeded"
+    assert attempt.lease_token is None
+    events = [obj for obj in db.added if isinstance(obj, JobEvent)]
+    outboxes = [obj for obj in db.added if isinstance(obj, CallbackOutbox)]
+    assert events[-1].payload == {"reason": "workflow_orchestration"}
+    assert outboxes == []
+
+
+@pytest.mark.asyncio
+async def test_mark_workflow_orchestration_attempt_succeeded_requires_running_root_job():
+    db = _FakeDB()
+    db.results.append(_NoRowResult())
+
+    updated = await JobRepo.mark_workflow_orchestration_attempt_succeeded(
+        db,
+        uuid.uuid4(),
+        lease_token=uuid.uuid4(),
+    )
+
+    assert updated is False
+    assert db.flushed is False
+    sql = _compile(db.statements[0])
+    assert "job_aggregates.status =" in sql
+    assert "job_execution_attempts.lease_token =" in sql
+
+
+@pytest.mark.asyncio
+async def test_count_active_jobs_excludes_workflow_root_waiting_for_children():
+    db = _FakeDB()
+    db.results.append(_ScalarOneResult(2))
+
+    active_count = await JobRepo.count_active_jobs(db)
+
+    assert active_count == 2
+    sql = _compile(db.statements[0])
+    assert "job_aggregates.status = " in sql
+    assert "job_aggregates.active_attempt_id IS NOT NULL" in sql
+    assert "job_aggregates.deleted_at IS NULL" in sql
 
 
 @pytest.mark.asyncio

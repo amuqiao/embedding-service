@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import AppError
 from app.jobs.factory import get_job_executor
 from app.models.job import Job
 from app.repositories.job_repo import JobRepo
 from app.services.executor import run_ai_job
 from app.services.job_lifecycle import SUCCESS_SIDE_EFFECT_DONE_STAGE, SUCCESS_SIDE_EFFECT_STAGE
-from app.services.job_runtime import model_id_from_job, prompt_payload_from_job
+from app.services.job_runtime import model_id_from_job, prompt_payload_from_job, workflow_plan_from_job
 from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404, trigger_request_id_from_job
+from app.workflows.orchestrator import create_ready_child_jobs
+
+logger = logging.getLogger(__name__)
 
 
 def _execution_generation(job: Job) -> int:
@@ -72,6 +77,67 @@ async def execute_job(
         return {"job_id": str(job_id), "status": "skipped", "job_status": job.status}
     if not job.execution_token:
         raise RuntimeError(f"job has no execution_token: {job_id}")
+
+    workflow_plan = workflow_plan_from_job(job)
+    if workflow_plan is not None:
+        if attempt_id is None or lease_token is None:
+            raise AppError(
+                "JOB_RUNTIME_NOT_SUPPORTED",
+                "workflow root orchestration requires an active attempt lease",
+                details={"job_id": str(job.id), "job_type": job.job_type},
+            )
+        claimed_orchestration = await _update_current_progress(
+            db,
+            job,
+            progress_percent=max(job.progress_percent or 0, 15),
+            progress_text="正在编排子任务",
+            progress_stage="planning",
+        )
+        await db.commit()
+        if not claimed_orchestration:
+            return {"job_id": str(job_id), "status": "skipped", "reason": "stale_execution_generation"}
+        extended = await JobRepo.heartbeat_attempt(
+            db,
+            attempt_id,
+            lease_token=lease_token,
+            lease_seconds=settings.job_stale_running_seconds,
+        )
+        if not extended:
+            raise AppError(
+                "JOB_STATE_TRANSITION_CONFLICT",
+                "workflow root orchestration attempt lease could not be extended",
+                details={"job_id": str(job_id), "attempt_id": str(attempt_id)},
+            )
+        orchestration = await create_ready_child_jobs(db, root_job=job, workflow_plan=workflow_plan)
+        marked_attempt = await JobRepo.mark_workflow_orchestration_attempt_succeeded(
+            db,
+            attempt_id,
+            lease_token=lease_token,
+        )
+        if not marked_attempt:
+            raise AppError(
+                "JOB_STATE_TRANSITION_CONFLICT",
+                "workflow root orchestration attempt could not be marked succeeded",
+                details={"job_id": str(job_id), "attempt_id": str(attempt_id)},
+            )
+        await db.commit()
+        from app.tasks.jobs import TaskiqPublishDeferredError, publish_job_attempt
+
+        for child_attempt_id in orchestration.created_attempt_ids:
+            try:
+                await publish_job_attempt(child_attempt_id)
+            except TaskiqPublishDeferredError:
+                logger.exception(
+                    "workflow_child_attempt_publish_deferred root_job_id=%s child_attempt_id=%s",
+                    job.id,
+                    child_attempt_id,
+                )
+        return {
+            "job_id": str(job_id),
+            "status": "succeeded",
+            "workflow_status": "orchestrated",
+            "created_child_jobs": len(orchestration.created_child_job_ids),
+        }
 
     try:
         executor = get_job_executor(job.job_type)

@@ -119,6 +119,22 @@ def runtime_fields_from_job(job: Job) -> dict[str, Any]:
     return fields
 
 
+def workflow_plan_from_job(job: Job) -> dict[str, Any] | None:
+    if not job.runtime_ref:
+        return None
+    plan = runtime_snapshot_from_job(job).get("workflow_plan")
+    if plan is None:
+        return None
+    if not isinstance(plan, dict):
+        raise AppError("RUNTIME_REF_INVALID", "workflow_plan must be a JSON object")
+    if plan.get("kind") != "dag_lite":
+        raise AppError("RUNTIME_REF_INVALID", "workflow_plan kind must be dag_lite")
+    nodes = plan.get("nodes")
+    if not isinstance(nodes, list):
+        raise AppError("RUNTIME_REF_INVALID", "workflow_plan nodes must be a JSON array")
+    return plan
+
+
 def output_target_from_job(job: Job) -> dict[str, Any]:
     return _validate_output_target(runtime_snapshot_from_job(job).get("output_target"))
 

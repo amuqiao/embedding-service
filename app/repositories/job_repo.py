@@ -716,6 +716,56 @@ class JobRepo:
         return True
 
     @staticmethod
+    async def mark_workflow_orchestration_attempt_succeeded(
+        db: AsyncSession,
+        attempt_id: uuid.UUID,
+        *,
+        lease_token: uuid.UUID,
+    ) -> bool:
+        result = await db.execute(
+            select(Job, JobAttempt)
+            .join(JobAttempt, JobAttempt.job_id == Job.id)
+            .where(
+                JobAttempt.id == attempt_id,
+                JobAttempt.status == "running",
+                JobAttempt.lease_token == lease_token,
+                Job.active_attempt_id == JobAttempt.id,
+                Job.status == "running",
+            )
+            .with_for_update(skip_locked=True)
+        )
+        row = result.one_or_none()
+        if row is None:
+            return False
+        job, attempt = row
+        now = datetime.now(timezone.utc)
+        attempt.status = "succeeded"
+        attempt.finished_at = now
+        attempt.lease_token = None
+        attempt.lease_expires_at = None
+        attempt.heartbeat_at = now
+        attempt.updated_at = now
+        job.active_attempt_id = None
+        job.execution_token = None
+        job.progress_percent = max(job.progress_percent or 0, 20)
+        job.progress_text = "等待子任务完成"
+        job.progress_stage = "planning"
+        job.last_heartbeat_at = now
+        job.updated_at = now
+        db.add(
+            JobEvent(
+                job_id=job.id,
+                attempt_id=attempt.id,
+                event_type="attempt.succeeded",
+                from_status="running",
+                to_status="succeeded",
+                payload={"reason": "workflow_orchestration"},
+            )
+        )
+        await db.flush()
+        return True
+
+    @staticmethod
     async def find_due_dispatches(db: AsyncSession, now: datetime, *, limit: int) -> list[DispatchOutbox]:
         result = await db.execute(
             select(DispatchOutbox)
@@ -1086,7 +1136,13 @@ class JobRepo:
         result = await db.execute(
             select(func.count())
             .select_from(Job)
-            .where(Job.status.in_(["queued", "running"]), Job.deleted_at.is_(None))
+            .where(
+                or_(
+                    Job.status == "queued",
+                    and_(Job.status == "running", Job.active_attempt_id.is_not(None)),
+                ),
+                Job.deleted_at.is_(None),
+            )
         )
         return result.scalar_one()
 

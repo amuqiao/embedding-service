@@ -4,11 +4,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core.exceptions import AppError
 from app.models.job import Job
 from app.services.job_runtime import payload_hash
 from app.jobs.runner import execute_job, fail_job
 from app.jobs.types.register import register_all_job_types
 from app.tasks import jobs as task_jobs
+from app.workflows.orchestrator import create_ready_child_jobs
 
 
 class _FakeDB:
@@ -217,6 +219,452 @@ async def test_execute_job_runs_custom_job_without_model_runtime(monkeypatch):
     assert progress_updates[-1][1] == "success_side_effect_done"
     assert succeeded["canonical_result"] == {"a": 2, "b": 3, "result": 5}
     assert succeeded["result"] == {"a": 2, "b": 3, "result": 5}
+
+
+@pytest.mark.asyncio
+async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypatch):
+    register_all_job_types()
+    root_params = {"workflow": True}
+    root_job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="client-workflow-1",
+        job_type="test.workflow",
+        status="running",
+        progress_percent=5,
+        progress_stage="running",
+        execution_token="attempt-root",
+        execution_generation=1,
+        priority="normal",
+        timeout_seconds=300,
+        job_params_hash=payload_hash(root_params),
+        runtime_ref={
+            "storage": "db_inline",
+            "type": "json",
+            "name": "runtime",
+            "payload": {
+                "schema_version": 1,
+                "job_type": "test.workflow",
+                "job_params_hash": payload_hash(root_params),
+                "runtime_fields": {},
+                "output_target": {
+                    "type": "oss_prefix",
+                    "oss_bucket": "bucket",
+                    "oss_prefix": "root/",
+                    "oss_region": "region",
+                },
+                "workflow_plan": {
+                    "schema_version": 1,
+                    "kind": "dag_lite",
+                    "workflow_type": "test.workflow",
+                    "workflow_version": 1,
+                    "failure_policy": "fail_fast",
+                    "max_nodes": 10,
+                    "node_count": 2,
+                    "nodes": [
+                        {
+                            "key": "first",
+                            "job_type": "job_test_echo",
+                            "job_params": {"message": "hello", "repeat": 1},
+                            "depends_on": [],
+                            "required": True,
+                            "weight": 1,
+                        },
+                        {
+                            "key": "second",
+                            "job_type": "job_test_echo",
+                            "job_params": {"message": "done", "repeat": 1},
+                            "depends_on": ["first"],
+                            "required": True,
+                            "weight": 1,
+                        },
+                    ],
+                },
+            },
+        },
+        created_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
+    )
+    root_attempt_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
+    created_children = []
+    created_attempt_ids = []
+    published_attempt_ids = []
+    heartbeats = []
+
+    async def fake_get_job_or_404(_db, job_id):
+        assert job_id == root_job.id
+        return root_job
+
+    async def fake_update_progress(
+        _db,
+        job_id,
+        *,
+        progress_percent,
+        progress_text,
+        progress_stage,
+        execution_token,
+        execution_generation,
+    ):
+        assert job_id == root_job.id
+        assert execution_token == "attempt-root"
+        assert execution_generation == 1
+        root_job.progress_percent = progress_percent
+        root_job.progress_stage = progress_stage
+        return True
+
+    async def fake_list_internal_children(_db, *, root_job_id, statuses=None):
+        assert root_job_id == root_job.id
+        assert statuses is None
+        return []
+
+    async def fake_get_internal_child_by_node_key(_db, *, root_job_id, workflow_node_key):
+        assert root_job_id == root_job.id
+        assert workflow_node_key == "first"
+        return None
+
+    async def fake_create(_db, **kwargs):
+        assert kwargs["root_job_id"] == root_job.id
+        assert kwargs["parent_job_id"] == root_job.id
+        assert kwargs["is_internal"] is True
+        assert kwargs["workflow_node_key"] == "first"
+        assert kwargs["client_request_id"] is None
+        assert kwargs["callback_url"] is None
+        child = Job(
+            id=uuid.uuid4(),
+            caller_id=kwargs["caller_id"],
+            job_type=kwargs["job_type"],
+            status="queued",
+            progress_percent=0,
+            priority=kwargs["priority"],
+            timeout_seconds=kwargs["timeout_seconds"],
+            root_job_id=kwargs["root_job_id"],
+            parent_job_id=kwargs["parent_job_id"],
+            is_internal=kwargs["is_internal"],
+            workflow_node_key=kwargs["workflow_node_key"],
+            created_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
+        )
+        created_children.append(child)
+        return child
+
+    async def fake_create_initial_attempt(_db, child, *, timeout_seconds):
+        attempt_id = uuid.uuid4()
+        child.active_attempt_id = attempt_id
+        created_attempt_ids.append(attempt_id)
+        return SimpleNamespace(id=attempt_id)
+
+    async def fake_heartbeat_attempt(_db, attempt_id, *, lease_token: uuid.UUID, lease_seconds):
+        heartbeats.append((attempt_id, lease_token, lease_seconds))
+        return True
+
+    async def fake_mark_workflow_orchestration_attempt_succeeded(_db, attempt_id, *, lease_token: uuid.UUID):
+        assert attempt_id == root_attempt_id
+        root_job.active_attempt_id = None
+        root_job.execution_token = None
+        root_job.progress_stage = "planning"
+        return True
+
+    async def fake_publish_job_attempt(attempt_id):
+        published_attempt_ids.append(attempt_id)
+        raise task_jobs.TaskiqPublishDeferredError(attempt_id, {"code": "TASKIQ_PUBLISH_FAILED"})
+
+    monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.list_internal_children", fake_list_internal_children)
+    monkeypatch.setattr(
+        "app.workflows.orchestrator.JobRepo.get_internal_child_by_node_key",
+        fake_get_internal_child_by_node_key,
+    )
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.create", fake_create)
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.create_initial_attempt", fake_create_initial_attempt)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.heartbeat_attempt", fake_heartbeat_attempt)
+    monkeypatch.setattr(
+        "app.jobs.runner.JobRepo.mark_workflow_orchestration_attempt_succeeded",
+        fake_mark_workflow_orchestration_attempt_succeeded,
+    )
+    monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", fake_publish_job_attempt)
+    monkeypatch.setattr(
+        "app.jobs.runner.get_job_executor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("root executor must not run")),
+    )
+
+    result = await execute_job(
+        _FakeDB(),
+        root_job.id,
+        execution_generation=1,
+        attempt_id=root_attempt_id,
+        lease_token=lease_token,
+    )
+
+    assert result == {
+        "job_id": str(root_job.id),
+        "status": "succeeded",
+        "workflow_status": "orchestrated",
+        "created_child_jobs": 1,
+    }
+    assert [child.workflow_node_key for child in created_children] == ["first"]
+    assert published_attempt_ids == created_attempt_ids
+    assert root_job.status == "running"
+    assert root_job.active_attempt_id is None
+    assert heartbeats and heartbeats[0][0] == root_attempt_id
+
+
+@pytest.mark.asyncio
+async def test_create_ready_child_jobs_does_not_duplicate_existing_child(monkeypatch):
+    root_job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="test.workflow",
+        status="running",
+        priority="normal",
+        timeout_seconds=300,
+    )
+    existing_child = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="job_test_echo",
+        status="queued",
+        is_internal=True,
+        root_job_id=root_job.id,
+        parent_job_id=root_job.id,
+        workflow_node_key="first",
+        progress_percent=0,
+        priority="normal",
+        timeout_seconds=300,
+    )
+    workflow_plan = {
+        "schema_version": 1,
+        "kind": "dag_lite",
+        "workflow_type": "test.workflow",
+        "workflow_version": 1,
+        "failure_policy": "fail_fast",
+        "max_nodes": 10,
+        "node_count": 2,
+        "nodes": [
+            {
+                "key": "first",
+                "job_type": "job_test_echo",
+                "job_params": {"message": "hello", "repeat": 1},
+                "depends_on": [],
+            },
+            {
+                "key": "second",
+                "job_type": "job_test_echo",
+                "job_params": {"message": "done", "repeat": 1},
+                "depends_on": ["first"],
+            },
+        ],
+    }
+
+    async def fake_list_internal_children(_db, *, root_job_id, statuses=None):
+        assert root_job_id == root_job.id
+        assert statuses is None
+        return [existing_child]
+
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.list_internal_children", fake_list_internal_children)
+    monkeypatch.setattr(
+        "app.workflows.orchestrator.JobRepo.get_internal_child_by_node_key",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("existing child should short-circuit")),
+    )
+    monkeypatch.setattr(
+        "app.workflows.orchestrator.JobRepo.create",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("existing child must not be duplicated")),
+    )
+
+    result = await create_ready_child_jobs(_FakeDB(), root_job=root_job, workflow_plan=workflow_plan)
+
+    assert result.created_child_job_ids == ()
+    assert result.created_attempt_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_create_ready_child_jobs_rejects_mismatched_persisted_plan_header():
+    root_job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="test.workflow",
+        status="running",
+        priority="normal",
+        timeout_seconds=300,
+    )
+    workflow_plan = {
+        "schema_version": 1,
+        "kind": "dag_lite",
+        "workflow_type": "test.workflow",
+        "workflow_version": 1,
+        "failure_policy": "fail_fast",
+        "max_nodes": 10,
+        "node_count": 2,
+        "nodes": [
+            {
+                "key": "first",
+                "job_type": "job_test_echo",
+                "job_params": {"message": "hello", "repeat": 1},
+                "depends_on": [],
+            }
+        ],
+    }
+
+    with pytest.raises(AppError) as exc:
+        await create_ready_child_jobs(_FakeDB(), root_job=root_job, workflow_plan=workflow_plan)
+
+    assert exc.value.code == "RUNTIME_REF_INVALID"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("overrides", "nodes", "message_fragment"),
+    [
+        ({"schema_version": True}, None, "schema_version"),
+        ({"workflow_version": 0}, None, "workflow_version"),
+        ({"failure_policy": "retry_all"}, None, "failure_policy"),
+        ({"max_nodes": 0}, None, "max_nodes"),
+        ({"node_count": True}, None, "node_count"),
+        (
+            {"max_nodes": 1, "node_count": 2},
+            [
+                {
+                    "key": "first",
+                    "job_type": "job_test_echo",
+                    "job_params": {"message": "hello", "repeat": 1},
+                    "depends_on": [],
+                },
+                {
+                    "key": "second",
+                    "job_type": "job_test_echo",
+                    "job_params": {"message": "done", "repeat": 1},
+                    "depends_on": [],
+                },
+            ],
+            "max_nodes",
+        ),
+    ],
+)
+async def test_create_ready_child_jobs_rejects_invalid_persisted_plan_header(
+    overrides,
+    nodes,
+    message_fragment,
+):
+    root_job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="test.workflow",
+        status="running",
+        priority="normal",
+        timeout_seconds=300,
+    )
+    workflow_plan = {
+        "schema_version": 1,
+        "kind": "dag_lite",
+        "workflow_type": "test.workflow",
+        "workflow_version": 1,
+        "failure_policy": "fail_fast",
+        "max_nodes": 10,
+        "node_count": 1,
+        "nodes": nodes
+        or [
+            {
+                "key": "first",
+                "job_type": "job_test_echo",
+                "job_params": {"message": "hello", "repeat": 1},
+                "depends_on": [],
+            }
+        ],
+    }
+    workflow_plan.update(overrides)
+
+    with pytest.raises(AppError) as exc:
+        await create_ready_child_jobs(_FakeDB(), root_job=root_job, workflow_plan=workflow_plan)
+
+    assert exc.value.code == "RUNTIME_REF_INVALID"
+    assert message_fragment in exc.value.message
+
+
+@pytest.mark.asyncio
+async def test_execute_workflow_root_rejects_cyclic_persisted_workflow_plan(monkeypatch):
+    root_params = {"workflow": True}
+    root_job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="client-workflow-1",
+        job_type="test.workflow",
+        status="running",
+        progress_percent=5,
+        progress_stage="running",
+        execution_token="attempt-root",
+        execution_generation=1,
+        priority="normal",
+        timeout_seconds=300,
+        job_params_hash=payload_hash(root_params),
+        runtime_ref={
+            "storage": "db_inline",
+            "type": "json",
+            "name": "runtime",
+            "payload": {
+                "schema_version": 1,
+                "job_type": "test.workflow",
+                "job_params_hash": payload_hash(root_params),
+                "runtime_fields": {},
+                "output_target": {
+                    "type": "oss_prefix",
+                    "oss_bucket": "bucket",
+                    "oss_prefix": "root/",
+                    "oss_region": "region",
+                },
+                "workflow_plan": {
+                    "schema_version": 1,
+                    "kind": "dag_lite",
+                    "workflow_type": "test.workflow",
+                    "workflow_version": 1,
+                    "failure_policy": "fail_fast",
+                    "max_nodes": 10,
+                    "node_count": 2,
+                    "nodes": [
+                        {
+                            "key": "first",
+                            "job_type": "job_test_echo",
+                            "job_params": {"message": "hello", "repeat": 1},
+                            "depends_on": ["second"],
+                        },
+                        {
+                            "key": "second",
+                            "job_type": "job_test_echo",
+                            "job_params": {"message": "done", "repeat": 1},
+                            "depends_on": ["first"],
+                        },
+                    ],
+                },
+            },
+        },
+        created_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
+    )
+
+    async def fake_get_job_or_404(_db, job_id):
+        assert job_id == root_job.id
+        return root_job
+
+    async def fake_update_progress(*_args, **_kwargs):
+        return True
+
+    async def fake_heartbeat_attempt(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.heartbeat_attempt", fake_heartbeat_attempt)
+
+    with pytest.raises(AppError) as exc:
+        await execute_job(
+            _FakeDB(),
+            root_job.id,
+            execution_generation=1,
+            attempt_id=uuid.uuid4(),
+            lease_token=uuid.uuid4(),
+        )
+
+    assert exc.value.code == "RUNTIME_REF_INVALID"
 
 
 @pytest.mark.asyncio
