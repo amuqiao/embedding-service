@@ -11,9 +11,11 @@
 | [`api/service-contract.md`](api/service-contract.md) | 当前 HTTP envelope、Job、Callback、Billing、认证和公开 route 合同 |
 | [`api/extension-guide.md`](api/extension-guide.md) | 新增 `job_type`、HTTP 接口、模型、Prompt 和对象存储产物的接入入口 |
 | [`api/poster-title-image-api.md`](api/poster-title-image-api.md) | CPP 美术任务接入 AI 标题图生成的 vNext 目标接口草案，不覆盖当前实现合同 |
-| [`plans/hardening.md`](plans/hardening.md) | 尚未完成的可靠性、billing、callback、deployment 和文档硬化事项 |
-| [`plans/ai-capability-enhancement.md`](plans/ai-capability-enhancement.md) | AI gateway、typed usage/pricing、Prompt fail-fast 和多模态能力的增强计划 |
+| [`plans/hardening.md`](plans/hardening.md) | 不阻塞主干开发的运维硬化 backlog |
+| [`plans/ai-capability-enhancement.md`](plans/ai-capability-enhancement.md) | AI Capability Kernel、provider adapter、usage normalizer、Prompt fail-fast 和多模态能力接入骨架 |
+| [`plans/ai-capability-cost-boundary-design.md`](plans/ai-capability-cost-boundary-design.md) | AI 能力层成本估算、typed pricing、ledger 事实源和非扣费边界的设计计划 |
 | [`plans/workflow-kernel-design.md`](plans/workflow-kernel-design.md) | 在当前 Job kernel 之上增加最小 durable workflow kernel 的设计计划 |
+| [`plans/implementation-terminal-acceptance.md`](plans/implementation-terminal-acceptance.md) | workflow、AI capability 和 cost boundary 开发前后的终态验收门禁 |
 
 ## 分层规则
 

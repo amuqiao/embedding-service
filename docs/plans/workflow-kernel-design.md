@@ -60,7 +60,7 @@ Root Job
 
 Root Job 仍然是外部查询、callback 和幂等提交的入口。Workflow 只负责内部编排，不能绕过 Job kernel 自己发任务、自己重试或自己写 provider cost。
 
-本文的 workflow 设计是新增内部编排内核范围，不推翻 `docs/plans/ai-capability-enhancement.md` 中 AI gateway、usage/pricing、Prompt 和 model catalog 的边界。AI capability plan 仍然负责模型调用能力增强；workflow kernel 只在多步骤、多节点 Job 成为基础需求时负责可靠编排。
+本文的 workflow 设计是新增内部编排内核范围，不推翻 `docs/plans/ai-capability-enhancement.md` 中 AI Capability Kernel 的边界，也不接管 `docs/plans/ai-capability-cost-boundary-design.md` 中的成本事实源。AI Capability Kernel 仍负责模型调用能力；Cost Boundary 仍负责成本估算和 ledger 投影；Workflow Kernel 只在多步骤、多节点 Job 成为基础需求时负责可靠编排。
 
 ## Architecture Principles
 
@@ -550,6 +550,10 @@ Planner 必须在提交前校验：
 
 ## Implementation Phases
 
+### Phase 0: Contract Readiness
+
+开发 workflow kernel 前必须先通过 [`implementation-terminal-acceptance.md`](implementation-terminal-acceptance.md) 中的 Phase 0 readiness。本文只保留 workflow 专属增量：planner、runtime state machine、child dispatch、join/finalize、root progress projection 和 reconciler。
+
 ### Phase 1: Internal Kernel Skeleton
 
 - 增加 workflow tables 和 migration。
@@ -581,6 +585,7 @@ Planner 必须在提交前校验：
 
 ## Acceptance
 
+- [`implementation-terminal-acceptance.md`](implementation-terminal-acceptance.md) 中的 Phase 0 readiness 已经通过。
 - `WorkflowSpec` 编译产物可完全落库，进程重启后能继续执行。
 - `chain`、`group`、`chord`、`map`、`starmap`、`chunks` 都只编译成 node/dependency/join，不新增六套 runtime。
 - child Job 创建和 dispatch intent 在同一事务提交。
@@ -589,11 +594,8 @@ Planner 必须在提交前校验：
 - workflow reconciler 能修复 ready、running、join 和 root terminal projection 的 stuck 状态。
 - root Job 对外 `percent` 在 retry、reconciler 和 child Job 失败后不下降。
 - root Job 对外 `stage` 和 `message` 不泄漏 child node 或 attempt 级内部阶段。
-- `allow_partial` 不要求公共 `partially_succeeded` 状态；部分成功先通过 workflow outcome 和 result summary 表达。
-- `allow_partial` 的成功判定来自 frozen `success_criteria`，重启后可重复计算。
-- billing / cost 仍从 `ai_call_ledger_entries` 聚合，任何 summary 字段都不是事实源。
-- callback 只在 root Job 终态发送；callback 失败不改变 root Job 终态。
-- `./scripts/verify.sh check` 覆盖 planner、state machine、幂等推进和 billing projection 的单元测试。
+- `allow_partial` 的 workflow outcome 和成功判定来自 frozen `success_criteria`，重启后可重复计算。
+- `./scripts/verify.sh check` 覆盖 planner、state machine、幂等推进和 workflow projection 的单元测试。
 - 涉及真实 worker/outbox/recovery 的变更通过 `./scripts/verify.sh workflow-smoke`。
 
 ## Explicit Non-goals

@@ -7,7 +7,7 @@
 - 合同状态：draft for implementation。
 - 当前优先级：本文不覆盖 [`service-contract.md`](service-contract.md) 中已经实现的共享服务合同。
 - 发布要求：正式对外发布前，必须同步升级 route、schema、contract tests 和 `service-contract.md`。
-- vNext shared-contract 提案：本文中的 `/jobs/{job_id}/cost`、`Cost`、`running` 状态可返回非空 `job_result`、`partially_succeeded`、`job.partially_succeeded` 和共享 `job_progress` envelope 都尚未覆盖当前实现合同。
+- vNext shared-contract 提案：本文中的 `/jobs/{job_id}/cost`、`Cost`、`running` 状态可返回非空 `job_result` 和共享 `job_progress` envelope 都尚未覆盖当前实现合同。
 - 服务前缀、认证、HTTP envelope 和通用错误语义以 [`service-contract.md`](service-contract.md) 为准。
 
 ## Scope
@@ -117,7 +117,7 @@ Rules:
 
 Rules:
 
-- 调用方只能使用 `job_status` 判断排队、运行、成功、部分成功或失败。
+- 调用方只能使用 `job_status` 判断排队、运行、成功或失败。
 - `percent` 是近似进度，不表达计费比例或 item 完成比例。
 - `percent` 只用于 UI 展示，调用方不能用它判断成功、失败或是否可取结果。
 - 终态 Job 的 `percent` 必须是 `100`。
@@ -298,7 +298,7 @@ POST /api/v1/ai-jobs/jobs
   },
   "callback": {
     "url": "https://cpp.example.com/ai-callback",
-    "events": ["job.succeeded", "job.partially_succeeded", "job.failed"]
+    "events": ["job.succeeded", "job.failed"]
   },
   "metadata": {
     "cpp_task_id": "art-task-123",
@@ -367,21 +367,16 @@ Batch rules:
 - 首版同一 Job 内 `items[].language` 也必须唯一；如果未来允许同一语言多版本，仍以 `item_id` 关联结果。
 - 不提供 `batch_options`。首版批量策略固定为 item 独立执行、root Job 最后 join/finalize。
 - item 之间不共享 `reference_image`、`model_options` 或 `prompt_overrides`。
-- 某个 item 失败不会阻止其它 item 继续执行。
-- 至少一个 item 成功且至少一个 item 失败时，Job 可以进入 `partially_succeeded`。
 - 所有 item 失败时，Job 进入 `failed`。
 - `draw_count` 表示该 item 成功时需要返回的标题图片候选数量。
 - `background` 和 `output_format` 是业务输出要求。服务端可以通过 provider 参数、后处理或对象存储转码实现，但这些内部实现不属于外部合同。
 - `background=transparent` 且 `output_format!=png` 时，服务端必须 fail-fast 返回 `INVALID_INPUT`；首版不定义透明 JPEG 或透明 WebP 输出。
 - `output_format` 到输出 OSS `content_type` 的映射固定为：`png -> image/png`、`webp -> image/webp`、`jpeg -> image/jpeg`。
-- `job.partially_succeeded` 是 vNext callback event 扩展；当前共享合同是否支持该事件，以 [`service-contract.md`](service-contract.md) 为准。
-
 Option rules:
 
 - 未传 `callback` 时不发送 Callback。
-- `callback.events` 目标合同允许 `job.succeeded`、`job.partially_succeeded`、`job.failed`。
-- `job.partially_succeeded` 是 vNext callback event；正式发布前必须同步升级共享 callback schema 和 contract tests。
-- 传 `callback.url` 但未传 `callback.events` 时，vNext 默认通知 `job.succeeded`、`job.partially_succeeded`、`job.failed`。
+- `callback.events` 目标合同允许 `job.succeeded`、`job.failed`。
+- 传 `callback.url` 但未传 `callback.events` 时，vNext 默认通知 `job.succeeded`、`job.failed`。
 - `options.priority` 首版只定义 `normal`。
 - `options.idempotency_mode=return_existing` 时，重复 `client_request_id` 返回已有 Job 当前状态。
 
@@ -440,7 +435,7 @@ Rules:
 
 ## 5. Poll Poster Title Image Job
 
-> vNext job result contract：本节引入 `running` 状态可返回非空 `job_result`、批量 result item 和 `partially_succeeded` 终态。当前共享合同仍以 [`service-contract.md`](service-contract.md) 为准；正式发布本节行为前，必须同步升级 `JobEnvelope` schema、Job 状态枚举、callback event schema 和 contract tests。
+> vNext job result contract：本节引入 `running` 状态可返回非空 `job_result` 和批量 result item。当前共享合同仍以 [`service-contract.md`](service-contract.md) 为准；正式发布本节行为前，必须同步升级 `JobEnvelope` schema、Job 状态枚举、callback event schema 和 contract tests。
 
 ### Method / Path
 
@@ -611,92 +606,6 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 }
 ```
 
-### Partially Succeeded Response
-
-首版批量策略固定为 item 独立执行。如果至少一个 item 成功且至少一个 item 失败，Job 可以进入 `partially_succeeded`。
-
-```json
-{
-  "code": "0",
-  "msg": "success",
-  "data": {
-    "job": {
-      "job_id": "018f9a7f-0183-4e4f-938d-1baf7411b4fd",
-      "client_request_id": "cpp-request-20260624-000001",
-      "job_type": "poster_title_image",
-      "job_status": "partially_succeeded",
-      "job_progress": {
-        "percent": 100
-      },
-      "job_result": {
-        "schema_version": "default",
-        "job_type": "poster_title_image",
-        "batch_summary": {
-          "total": 2,
-          "succeeded": 1,
-          "failed": 1,
-          "running": 0,
-          "pending": 0
-        },
-        "items": [
-          {
-            "item_id": "es-ES",
-            "language": "es-ES",
-            "status": "succeeded",
-            "images": [
-              {
-                "object": {
-                  "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/poster-title/018f9a7f/es-ES/title-layer.png",
-                  "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/es-ES/title-layer.png",
-                  "content_type": "image/png",
-                  "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-                }
-              }
-            ],
-            "error": null
-          },
-          {
-            "item_id": "pt-BR",
-            "language": "pt-BR",
-            "status": "failed",
-            "images": [],
-            "error": {
-              "code": "MODEL_CALL_FAILED",
-              "message": "image provider failed",
-              "details": {
-                "failure_phase": "image_generation"
-              }
-            }
-          }
-        ],
-        "duration_ms": {
-          "ai_model": 42310,
-          "total": 58920
-        }
-      },
-      "job_error": null,
-      "cost": {
-        "currency": "USD",
-        "amount": "0.061200",
-        "final": true
-      },
-      "callback": {
-        "status": "pending",
-        "attempt": 0,
-        "last_error": null,
-        "next_retry_at": null
-      },
-      "status_url": "/api/v1/ai-jobs/jobs/018f9a7f-0183-4e4f-938d-1baf7411b4fd",
-      "created_at": "2026-06-24T12:00:00+00:00",
-      "updated_at": "2026-06-24T12:01:00+00:00",
-      "finished_at": "2026-06-24T12:01:00+00:00"
-    }
-  },
-  "request_id": "01J...",
-  "server_time": "2026-06-24T12:01:00+00:00"
-}
-```
-
 ### Failed Response
 
 ```json
@@ -821,21 +730,18 @@ Result rules:
   - 至少一个 item 仍为 `running` 或 `pending`，表示图片生成仍在执行。
   - 所有 item 都已经是 `succeeded` 或 `failed`，但 `job.cost=null`，表示图片生成已完成、费用仍在聚合。
 - `job_status=succeeded` 时，所有 item 的 `status` 必须为 `succeeded`，且 `running=0`、`pending=0`、`failed=0`。
-- `job_status=partially_succeeded` 时，至少一个 item 的 `status` 为 `succeeded`，至少一个 item 的 `status` 为 `failed`，且 `running=0`、`pending=0`。
 - `job_status=failed` 表示没有任何 item 成功；如果已经形成 item 快照，应返回非空 `job_result`，且所有 item 的 `status` 必须为 `failed`，`succeeded=0`、`running=0`、`pending=0`。
 - Job 在形成首个 item 快照前失败时，`job_status=failed` 可以返回 `job_result=null`，失败原因在 `job.job_error`。
-- 如果任一 item 已经对调用方公开为 `status=succeeded`，最终状态不能回退为 `failed`；后续失败只能使 Job 进入 `partially_succeeded`。
-- `job_status=partially_succeeded` 时，Job 已终态，失败原因在 `job.job_result.items[].error`。
 - `status=pending` 或 `status=running` 的 item 必须返回空 `images`、`error=null`。
 - `status=succeeded` 的 item 必须返回该请求 item `model_options.draw_count` 个标题图片 OSS object。
 - `images[]` 数组顺序是稳定候选顺序；同一 Job 的后续轮询和终态响应不得重排已经公开的图片。
-- 如果某个 item 无法产出请求 item `model_options.draw_count` 个标题图片，该 item 不能标记为 `succeeded`；首版不定义候选级部分成功。
+- 如果某个 item 无法产出请求 item `model_options.draw_count` 个标题图片，该 item 不能标记为 `succeeded`。
 - 首版不返回海报底图、合成海报、贴图坐标或图片尺寸元数据。
 - `status=failed` 的 item 必须返回空 `images` 和非空 `error`。
 - `duration_ms.ai_model` 只统计 AI provider 调用耗时；`duration_ms.total` 统计 Job 总耗时。
 - token、图片、视频、音频和调用次数等计费明细不在 `job_result` 中返回。
 - `job_status=queued` 或 `job_status=running` 时，`job.cost` 必须为 `null`。
-- `job_status=succeeded`、`job_status=partially_succeeded` 或 `job_status=failed` 时，`job.cost` 必须为 `Cost`，且 `cost.final=true`。
+- `job_status=succeeded` 或 `job_status=failed` 时，`job.cost` 必须为 `Cost`，且 `cost.final=true`。
 
 ## 6. Query Job Cost
 
@@ -876,21 +782,18 @@ Rules:
 - `final=true` 表示内部调用日志已经聚合完毕，CPP 可以展示为最终费用。
 - `final=false` 表示 Job 或费用聚合还未完成，CPP 应继续轮询 Job 或 Cost。
 - Job 终态响应和终态 Callback 中的 `job.cost.final` 必须是 `true`。
-- 已失败或部分成功的 Job 也可以有最终费用；是否收费由内部调用日志聚合决定。
+- 已失败的 Job 也可以有最终费用；是否收费由内部调用日志聚合决定。
 - CPP 接入 vNext 合同后，应以 `job.cost` 和本接口返回的 `Cost` 为费用权威；旧 `/billing` 如果仍存在，只作为兼容旧调用方的接口，不作为 CPP 新接入面的读取来源。
 
 ## 7. Callback
 
 Callback payload、签名和 delivery 语义沿用 [`service-contract.md`](service-contract.md) 的 `CallbackEnvelope`。
 
-> vNext callback proposal：`job.partially_succeeded` 是批量 Job 的新增终态事件，当前共享合同是否支持该事件，以 [`service-contract.md`](service-contract.md) 为准。
-
 Rules:
 
 - Callback payload 顶层 `job` 必须是完整 `JobEnvelope`，字段结构与 `GET /jobs/{job_id}` 中的 `data.job` 一致。
 - 终态 Callback payload 的 `job.cost` 必须存在，且 `job.cost.final=true`。
 - CPP 收到终态 Callback 后，可以直接读取 payload 顶层 `job.cost`；`GET /jobs/{job_id}/cost` 只是额外查询接口。
-- `job.partially_succeeded` 只用于批量 Job 部分成功终态；通用 callback 头、签名和重试规则不在本文重复定义。
 
 ## 8. Error Codes
 
