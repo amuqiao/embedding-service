@@ -47,6 +47,7 @@ def _model() -> SimpleNamespace:
         provider_model="custom-model",
         litellm_model="openai/custom-model",
         pricing_ref="openai:custom-model@2026-06-23",
+        capabilities=("text_generation",),
         temperature=0.2,
         num_retries=1,
         drop_params=False,
@@ -83,6 +84,16 @@ def test_model_gate_resolves_model_to_internal_capability(monkeypatch):
     assert result.resolved_model.provider_model == "custom-model"
     assert result.resolved_model.litellm_model == "openai/custom-model"
     assert result.resolved_model.pricing_ref == "openai:custom-model@2026-06-23"
+
+
+def test_model_gate_rejects_model_without_text_generation_capability(monkeypatch):
+    model = SimpleNamespace(**{**_model().__dict__, "capabilities": ("image_generation",)})
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: model)
+
+    with pytest.raises(AppError) as exc:
+        ai_capability_kernel.ModelGate().resolve("custom-model")
+
+    assert exc.value.code == "MODEL_NOT_AVAILABLE"
 
 
 @pytest.mark.asyncio

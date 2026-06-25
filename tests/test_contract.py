@@ -10,6 +10,7 @@ from app.core.security import require_service_auth
 from app.main import API_PREFIX, app
 from app.schemas.errors import build_error_envelope
 from app.schemas.jobs import CreateJobRequest, JobResult
+from app.schemas.meta import ModelOut, ModelsResponse
 from app.services.executor import _prompt_messages
 from app.services.jobs import _validate_create_request, validate_job_status_payload
 
@@ -537,6 +538,63 @@ def test_models_route_allows_missing_authorization_when_auth_header_is_disabled(
 
     assert response.status_code == 200
     assert response.json()["code"] == "0"
+
+
+def test_models_route_exposes_public_model_selection_metadata(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.api.routes import meta as meta_routes
+
+    _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
+    monkeypatch.setattr(
+        meta_routes,
+        "list_models_response",
+        lambda: ModelsResponse(
+            default_model_id="custom-model",
+            models=[
+                ModelOut(
+                    id="custom-model",
+                    name="Custom Model",
+                    provider="openai",
+                    enabled=True,
+                    capabilities=["text_generation"],
+                    input_media_types=["text/plain"],
+                    output_media_types=["text/plain"],
+                    context_window=12345,
+                    supports_json_output=True,
+                    notes="Caller-facing note",
+                )
+            ],
+        ),
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(f"{API_PREFIX}/models")
+
+    assert response.status_code == 200
+    model = response.json()["data"]["models"][0]
+    assert model["capabilities"] == ["text_generation"]
+    assert model["input_media_types"] == ["text/plain"]
+    assert model["output_media_types"] == ["text/plain"]
+    hidden_fields = {
+        "pricing_ref",
+        "provider_model",
+        "litellm_model",
+        "requires_env",
+        "temperature",
+        "num_retries",
+        "drop_params",
+    }
+    assert hidden_fields.isdisjoint(model)
+
+    model_schema = app.openapi()["components"]["schemas"]["ModelOut"]["properties"]
+    assert {"capabilities", "input_media_types", "output_media_types"} <= set(model_schema)
+    model_required = set(app.openapi()["components"]["schemas"]["ModelOut"]["required"])
+    assert {"capabilities", "input_media_types", "output_media_types"} <= model_required
+    assert hidden_fields.isdisjoint(model_schema)
+
+    operation = app.openapi()["paths"][f"{API_PREFIX}/models"]["get"]
+    response_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert response_schema["properties"]["data"]["$ref"].endswith("/ModelsResponse")
 
 
 def test_legal_request_id_allows_dot_and_colon(monkeypatch):

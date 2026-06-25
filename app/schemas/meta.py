@@ -6,6 +6,9 @@ class ModelOut(BaseModel):
     name: str
     provider: str
     enabled: bool
+    capabilities: list[str]
+    input_media_types: list[str]
+    output_media_types: list[str]
     context_window: int
     supports_json_output: bool = False
     notes: str = ""

@@ -110,6 +110,8 @@ def require_enabled_text_model(model_id: str) -> TextModel:
 class ModelGate:
     def resolve(self, model_id: str) -> ModelGateResult:
         model = require_enabled_text_model(model_id)
+        if "text_generation" not in model.capabilities:
+            raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不支持文本生成: {model_id}")
         return ModelGateResult(
             model=model,
             resolved_model=ResolvedModel(

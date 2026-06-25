@@ -25,10 +25,10 @@ AI 能力层不负责：
 ## Current Baseline
 
 - 当前稳定 AI 调用入口是 `app/services/ai_gateway_facade.py` 的 `generate_text_with_ledger()`。
-- 当前 facade 内已经存在 `ModelGate`、`ProviderGateway`、`UsageNormalizer`、`TypedPricingResolver` 和 `UsageLedgerWriter` 这些职责对象，但它们仍主要服务文本生成路径。
+- `app/services/ai_capability_kernel.py` 承载 `ModelGate`、`ProviderGateway`、`UsageNormalizer`、`TypedPricingResolver` 和 `UsageLedgerWriter`；`app/services/ai_gateway_facade.py` 保留文本调用 facade。
 - 当前稳定执行链仍是 `generate_text_with_ledger()` + `TextModel`。多模态 `UsageRecord` / `PricingRule` 是扩展抽象基础，不代表图片、音频或视频 provider path 已经交付。
 - `app/integrations/ai_gateway.py` 当前是文本生成 adapter，返回 `TextGenerationResult` 和 token usage，不写 Job、Callback、Billing envelope 或数据库。
-- `app/core/model_registry.py` 从 `app/core/models.yaml` 加载模型目录，并校验 enabled、环境变量、provider model 和 `pricing_ref`。
+- `app/core/model_registry.py` 从 `app/core/models.yaml` 加载模型目录，并校验 enabled、能力标签、输入/输出媒体类型、required env 声明、provider model 派生、generation 参数和 `pricing_ref`。缺少 required env 的模型不会出现在可用模型列表中。
 - `app/core/pricing_registry.py` 从 `app/core/pricing.yaml` 加载价格规则，当前配置只启用文本 `per_token`，代码已有 `per_image`、`per_second`、`per_call` 的基础类型。
 - `app/core/usage_records.py` 已经提供 `TextUsageRecord`、`ImageUsageRecord`、`AudioUsageRecord` 和 `VideoUsageRecord` 的 typed usage 入口。
 - `ai_call_ledger_entries` 是 AI provider call 的 usage / cost estimate 事实源；`app/services/billing.py` 从 ledger 聚合 Job scope billing read model。
@@ -36,10 +36,9 @@ AI 能力层不负责：
 
 ## Remaining Gaps
 
-- AI Capability Kernel 的职责还没有被文档化为长期约束；不同业务接入时仍可能绕过 facade 直接调用 provider、解析 usage 或计算 cost。
-- 当前 facade 的职责对象还集中在一个模块内，文本路径清楚，但多模态路径接入前需要先稳定输入、输出、usage 和 failure contract。
-- Model catalog 主要面向文本模型；多模态能力标签、输入/输出媒体类型、生成参数约束和 provider adapter 归属还未形成可验证合同。
-- Prompt Registry 缺少启动期和 verify 期 fail-fast。Prompt-driven `job_type` 还不能声明稳定 `prompt_ref`、step prompt refs 或 `output_schema_ref` 并由 registry 统一校验。
+- 多模态 path 仍未交付；当前 kernel 组件和 provider adapter 仍主要服务文本生成路径。
+- Model catalog 已有能力标签、输入/输出媒体类型和 generation 参数校验，但多模态模型条目、provider adapter 归属和真实多模态 pricing fixtures 还未接入。
+- Prompt Registry 已纳入 registry consistency 校验；后续仍需要在正式业务 `job_type` 接入时补足对应 prompt refs、step prompt refs 和 output schema refs。
 - Usage normalizer 已有 typed record 基础，但 provider raw usage 到 `usage_units` 的转换规则仍主要覆盖文本。
 - 成本估算边界已经单独收敛到 `ai-capability-cost-boundary-design.md`，本文件需要避免重复定义 pricing 深节和 billing 状态矩阵。
 
@@ -193,8 +192,8 @@ Phase 1 的数据库/表边界如下：
 
 ### Phase 2: Registry fail-fast
 
-- 扩展 model catalog 校验，支持能力标签、输入/输出媒体类型、required env 和生成参数约束。
-- 将 Prompt Registry 纳入启动期和 `./scripts/verify.sh check` 校验。
+- 扩展 model catalog 校验，支持能力标签、输入/输出媒体类型、required env 声明和生成参数约束。
+- 保持 Prompt Registry 在启动期、worker 启动和 `./scripts/verify.sh check` 中校验。
 - Prompt-driven `job_type` 必须声明 prompt refs、step prompt refs 和 output schema refs。
 - 缺失、拼错或 step 不匹配必须 fail-fast。
 
@@ -235,8 +234,9 @@ Phase 1 验收：
 后续阶段验收：
 
 - Phase 2 后，非法 `model_id`、`pricing_ref`、prompt ref、step prompt ref、output schema ref 在应用启动、worker 启动或 `./scripts/verify.sh check` 中直接失败。
+- Phase 2 后，`GET /models` 公开 `capabilities`、`input_media_types` 和 `output_media_types`，但不公开 `pricing_ref`、价格矩阵或 provider raw usage schema。
+- Phase 2 后，`tests/test_model_registry.py` 覆盖 model gate、capability、media types、required env 和 pricing ref 匹配。
 - Phase 3 后，`tests/test_ai_gateway_facade.py` 覆盖 facade 正常路径、provider 失败、usage 缺失、pricing 失败和 terminal ledger update 失败。
-- Phase 3 后，`tests/test_model_registry.py` 覆盖 model gate、capability、required env 和 pricing ref 匹配。
 - Phase 4 前，workflow / child Job 归因必须完成设计选择：给 `ai_call_ledger_entries` 加 attribution 字段，或使用等价 attribution 辅助表 / scope 规则。
 - Phase 4 后，业务 Job、workflow node 和 provider adapter 都不能绕过 AI facade 直接写 cost 或解析 provider raw usage。
 - `./scripts/verify.sh check` 成为关闭本计划阶段性工作的最小验证入口；涉及真实 Job workflow 时，再运行 `./scripts/verify.sh workflow-smoke`。

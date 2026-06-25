@@ -86,6 +86,8 @@ Callback 是服务主动向调用方发送的终态事件，不套 HTTP response
 
 `app/integrations/ai_gateway.py` 只执行 provider 调用并返回 `TextGenerationResult`，不写 Job、Callback、Billing envelope 或数据库。
 
+模型目录由 `app/core/models.yaml` 和 `app/core/model_registry.py` 管理。当前每个模型必须声明 `capabilities`、`input_media_types`、`output_media_types`、`pricing_ref`、provider 映射、required env 声明和 generation 参数；`GET /models` 只暴露调用方选择模型需要的公开元信息，不暴露 `pricing_ref` 或价格矩阵。缺少 required env 的模型不会出现在可用模型列表中。
+
 Job scope 调用必须传入：
 
 - `scope_type="job"`

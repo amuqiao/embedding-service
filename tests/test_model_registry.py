@@ -68,6 +68,12 @@ models:
     litellm_model: openai/custom-model
     pricing_ref: openai:custom-model@2026-06-23
     enabled: true
+    capabilities:
+      - text_generation
+    input_media_types:
+      - text/plain
+    output_media_types:
+      - text/plain
     context_window: 12345
     supports_json_output: true
     notes: ""
@@ -96,6 +102,9 @@ def test_model_registry_loads_available_models_from_yaml(tmp_path, monkeypatch):
 
     assert response.default_model_id == "custom-model"
     assert [model.id for model in response.models] == ["custom-model"]
+    assert response.models[0].capabilities == ["text_generation"]
+    assert response.models[0].input_media_types == ["text/plain"]
+    assert response.models[0].output_media_types == ["text/plain"]
     assert response.models[0].context_window == 12345
     assert response.billing_enabled is None
     assert response.cost_estimate_available is None
@@ -167,6 +176,12 @@ models:
     litellm_model: openai/custom-model
     pricing_ref: openai:gpt-5.5@2026-06-23
     enabled: true
+    capabilities:
+      - text_generation
+    input_media_types:
+      - text/plain
+    output_media_types:
+      - text/plain
     context_window: 12345
     supports_json_output: true
     notes: ""
@@ -187,6 +202,66 @@ models:
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
 
     with pytest.raises(RuntimeError, match="does not match model custom-model"):
+        model_registry.validate_model_catalog()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("capabilities", "[]", "capabilities"),
+        ("capabilities", "[text_generation, custom_unknown]", "unknown values"),
+        ("capabilities", "[text_generation, text_generation]", "duplicate capabilities"),
+        ("input_media_types", "[]", "input_media_types"),
+        ("input_media_types", "[textplain]", "invalid media types"),
+        ("input_media_types", "[text/plain, text/plain]", "duplicate input_media_types"),
+        ("output_media_types", "[]", "output_media_types"),
+        ("output_media_types", "[textplain]", "invalid media types"),
+        ("output_media_types", "[text/plain, text/plain]", "duplicate output_media_types"),
+    ],
+)
+def test_model_registry_rejects_invalid_capability_or_media_contract(tmp_path, monkeypatch, field, value, message):
+    config_path = tmp_path / "models.yaml"
+    _write_model_config(config_path)
+    config_text = config_path.read_text(encoding="utf-8")
+    if field == "capabilities":
+        config_text = config_text.replace("capabilities:\n      - text_generation", f"capabilities: {value}")
+    elif field == "input_media_types":
+        config_text = config_text.replace("input_media_types:\n      - text/plain", f"input_media_types: {value}")
+    else:
+        config_text = config_text.replace("output_media_types:\n      - text/plain", f"output_media_types: {value}")
+    config_path.write_text(config_text, encoding="utf-8")
+    test_settings = _build_settings(
+        OPENAI_API_KEY="test-key",
+        DEFAULT_MODEL_ID="custom-model",
+        MODEL_CONFIG_PATH=str(config_path),
+    )
+    monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
+
+    with pytest.raises(RuntimeError, match=message):
+        model_registry.list_models_response()
+
+
+@pytest.mark.parametrize(
+    ("field", "block", "message"),
+    [
+        ("capabilities", "    capabilities:\n      - text_generation\n", "capabilities"),
+        ("input_media_types", "    input_media_types:\n      - text/plain\n", "input_media_types"),
+        ("output_media_types", "    output_media_types:\n      - text/plain\n", "output_media_types"),
+    ],
+)
+def test_model_registry_rejects_missing_capability_or_media_contract(tmp_path, monkeypatch, field, block, message):
+    config_path = tmp_path / "models.yaml"
+    _write_model_config(config_path)
+    config_text = config_path.read_text(encoding="utf-8").replace(block, "")
+    config_path.write_text(config_text, encoding="utf-8")
+    test_settings = _build_settings(
+        OPENAI_API_KEY="test-key",
+        DEFAULT_MODEL_ID="custom-model",
+        MODEL_CONFIG_PATH=str(config_path),
+    )
+    monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
+
+    with pytest.raises(RuntimeError, match=message):
         model_registry.validate_model_catalog()
 
 

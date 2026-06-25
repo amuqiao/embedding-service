@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -6,6 +7,9 @@ import yaml
 from app.core.config import settings
 from app.core.pricing_registry import validate_price_matches_model
 from app.schemas.meta import ModelOut, ModelsResponse
+
+KNOWN_MODEL_CAPABILITIES = frozenset({"text_generation", "image_generation", "tts", "video_generation"})
+MEDIA_TYPE_PATTERN = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
 
 
 @dataclass(frozen=True)
@@ -17,6 +21,9 @@ class TextModel:
     litellm_model: str
     pricing_ref: str
     enabled: bool
+    capabilities: tuple[str, ...]
+    input_media_types: tuple[str, ...]
+    output_media_types: tuple[str, ...]
     context_window: int
     supports_json_output: bool
     notes: str
@@ -65,6 +72,39 @@ def _requires_env(config: dict[str, Any], model_id: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value)
 
 
+def _required_str_tuple(config: dict[str, Any], key: str, model_id: str) -> tuple[str, ...]:
+    value = config.get(key)
+    if not isinstance(value, list) or not value:
+        raise RuntimeError(f"model {model_id} requires {key} as a non-empty list of strings")
+    values: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise RuntimeError(f"model {model_id} requires {key} as a non-empty list of strings")
+        normalized = item.strip()
+        if normalized in seen:
+            raise RuntimeError(f"model {model_id} has duplicate {key}: {normalized}")
+        seen.add(normalized)
+        values.append(normalized)
+    return tuple(values)
+
+
+def _capabilities(config: dict[str, Any], model_id: str) -> tuple[str, ...]:
+    capabilities = _required_str_tuple(config, "capabilities", model_id)
+    unknown = sorted(set(capabilities) - KNOWN_MODEL_CAPABILITIES)
+    if unknown:
+        raise RuntimeError(f"model {model_id} capabilities contains unknown values: {unknown}")
+    return capabilities
+
+
+def _media_types(config: dict[str, Any], key: str, model_id: str) -> tuple[str, ...]:
+    media_types = _required_str_tuple(config, key, model_id)
+    invalid = [media_type for media_type in media_types if not MEDIA_TYPE_PATTERN.fullmatch(media_type)]
+    if invalid:
+        raise RuntimeError(f"model {model_id} {key} contains invalid media types: {invalid}")
+    return media_types
+
+
 def _env_value(name: str) -> str:
     return settings.application_env_value(name)
 
@@ -108,6 +148,7 @@ def _parse_model(config: dict[str, Any]) -> TextModel:
     temperature, num_retries, drop_params = _generation_config(config, model_id)
     provider = _required_str(config, "provider", model_id)
     litellm_model = _required_str(config, "litellm_model", model_id)
+    capabilities = _capabilities(config, model_id)
     return TextModel(
         id=model_id,
         name=_required_str(config, "name", model_id),
@@ -116,6 +157,9 @@ def _parse_model(config: dict[str, Any]) -> TextModel:
         litellm_model=litellm_model,
         pricing_ref=_required_str(config, "pricing_ref", model_id),
         enabled=_required_bool(config, "enabled", model_id),
+        capabilities=capabilities,
+        input_media_types=_media_types(config, "input_media_types", model_id),
+        output_media_types=_media_types(config, "output_media_types", model_id),
         context_window=_required_positive_int(config, "context_window", model_id),
         supports_json_output=_required_bool(config, "supports_json_output", model_id),
         notes=_required_str(config, "notes", model_id, allow_empty=True),
@@ -163,6 +207,9 @@ def list_models_response() -> ModelsResponse:
                 name=m.name,
                 provider=m.provider,
                 enabled=m.enabled,
+                capabilities=list(m.capabilities),
+                input_media_types=list(m.input_media_types),
+                output_media_types=list(m.output_media_types),
                 context_window=m.context_window,
                 supports_json_output=m.supports_json_output,
                 notes=m.notes,

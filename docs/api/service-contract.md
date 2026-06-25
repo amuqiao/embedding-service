@@ -163,3 +163,35 @@ GET /api/v1/ai-jobs/prompt-templates
 ```
 
 模型配置来自 `MODEL_CONFIG_PATH`，Prompt 配置来自 `PROMPT_CONFIG_PATH`。这两个接口只暴露当前服务允许调用方看到的元信息，不暴露 provider 密钥或内部 pricing 明细。
+
+`GET /models` 成功响应：
+
+```text
+HttpEnvelope[ModelsResponse]
+  data.default_model_id
+  data.models[]
+  data.billing_enabled?
+  data.cost_estimate_available?
+```
+
+`ModelsResponse.models[]` 的单个模型条目包含：
+
+```text
+ModelOut
+  id
+  name
+  provider
+  enabled
+  capabilities
+  input_media_types
+  output_media_types
+  context_window
+  supports_json_output
+  notes
+```
+
+`capabilities`、`input_media_types` 和 `output_media_types` 是调用方选择模型需要的公开能力元信息。`capabilities` 使用本服务定义的稳定能力值，不直接透传 provider 原始能力名；`input_media_types` 和 `output_media_types` 使用 MIME type。未来可以新增能力值或媒体类型，调用方应忽略未知值。
+
+`pricing_ref`、价格矩阵、provider raw usage schema、provider key、provider model、LiteLLM model、required env 和 generation 参数不属于公开模型合同。
+
+兼容性说明：Phase 2 为 `ModelOut` 新增 `capabilities`、`input_media_types` 和 `output_media_types`。宽松 JSON 客户端可以忽略新增字段；严格 schema 或生成 SDK 客户端需要同步更新模型定义。

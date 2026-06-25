@@ -29,9 +29,11 @@
 
 1. 修改 `app/core/models.yaml`。
 2. 确认 `model_id` 是对外稳定 ID。
-3. 配置 provider、provider model、LiteLLM model、上下文窗口和调用参数。
-4. 如 billing enabled，确保 pricing ref 存在且与模型配置匹配。
-5. 补充或调整模型 registry 测试。
+3. 配置 provider、LiteLLM model、能力标签、输入/输出媒体类型、上下文窗口、`pricing_ref`、required env 和调用参数。
+4. `capabilities` 使用本服务稳定能力值；`input_media_types` 和 `output_media_types` 使用 MIME type。
+5. `provider_model` 由 `provider` 和 `litellm_model` 派生，不在 YAML 中单独配置。
+6. 确保 `pricing_ref` 存在且与模型配置匹配。
+7. 补充或调整模型 registry 测试。
 
 Provider 密钥来自环境变量，不写入 YAML 或文档示例。
 
