@@ -45,6 +45,36 @@ api_reload_enabled() {
   bool_enabled DEV_API_RELOAD "$DEV_API_RELOAD"
 }
 
+app_env_value() {
+  local key="$1"
+  local value="${!key:-}"
+  if [[ -n "$value" ]]; then
+    printf "%s" "$value"
+  else
+    env_value "$key"
+  fi
+}
+
+bool_true() {
+  case "$1" in
+    true|True|TRUE) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_loopback_host() {
+  case "$1" in
+    127.0.0.1|localhost|::1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+guard_api_insecure_header_flags() {
+  if bool_true "$(app_env_value DISABLE_HTTP_AUTH_HEADER)" || bool_true "$(app_env_value DISABLE_CALLER_ID_HEADER)"; then
+    is_loopback_host "$API_HOST" || die "API_HOST must be 127.0.0.1, localhost, or ::1 when auth header disable flags are enabled" 2
+  fi
+}
+
 service_command() {
   case "$1" in
     api)
@@ -234,6 +264,7 @@ start_service() {
   require_app_service "$service"
   require_project_python
   if [[ "$service" == "api" ]]; then
+    guard_api_insecure_header_flags
     if api_reload_enabled; then
       require_executable "$UVICORN_BIN" "run: ./scripts/dev.sh bootstrap"
     else

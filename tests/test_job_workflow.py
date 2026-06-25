@@ -158,6 +158,79 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
 
 
 @pytest.mark.asyncio
+async def test_publish_job_attempt_marks_published_before_enqueue(monkeypatch):
+    attempt_id = uuid.uuid4()
+    dispatch = SimpleNamespace(id=uuid.uuid4())
+    lease_token = uuid.uuid4()
+    calls: list[str] = []
+
+    async def fake_with_db(coro):
+        return await coro(_FakeDB())
+
+    async def fake_lease_dispatch_for_publish(_db, received_attempt_id, *, lease_seconds):
+        assert received_attempt_id == attempt_id
+        calls.append("lease")
+        return dispatch, lease_token
+
+    async def fake_kiq(received_attempt_id):
+        assert received_attempt_id == str(attempt_id)
+        calls.append("kiq")
+
+    async def fake_mark_dispatch_published(_db, dispatch_id, *, lease_token: uuid.UUID, next_attempt_at):
+        assert dispatch_id == dispatch.id
+        calls.append("mark")
+        return True
+
+    monkeypatch.setattr(task_jobs, "_with_db", fake_with_db)
+    monkeypatch.setattr(task_jobs.JobRepo, "lease_dispatch_for_publish", fake_lease_dispatch_for_publish)
+    monkeypatch.setattr(task_jobs.run_job_attempt, "kiq", fake_kiq)
+    monkeypatch.setattr(task_jobs.JobRepo, "mark_dispatch_published", fake_mark_dispatch_published)
+
+    await task_jobs.publish_job_attempt(attempt_id)
+
+    assert calls == ["lease", "mark", "kiq"]
+
+
+@pytest.mark.asyncio
+async def test_publish_job_attempt_defers_after_uncertain_enqueue(monkeypatch):
+    attempt_id = uuid.uuid4()
+    dispatch = SimpleNamespace(id=uuid.uuid4())
+    lease_token = uuid.uuid4()
+    calls: list[str] = []
+
+    async def fake_with_db(coro):
+        return await coro(_FakeDB())
+
+    async def fake_lease_dispatch_for_publish(_db, received_attempt_id, *, lease_seconds):
+        assert received_attempt_id == attempt_id
+        calls.append("lease")
+        return dispatch, lease_token
+
+    async def fake_mark_dispatch_published(_db, dispatch_id, *, lease_token: uuid.UUID, next_attempt_at):
+        assert dispatch_id == dispatch.id
+        calls.append("mark")
+        return True
+
+    async def fake_kiq(received_attempt_id):
+        assert received_attempt_id == str(attempt_id)
+        calls.append("kiq")
+        raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr(task_jobs, "_with_db", fake_with_db)
+    monkeypatch.setattr(task_jobs.JobRepo, "lease_dispatch_for_publish", fake_lease_dispatch_for_publish)
+    monkeypatch.setattr(task_jobs.JobRepo, "mark_dispatch_published", fake_mark_dispatch_published)
+    monkeypatch.setattr(task_jobs.run_job_attempt, "kiq", fake_kiq)
+
+    with pytest.raises(task_jobs.TaskiqPublishDeferredError) as exc:
+        await task_jobs.publish_job_attempt(attempt_id)
+
+    assert calls == ["lease", "mark", "kiq"]
+    assert exc.value.attempt_id == attempt_id
+    assert exc.value.error["code"] == "TASKIQ_PUBLISH_FAILED"
+    assert exc.value.error["details"]["type"] == "RuntimeError"
+
+
+@pytest.mark.asyncio
 async def test_execute_job_runs_custom_job_without_model_runtime(monkeypatch):
     register_all_job_types()
     job = _running_add_job()

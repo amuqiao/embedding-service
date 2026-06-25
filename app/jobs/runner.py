@@ -13,7 +13,12 @@ from app.models.job import Job
 from app.repositories.job_repo import JobRepo
 from app.services.executor import run_ai_job
 from app.services.job_lifecycle import SUCCESS_SIDE_EFFECT_DONE_STAGE, SUCCESS_SIDE_EFFECT_STAGE
-from app.services.job_runtime import model_id_from_job, prompt_payload_from_job, workflow_plan_from_job
+from app.services.job_runtime import (
+    ai_billing_scope_id_from_job,
+    model_id_from_job,
+    prompt_payload_from_job,
+    workflow_plan_from_job,
+)
 from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404, trigger_request_id_from_job
 from app.workflows.orchestrator import advance_workflow_after_child_terminal, create_ready_child_jobs
 
@@ -181,6 +186,7 @@ async def execute_job(
             input_text=_load_input_text(job),
             caller_id=job.caller_id,
             job_id=job.id,
+            ai_scope_id=ai_billing_scope_id_from_job(job),
             attempt_id=model_attempt_id,
             request_id=trigger_request_id_from_job(job),
         )

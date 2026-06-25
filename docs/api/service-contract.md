@@ -21,14 +21,15 @@ route 函数只返回内层 data schema；外层 envelope 由应用统一包装�
 
 ## 认证
 
-除 `/health` 和 `/healthz` 外，请求默认需要：
+除 `/health` 和 `/healthz` 外，请求默认需要 Bearer token：
 
 ```http
 Authorization: Bearer <service-key>
-X-AI-Service-Caller-ID: <caller-id>
 ```
 
-本地可以通过配置关闭 header 校验，但配置层只允许在 loopback DB/Redis 地址下开启。
+`X-AI-Service-Caller-ID` 是可选调用方标识；不传时使用 `default` caller，传入非法格式会返回未授权错误。
+
+本地可以通过 `DISABLE_HTTP_AUTH_HEADER=true` 关闭 Bearer 校验；可以通过 `DISABLE_CALLER_ID_HEADER=true` 忽略 `X-AI-Service-Caller-ID` 并统一使用 `default` caller。`Settings` 会要求 DB/Redis 指向 loopback；本地 `dev.sh` / `start-api.sh` 启动入口还会要求 `API_HOST` 是 loopback。绕过这些启动入口时，调用方必须自行保证 API 不绑定公开地址。
 
 ## 创建 Job
 
@@ -95,7 +96,7 @@ HttpEnvelope[JobBillingResponseData]
   data.billing -> BillingEnvelope
 ```
 
-Job billing 从 `ai_call_ledger_entries` 中 `scope_type="job"` 且 `scope_id=job_id` 的 ledger 行聚合。Billing 查询是 Job scope 的公开投影，不是 `job_type` 自定义 result 字段。
+Job billing 从 `ai_call_ledger_entries` 中 `scope_type="job"` 且 `scope_id=job_id` 的 ledger 行聚合。对 workflow root Job，internal child Job 的 AI 调用也写入 root Job scope；ledger 行仍保留 child `job_id`、`attempt_id` 和 `job_type` 作为诊断归因。Billing 查询是 Job scope 的公开投影，不是 `job_type` 自定义 result 字段。
 
 ```text
 BillingEnvelope

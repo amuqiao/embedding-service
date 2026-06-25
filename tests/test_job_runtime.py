@@ -5,6 +5,7 @@ import pytest
 
 from app.models.job import Job
 from app.services.job_runtime import (
+    ai_billing_scope_id_from_job,
     job_params_from_job,
     payload_hash,
     prompt_payload_from_job,
@@ -99,3 +100,16 @@ def test_runtime_helpers_fail_fast_without_refs():
 
     with pytest.raises(Exception, match="运行时引用不存在"):
         job_params_from_job(job)
+
+
+def test_ai_billing_scope_uses_root_for_internal_child():
+    root_id = uuid.uuid4()
+    child_id = uuid.uuid4()
+
+    assert ai_billing_scope_id_from_job(Job(id=root_id, job_type="test.echo")) == root_id
+    assert (
+        ai_billing_scope_id_from_job(
+            Job(id=child_id, job_type="test.echo", is_internal=True, root_job_id=root_id)
+        )
+        == root_id
+    )

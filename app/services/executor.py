@@ -61,6 +61,7 @@ async def run_ai_job(
     input_text: str,
     caller_id: str,
     job_id: uuid.UUID,
+    ai_scope_id: uuid.UUID | None = None,
     attempt_id: uuid.UUID,
     request_id: str | None,
 ) -> JobResult:
@@ -70,7 +71,7 @@ async def run_ai_job(
     result = await generate_text_with_ledger(
         caller_id=caller_id,
         scope_type="job",
-        scope_id=str(job_id),
+        scope_id=str(ai_scope_id or job_id),
         operation=f"{job_type}.execute",
         step_name="calling_model",
         request_id=request_id,

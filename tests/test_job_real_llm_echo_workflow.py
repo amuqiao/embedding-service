@@ -241,6 +241,7 @@ async def test_job_real_llm_echo_uses_shared_llm_runtime(monkeypatch):
     assert captured["model_id"] == "gpt-5.4-mini"
     assert captured["caller_id"] == "caller-1"
     assert captured["job_id"] == job.id
+    assert captured["ai_scope_id"] == job.id
     assert captured["attempt_id"] == job.active_attempt_id
     assert captured["request_id"] == "req-real-1"
     assert captured["input_text"] == "hello"
@@ -280,3 +281,89 @@ async def test_job_real_llm_double_echo_calls_ledger_twice(monkeypatch):
     assert calls[0]["scope_id"] == str(job.id)
     assert calls[0]["attempt_id"] == job.active_attempt_id
     assert calls[1]["request_id"] == "req-real-double-1"
+
+
+@pytest.mark.asyncio
+async def test_internal_real_llm_echo_bills_root_scope(monkeypatch):
+    register_all_job_types()
+    job = _running_real_llm_job()
+    root_id = uuid.uuid4()
+    job.is_internal = True
+    job.root_job_id = root_id
+    job.parent_job_id = root_id
+    job.workflow_node_key = "first"
+    captured = {}
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_update_progress(_db, _job_id, *, progress_percent, progress_text, progress_stage, **_kwargs):
+        job.progress_percent = progress_percent
+        job.progress_stage = progress_stage
+        return True
+
+    async def fake_run_ai_job(**kwargs):
+        captured.update(kwargs)
+        return JobResult(artifacts=[], signals={"message": "ok"})
+
+    async def fake_mark_succeeded(_db, _job_id, *, result, canonical_result, **_kwargs):
+        job.status = "succeeded"
+        return True
+
+    async def fake_advance_workflow_after_child_terminal(_db, *, child_job):
+        captured["advanced_child_id"] = child_job.id
+        return {"advanced": True}
+
+    async def fake_handle_workflow_advance_result(result):
+        captured["workflow_advance"] = result
+
+    async def fake_deliver_callback_for_job(_job_id):
+        captured["callback_checked"] = True
+        return False
+
+    monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
+    monkeypatch.setattr("app.jobs.runner.run_ai_job", fake_run_ai_job)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.mark_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr(
+        "app.jobs.runner.advance_workflow_after_child_terminal",
+        fake_advance_workflow_after_child_terminal,
+    )
+    monkeypatch.setattr("app.tasks.jobs.handle_workflow_advance_result", fake_handle_workflow_advance_result)
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback_for_job)
+
+    result = await execute_job(_FakeDB(), job.id, execution_generation=1)
+
+    assert result == {"job_id": str(job.id), "status": "succeeded"}
+    assert captured["job_id"] == job.id
+    assert captured["ai_scope_id"] == root_id
+    assert captured["advanced_child_id"] == job.id
+    assert captured["workflow_advance"] == {"advanced": True}
+    assert "callback_checked" not in captured
+
+
+@pytest.mark.asyncio
+async def test_internal_real_llm_double_echo_bills_root_scope(monkeypatch):
+    job = _running_real_llm_double_job()
+    root_id = uuid.uuid4()
+    job.is_internal = True
+    job.root_job_id = root_id
+    job.parent_job_id = root_id
+    job.workflow_node_key = "double"
+    calls = []
+
+    async def fake_generate_text_with_ledger(**kwargs):
+        calls.append(kwargs)
+        index = len(calls)
+        return type("Result", (), {"text": f"message-{index}"})()
+
+    monkeypatch.setattr(
+        "app.jobs.types.job_real_llm_double_echo.generate_text_with_ledger",
+        fake_generate_text_with_ledger,
+    )
+
+    await JobRealLlmDoubleEchoJob()._execute(job, _FakeDB())
+
+    assert [call["scope_id"] for call in calls] == [str(root_id), str(root_id)]
+    assert {call["job_id"] for call in calls} == {job.id}
+    assert {call["attempt_id"] for call in calls} == {job.active_attempt_id}

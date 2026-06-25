@@ -7,16 +7,20 @@
 | 文档 | 用途 |
 |---|---|
 | [`current/architecture.md`](current/architecture.md) | 当前服务边界、模块职责、运行形态、AI gateway/billing 边界和验证基线 |
+| [`current/ai-capability.md`](current/ai-capability.md) | 当前 AI 调用入口、model/prompt/pricing registry、AI kernel 组件和文本 provider path |
+| [`current/ai-billing.md`](current/ai-billing.md) | 当前 AI call ledger、usage/cost 事实源、Job billing 聚合和非资金账本边界 |
 | [`current/job-kernel.md`](current/job-kernel.md) | 当前 Job、幂等键、Attempt、Dispatch outbox、Callback outbox 和 audit event 的职责划分 |
 | [`current/job-kernel-table-design.md`](current/job-kernel-table-design.md) | 当前 Job kernel 表设计意图、核心表/辅助表边界和 workflow MVP 表设计原则 |
+| [`current/workflow-kernel.md`](current/workflow-kernel.md) | 当前 DAG-lite root/child workflow、child Job 执行、root 汇总和 billing scope 行为 |
+| [`current/template-readiness.md`](current/template-readiness.md) | 当前仓库作为 AI Job 微服务模板复制给新业务前的就绪边界、必改项和最小验收 |
 | [`api/service-contract.md`](api/service-contract.md) | 当前 HTTP envelope、Job、Callback、Billing、认证和公开 route 合同 |
 | [`api/extension-guide.md`](api/extension-guide.md) | 新增 `job_type`、HTTP 接口、模型、Prompt 和对象存储产物的接入入口 |
 | [`api/poster-title-image-api.md`](api/poster-title-image-api.md) | CPP 美术任务接入 AI 标题图生成的 vNext 目标接口草案，不覆盖当前实现合同 |
 | [`plans/hardening.md`](plans/hardening.md) | 不阻塞主干开发的运维硬化 backlog |
-| [`plans/ai-capability-enhancement.md`](plans/ai-capability-enhancement.md) | AI Capability Kernel、provider adapter、usage normalizer、Prompt fail-fast 和多模态能力接入骨架 |
-| [`plans/ai-capability-cost-boundary-design.md`](plans/ai-capability-cost-boundary-design.md) | AI 能力层成本估算、typed pricing、ledger 事实源和非扣费边界的设计计划 |
-| [`plans/workflow-kernel-design.md`](plans/workflow-kernel-design.md) | 在当前 Job kernel 之上增加最小 durable workflow kernel 的设计计划 |
-| [`plans/implementation-terminal-acceptance.md`](plans/implementation-terminal-acceptance.md) | workflow、AI capability 和 cost boundary 开发前后的终态验收门禁 |
+| [`plans/ai-capability-enhancement.md`](plans/ai-capability-enhancement.md) | 多模态 provider、正式业务 `job_type`、node/child attribution 和业务 e2e 后续计划 |
+| [`plans/ai-capability-cost-boundary-design.md`](plans/ai-capability-cost-boundary-design.md) | `job_cost_summary`、node/child cost attribution、多模态成本路径和持久化 usage 扩展后续计划 |
+| [`plans/workflow-kernel-design.md`](plans/workflow-kernel-design.md) | workflow 从模板能力走向正式业务编排前的剩余缺口 |
+| [`plans/implementation-terminal-acceptance.md`](plans/implementation-terminal-acceptance.md) | 模板阶段剩余验收门禁和业务接入前置条件 |
 
 ## 分层规则
 

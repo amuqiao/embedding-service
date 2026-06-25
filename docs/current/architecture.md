@@ -45,6 +45,7 @@ API 与 worker 可以多副本运行。并发安全依赖数据库唯一约束�
 | Schemas | `app/schemas/` | `HttpEnvelope` 内层 data、Job、Callback、Billing、Error 合同 |
 | Job kernel | `app/models/job.py`、`app/repositories/job_repo.py`、`app/tasks/jobs.py`、`app/tasks/recovery.py` | Job 聚合、Attempt、Dispatch outbox、Callback outbox、状态迁移和恢复 |
 | Job extension | `app/jobs/`、`app/services/job_runtime.py`、`app/services/executor.py` | `job_type` 注册、运行时快照、executor 执行和结果投影 |
+| Workflow | `app/workflows/`、`app/jobs/types/job_test_workflow.py` | DAG-lite root/child 编排、ready child 创建、child terminal 后推进和 root 汇总 |
 | AI gateway | `app/services/ai_gateway_facade.py`、`app/services/ai_capability_kernel.py`、`app/integrations/ai_gateway.py` | 模型启用校验、provider 调用、AI call ledger、usage 和 cost 记录 |
 | Billing | `app/services/billing.py`、`app/schemas/billing.py` | 从 `ai_call_ledger_entries` 聚合 Job scope billing read model |
 
@@ -72,35 +73,9 @@ Callback 是服务主动向调用方发送的终态事件，不套 HTTP response
 
 ## AI Gateway 与 Billing
 
-`app/services/ai_gateway_facade.py` 是模型调用的业务入口。它保留 `generate_text_with_ledger()` 文本 facade，并编排 `app/services/ai_capability_kernel.py` 中的职责组件：
+AI 调用当前事实见 [`ai-capability.md`](ai-capability.md)。当前稳定入口是 `app/services/ai_gateway_facade.py` 的 `generate_text_with_ledger()`，真实 provider path 覆盖文本生成；多模态 provider path 和 workflow node 级成本归因不是当前事实。
 
-- 校验 `model_id` 已启用。
-- 校验 pricing 与模型配置匹配。
-- 在 provider 调用前写入 `ai_call_ledger_entries` 的 `pending` 行。
-- 调用 `app/integrations/ai_gateway.py` 的 LiteLLM provider adapter。
-- 将 provider usage 标准化为内部 `UsageRecord`。
-- 使用 `PricingRule + UsageRecord` 计算 cost。
-- 将 ledger 行更新为 succeeded 或 failed。
-
-`app/services/ai_capability_kernel.py` 承载当前 AI Capability Kernel 组件：`ModelGate`、`ProviderGateway`、`UsageNormalizer`、`TypedPricingResolver` 和 `UsageLedgerWriter`。这些组件仍服务当前文本生成路径；多模态 provider path 和 workflow descendant attribution 不是当前事实。
-
-`app/integrations/ai_gateway.py` 只执行 provider 调用并返回 `TextGenerationResult`，不写 Job、Callback、Billing envelope 或数据库。
-
-模型目录由 `app/core/models.yaml` 和 `app/core/model_registry.py` 管理。当前每个模型必须声明 `capabilities`、`input_media_types`、`output_media_types`、`pricing_ref`、provider 映射、required env 声明和 generation 参数；`GET /models` 只暴露调用方选择模型需要的公开元信息，不暴露 `pricing_ref` 或价格矩阵。缺少 required env 的模型不会出现在可用模型列表中。
-
-Job scope 调用必须传入：
-
-- `scope_type="job"`
-- `scope_id=str(job_id)`
-- `job_id`
-- `attempt_id`
-- `job_type`
-
-`GET /jobs/{job_id}/billing` 从 `ai_call_ledger_entries` 聚合 Job scope billing。`ai_call_ledger_entries` 是 billing 事实源；后续如新增 summary 表，只能作为派生读模型。
-
-`UsageRecord.kind` 和 `UsageRecord.schema_version` 当前是内存类型字段，不是 `ai_call_ledger_entries` 的独立持久化列。ledger 当前持久化 provider raw usage 诊断信息 `usage_detail` 和可聚合计价单位 `usage_units`。
-
-如果 provider 已经被调用但 ledger terminal update 失败，不能通过重放 provider 调用修复账本。recovery 只负责把超时停留在 `pending` 的 ledger 行收敛为失败或未知状态，让 billing read model 显式表达不完整。
+AI billing 当前事实见 [`ai-billing.md`](ai-billing.md)。`GET /jobs/{job_id}/billing` 从 `ai_call_ledger_entries` 聚合 Job scope billing；workflow child AI 调用使用 root Job scope 聚合到 root billing。`ai_call_ledger_entries` 是 AI provider call usage / cost estimate 事实源，不是资金账本。
 
 ## 配置边界
 

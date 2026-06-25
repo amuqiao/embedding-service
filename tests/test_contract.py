@@ -443,6 +443,8 @@ def test_openapi_declares_unified_response_envelope_for_jobs():
     assert any(
         parameter["name"] == "X-Request-ID"
         and parameter["schema"]["pattern"] == r"^[a-zA-Z0-9._:-]{1,128}$"
+        and parameter["schema"]["default"] == "default"
+        and parameter["example"] == "default"
         for parameter in operation["parameters"]
     )
 
@@ -612,6 +614,20 @@ def test_legal_request_id_allows_dot_and_colon(monkeypatch):
     body = response.json()
     assert body["request_id"] == "trace.id:part-1"
     assert response.headers["X-Request-ID"] == "trace.id:part-1"
+
+
+def test_missing_request_id_uses_default(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(f"{API_PREFIX}/models")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["request_id"] == "default"
+    assert response.headers["X-Request-ID"] == "default"
 
 
 def test_invalid_request_id_returns_error_envelope(monkeypatch):

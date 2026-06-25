@@ -147,3 +147,7 @@ def model_id_from_job(job: Job) -> str | None:
 def prompt_payload_from_job(job: Job) -> dict[str, Any]:
     value = runtime_fields_from_job(job).get("prompt_payload")
     return value if isinstance(value, dict) else {}
+
+
+def ai_billing_scope_id_from_job(job: Job) -> uuid.UUID:
+    return job.root_job_id or job.id

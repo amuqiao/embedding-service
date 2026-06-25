@@ -72,7 +72,7 @@ FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默�
 
 API 前缀由 `SERVICE_API_PREFIX` 配置，默认是 `/api/v1/ai-jobs`。
 
-Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts.yaml`。当前项目注册了 `job_test_add` 测试示例 `job_type`，以及不依赖模型调用的 `arithmetic` 示例能力；该 YAML 只声明空模板集合。新增正式 LLM 能力时再按项目规范补充 Prompt 模板、`job_type` 注册和验证用例。
+Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts.yaml`。当前内置测试和示例 `job_type` 只用于模板验证与接入样例，边界见 [模板采用就绪度](docs/current/template-readiness.md)；新增正式 LLM 能力时再按项目规范补充 Prompt 模板、`job_type` 注册和验证用例。
 
 模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML，配置项包括对外 `model_id`、LiteLLM model id、上下文窗口、所需环境变量和模型调用参数。
 
@@ -82,7 +82,7 @@ Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts
 Authorization: Bearer dev-service-key
 ```
 
-本地联调可通过 `DISABLE_HTTP_AUTH_HEADER=true` 跳过 Bearer 校验；可通过 `DISABLE_CALLER_ID_HEADER=true` 忽略 `X-AI-Service-Caller-ID` 并统一使用 `default` caller。配置层只允许在loopback DB/Redis 地址下开启这两个开关；生产环境应保持为 `false`。
+`X-AI-Service-Caller-ID` 可选；不传时使用 `default` caller。本地联调可通过 `DISABLE_HTTP_AUTH_HEADER=true` 跳过 Bearer 校验；可通过 `DISABLE_CALLER_ID_HEADER=true` 忽略 caller header 并统一使用 `default` caller。`Settings` 会要求 DB/Redis 指向 loopback；本地 `dev.sh` / `start-api.sh` 入口还会要求 `API_HOST` 是 loopback。生产环境应保持这两个开关为 `false`。
 
 ## 冒烟验证
 

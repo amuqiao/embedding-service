@@ -56,6 +56,42 @@ def test_dev_api_service_command_uses_start_api_by_default():
     assert ".venv/bin/uvicorn" not in command
 
 
+@pytest.mark.parametrize("flag", ["DISABLE_HTTP_AUTH_HEADER", "DISABLE_CALLER_ID_HEADER"])
+def test_start_api_rejects_public_bind_when_auth_headers_are_disabled(flag):
+    env = os.environ.copy()
+    env.update({"API_HOST": "0.0.0.0", flag: "true"})
+
+    result = subprocess.run(
+        ["./start-api.sh"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "API_HOST must be 127.0.0.1" in result.stderr
+
+
+@pytest.mark.parametrize("flag", ["DISABLE_HTTP_AUTH_HEADER", "DISABLE_CALLER_ID_HEADER"])
+def test_dev_start_rejects_public_bind_when_auth_headers_are_disabled(flag):
+    env = os.environ.copy()
+    env.update({"API_HOST": "0.0.0.0", flag: "true"})
+
+    result = subprocess.run(
+        ["bash", "-lc", "source scripts/dev/services.sh >/dev/null; start_service api"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "API_HOST must be 127.0.0.1" in result.stderr
+
+
 def test_dev_worker_service_command_injects_script_env(tmp_path):
     script_env = tmp_path / "scripts.env"
     script_env.write_text(

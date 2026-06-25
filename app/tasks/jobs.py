@@ -95,32 +95,6 @@ async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
         return
     dispatch, lease_token = leased
 
-    try:
-        await run_job_attempt.kiq(str(attempt_id))
-    except Exception as exc:
-        error = {
-            "code": "TASKIQ_PUBLISH_FAILED",
-            "message": "Taskiq publish failed",
-            "details": {"type": type(exc).__name__, "message": str(exc)[:500]},
-        }
-
-        async def record_failure(db):
-            recorded = await JobRepo.mark_dispatch_publish_failed(
-                db,
-                dispatch.id,
-                lease_token=lease_token,
-                error=error,
-                next_attempt_at=datetime.now(timezone.utc) + timedelta(seconds=settings.job.orphan_timeout_seconds),
-                max_publish_attempts=settings.job.dispatch_max_publish_attempts,
-            )
-            if recorded:
-                await db.commit()
-            return recorded
-
-        if not await _with_db(record_failure):
-            raise
-        raise TaskiqPublishDeferredError(attempt_id, error) from exc
-
     async def mark_published(db):
         await JobRepo.mark_dispatch_published(
             db,
@@ -130,7 +104,25 @@ async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
         )
         await db.commit()
 
-    await _with_db(mark_published)
+    try:
+        await _with_db(mark_published)
+    except Exception as exc:
+        error = {
+            "code": "TASKIQ_PUBLISH_FAILED",
+            "message": "Taskiq publish confirmation failed",
+            "details": {"type": type(exc).__name__, "message": str(exc)[:500]},
+        }
+        raise TaskiqPublishDeferredError(attempt_id, error) from exc
+
+    try:
+        await run_job_attempt.kiq(str(attempt_id))
+    except Exception as exc:
+        error = {
+            "code": "TASKIQ_PUBLISH_FAILED",
+            "message": "Taskiq publish failed after dispatch was marked published",
+            "details": {"type": type(exc).__name__, "message": str(exc)[:500]},
+        }
+        raise TaskiqPublishDeferredError(attempt_id, error) from exc
 
 
 async def handle_workflow_advance_result(result: Any) -> None:

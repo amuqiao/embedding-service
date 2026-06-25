@@ -14,7 +14,7 @@ from app.schemas.jobs import (
     JobRealLlmDoubleEchoRuntimeFields,
 )
 from app.services.ai_gateway_facade import generate_text_with_ledger
-from app.services.job_runtime import job_params_from_job, runtime_fields_from_job
+from app.services.job_runtime import ai_billing_scope_id_from_job, runtime_fields_from_job
 from app.services.jobs import _load_input_text, trigger_request_id_from_job
 
 FIRST_LLM_STEP_NAME = "first_llm_call"
@@ -85,11 +85,12 @@ class JobRealLlmDoubleEchoJob(JobExecutor):
             )
         input_text = _load_input_text(job)
         request_id = trigger_request_id_from_job(job)
+        ai_scope_id = ai_billing_scope_id_from_job(job)
 
         first = await generate_text_with_ledger(
             caller_id=job.caller_id,
             scope_type="job",
-            scope_id=str(job.id),
+            scope_id=str(ai_scope_id),
             operation="job_real_llm_double_echo.first",
             step_name=FIRST_LLM_STEP_NAME,
             request_id=request_id,
@@ -102,7 +103,7 @@ class JobRealLlmDoubleEchoJob(JobExecutor):
         second = await generate_text_with_ledger(
             caller_id=job.caller_id,
             scope_type="job",
-            scope_id=str(job.id),
+            scope_id=str(ai_scope_id),
             operation="job_real_llm_double_echo.second",
             step_name=SECOND_LLM_STEP_NAME,
             request_id=request_id,

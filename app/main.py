@@ -102,7 +102,9 @@ def _install_envelope_openapi_contract(schema: dict) -> None:
             "minLength": 1,
             "maxLength": 128,
             "pattern": r"^[a-zA-Z0-9._:-]{1,128}$",
+            "default": DEFAULT_REQUEST_ID,
         },
+        "example": DEFAULT_REQUEST_ID,
         "description": "Optional request trace ID. Invalid values return HTTP 400 with code 100002.",
     }
     for path, path_item in schema.get("paths", {}).items():
@@ -140,6 +142,7 @@ _HEALTH_PATHS = {"/health", "/healthz"}
 _ENVELOPE_FIELDS = {"code", "msg", "data", "request_id", "server_time"}
 # 只允许 ASCII 字母、数字、点号、下划线、冒号和连字符，最长 128 字符
 _REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9._:-]{1,128}$")
+DEFAULT_REQUEST_ID = "default"
 
 
 def _new_request_id() -> str:
@@ -185,7 +188,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
                 content=jsonable_encoder(body),
                 headers={"X-Request-ID": request_id},
             )
-        request_id = raw_id if raw_id else _new_request_id()
+        request_id = raw_id if raw_id else DEFAULT_REQUEST_ID
         request.state.request_id = request_id
         set_request_id(request_id)
         started = time.monotonic()
