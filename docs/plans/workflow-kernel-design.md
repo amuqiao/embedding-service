@@ -50,8 +50,8 @@ Process Manager
 
 ```text
 Root Job
-  -> frozen fan-out plan
-  -> internal Child Job for each execution item
+  -> frozen DAG-lite plan
+  -> internal Child Job for each executable node
       -> JobAttempt
       -> DispatchOutbox
       -> Taskiq worker
@@ -90,10 +90,10 @@ workflow job_type
 
 Workflow kernel 负责推进流程，不直接执行业务模型调用：
 
-- 根据 frozen fan-out plan 找到尚未创建的 child nodes。
-- 为 leaf task node 创建 internal child Job。
-- 在 child Job 终态后幂等推进 root finalize。
-- 在所有 required child Job 或 success criteria 满足后投影 root terminal。
+- 根据 frozen DAG-lite plan 找到 ready executable nodes。
+- 为 ready executable node 创建 internal child Job。
+- 在 child Job 终态后幂等解锁 downstream nodes 或推进 root finalize。
+- 在 join / reducer 条件满足后创建 reducer child Job 或投影 root terminal。
 - 根据 failure policy 决定 root Job 最终 outcome。
 - 通过 reconciler 修复 stuck、orphaned 和 missed-event 状态。
 
@@ -116,9 +116,9 @@ MVP 阶段不新增 `workflow_wakeup_outbox`。当前 `dispatch_outbox` 继续�
 
 同一 leaf node 在任何重复调度、重复消息或 reconciler 重跑下最多只能绑定一个 child Job。这个规则必须由数据库唯一约束或等价幂等约束保证，不能只依赖应用层判断。
 
-### Canvas 原语是未来 Planner Macro
+### Canvas 原语是 Planner Macro
 
-MVP 只支持固定 fan-out / finalize，不实现通用 Canvas runtime。未来如果需要 `chain`、`group`、`chord`、`map`、`starmap`、`chunks`，这些原语也不应各自成为一套 runtime 机制；它们应统一编译为 node 和 dependency：
+DAG-lite MVP 支持 `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 的 planner 语义，但不为每个原语实现一套 runtime 机制。Planner 把这些原语统一编译为 frozen nodes 和 dependencies，runtime 只消费编译后的 ready nodes：
 
 | 原语 | 编译结果 |
 |---|---|
@@ -126,40 +126,43 @@ MVP 只支持固定 fan-out / finalize，不实现通用 Canvas runtime。未来
 | `group` | 多个没有相互依赖的 ready nodes |
 | `chord` | `group` + join / barrier node |
 | `map` | planner 按输入数组生成同构 nodes |
-| `starmap` | `map` 的参数展开形式 |
+| `starmap` | planner 按输入数组生成同构 nodes，并把 tuple / object args 展开为 node input |
 | `chunks` | planner 按 chunk size 生成分片 nodes |
 
-未来通用 runtime 只理解：
+DAG-lite runtime 只理解：
 
 ```text
 node
 node dependency
-node status
 join / barrier rule
 ready-node scheduling
 terminal child-job event applying
 reconciliation
 ```
 
+`starmap` 与 `map` 的差异只存在于 planner 阶段。runtime 不能重新解释 starmap，只能执行 frozen node input。
+
 ### Workflow Plan 必须 Frozen
 
 提交 Job 后，workflow plan 必须落库为 frozen plan。worker 和 reconciler 不能依赖运行时内存里的 Python 对象来恢复流程。
 
-MVP frozen plan 至少要保证：
+DAG-lite MVP frozen plan 至少要保证：
 
 - `workflow_type` 和 `workflow_version` 固定。
 - `node_key` 在同一个 workflow 内唯一。
+- dependency graph 无环。
 - 每个 node 有明确 kind、输入引用、输出引用、timeout、retry policy 和 cost scope。
 - fan-out 数量和 chunk size 已经通过配置或能力规则限制。
 - 每个 leaf node 可生成稳定幂等键。
+- `map`、`starmap` 和 `chunks` 展开后的 node input 已冻结，runtime 不重新运行参数展开逻辑。
 
 ## Planned Data Model
 
-本文按 MVP-first 方式定义表设计。MVP 只支持 root Job fan-out 到一组 internal child Jobs，再由 root 汇总终态；不实现通用 DAG runtime。表是否新增必须由不可替代的事实源决定，不因为概念上存在 workflow / node / event 就建表。
+本文按 MVP-first 方式定义表设计。DAG-lite MVP 支持 chain / group / chord / map / starmap / chunks 的 planner 语义，但不新增通用 DAG 物理表。表是否新增必须由不可替代的事实源决定，不因为概念上存在 workflow / node / event 就建表。
 
 ### MVP Table Decision
 
-MVP 阶段新增 workflow 专属物理表数量为 0。唯一必须修改的核心表是 `job_aggregates`。
+DAG-lite MVP 阶段新增 workflow 专属物理表数量为 0。唯一必须修改的核心表是 `job_aggregates`。
 
 | 分类 | 表 / 修改 | MVP 决策 | 事实依据 |
 |---|---|---|---|
@@ -209,15 +212,15 @@ ai_call_ledger_entries
 
 `job_audit_events`、日志、metrics 和未来 read model 都不能成为恢复前提。
 
-### MVP Frozen Plan Authority
+### DAG-lite Frozen Plan Authority
 
-MVP 不新增 `workflow_plans`、`workflow_instances`、`workflow_nodes` 或 `workflow_node_dependencies`。Frozen plan 的权威来源是 root Job 已持久化字段：
+DAG-lite MVP 不新增 `workflow_plans`、`workflow_instances`、`workflow_nodes` 或 `workflow_node_dependencies`。Frozen plan 的权威来源是 root Job 已持久化字段：
 
 - root Job 的 `job_type` 固定 workflow 类型。
-- root Job 的 `job_params`、`metadata` 或 `runtime_ref` 保存 frozen fan-out plan、`workflow_version`、failure policy、success criteria、node keys 和 node input refs。
-- child Job 的 `workflow_node_key` 保存 leaf node 身份。
+- root Job 的 `job_params`、`metadata` 或 `runtime_ref` 保存 frozen DAG-lite plan、`workflow_version`、failure policy、success criteria、node keys、dependencies、barrier rules 和 node input refs。
+- child Job 的 `workflow_node_key` 保存 executable node 身份。
 
-MVP reconciler 恢复时不能依赖内存中的 Python `WorkflowSpec` 重新展开已提交 workflow；它必须读取 root Job 上已经冻结的 plan，再结合 child Jobs 当前状态推进 root。
+DAG-lite reconciler 恢复时不能依赖内存中的 Python `WorkflowSpec` 重新展开已提交 workflow；它必须读取 root Job 上已经冻结的 plan，再结合 child Jobs 当前状态计算 ready nodes、join 条件和 root terminal decision。
 
 ### Deferred Tables
 
@@ -226,8 +229,8 @@ MVP reconciler 恢复时不能依赖内存中的 Python `WorkflowSpec` 重新展
 | 表 | 后置条件 |
 |---|---|
 | `workflow_instances` | 一个 root Job 同时承载多个 workflow instance，或 workflow 生命周期、lease、状态已经不能由 root Job 表达 |
-| `workflow_nodes` | 需要通用 DAG、node 级状态查询、node 级 retry/skip/join 状态，且 child Job 行无法表达 |
-| `workflow_node_dependencies` | 需要运行时恢复任意 DAG edge，而不是 MVP 固定 fan-out / finalize |
+| `workflow_nodes` | 需要 node 级状态查询、node 级 retry/skip/join 状态，且 child Job 行与 root frozen plan 无法表达 |
+| `workflow_node_dependencies` | root frozen plan 中的 dependencies 过大、查询低效，或需要按 edge 做运维查询 |
 | `workflow_wakeup_outbox` | child terminal 后必须低延迟、事务内可靠唤醒 process manager，且 reconciler 扫描不可接受 |
 | `workflow_events` | `job_audit_events` 已无法满足 workflow 排障时间线，且仍只作为辅助表 |
 | `workflow_child_jobs` | 从 root 枚举 child Job 的查询出现明确性能瓶颈，且可作为可重建 read model |
@@ -253,20 +256,23 @@ MVP 不新增公共 `job_status`。Root Job 继续使用现有 `queued`、`runni
 
 第一版不把 `partial_success` 提升为公共 `job_status`。
 
-### MVP Child Node State
+### DAG-lite Node State
 
 ```text
 not_created
+  -> ready
   -> running
   -> succeeded
   -> failed
+  -> skipped
 ```
 
 关键规则：
 
-- `not_created` 是 frozen plan 中存在 node key，但还没有对应 child Job。
-- child Job 创建后，node 状态由 child Job 的 `job_aggregates.status` 表达。
-- MVP 不保存独立 node status，不保存 skipped node 行。被 failure policy 跳过的 node 只进入 root result summary 或 audit。
+- `not_created` 是 frozen plan 中存在 node key，但依赖未满足或尚未创建对应 child Job。
+- `ready` 由 root frozen plan dependencies 和已终态 child Jobs 计算出来，不持久化为独立 node 行。
+- child Job 创建后，executable node 状态由 child Job 的 `job_aggregates.status` 表达。
+- DAG-lite MVP 不保存独立 node status，不保存 skipped node 行。被 failure policy 跳过的 node 只进入 root result summary 或 audit。
 - 状态推进必须依赖 `workflow_node_key` 唯一约束和 Job terminal compare-and-set，避免重复创建 child Job 或重复完成 root Job。
 
 ## Main Runtime Flow
@@ -277,21 +283,22 @@ not_created
 POST /jobs
   -> validate job_type and job_params
   -> resolve WorkflowSpec
-  -> compile MVP frozen fan-out plan
+  -> compile DAG-lite frozen plan
   -> transaction:
        claim root job_submission_keys idempotency key
-       insert root job with frozen plan in job metadata / runtime_ref
+       insert root job with frozen DAG-lite plan in job metadata / runtime_ref
        insert root job attempt
        insert dispatch_outbox for root orchestration step
   -> commit
 ```
 
-### Create Child Jobs
+### Create Ready Child Jobs
 
 ```text
 root orchestration step or reconciler
-  -> load root job frozen fan-out plan
-  -> for each node key without child job:
+  -> load root job frozen DAG-lite plan
+  -> compute ready executable nodes from dependencies and child terminal states
+  -> for each ready node key without child job:
        transaction:
          create child job with root_job_id, parent_job_id, is_internal=true, workflow_node_key
          create child job attempt
@@ -307,8 +314,11 @@ root orchestration step or reconciler
 child job reaches terminal state
   -> terminal hook or reconciler finds root by child.root_job_id
   -> transaction:
-       load root frozen plan and all child jobs
-       if terminal criteria are met:
+       load root frozen DAG-lite plan and all child jobs
+       compute newly ready nodes and join / reducer conditions
+       if more executable nodes are ready:
+         create child jobs for ready nodes
+       elif terminal criteria are met:
          apply failure_policy / success_criteria
          project root result / error / progress
          complete root job
@@ -322,7 +332,7 @@ child job reaches terminal state
 
 ### 创建 root workflow
 
-Root Job、root attempt、root dispatch outbox 和 frozen fan-out plan 必须在同一个事务内提交。否则会出现 root Job 已存在但 orchestration step 永远不会启动的 orphan state。
+Root Job、root attempt、root dispatch outbox 和 frozen DAG-lite plan 必须在同一个事务内提交。否则会出现 root Job 已存在但 orchestration step 永远不会启动的 orphan state。
 
 这里复用现有 `dispatch_outbox` 发布 root orchestration step，因为它仍然是一个 Job attempt 执行消息；不能把 workflow tick 或其它非 Job attempt 副作用塞进 `dispatch_outbox`。
 
@@ -361,7 +371,7 @@ scope_id=<root_job_id>
 Root Job 对外 `percent` 应采用 Job 级单调展示合同：
 
 - 调用方不能看到 node retry 或 child Job attempt 的内部回退。
-- 只有 workflow process manager 可以投影 root Job progress；child Job worker 不能直接写 root Job progress。
+- 只有 root orchestration / finalize / reconciler 路径可以投影 root Job progress；child Job worker 不能直接写 root Job progress。
 - `stage` 和 `message` 在公开合同未变更前也只能由 workflow process manager 投影，必须保持 root Job 级语义，并继续受当前公共枚举和 schema 约束。
 - 同一 root Job 对外 `percent` 不下降。
 - 非终态 root Job 的 `percent` 范围是 `0..99`。
@@ -385,6 +395,8 @@ Root Job terminal 时再置为 `100`。
 - 未开始的下游节点标记为 `skipped`。
 - root Job 终态为 `failed`。
 - 已经成功的 child result 可保留为内部排障或 result draft，但当前公共合同下 failed Job 不返回 `job_result`。
+
+MVP 的 `fail_fast` 不等于取消已经创建或正在运行的 child Job。Root finalize 可以在发现 required child 失败后进入失败收敛，但已经 dispatch 的 child Job 可能继续执行到终态。取消 running child Jobs、撤销 provider 调用或中止外部生成属于后续 cancellation 设计，不纳入 MVP。
 
 ### `allow_partial`
 
@@ -461,9 +473,13 @@ Root Job、internal child Job、attempt、callback 和 AI call ledger 的保留�
 Planner 必须在提交前校验：
 
 - node key 唯一。
+- dependency graph 无环。
+- 每个 dependency 指向存在的 node。
 - fan-out 数量、chunk size 和总 node 数不超过配置限制。
+- fan-out limit、chunk size 和 provider 并发限制必须在 frozen plan 中体现；不能让一个 root Job 无限制创建 child Jobs。
 - 每个 leaf node 能生成稳定 child Job idempotency key。
 - 每个 node 的输入和输出引用策略明确。
+- `map`、`starmap` 和 `chunks` 的参数展开结果已冻结为 node input。
 - failure policy 与 result projection 匹配。
 - `success_criteria` 已冻结，且 reconciler 不依赖进程内临时函数做终态判定。
 
@@ -490,17 +506,18 @@ Planner 必须在提交前校验：
 
 - 不新增 workflow 专属表。
 - 修改 `job_aggregates`，增加 root / child lineage、internal visibility 和 `workflow_node_key`，确保 child Job 不进入公共查询合同。
-- 增加 MVP `WorkflowSpec` 注册、编译和 frozen fan-out plan 校验。
-- 支持 root Job 提交时把 frozen fan-out plan 写入 root Job 已有持久化字段。
-- 支持 root orchestration step 幂等创建 internal child Jobs。
+- 增加 DAG-lite `WorkflowSpec` 注册、编译和 frozen plan 校验，包括 chain / group / chord / map / starmap / chunks、DAG 无环、fan-out limit、chunk size、node key uniqueness 和 child idempotency key。
+- 支持 root Job 提交时把 frozen DAG-lite plan 写入 root Job 已有持久化字段。
+- 支持 root orchestration step 幂等创建 ready internal child Jobs。
 - 暂不新增公共 API 状态。
 
 ### Phase 2: Orchestrator and Child Job Dispatch
 
 - child Job 复用现有 JobAttempt 和 DispatchOutbox。
-- child Job 终态或 reconciler 可幂等推进 root finalize。
+- child Job 终态或 reconciler 可幂等计算 downstream ready nodes、join / reducer 条件和 root finalize。
 - root finalize 支持 `fail_fast` 和 `allow_partial`。
 - root progress 从 frozen node weights 和 child Job 终态派生。
+- child Job worker 不允许直接写 root Job progress；root progress 只能由 root orchestration / finalize / reconciler 投影。
 
 ### Phase 3: Recovery, Cost and Progress Projection
 
@@ -512,25 +529,27 @@ Planner 必须在提交前校验：
 ### Phase 4: Future Generalization Review
 
 - 根据 MVP 运行结果评估是否需要 `workflow_instances`、`workflow_nodes`、`workflow_node_dependencies` 或 `workflow_wakeup_outbox`。
-- 只有当固定 fan-out/finalize 无法承载真实业务，才推进通用 DAG runtime。
+- 只有当 root frozen DAG-lite plan 扫描、node 状态推导或 join 运维查询成为明确瓶颈，才物化 `workflow_nodes` / `workflow_node_dependencies`。
 
 ### Phase 5: First Business Adoption
 
 - 选择 `poster_title_image` 作为第一个 workflow spec。
 - 不为该业务新增特殊调度机制。
-- 验证多 item、allow_partial、fail_fast、成本聚合、callback 和轮询终态。
+- 验证多 item、allow_partial、fail_fast 非取消语义、fan-out limit、成本聚合、callback 和轮询终态。
 
 ## Acceptance
 
 - [`implementation-terminal-acceptance.md`](implementation-terminal-acceptance.md) 中的 Phase 0 readiness 已经通过。
-- MVP `WorkflowSpec` 编译产物可写入 root Job 持久化字段，进程重启后能继续执行。
+- DAG-lite `WorkflowSpec` 编译产物可写入 root Job 持久化字段，进程重启后能继续执行。
+- `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 都编译为 frozen nodes / dependencies / node input，不新增六套 runtime。
 - MVP 不新增 workflow 专属表，只修改 `job_aggregates` 并复用现有 Job kernel 表。
 - child Job 创建和 dispatch intent 在同一事务提交。
-- child Job 终态重复应用不会重复创建 child Job 或重复完成 root Job。
+- child Job 终态重复应用不会重复创建 downstream child Job 或重复完成 root Job。
 - root finalize 在并发触发下只执行一次。
 - workflow reconciler 能修复 missing child、missing dispatch、child terminal 和 root terminal projection 的 stuck 状态。
 - root Job 对外 `percent` 在 retry、reconciler 和 child Job 失败后不下降。
 - root Job 对外 `stage` 和 `message` 不泄漏 child node 或 attempt 级内部阶段。
+- child Job worker 不能直接更新 root Job progress。
 - `allow_partial` 的 workflow outcome 和成功判定来自 frozen `success_criteria`，重启后可重复计算。
 - `./scripts/verify.sh check` 覆盖 planner、state machine、幂等推进和 workflow projection 的单元测试。
 - 涉及真实 worker/outbox/recovery 的变更通过 `./scripts/verify.sh workflow-smoke`。

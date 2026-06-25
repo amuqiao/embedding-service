@@ -33,11 +33,14 @@
 | Gate | 验收要求 |
 |---|---|
 | Root / child Job visibility | Root Job 是唯一公共查询、callback 和幂等入口；child Job 第一版是内部执行资源；公共 `GET /jobs/{job_id}` 不能让调用方查询到不属于其公共合同的 child Job |
-| Execution split | 冻结 simple job_type 和 workflow job_type 的执行分流；simple job 可由 root attempt 直接执行，workflow job 的 root 只做编排和对外聚合，item 执行必须走 internal child Job |
+| Execution split | 冻结 simple job_type 和 workflow job_type 的执行分流；simple job 可由 root attempt 直接执行，workflow job 的 root 只做编排和对外聚合，executable node 执行必须走 internal child Job |
+| DAG-lite planner | 冻结 `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 的 planner 语义；它们必须编译为 frozen nodes / dependencies / node input，不新增六套 runtime |
 | Workflow MVP tables | 冻结 MVP 不新增 workflow 专属表；只通过 `job_aggregates` root / child lineage、internal visibility 和 `workflow_node_key` 表达 child Job 归属与幂等 |
 | Self-indexing aggregate | 冻结 `job_aggregates` 自索引设计；root -> child 查询依赖 `root_job_id`、`parent_job_id`、`workflow_node_key` 和必要索引，不新增 child Job 状态副本表 |
 | Ledger attribution | 冻结 descendant AI call 写入 root Job scope 的方式；MVP 使用 `scope_type="job"`、`scope_id=<root_job_id>` 聚合 root billing，node / child 归因列后置评估 |
 | Job progress | Root Job 对外 progress 是 Job 级单调展示值；child attempt、node retry 和 reconciler 不能让调用方看到 percent 回退 |
+| Fan-out limit | 冻结每个 root workflow 的 item / child job / chunk 上限；root orchestration 不允许无界创建 child Jobs |
+| Failure policy | 冻结 MVP `fail_fast` 语义；它只决定 root 失败收敛，不承诺取消已经 dispatch 或 running 的 child Jobs |
 | Job result | `allow_partial` 不新增公共 `partially_succeeded`；部分成功只通过 root result summary / item status 表达 |
 | Cost projection | terminal polling、terminal callback 和 future `job.cost` 必须使用同一 ledger 聚合逻辑；summary 不是事实源 |
 | Callback | Root Job 只发送一次终态 callback；child Job 不发送调用方 callback；callback delivery 失败不改变 Job 终态 |
@@ -52,15 +55,17 @@
 
 - Simple job_type 仍可由 root Job attempt 直接执行；workflow job_type 的 root Job 只做编排、对外查询、billing 聚合和 callback。
 - Workflow MVP 不新增 `workflow_instances`、`workflow_nodes`、`workflow_node_dependencies`、`workflow_wakeup_outbox` 或 `workflow_events`。
-- Root Job、root attempt、root dispatch outbox 和 frozen fan-out plan 在同一事务提交。
-- Root orchestration step 只创建 internal child Jobs，不在 root worker slot 中同步处理所有 item。
+- Root Job、root attempt、root dispatch outbox 和 frozen DAG-lite plan 在同一事务提交。
+- Root orchestration step 只创建 ready internal child Jobs，不在 root worker slot 中同步处理所有 executable nodes。
+- Root orchestration step 必须执行 DAG 无环、dependency 指向、fan-out limit、chunk size、starmap 参数展开和 child idempotency 校验，不能无界创建 child Jobs。
 - 创建 child Job 时，child Job、child attempt 和 child dispatch outbox 在同一事务提交。
 - 同一 root Job 下同一 `workflow_node_key` 最多创建一个 child Job，并由数据库唯一约束或等价幂等约束保证。
 - `job_aggregates` 提供 root -> child 排查所需索引，至少覆盖 root child 枚举、按父 Job 查询、root + node key 幂等和 root + status 过滤。
 - Workflow terminal、root Job terminal、root result projection、terminal cost projection intent 和 root callback outbox 在同一终态投影路径中收敛。
 - 重复 root orchestration step、重复 child terminal apply、重复 reconciler run 不会重复创建 child Job、重复 finalize root 或重复发送 root callback。
 - Root finalize 在并发触发下只执行一次。
-- Reconciler 能修复 frozen plan child 缺失、child attempt / dispatch 缺失、child 已终态但 root 未重新计算、root 已终态但 callback outbox 缺失等状态。
+- `fail_fast` 不要求取消已 dispatch 或 running 的 child Jobs；如果需要取消语义，必须作为后续 cancellation 合同单独设计。
+- Reconciler 能修复 frozen plan ready child 缺失、child attempt / dispatch 缺失、child 已终态但 downstream ready nodes 未计算、root 已终态但 callback outbox 缺失等状态。
 - Child Job 第一版不作为外部调用方可查询资源；如果实现无法阻止公共查询命中 child Job，不允许发布 workflow kernel。
 
 ### AI Capability
@@ -86,6 +91,7 @@
 - 当前公共 `job_status` 仍只使用 `queued`、`running`、`succeeded`、`failed`，除非单独升级 `docs/api/service-contract.md`、schema 和 contract tests。
 - 当前公开合同未升级前，非终态 `job_result` 和 `job_error` 仍为 `null`。
 - `job_progress.stage`、`job_progress.message` 和 `job_progress.percent` 只能表达 root Job 级语义，不能泄漏 child node、worker attempt 或 provider 内部阶段。
+- Child Job worker 不能直接写 root Job progress；root progress 只能由 root orchestration、root finalize 或 reconciler 投影。
 - 不发布公共 `partially_succeeded`。
 - Callback event 仍只使用当前公开合同允许的终态事件，除非单独升级 shared callback contract。
 - `GET /models` 不暴露 provider raw model、内部 `pricing_ref`、价格矩阵、provider raw usage schema 或内部成本明细。
@@ -105,15 +111,17 @@
 1. **Contract / registry checks**
    - service contract 不变式。
    - model / pricing / prompt registry fail-fast。
-   - MVP WorkflowSpec compile、fan-out limit、node key uniqueness、child idempotency key uniqueness。
+   - DAG-lite WorkflowSpec compile、DAG 无环、dependency 指向、fan-out limit、node key uniqueness、starmap 参数展开、child idempotency key uniqueness。
    - billing 状态映射。
 
 2. **DB integration checks**
-   - root workflow create 原子性，不新增 workflow 专属表。
+   - root workflow create 原子性，frozen DAG-lite plan 落入 root Job 持久化字段，不新增 workflow 专属表。
    - `job_aggregates` root / child lineage 字段、唯一约束和索引生效。
+   - public `GET /jobs/{job_id}` 过滤 internal child Jobs。
    - child create + dispatch 原子性。
    - duplicate child terminal apply 幂等性。
    - root finalize 并发一次性。
+   - `fail_fast` root 失败收敛不会依赖取消已 running child Jobs。
    - stale pending ledger 和 root terminal recovery。
 
 3. **Runtime smoke**
@@ -122,7 +130,7 @@
    - `./scripts/dev.sh stop`
 
 4. **Business adoption checks**
-   - 正常 fan-out / fan-in。
+   - `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 至少覆盖 planner / runtime smoke。
    - 至少一个 provider / usage / pricing failure path。
    - descendant ledger 聚合到 root billing。
    - root terminal callback mock。
