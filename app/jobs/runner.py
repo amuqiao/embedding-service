@@ -15,7 +15,7 @@ from app.services.executor import run_ai_job
 from app.services.job_lifecycle import SUCCESS_SIDE_EFFECT_DONE_STAGE, SUCCESS_SIDE_EFFECT_STAGE
 from app.services.job_runtime import model_id_from_job, prompt_payload_from_job, workflow_plan_from_job
 from app.services.jobs import _load_input_text, _persist_large_artifacts, get_job_or_404, trigger_request_id_from_job
-from app.workflows.orchestrator import create_ready_child_jobs
+from app.workflows.orchestrator import advance_workflow_after_child_terminal, create_ready_child_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -257,11 +257,17 @@ async def execute_job(
                 "attempt could not be marked succeeded with job result",
                 details={"job_id": str(job_id), "attempt_id": str(attempt_id)},
             )
+    workflow_advance = None
+    if job.is_internal:
+        workflow_advance = await advance_workflow_after_child_terminal(db, child_job=job)
     await db.commit()
     await db.refresh(job)
-    from app.tasks.jobs import deliver_callback_for_job
+    from app.tasks.jobs import deliver_callback_for_job, handle_workflow_advance_result
 
-    await deliver_callback_for_job(job_id)
+    if workflow_advance is not None:
+        await handle_workflow_advance_result(workflow_advance)
+    else:
+        await deliver_callback_for_job(job_id)
     return {"job_id": str(job_id), "status": "succeeded"}
 
 
@@ -272,6 +278,12 @@ async def fail_job(
     error: dict[str, Any],
 ) -> None:
     job = await get_job_or_404(db, job_id)
+    if job.active_attempt_id is not None:
+        raise AppError(
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "fail_job cannot bypass an active attempt",
+            details={"job_id": str(job.id), "active_attempt_id": str(job.active_attempt_id)},
+        )
     await JobRepo.mark_failed(db, job_id, error, execution_token=job.execution_token)
     await db.commit()
     from app.tasks.jobs import deliver_callback_for_job

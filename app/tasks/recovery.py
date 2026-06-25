@@ -34,6 +34,7 @@ async def _run_recovery(db: AsyncSession) -> dict:
     callback_due: list[str] = []
     deleted = 0
     dispatch_attempts: list[uuid.UUID] = []
+    workflow_advances = []
     ai_ledger_reconciled = 0
 
     lock_result = await db.execute(text("SELECT pg_try_advisory_lock(hashtext('job_recovery_loop'))"))
@@ -83,6 +84,13 @@ async def _run_recovery(db: AsyncSession) -> dict:
                 next_attempt_at=now,
             )
             if claimed:
+                terminal_job = await JobRepo.get(db, attempt.job_id)
+                if terminal_job is not None and terminal_job.is_internal and terminal_job.status == "failed":
+                    from app.workflows.orchestrator import advance_workflow_after_child_terminal
+
+                    workflow_advances.append(
+                        await advance_workflow_after_child_terminal(db, child_job=terminal_job)
+                    )
                 failed += 1
                 logger.warning("recovery: failed stale running attempt %s", attempt.id)
 
@@ -129,6 +137,15 @@ async def _run_recovery(db: AsyncSession) -> dict:
                     logger.info("recovery: delivered pending callback for job %s", job_id)
             except Exception:
                 logger.exception("recovery: callback delivery failed for job %s", job_id)
+
+    if workflow_advances:
+        from app.tasks.jobs import handle_workflow_advance_result
+
+        for result in workflow_advances:
+            try:
+                await handle_workflow_advance_result(result)
+            except Exception:
+                logger.exception("recovery: workflow advance side effect failed root_job_id=%s", result.root_job_id)
 
     return {
         "recovered": recovered,

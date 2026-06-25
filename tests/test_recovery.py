@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.models.job import DispatchOutbox, JobAttempt
+from app.models.job import DispatchOutbox, Job, JobAttempt
 from app.tasks.recovery import _run_recovery, _stale_pending_ai_call_before
 
 
@@ -131,8 +131,12 @@ async def test_recovery_marks_stale_running_attempt_failed(monkeypatch):
         marked.append(attempt_id)
         return True
 
+    async def get_job(*_args, **_kwargs):
+        return None
+
     _patch_common_recovery(monkeypatch, stale_attempts=stale_attempts)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.mark_attempt_failed", mark_failed)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.get", get_job)
 
     result = await _run_recovery(_FakeDB())
 
@@ -140,6 +144,63 @@ async def test_recovery_marks_stale_running_attempt_failed(monkeypatch):
     assert result["failed"] == 1
     assert marked == [attempt.id]
     assert delivered == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_advances_workflow_after_stale_internal_child_failed(monkeypatch):
+    attempt = _attempt("running")
+    root_job_id = uuid.uuid4()
+    child = Job(
+        id=attempt.job_id,
+        caller_id="caller-1",
+        job_type="job_test_echo",
+        status="failed",
+        is_internal=True,
+        root_job_id=root_job_id,
+        parent_job_id=root_job_id,
+        workflow_node_key="first",
+        progress_percent=100,
+        priority="normal",
+        timeout_seconds=60,
+    )
+    advance_result = type(
+        "AdvanceResult",
+        (),
+        {
+            "root_job_id": root_job_id,
+            "created_attempt_ids": (),
+            "finalized_root_job_id": root_job_id,
+        },
+    )()
+    advanced = {}
+
+    async def stale_attempts(*_args, **_kwargs):
+        return [attempt]
+
+    async def mark_failed(*_args, **_kwargs):
+        return True
+
+    async def get_job(*_args, **_kwargs):
+        return child
+
+    async def advance(_db, *, child_job):
+        advanced["child_job_id"] = child_job.id
+        return advance_result
+
+    async def handle_result(result):
+        advanced["result"] = result
+
+    _patch_common_recovery(monkeypatch, stale_attempts=stale_attempts)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.mark_attempt_failed", mark_failed)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.get", get_job)
+    monkeypatch.setattr("app.workflows.orchestrator.advance_workflow_after_child_terminal", advance)
+    monkeypatch.setattr("app.tasks.jobs.handle_workflow_advance_result", handle_result)
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["failed"] == 1
+    assert advanced["child_job_id"] == child.id
+    assert advanced["result"] is advance_result
 
 
 @pytest.mark.asyncio

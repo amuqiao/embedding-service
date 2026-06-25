@@ -858,6 +858,19 @@ class JobRepo:
         result = await db.execute(select(Job).where(*conditions).order_by(Job.created_at.asc()))
         return list(result.scalars().all())
 
+    @staticmethod
+    async def get_workflow_root_for_update(db: AsyncSession, root_job_id: uuid.UUID) -> Job | None:
+        result = await db.execute(
+            select(Job)
+            .where(
+                Job.id == root_job_id,
+                Job.is_internal.is_(False),
+                Job.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def update_progress(
         db: AsyncSession,
         job_id: uuid.UUID,
@@ -955,6 +968,98 @@ class JobRepo:
         job.last_heartbeat_at = now
         job.updated_at = now
         await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
+        await db.flush()
+        return True
+
+    @staticmethod
+    async def mark_workflow_root_succeeded(
+        db: AsyncSession,
+        root_job_id: uuid.UUID,
+        *,
+        result: dict[str, Any],
+        canonical_result: dict[str, Any],
+    ) -> bool:
+        query_result = await db.execute(
+            select(Job)
+            .where(
+                Job.id == root_job_id,
+                Job.status == "running",
+                Job.active_attempt_id.is_(None),
+                Job.is_internal.is_(False),
+                Job.deleted_at.is_(None),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        job = query_result.scalar_one_or_none()
+        if not job:
+            return False
+        now = datetime.now(timezone.utc)
+        job.status = "succeeded"
+        job.progress_percent = 100
+        job.progress_text = "已完成"
+        job.progress_stage = "succeeded"
+        job.result = result
+        job.canonical_result = canonical_result
+        job.canonical_result_ref = None
+        job.error = None
+        job.finished_at = now
+        job.last_heartbeat_at = now
+        job.updated_at = now
+        await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
+        db.add(
+            JobEvent(
+                job_id=job.id,
+                event_type="workflow.root.succeeded",
+                from_status="running",
+                to_status="succeeded",
+                payload={"reason": "workflow_finalize"},
+            )
+        )
+        await db.flush()
+        return True
+
+    @staticmethod
+    async def mark_workflow_root_failed(
+        db: AsyncSession,
+        root_job_id: uuid.UUID,
+        *,
+        error: dict[str, Any],
+    ) -> bool:
+        query_result = await db.execute(
+            select(Job)
+            .where(
+                Job.id == root_job_id,
+                Job.status == "running",
+                Job.active_attempt_id.is_(None),
+                Job.is_internal.is_(False),
+                Job.deleted_at.is_(None),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        job = query_result.scalar_one_or_none()
+        if not job:
+            return False
+        now = datetime.now(timezone.utc)
+        job.status = "failed"
+        job.progress_text = "处理失败"
+        job.progress_stage = "failed"
+        job.result = None
+        job.canonical_result = None
+        job.canonical_result_ref = None
+        job.error = error
+        job.finished_at = now
+        job.last_heartbeat_at = now
+        job.updated_at = now
+        await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
+        db.add(
+            JobEvent(
+                job_id=job.id,
+                event_type="workflow.root.failed",
+                from_status="running",
+                to_status="failed",
+                payload={**error, "reason": "workflow_finalize"},
+            )
+        )
         await db.flush()
         return True
 

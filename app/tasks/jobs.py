@@ -133,6 +133,21 @@ async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
     await _with_db(mark_published)
 
 
+async def handle_workflow_advance_result(result: Any) -> None:
+    for child_attempt_id in getattr(result, "created_attempt_ids", ()) or ():
+        try:
+            await publish_job_attempt(child_attempt_id)
+        except TaskiqPublishDeferredError:
+            logger.exception(
+                "workflow_downstream_attempt_publish_deferred root_job_id=%s child_attempt_id=%s",
+                getattr(result, "root_job_id", None),
+                child_attempt_id,
+            )
+    finalized_root_job_id = getattr(result, "finalized_root_job_id", None)
+    if finalized_root_job_id is not None:
+        await deliver_callback_for_job(finalized_root_job_id)
+
+
 @broker.task(task_name="jobs.run_attempt")
 async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
     _ensure_workflows_registered()
@@ -208,12 +223,22 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
                     retryable=_should_retry_attempt(job.job_type, error),
                     next_attempt_at=datetime.now(timezone.utc),
                 )
-                await db.commit()
-                return marked
+                workflow_advance = None
+                if marked and job_id is not None and job.is_internal:
+                    terminal_job = await JobRepo.get(db, job_id)
+                    if terminal_job is not None and terminal_job.is_internal and terminal_job.status == "failed":
+                        from app.workflows.orchestrator import advance_workflow_after_child_terminal
 
-            marked = await _with_db(mark_failed)
+                        workflow_advance = await advance_workflow_after_child_terminal(db, child_job=terminal_job)
+                await db.commit()
+                return marked, workflow_advance
+
+            marked, workflow_advance = await _with_db(mark_failed)
             if marked and job_id is not None:
-                await deliver_callback_for_job(job_id)
+                if workflow_advance is not None:
+                    await handle_workflow_advance_result(workflow_advance)
+                else:
+                    await deliver_callback_for_job(job_id)
         raise
 
 

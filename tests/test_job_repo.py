@@ -907,6 +907,109 @@ async def test_count_active_jobs_excludes_workflow_root_waiting_for_children():
 
 
 @pytest.mark.asyncio
+async def test_mark_workflow_root_succeeded_finalizes_waiting_root_and_callback():
+    root = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="root-client-1",
+        job_type="test.workflow",
+        status="running",
+        active_attempt_id=None,
+        is_internal=False,
+        progress_percent=80,
+        metadata_={},
+        callback_url="https://example.com/callback",
+        callback_events=["job.succeeded"],
+        runtime_ref={
+            "payload": {
+                "runtime_fields": {"_system": {"trigger_request_id": "req-root-1"}},
+            },
+        },
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    db = _FakeDB()
+    db.results.extend([_ScalarResult(root), _ScalarResult(None)])
+
+    updated = await JobRepo.mark_workflow_root_succeeded(
+        db,
+        root.id,
+        result={"workflow": {"outcome": "success"}},
+        canonical_result={"workflow": {"outcome": "success"}},
+    )
+
+    assert updated is True
+    assert root.status == "succeeded"
+    assert root.progress_percent == 100
+    assert root.progress_stage == "succeeded"
+    assert root.result == {"workflow": {"outcome": "success"}}
+    outboxes = [item for item in db.added if isinstance(item, CallbackOutbox)]
+    events = [item for item in db.added if isinstance(item, JobEvent)]
+    assert len(outboxes) == 1
+    assert outboxes[0].job_id == root.id
+    assert outboxes[0].event_type == "job.succeeded"
+    assert events[-1].event_type == "workflow.root.succeeded"
+    sql = _compile(db.statements[0])
+    assert "job_aggregates.active_attempt_id IS NULL" in sql
+    assert "job_aggregates.is_internal IS false" in sql
+
+
+@pytest.mark.asyncio
+async def test_mark_workflow_root_failed_finalizes_waiting_root_and_callback():
+    root = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="root-client-1",
+        job_type="test.workflow",
+        status="running",
+        active_attempt_id=None,
+        is_internal=False,
+        progress_percent=80,
+        metadata_={},
+        callback_url="https://example.com/callback",
+        callback_events=["job.failed"],
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    error = {"code": "WORKFLOW_CHILD_FAILED", "message": "workflow child job failed", "details": {}}
+    db = _FakeDB()
+    db.results.extend([_ScalarResult(root), _ScalarResult(None)])
+
+    updated = await JobRepo.mark_workflow_root_failed(db, root.id, error=error)
+
+    assert updated is True
+    assert root.status == "failed"
+    assert root.progress_stage == "failed"
+    assert root.result is None
+    assert root.error == error
+    outboxes = [item for item in db.added if isinstance(item, CallbackOutbox)]
+    events = [item for item in db.added if isinstance(item, JobEvent)]
+    assert len(outboxes) == 1
+    assert outboxes[0].job_id == root.id
+    assert outboxes[0].event_type == "job.failed"
+    assert events[-1].event_type == "workflow.root.failed"
+
+
+@pytest.mark.asyncio
+async def test_mark_workflow_root_succeeded_rejects_active_root_attempt():
+    db = _FakeDB()
+    db.results.append(_ScalarResult(None))
+
+    updated = await JobRepo.mark_workflow_root_succeeded(
+        db,
+        uuid.uuid4(),
+        result={"workflow": {"outcome": "success"}},
+        canonical_result={"workflow": {"outcome": "success"}},
+    )
+
+    assert updated is False
+    assert db.flushed is False
+    sql = _compile(db.statements[0])
+    assert "job_aggregates.active_attempt_id IS NULL" in sql
+    assert "job_aggregates.is_internal IS false" in sql
+
+
+@pytest.mark.asyncio
 async def test_mark_attempt_failed_creates_retry_attempt_when_allowed():
     error = {"code": "JOB_TIMEOUT", "message": "timed out", "details": {}}
     lease_token = uuid.uuid4()

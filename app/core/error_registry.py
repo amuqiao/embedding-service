@@ -246,6 +246,14 @@ _SPECS: dict[str, ErrorSpec] = {
         owner="ai",
     ),
     "JOB_TIMEOUT": ErrorSpec("900541", "JOB_TIMEOUT", "job timeout", 504, retryable=True, scope="job", owner="jobs"),
+    "WORKFLOW_CHILD_FAILED": ErrorSpec(
+        "900542",
+        "WORKFLOW_CHILD_FAILED",
+        "workflow child job failed",
+        500,
+        scope="job",
+        owner="jobs",
+    ),
     "CALLBACK_URL_INVALID": ErrorSpec("900551", "CALLBACK_URL_INVALID", "callback url invalid", 500, scope="callback", owner="callbacks"),
     "CALLBACK_BODY_INVALID": ErrorSpec("900552", "CALLBACK_BODY_INVALID", "callback body invalid", 500, scope="callback", owner="callbacks"),
 }

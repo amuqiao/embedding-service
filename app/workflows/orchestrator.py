@@ -30,6 +30,15 @@ class WorkflowOrchestrationResult:
     created_attempt_ids: tuple[uuid.UUID, ...]
 
 
+@dataclass(frozen=True)
+class WorkflowAdvanceResult:
+    root_job_id: uuid.UUID
+    created_child_job_ids: tuple[uuid.UUID, ...] = ()
+    created_attempt_ids: tuple[uuid.UUID, ...] = ()
+    finalized_root_job_id: uuid.UUID | None = None
+    root_status: str | None = None
+
+
 async def create_ready_child_jobs(
     db: AsyncSession,
     *,
@@ -72,6 +81,106 @@ async def create_ready_child_jobs(
     )
 
 
+async def advance_workflow_after_child_terminal(
+    db: AsyncSession,
+    *,
+    child_job: Job,
+) -> WorkflowAdvanceResult:
+    if not child_job.is_internal or child_job.root_job_id is None:
+        return WorkflowAdvanceResult(root_job_id=child_job.id)
+    root_job = await JobRepo.get_workflow_root_for_update(db, child_job.root_job_id)
+    if root_job is None:
+        raise AppError(
+            "RUNTIME_REF_INVALID",
+            "workflow child references a missing root job",
+            details={"child_job_id": str(child_job.id), "root_job_id": str(child_job.root_job_id)},
+        )
+    if root_job.status in ("succeeded", "failed"):
+        return WorkflowAdvanceResult(
+            root_job_id=root_job.id,
+            root_status=root_job.status,
+        )
+    if root_job.status != "running" or root_job.active_attempt_id is not None:
+        return WorkflowAdvanceResult(root_job_id=root_job.id)
+
+    from app.services.job_runtime import workflow_plan_from_job
+
+    workflow_plan = workflow_plan_from_job(root_job)
+    if workflow_plan is None:
+        raise AppError(
+            "RUNTIME_REF_INVALID",
+            "workflow root job is missing frozen workflow_plan",
+            details={"root_job_id": str(root_job.id), "child_job_id": str(child_job.id)},
+        )
+    nodes = _nodes_by_key(workflow_plan)
+    children = await JobRepo.list_internal_children(db, root_job_id=root_job.id)
+    failed_child = _first_failed_required_child(nodes, children)
+    if failed_child is not None and workflow_plan["failure_policy"] == "fail_fast":
+        error = _root_failure_error(failed_child)
+        finalized = await JobRepo.mark_workflow_root_failed(db, root_job.id, error=error)
+        return WorkflowAdvanceResult(
+            root_job_id=root_job.id,
+            finalized_root_job_id=root_job.id if finalized else None,
+            root_status="failed" if finalized else None,
+        )
+
+    orchestration = await create_ready_child_jobs(db, root_job=root_job, workflow_plan=workflow_plan)
+    children = await JobRepo.list_internal_children(db, root_job_id=root_job.id)
+    created_attempt_ids = orchestration.created_attempt_ids
+    has_active_children = _has_active_children(children)
+    all_required_succeeded = _all_required_children_succeeded(nodes, children)
+    first_failed_child = _first_failed_child(children)
+    if not created_attempt_ids and all_required_succeeded:
+        outcome = "partial_success" if first_failed_child is not None else "success"
+        result = _root_success_result(root_job, workflow_plan, nodes, children, outcome=outcome)
+        finalized = await JobRepo.mark_workflow_root_succeeded(
+            db,
+            root_job.id,
+            result=result,
+            canonical_result=result,
+        )
+        return WorkflowAdvanceResult(
+            root_job_id=root_job.id,
+            created_child_job_ids=orchestration.created_child_job_ids,
+            created_attempt_ids=orchestration.created_attempt_ids,
+            finalized_root_job_id=root_job.id if finalized else None,
+            root_status="succeeded" if finalized else None,
+        )
+    if (
+        not created_attempt_ids
+        and not has_active_children
+        and not all_required_succeeded
+        and first_failed_child is not None
+    ):
+        if workflow_plan["failure_policy"] == "allow_partial" and _any_required_child_succeeded(nodes, children):
+            result = _root_success_result(root_job, workflow_plan, nodes, children, outcome="partial_success")
+            finalized = await JobRepo.mark_workflow_root_succeeded(
+                db,
+                root_job.id,
+                result=result,
+                canonical_result=result,
+            )
+            return WorkflowAdvanceResult(
+                root_job_id=root_job.id,
+                finalized_root_job_id=root_job.id if finalized else None,
+                root_status="succeeded" if finalized else None,
+            )
+        error = _root_failure_error(first_failed_child)
+        finalized = await JobRepo.mark_workflow_root_failed(db, root_job.id, error=error)
+        return WorkflowAdvanceResult(
+            root_job_id=root_job.id,
+            finalized_root_job_id=root_job.id if finalized else None,
+            root_status="failed" if finalized else None,
+        )
+
+    await _project_root_progress(db, root_job=root_job, nodes=nodes, children=children)
+    return WorkflowAdvanceResult(
+        root_job_id=root_job.id,
+        created_child_job_ids=orchestration.created_child_job_ids,
+        created_attempt_ids=orchestration.created_attempt_ids,
+    )
+
+
 def _nodes_by_key(workflow_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     _validate_plan_header(workflow_plan)
     raw_nodes = workflow_plan.get("nodes")
@@ -101,11 +210,19 @@ def _nodes_by_key(workflow_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
         job_params = raw_node.get("job_params")
         if not isinstance(job_params, dict):
             raise AppError("RUNTIME_REF_INVALID", f"workflow node {key} job_params must be a JSON object")
+        required = raw_node.get("required", True)
+        if not isinstance(required, bool):
+            raise AppError("RUNTIME_REF_INVALID", f"workflow node {key} required must be a boolean")
+        weight = raw_node.get("weight", 1)
+        if type(weight) is not int or weight < 1:
+            raise AppError("RUNTIME_REF_INVALID", f"workflow node {key} weight must be >= 1")
         nodes[key] = {
             "key": key,
             "depends_on": tuple(depends_on),
             "job_type": job_type,
             "job_params": deepcopy(job_params),
+            "required": required,
+            "weight": weight,
         }
     for node in nodes.values():
         for dependency in node["depends_on"]:
@@ -161,6 +278,132 @@ def _validate_dag(nodes: dict[str, dict[str, Any]]) -> None:
             "workflow_plan contains cyclic or unschedulable dependencies",
             details={"nodes": cyclic_keys},
         )
+
+
+def _children_by_node_key(children: list[Job]) -> dict[str, Job]:
+    return {child.workflow_node_key: child for child in children if child.workflow_node_key}
+
+
+def _first_failed_required_child(nodes: dict[str, dict[str, Any]], children: list[Job]) -> Job | None:
+    children_by_key = _children_by_node_key(children)
+    for key, node in nodes.items():
+        child = children_by_key.get(key)
+        if node["required"] and child is not None and child.status == "failed":
+            return child
+    return None
+
+
+def _all_required_children_succeeded(nodes: dict[str, dict[str, Any]], children: list[Job]) -> bool:
+    children_by_key = _children_by_node_key(children)
+    for key, node in nodes.items():
+        if not node["required"]:
+            continue
+        child = children_by_key.get(key)
+        if child is None or child.status != "succeeded":
+            return False
+    return True
+
+
+def _any_required_child_succeeded(nodes: dict[str, dict[str, Any]], children: list[Job]) -> bool:
+    children_by_key = _children_by_node_key(children)
+    return any(
+        node["required"]
+        and (child := children_by_key.get(key)) is not None
+        and child.status == "succeeded"
+        for key, node in nodes.items()
+    )
+
+
+def _first_failed_child(children: list[Job]) -> Job | None:
+    for child in children:
+        if child.status == "failed":
+            return child
+    return None
+
+
+def _has_active_children(children: list[Job]) -> bool:
+    return any(child.status in ("queued", "running") for child in children)
+
+
+def _root_success_result(
+    root_job: Job,
+    workflow_plan: dict[str, Any],
+    nodes: dict[str, dict[str, Any]],
+    children: list[Job],
+    *,
+    outcome: str,
+) -> dict[str, Any]:
+    children_by_key = _children_by_node_key(children)
+    node_results = []
+    succeeded_count = 0
+    failed_count = 0
+    for key in nodes:
+        child = children_by_key.get(key)
+        status = child.status if child is not None else "not_created"
+        if status == "succeeded":
+            succeeded_count += 1
+        elif status == "failed":
+            failed_count += 1
+        node_results.append(
+            {
+                "node_key": key,
+                "job_id": str(child.id) if child is not None else None,
+                "job_type": nodes[key]["job_type"],
+                "status": status,
+                "result": child.result if child is not None and child.status == "succeeded" else None,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "job_type": root_job.job_type,
+        "workflow": {
+            "workflow_type": workflow_plan["workflow_type"],
+            "workflow_version": workflow_plan["workflow_version"],
+            "outcome": outcome,
+            "failure_policy": workflow_plan["failure_policy"],
+            "node_count": len(nodes),
+            "succeeded": succeeded_count,
+            "failed": failed_count,
+            "nodes": node_results,
+        },
+    }
+
+
+def _root_failure_error(child: Job) -> dict[str, Any]:
+    child_error = child.error if isinstance(child.error, dict) else {}
+    return {
+        "code": "WORKFLOW_CHILD_FAILED",
+        "message": "workflow child job failed",
+        "details": {
+            "child_job_id": str(child.id),
+            "workflow_node_key": child.workflow_node_key,
+            "child_error": child_error,
+        },
+    }
+
+
+async def _project_root_progress(
+    db: AsyncSession,
+    *,
+    root_job: Job,
+    nodes: dict[str, dict[str, Any]],
+    children: list[Job],
+) -> None:
+    total_weight = sum(node["weight"] for node in nodes.values())
+    children_by_key = _children_by_node_key(children)
+    completed_weight = sum(
+        node["weight"]
+        for key, node in nodes.items()
+        if (child := children_by_key.get(key)) is not None and child.status in ("succeeded", "failed")
+    )
+    projected_percent = 20 + int((completed_weight / total_weight) * 75) if total_weight else 20
+    await JobRepo.update_progress(
+        db,
+        root_job.id,
+        progress_percent=max(root_job.progress_percent or 0, min(projected_percent, 95)),
+        progress_text="正在汇总子任务",
+        progress_stage="merging",
+    )
 
 
 async def _create_child_job(
