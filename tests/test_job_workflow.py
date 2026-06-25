@@ -10,7 +10,11 @@ from app.services.job_runtime import payload_hash
 from app.jobs.runner import execute_job, fail_job
 from app.jobs.types.register import register_all_job_types
 from app.tasks import jobs as task_jobs
-from app.workflows.orchestrator import advance_workflow_after_child_terminal, create_ready_child_jobs
+from app.workflows.orchestrator import (
+    advance_workflow_after_child_terminal,
+    create_ready_child_jobs,
+    reconcile_workflow_root,
+)
 
 
 class _FakeDB:
@@ -510,6 +514,119 @@ async def test_create_ready_child_jobs_rejects_mismatched_persisted_plan_header(
         await create_ready_child_jobs(_FakeDB(), root_job=root_job, workflow_plan=workflow_plan)
 
     assert exc.value.code == "RUNTIME_REF_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_workflow_root_creates_missing_ready_child(monkeypatch):
+    register_all_job_types()
+    root_job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="test.workflow",
+        status="running",
+        progress_percent=20,
+        active_attempt_id=None,
+        is_internal=False,
+        priority="normal",
+        timeout_seconds=300,
+        job_params_hash=payload_hash({"workflow": True}),
+        runtime_ref={
+            "storage": "db_inline",
+            "type": "json",
+            "name": "runtime",
+            "payload": {
+                "schema_version": 1,
+                "job_type": "test.workflow",
+                "job_params_hash": payload_hash({"workflow": True}),
+                "runtime_fields": {},
+                "output_target": {
+                    "type": "oss_prefix",
+                    "oss_bucket": "bucket",
+                    "oss_prefix": "root/",
+                    "oss_region": "region",
+                },
+                "workflow_plan": {
+                    "schema_version": 1,
+                    "kind": "dag_lite",
+                    "workflow_type": "test.workflow",
+                    "workflow_version": 1,
+                    "failure_policy": "fail_fast",
+                    "max_nodes": 10,
+                    "node_count": 1,
+                    "nodes": [
+                        {
+                            "key": "first",
+                            "job_type": "job_test_echo",
+                            "job_params": {"message": "hello", "repeat": 1},
+                            "depends_on": [],
+                            "required": True,
+                            "weight": 1,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+    created_children = []
+    created_attempt_ids = []
+
+    async def fake_get_workflow_root_for_update(_db, root_job_id):
+        assert root_job_id == root_job.id
+        return root_job
+
+    async def fake_list_internal_children(_db, *, root_job_id, statuses=None):
+        assert root_job_id == root_job.id
+        assert statuses is None
+        return created_children
+
+    async def fake_get_internal_child_by_node_key(_db, *, root_job_id, workflow_node_key):
+        assert root_job_id == root_job.id
+        assert workflow_node_key == "first"
+        return None
+
+    async def fake_create(_db, **kwargs):
+        child = Job(
+            id=uuid.uuid4(),
+            caller_id=kwargs["caller_id"],
+            job_type=kwargs["job_type"],
+            status="queued",
+            progress_percent=0,
+            priority=kwargs["priority"],
+            timeout_seconds=kwargs["timeout_seconds"],
+            root_job_id=kwargs["root_job_id"],
+            parent_job_id=kwargs["parent_job_id"],
+            is_internal=kwargs["is_internal"],
+            workflow_node_key=kwargs["workflow_node_key"],
+        )
+        created_children.append(child)
+        return child
+
+    async def fake_create_initial_attempt(_db, child, *, timeout_seconds):
+        attempt_id = uuid.uuid4()
+        child.active_attempt_id = attempt_id
+        created_attempt_ids.append(attempt_id)
+        return SimpleNamespace(id=attempt_id)
+
+    async def fake_update_progress(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.get_workflow_root_for_update", fake_get_workflow_root_for_update)
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.list_internal_children", fake_list_internal_children)
+    monkeypatch.setattr(
+        "app.workflows.orchestrator.JobRepo.get_internal_child_by_node_key",
+        fake_get_internal_child_by_node_key,
+    )
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.create", fake_create)
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.create_initial_attempt", fake_create_initial_attempt)
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.update_progress", fake_update_progress)
+
+    result = await reconcile_workflow_root(_FakeDB(), root_job_id=root_job.id)
+
+    assert [child.workflow_node_key for child in created_children] == ["first"]
+    assert result.root_job_id == root_job.id
+    assert result.created_child_job_ids == tuple(child.id for child in created_children)
+    assert result.created_attempt_ids == tuple(created_attempt_ids)
+    assert result.finalized_root_job_id is None
 
 
 @pytest.mark.asyncio

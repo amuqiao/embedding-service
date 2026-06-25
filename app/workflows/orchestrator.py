@@ -18,6 +18,7 @@ from app.services.job_runtime import (
     configured_output_target,
     payload_hash,
     write_runtime_json,
+    workflow_plan_from_job,
 )
 from app.services.jobs import _validate_prompt
 from app.workflows.base import FAILURE_POLICIES
@@ -88,12 +89,20 @@ async def advance_workflow_after_child_terminal(
 ) -> WorkflowAdvanceResult:
     if not child_job.is_internal or child_job.root_job_id is None:
         return WorkflowAdvanceResult(root_job_id=child_job.id)
-    root_job = await JobRepo.get_workflow_root_for_update(db, child_job.root_job_id)
+    return await reconcile_workflow_root(db, root_job_id=child_job.root_job_id)
+
+
+async def reconcile_workflow_root(
+    db: AsyncSession,
+    *,
+    root_job_id: uuid.UUID,
+) -> WorkflowAdvanceResult:
+    root_job = await JobRepo.get_workflow_root_for_update(db, root_job_id)
     if root_job is None:
         raise AppError(
             "RUNTIME_REF_INVALID",
-            "workflow child references a missing root job",
-            details={"child_job_id": str(child_job.id), "root_job_id": str(child_job.root_job_id)},
+            "workflow root job is missing",
+            details={"root_job_id": str(root_job_id)},
         )
     if root_job.status in ("succeeded", "failed"):
         return WorkflowAdvanceResult(
@@ -103,14 +112,12 @@ async def advance_workflow_after_child_terminal(
     if root_job.status != "running" or root_job.active_attempt_id is not None:
         return WorkflowAdvanceResult(root_job_id=root_job.id)
 
-    from app.services.job_runtime import workflow_plan_from_job
-
     workflow_plan = workflow_plan_from_job(root_job)
     if workflow_plan is None:
         raise AppError(
             "RUNTIME_REF_INVALID",
             "workflow root job is missing frozen workflow_plan",
-            details={"root_job_id": str(root_job.id), "child_job_id": str(child_job.id)},
+            details={"root_job_id": str(root_job.id)},
         )
     nodes = _nodes_by_key(workflow_plan)
     children = await JobRepo.list_internal_children(db, root_job_id=root_job.id)

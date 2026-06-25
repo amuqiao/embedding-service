@@ -179,6 +179,64 @@ async def test_list_internal_children_can_filter_by_root_and_statuses():
 
 
 @pytest.mark.asyncio
+async def test_find_workflow_roots_for_reconciliation_scans_only_waiting_public_roots():
+    db = _FakeDB()
+    db.results.append(_ScalarListResult([]))
+
+    roots = await JobRepo.find_workflow_roots_for_reconciliation(db, limit=10)
+
+    assert roots == []
+    sql = _compile(db.statements[0])
+    assert "job_aggregates.status =" in sql
+    assert "job_aggregates.active_attempt_id IS NULL" in sql
+    assert "job_aggregates.is_internal IS false" in sql
+    assert "job_aggregates.deleted_at IS NULL" in sql
+    assert "job_aggregates.runtime_ref" in sql
+    assert "?" in sql
+    compiled = db.statements[0].compile(dialect=postgresql.dialect())
+    assert "workflow_plan" in set(compiled.params.values())
+    assert "LIMIT" in sql
+
+
+@pytest.mark.asyncio
+async def test_find_active_pending_attempts_missing_dispatch_excludes_attempts_with_outbox():
+    db = _FakeDB()
+    db.results.append(_ScalarListResult([]))
+
+    attempts = await JobRepo.find_active_pending_attempts_missing_dispatch(db, limit=10)
+
+    assert attempts == []
+    sql = _compile(db.statements[0])
+    assert "job_aggregates.status =" in sql
+    assert "job_aggregates.active_attempt_id = job_execution_attempts.id" in sql
+    assert "job_execution_attempts.status =" in sql
+    assert "NOT (EXISTS" in sql
+    assert "dispatch_outbox.attempt_id = job_execution_attempts.id" in sql
+    assert "dispatch_outbox.task_name =" in sql
+    assert "FOR UPDATE SKIP LOCKED" in sql
+
+
+@pytest.mark.asyncio
+async def test_find_terminal_root_jobs_missing_callback_outbox_excludes_internal_jobs():
+    db = _FakeDB()
+    db.results.append(_ScalarListResult([]))
+
+    jobs = await JobRepo.find_terminal_root_jobs_missing_callback_outbox(db, limit=10)
+
+    assert jobs == []
+    sql = _compile(db.statements[0])
+    assert "job_aggregates.status IN" in sql
+    assert "job_aggregates.is_internal IS false" in sql
+    assert "job_aggregates.callback_url IS NOT NULL" in sql
+    assert "job_aggregates.deleted_at IS NULL" in sql
+    compiled = db.statements[0].compile(dialect=postgresql.dialect())
+    assert any(value == "job.succeeded" for value in compiled.params.values())
+    assert any(value == "job.failed" for value in compiled.params.values())
+    assert "NOT (EXISTS" in sql
+    assert "FOR UPDATE SKIP LOCKED" in sql
+
+
+@pytest.mark.asyncio
 async def test_create_internal_job_requires_root_job_id():
     db = _FakeDB()
 

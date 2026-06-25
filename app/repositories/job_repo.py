@@ -808,6 +808,84 @@ class JobRepo:
         return list(result.scalars().all())
 
     @staticmethod
+    async def find_workflow_roots_for_reconciliation(db: AsyncSession, *, limit: int) -> list[Job]:
+        result = await db.execute(
+            select(Job)
+            .where(
+                Job.status == "running",
+                Job.active_attempt_id.is_(None),
+                Job.is_internal.is_(False),
+                Job.deleted_at.is_(None),
+                Job.runtime_ref["payload"].op("?")("workflow_plan"),
+            )
+            .order_by(Job.updated_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def find_active_pending_attempts_missing_dispatch(db: AsyncSession, *, limit: int) -> list[JobAttempt]:
+        dispatch_exists = (
+            select(DispatchOutbox.id)
+            .where(
+                DispatchOutbox.attempt_id == JobAttempt.id,
+                DispatchOutbox.task_name == DISPATCH_TASK_NAME,
+            )
+            .exists()
+        )
+        result = await db.execute(
+            select(JobAttempt)
+            .join(Job, Job.id == JobAttempt.job_id)
+            .where(
+                Job.status == "queued",
+                Job.active_attempt_id == JobAttempt.id,
+                Job.deleted_at.is_(None),
+                JobAttempt.status == "pending",
+                ~dispatch_exists,
+            )
+            .order_by(JobAttempt.created_at.asc())
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def find_terminal_root_jobs_missing_callback_outbox(db: AsyncSession, *, limit: int) -> list[Job]:
+        succeeded_callback_exists = (
+            select(CallbackOutbox.id)
+            .where(
+                CallbackOutbox.job_id == Job.id,
+                CallbackOutbox.event_type == "job.succeeded",
+            )
+            .exists()
+        )
+        failed_callback_exists = (
+            select(CallbackOutbox.id)
+            .where(
+                CallbackOutbox.job_id == Job.id,
+                CallbackOutbox.event_type == "job.failed",
+            )
+            .exists()
+        )
+        result = await db.execute(
+            select(Job)
+            .where(
+                Job.status.in_(["succeeded", "failed"]),
+                Job.is_internal.is_(False),
+                Job.callback_url.is_not(None),
+                Job.deleted_at.is_(None),
+                or_(
+                    and_(Job.status == "succeeded", ~succeeded_callback_exists),
+                    and_(Job.status == "failed", ~failed_callback_exists),
+                ),
+            )
+            .order_by(Job.updated_at.asc())
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
     async def get(db: AsyncSession, job_id: uuid.UUID) -> Job | None:
         result = await db.execute(select(Job).where(Job.id == job_id, Job.deleted_at.is_(None)))
         return result.scalar_one_or_none()

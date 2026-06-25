@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,6 +39,10 @@ async def _no_ai_ledger_reconciliation(*_args, **_kwargs):
     return 0
 
 
+async def _no_jobs(*_args, **_kwargs):
+    return []
+
+
 def _attempt(status: str = "published") -> JobAttempt:
     return JobAttempt(
         id=uuid.uuid4(),
@@ -72,6 +77,9 @@ def _patch_common_recovery(monkeypatch, *, due_dispatches=None, stale_attempts=N
         stale_attempts or _no_attempts,
     )
     monkeypatch.setattr("app.tasks.recovery.JobRepo.find_due_callbacks", _no_attempts)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_workflow_roots_for_reconciliation", _no_jobs)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_active_pending_attempts_missing_dispatch", _no_attempts)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_terminal_root_jobs_missing_callback_outbox", _no_jobs)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.cleanup_expired_jobs", _cleanup)
     monkeypatch.setattr(
         "app.tasks.recovery.AiCallLogRepo.mark_stale_pending_failed",
@@ -201,6 +209,219 @@ async def test_recovery_advances_workflow_after_stale_internal_child_failed(monk
     assert result["failed"] == 1
     assert advanced["child_job_id"] == child.id
     assert advanced["result"] is advance_result
+
+
+@pytest.mark.asyncio
+async def test_recovery_reconciles_workflow_root_and_handles_side_effects(monkeypatch):
+    root_job_id = uuid.uuid4()
+    child_attempt_id = uuid.uuid4()
+    root = Job(
+        id=root_job_id,
+        caller_id="caller-1",
+        job_type="test.workflow",
+        status="running",
+        is_internal=False,
+        active_attempt_id=None,
+    )
+    advance_result = SimpleNamespace(
+        root_job_id=root_job_id,
+        created_attempt_ids=(child_attempt_id,),
+        finalized_root_job_id=None,
+    )
+    handled = []
+
+    async def workflow_roots(*_args, **_kwargs):
+        return [root]
+
+    async def reconcile(_db, *, root_job_id):
+        assert root_job_id == root.id
+        return advance_result
+
+    async def handle_result(result):
+        handled.append(result)
+
+    _patch_common_recovery(monkeypatch)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_workflow_roots_for_reconciliation", workflow_roots)
+    monkeypatch.setattr("app.workflows.orchestrator.reconcile_workflow_root", reconcile)
+    monkeypatch.setattr("app.tasks.jobs.handle_workflow_advance_result", handle_result)
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["workflow_reconciled"] == 1
+    assert handled == [advance_result]
+
+
+@pytest.mark.asyncio
+async def test_recovery_deduplicates_dispatch_attempt_from_reconciler_and_due_scan(monkeypatch):
+    root_job_id = uuid.uuid4()
+    child_attempt_id = uuid.uuid4()
+    root = Job(
+        id=root_job_id,
+        caller_id="caller-1",
+        job_type="test.workflow",
+        status="running",
+        is_internal=False,
+        active_attempt_id=None,
+    )
+    advance_result = SimpleNamespace(
+        root_job_id=root_job_id,
+        created_attempt_ids=(child_attempt_id,),
+        finalized_root_job_id=None,
+    )
+    due_dispatch = _dispatch(child_attempt_id)
+    published = []
+
+    async def workflow_roots(*_args, **_kwargs):
+        return [root]
+
+    async def reconcile(_db, *, root_job_id):
+        assert root_job_id == root.id
+        return advance_result
+
+    async def due_dispatches(*_args, **_kwargs):
+        return [due_dispatch]
+
+    async def publish(attempt_id):
+        published.append(attempt_id)
+
+    _patch_common_recovery(monkeypatch, due_dispatches=due_dispatches)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_workflow_roots_for_reconciliation", workflow_roots)
+    monkeypatch.setattr("app.workflows.orchestrator.reconcile_workflow_root", reconcile)
+    monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", publish)
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["workflow_reconciled"] == 1
+    assert result["recovered"] == 0
+    assert published == [child_attempt_id]
+
+
+@pytest.mark.asyncio
+async def test_recovery_deduplicates_callback_from_reconciler_and_due_scan(monkeypatch):
+    root_job_id = uuid.uuid4()
+    root = Job(
+        id=root_job_id,
+        caller_id="caller-1",
+        job_type="test.workflow",
+        status="running",
+        is_internal=False,
+        active_attempt_id=None,
+    )
+    due_job = Job(
+        id=root_job_id,
+        caller_id="caller-1",
+        job_type="test.workflow",
+        status="succeeded",
+        is_internal=False,
+        callback_url="https://callback.example/jobs",
+    )
+    advance_result = SimpleNamespace(
+        root_job_id=root_job_id,
+        created_attempt_ids=(),
+        finalized_root_job_id=root_job_id,
+    )
+    delivered = []
+
+    async def workflow_roots(*_args, **_kwargs):
+        return [root]
+
+    async def reconcile(_db, *, root_job_id):
+        assert root_job_id == root.id
+        return advance_result
+
+    async def due_callbacks(*_args, **_kwargs):
+        return [due_job]
+
+    async def deliver_callback(job_id):
+        delivered.append(job_id)
+        return True
+
+    async def handle_result(result):
+        await deliver_callback(result.finalized_root_job_id)
+
+    _patch_common_recovery(monkeypatch)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_workflow_roots_for_reconciliation", workflow_roots)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_due_callbacks", due_callbacks)
+    monkeypatch.setattr("app.workflows.orchestrator.reconcile_workflow_root", reconcile)
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", deliver_callback)
+    monkeypatch.setattr("app.tasks.jobs.handle_workflow_advance_result", handle_result)
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["workflow_reconciled"] == 1
+    assert result["callbacks"] == 0
+    assert delivered == [root_job_id]
+
+
+@pytest.mark.asyncio
+async def test_recovery_repairs_missing_dispatch_outbox_and_publishes_attempt(monkeypatch):
+    attempt = _attempt("pending")
+    created = []
+    published = []
+
+    async def missing_dispatch(*_args, **_kwargs):
+        return [attempt]
+
+    async def create_dispatch(_db, *, job_id, attempt_id, next_attempt_at, dispatch_reason):
+        assert job_id == attempt.job_id
+        assert attempt_id == attempt.id
+        assert next_attempt_at is not None
+        assert dispatch_reason == "reconciler_missing_dispatch"
+        created.append(attempt_id)
+
+    async def publish(attempt_id):
+        published.append(attempt_id)
+
+    _patch_common_recovery(monkeypatch)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_active_pending_attempts_missing_dispatch", missing_dispatch)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.create_dispatch_outbox", create_dispatch)
+    monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", publish)
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["dispatch_reconciled"] == 1
+    assert result["recovered"] == 1
+    assert created == [attempt.id]
+    assert published == [attempt.id]
+
+
+@pytest.mark.asyncio
+async def test_recovery_repairs_missing_callback_outbox_and_delivers(monkeypatch):
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="job_test_echo",
+        status="succeeded",
+        is_internal=False,
+        callback_url="https://callback.example/jobs",
+    )
+    ensured = []
+    delivered = []
+
+    async def terminal_jobs(*_args, **_kwargs):
+        return [job]
+
+    async def ensure_callback(_db, received_job, *, now):
+        assert received_job.id == job.id
+        assert now.tzinfo is not None
+        ensured.append(received_job.id)
+        return SimpleNamespace(next_attempt_at=now)
+
+    async def deliver_callback(job_id):
+        delivered.append(job_id)
+        return True
+
+    _patch_common_recovery(monkeypatch)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_terminal_root_jobs_missing_callback_outbox", terminal_jobs)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.ensure_terminal_callback_outbox", ensure_callback)
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", deliver_callback)
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["callback_reconciled"] == 1
+    assert result["callbacks"] == 1
+    assert ensured == [job.id]
+    assert delivered == [job.id]
 
 
 @pytest.mark.asyncio

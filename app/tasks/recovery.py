@@ -35,6 +35,9 @@ async def _run_recovery(db: AsyncSession) -> dict:
     deleted = 0
     dispatch_attempts: list[uuid.UUID] = []
     workflow_advances = []
+    workflow_reconciled = 0
+    dispatch_reconciled = 0
+    callback_reconciled = 0
     ai_ledger_reconciled = 0
 
     lock_result = await db.execute(text("SELECT pg_try_advisory_lock(hashtext('job_recovery_loop'))"))
@@ -46,19 +49,15 @@ async def _run_recovery(db: AsyncSession) -> dict:
             "failed": failed,
             "callbacks": 0,
             "deleted": deleted,
+            "workflow_reconciled": workflow_reconciled,
+            "dispatch_reconciled": dispatch_reconciled,
+            "callback_reconciled": callback_reconciled,
             "ai_ledger_reconciled": ai_ledger_reconciled,
             "locked": False,
         }
 
     try:
         now = datetime.now(timezone.utc)
-        due_dispatches = await JobRepo.find_due_dispatches(
-            db,
-            now,
-            limit=settings.job.recovery_batch_size,
-        )
-        dispatch_attempts.extend(dispatch.attempt_id for dispatch in due_dispatches)
-
         stale_attempts = await JobRepo.find_stale_running_attempts(
             db,
             now,
@@ -94,13 +93,72 @@ async def _run_recovery(db: AsyncSession) -> dict:
                 failed += 1
                 logger.warning("recovery: failed stale running attempt %s", attempt.id)
 
+        from app.workflows.orchestrator import reconcile_workflow_root
+
+        workflow_roots = await JobRepo.find_workflow_roots_for_reconciliation(
+            db,
+            limit=settings.job.recovery_batch_size,
+        )
+        for root_job in workflow_roots:
+            result = await reconcile_workflow_root(db, root_job_id=root_job.id)
+            if result.created_attempt_ids or result.finalized_root_job_id is not None:
+                workflow_advances.append(result)
+                workflow_reconciled += 1
+        workflow_created_attempt_ids = {
+            attempt_id
+            for result in workflow_advances
+            for attempt_id in (result.created_attempt_ids or ())
+        }
+        workflow_finalized_root_ids = {
+            result.finalized_root_job_id
+            for result in workflow_advances
+            if result.finalized_root_job_id is not None
+        }
+
+        missing_dispatch_attempts = await JobRepo.find_active_pending_attempts_missing_dispatch(
+            db,
+            limit=settings.job.recovery_batch_size,
+        )
+        for attempt in missing_dispatch_attempts:
+            await JobRepo.create_dispatch_outbox(
+                db,
+                job_id=attempt.job_id,
+                attempt_id=attempt.id,
+                next_attempt_at=now,
+                dispatch_reason="reconciler_missing_dispatch",
+            )
+            dispatch_attempts.append(attempt.id)
+            dispatch_reconciled += 1
+
+        terminal_jobs_missing_callback = await JobRepo.find_terminal_root_jobs_missing_callback_outbox(
+            db,
+            limit=settings.job.recovery_callback_batch_size,
+        )
+        for job in terminal_jobs_missing_callback:
+            outbox = await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
+            if outbox is not None:
+                callback_reconciled += 1
+                if outbox.next_attempt_at is not None and job.id not in workflow_finalized_root_ids:
+                    callback_due.append(str(job.id))
+
+        due_dispatches = await JobRepo.find_due_dispatches(
+            db,
+            now,
+            limit=settings.job.recovery_batch_size,
+        )
+        dispatch_attempts.extend(
+            dispatch.attempt_id
+            for dispatch in due_dispatches
+            if dispatch.attempt_id not in workflow_created_attempt_ids
+        )
+
         due_callbacks = await JobRepo.find_due_callbacks(
             db,
             now=now,
             max_attempts=settings.callback.max_delivery_attempts,
             limit=settings.job.recovery_callback_batch_size,
         )
-        callback_due.extend(str(job.id) for job in due_callbacks)
+        callback_due.extend(str(job.id) for job in due_callbacks if job.id not in workflow_finalized_root_ids)
 
         ai_ledger_reconciled = await AiCallLogRepo.mark_stale_pending_failed(
             db,
@@ -119,7 +177,7 @@ async def _run_recovery(db: AsyncSession) -> dict:
     if dispatch_attempts:
         from app.tasks.jobs import publish_job_attempt
 
-        for attempt_id in dispatch_attempts:
+        for attempt_id in dict.fromkeys(dispatch_attempts):
             try:
                 await publish_job_attempt(attempt_id)
                 recovered += 1
@@ -152,6 +210,9 @@ async def _run_recovery(db: AsyncSession) -> dict:
         "failed": failed,
         "callbacks": len(callback_due),
         "deleted": deleted,
+        "workflow_reconciled": workflow_reconciled,
+        "dispatch_reconciled": dispatch_reconciled,
+        "callback_reconciled": callback_reconciled,
         "ai_ledger_reconciled": ai_ledger_reconciled,
         "locked": True,
     }
