@@ -14,7 +14,7 @@
 
 | 计划 | 本文验收重点 |
 |---|---|
-| [`workflow-kernel-design.md`](workflow-kernel-design.md) | root / child Job、DAG、outbox、reconciler、progress/result projection |
+| [`workflow-kernel-design.md`](workflow-kernel-design.md) | simple / workflow job_type 分流、root / child Job、outbox 复用、reconciler、progress/result projection |
 | [`ai-capability-enhancement.md`](ai-capability-enhancement.md) | AI facade、provider adapter、usage normalizer、model / prompt / pricing registry 交接点 |
 | [`ai-capability-cost-boundary-design.md`](ai-capability-cost-boundary-design.md) | ledger attribution、cost estimate、billing / cost summary projection |
 | [`hardening.md`](hardening.md) | 运维硬化 backlog，不阻塞主干但不能与主干合同冲突 |
@@ -33,12 +33,15 @@
 | Gate | 验收要求 |
 |---|---|
 | Root / child Job visibility | Root Job 是唯一公共查询、callback 和幂等入口；child Job 第一版是内部执行资源；公共 `GET /jobs/{job_id}` 不能让调用方查询到不属于其公共合同的 child Job |
-| Ledger attribution | 冻结 descendant AI call 写入 root Job scope 的方式；明确 workflow / node / child Job / attempt 的最小归因字段或等价 scope |
+| Execution split | 冻结 simple job_type 和 workflow job_type 的执行分流；simple job 可由 root attempt 直接执行，workflow job 的 root 只做编排和对外聚合，item 执行必须走 internal child Job |
+| Workflow MVP tables | 冻结 MVP 不新增 workflow 专属表；只通过 `job_aggregates` root / child lineage、internal visibility 和 `workflow_node_key` 表达 child Job 归属与幂等 |
+| Self-indexing aggregate | 冻结 `job_aggregates` 自索引设计；root -> child 查询依赖 `root_job_id`、`parent_job_id`、`workflow_node_key` 和必要索引，不新增 child Job 状态副本表 |
+| Ledger attribution | 冻结 descendant AI call 写入 root Job scope 的方式；MVP 使用 `scope_type="job"`、`scope_id=<root_job_id>` 聚合 root billing，node / child 归因列后置评估 |
 | Job progress | Root Job 对外 progress 是 Job 级单调展示值；child attempt、node retry 和 reconciler 不能让调用方看到 percent 回退 |
 | Job result | `allow_partial` 不新增公共 `partially_succeeded`；部分成功只通过 root result summary / item status 表达 |
 | Cost projection | terminal polling、terminal callback 和 future `job.cost` 必须使用同一 ledger 聚合逻辑；summary 不是事实源 |
 | Callback | Root Job 只发送一次终态 callback；child Job 不发送调用方 callback；callback delivery 失败不改变 Job 终态 |
-| Retention | Root Job 查询期、workflow/node 排障期、descendant ledger 保留期、callback outbox 保留期之间的关系已冻结 |
+| Retention | Root Job 查询期、internal child Job 排障期、descendant ledger 保留期、callback outbox 保留期之间的关系已冻结 |
 | Hardening scope | `hardening.md` 只保留 operational backlog，不重新打开主干计划的 non-goals |
 
 任一 Gate 未冻结时，不应开始 workflow kernel 或多模态业务接入实现。
@@ -47,17 +50,22 @@
 
 ### Job / Workflow
 
-- Root Job、workflow instance、workflow nodes、dependencies 和 first wakeup intent 在同一事务提交。
-- Leaf node 创建 child Job 时，child Job、child attempt、dispatch outbox 和 node `execution_job_id` 在同一事务提交。
+- Simple job_type 仍可由 root Job attempt 直接执行；workflow job_type 的 root Job 只做编排、对外查询、billing 聚合和 callback。
+- Workflow MVP 不新增 `workflow_instances`、`workflow_nodes`、`workflow_node_dependencies`、`workflow_wakeup_outbox` 或 `workflow_events`。
+- Root Job、root attempt、root dispatch outbox 和 frozen fan-out plan 在同一事务提交。
+- Root orchestration step 只创建 internal child Jobs，不在 root worker slot 中同步处理所有 item。
+- 创建 child Job 时，child Job、child attempt 和 child dispatch outbox 在同一事务提交。
+- 同一 root Job 下同一 `workflow_node_key` 最多创建一个 child Job，并由数据库唯一约束或等价幂等约束保证。
+- `job_aggregates` 提供 root -> child 排查所需索引，至少覆盖 root child 枚举、按父 Job 查询、root + node key 幂等和 root + status 过滤。
 - Workflow terminal、root Job terminal、root result projection、terminal cost projection intent 和 root callback outbox 在同一终态投影路径中收敛。
-- 重复 orchestrator tick、重复 child terminal apply、重复 reconciler run 不会重复创建 child Job、重复推进 node 或重复发送 root callback。
-- Join / finalize node 在并发触发下只执行一次。
-- Reconciler 能修复 ready node 卡住、running node 已终态未应用、join 条件满足未执行、workflow 已终态但 root Job 未终态等状态。
+- 重复 root orchestration step、重复 child terminal apply、重复 reconciler run 不会重复创建 child Job、重复 finalize root 或重复发送 root callback。
+- Root finalize 在并发触发下只执行一次。
+- Reconciler 能修复 frozen plan child 缺失、child attempt / dispatch 缺失、child 已终态但 root 未重新计算、root 已终态但 callback outbox 缺失等状态。
 - Child Job 第一版不作为外部调用方可查询资源；如果实现无法阻止公共查询命中 child Job，不允许发布 workflow kernel。
 
 ### AI Capability
 
-- 业务 Job 和 workflow node 只通过 AI facade 调用 provider。
+- 业务 Job 和 workflow child Job 只通过 AI facade 调用 provider。
 - Provider adapter 不写数据库，不拼 Job、Callback 或 Billing envelope。
 - Provider raw usage 必须先经 UsageNormalizer 转成 typed usage，再交给成本边界。
 - Model catalog、prompt refs、pricing refs 和 capability constraints 在启动、worker 启动或 `./scripts/verify.sh check` 中 fail-fast。
@@ -86,9 +94,9 @@
 ### Operations
 
 - Retention 关系保证 root Job 查询期内 result 可用，root billing 查询期内 descendant ledger 可用，child Job 不早于 root workflow 排障窗口被硬删除。
-- Dispatch outbox、workflow wakeup outbox、callback outbox 和 stale ledger 至少有可诊断 terminal / dead letter 状态。
+- Dispatch outbox、callback outbox 和 stale ledger 至少有可诊断 terminal / dead letter 状态。
 - Callback receiver mock 覆盖签名、accepted body、非 2xx、超时和重试路径。
-- 最小观测面能串联 root job id、workflow id、node id、child job id、attempt id 和 AI call ledger id。
+- 最小观测面能串联 root job id、workflow node key、child job id、attempt id 和 AI call ledger id。
 
 ## Verification Sequence
 
@@ -97,14 +105,15 @@
 1. **Contract / registry checks**
    - service contract 不变式。
    - model / pricing / prompt registry fail-fast。
-   - WorkflowSpec compile、DAG 无环、fan-out limit、node key uniqueness。
+   - MVP WorkflowSpec compile、fan-out limit、node key uniqueness、child idempotency key uniqueness。
    - billing 状态映射。
 
 2. **DB integration checks**
-   - root workflow create 原子性。
+   - root workflow create 原子性，不新增 workflow 专属表。
+   - `job_aggregates` root / child lineage 字段、唯一约束和索引生效。
    - child create + dispatch 原子性。
    - duplicate child terminal apply 幂等性。
-   - join 并发一次性。
+   - root finalize 并发一次性。
    - stale pending ledger 和 root terminal recovery。
 
 3. **Runtime smoke**
