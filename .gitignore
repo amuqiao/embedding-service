@@ -10,6 +10,7 @@ __pycache__/
 .DS_Store
 .data/
 .run/
+.vscode/
 .uv-cache/
 long_text_*.txt
 storage/objects/
