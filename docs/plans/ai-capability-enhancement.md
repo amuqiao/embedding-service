@@ -26,11 +26,11 @@ AI 能力层不负责：
 
 - 当前稳定 AI 调用入口是 `app/services/ai_gateway_facade.py` 的 `generate_text_with_ledger()`。
 - `app/services/ai_capability_kernel.py` 承载 `ModelGate`、`ProviderGateway`、`UsageNormalizer`、`TypedPricingResolver` 和 `UsageLedgerWriter`；`app/services/ai_gateway_facade.py` 保留文本调用 facade。
-- 当前稳定执行链仍是 `generate_text_with_ledger()` + `TextModel`。多模态 `UsageRecord` / `PricingRule` 是扩展抽象基础，不代表图片、音频或视频 provider path 已经交付。
+- 当前稳定执行链仍是 `generate_text_with_ledger()` + `TextModel`。文本路径已经使用 `TextUsageRecord` 作为 pricing resolver 输入，并将 `usage_units()` 投影写入 ledger；多模态 provider path 还未交付。
 - `app/integrations/ai_gateway.py` 当前是文本生成 adapter，返回 `TextGenerationResult` 和 token usage，不写 Job、Callback、Billing envelope 或数据库。
 - `app/core/model_registry.py` 从 `app/core/models.yaml` 加载模型目录，并校验 enabled、能力标签、输入/输出媒体类型、required env 声明、provider model 派生、generation 参数和 `pricing_ref`。缺少 required env 的模型不会出现在可用模型列表中。
 - `app/core/pricing_registry.py` 从 `app/core/pricing.yaml` 加载价格规则，当前配置只启用文本 `per_token`，代码已有 `per_image`、`per_second`、`per_call` 的基础类型。
-- `app/core/usage_records.py` 已经提供 `TextUsageRecord`、`ImageUsageRecord`、`AudioUsageRecord` 和 `VideoUsageRecord` 的 typed usage 入口。
+- `app/core/usage_records.py` 已经提供 `TextUsageRecord`、`ImageUsageRecord`、`AudioUsageRecord` 和 `VideoUsageRecord` 的 typed usage 入口；当前只有文本 provider path 会产生真实 provider usage record。
 - `ai_call_ledger_entries` 是 AI provider call 的 usage / cost estimate 事实源；`app/services/billing.py` 从 ledger 聚合 Job scope billing read model。
 - `app/core/prompt_templates.py` 和 `app/core/prompts.yaml` 提供 Prompt 模板入口；Prompt-driven `job_type`、step prompt 和 output schema 还没有统一 fail-fast 合同。
 
@@ -39,7 +39,7 @@ AI 能力层不负责：
 - 多模态 path 仍未交付；当前 kernel 组件和 provider adapter 仍主要服务文本生成路径。
 - Model catalog 已有能力标签、输入/输出媒体类型和 generation 参数校验，但多模态模型条目、provider adapter 归属和真实多模态 pricing fixtures 还未接入。
 - Prompt Registry 已纳入 registry consistency 校验；后续仍需要在正式业务 `job_type` 接入时补足对应 prompt refs、step prompt refs 和 output schema refs。
-- Usage normalizer 已有 typed record 基础，但 provider raw usage 到 `usage_units` 的转换规则仍主要覆盖文本。
+- image / audio / video usage record 已有基础类型，但真实 provider raw usage 到这些 record 的转换规则还未接入。
 - 成本估算边界已经单独收敛到 `ai-capability-cost-boundary-design.md`，本文件需要避免重复定义 pricing 深节和 billing 状态矩阵。
 
 ## 成熟模式
@@ -202,6 +202,7 @@ Phase 1 的数据库/表边界如下：
 - 稳定 `UsageRecord`、`usage_units`、`usage_detail` 和 `usage_schema_version` 的内部合同。
 - `usage_schema_version` 和未来 `usage_kind` 如需持久化，必须通过明确 migration 增加；当前不能把它们写成已经存在的 DB 事实。
 - 保持文本 normalizer 的当前行为。
+- 文本 facade 内部使用 `UsageRecord` 作为 pricing resolver 输入，不能让 pricing resolver 直接解析 provider raw usage 或 loose usage dict。
 - 为 image / audio / video normalizer 先补单元测试，再接真实 provider。
 - 禁止 billing service 临时解析 provider raw usage。
 

@@ -78,8 +78,8 @@ Callback 是服务主动向调用方发送的终态事件，不套 HTTP response
 - 校验 pricing 与模型配置匹配。
 - 在 provider 调用前写入 `ai_call_ledger_entries` 的 `pending` 行。
 - 调用 `app/integrations/ai_gateway.py` 的 LiteLLM provider adapter。
-- 校验 provider usage。
-- 计算 cost。
+- 将 provider usage 标准化为内部 `UsageRecord`。
+- 使用 `PricingRule + UsageRecord` 计算 cost。
 - 将 ledger 行更新为 succeeded 或 failed。
 
 `app/services/ai_capability_kernel.py` 承载当前 AI Capability Kernel 组件：`ModelGate`、`ProviderGateway`、`UsageNormalizer`、`TypedPricingResolver` 和 `UsageLedgerWriter`。这些组件仍服务当前文本生成路径；多模态 provider path 和 workflow descendant attribution 不是当前事实。
@@ -97,6 +97,8 @@ Job scope 调用必须传入：
 - `job_type`
 
 `GET /jobs/{job_id}/billing` 从 `ai_call_ledger_entries` 聚合 Job scope billing。`ai_call_ledger_entries` 是 billing 事实源；后续如新增 summary 表，只能作为派生读模型。
+
+`UsageRecord.kind` 和 `UsageRecord.schema_version` 当前是内存类型字段，不是 `ai_call_ledger_entries` 的独立持久化列。ledger 当前持久化 provider raw usage 诊断信息 `usage_detail` 和可聚合计价单位 `usage_units`。
 
 如果 provider 已经被调用但 ledger terminal update 失败，不能通过重放 provider 调用修复账本。recovery 只负责把超时停留在 `pending` 的 ledger 行收敛为失败或未知状态，让 billing read model 显式表达不完整。
 

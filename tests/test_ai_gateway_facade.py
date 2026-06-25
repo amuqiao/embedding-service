@@ -6,6 +6,7 @@ import pytest
 
 from app.core.exceptions import AppError
 from app.core.error_registry import get_error_spec
+from app.core.pricing_registry import CallPrice, TokenPrice
 from app.integrations.ai_gateway import TextGenerationResult
 from app.services import ai_capability_kernel
 from app.services import ai_gateway_facade
@@ -54,9 +55,13 @@ def _model() -> SimpleNamespace:
     )
 
 
-def _price() -> SimpleNamespace:
-    return SimpleNamespace(
+def _price() -> TokenPrice:
+    return TokenPrice(
         ref="openai:custom-model@2026-06-23",
+        model_id="custom-model",
+        provider="openai",
+        provider_model="custom-model",
+        pricing_type="per_token",
         version="2026-06-23",
         currency="USD",
         input_per_1m=Decimal("1.00"),
@@ -146,9 +151,10 @@ def test_usage_normalizer_reads_provider_cached_token_variants(usage, expected_c
         usage=usage,
     )
 
-    usage_units = ai_capability_kernel.UsageNormalizer().normalize_text(result)
+    usage_record = ai_capability_kernel.UsageNormalizer().normalize_text(result)
 
-    assert usage_units == {
+    assert usage_record.kind == "text"
+    assert usage_record.usage_units() == {
         "input_tokens": 100,
         "cached_input_tokens": expected_cached,
         "output_tokens": 50,
@@ -159,21 +165,27 @@ def test_usage_normalizer_reads_provider_cached_token_variants(usage, expected_c
 def test_typed_pricing_resolver_keeps_token_cost_patchable(monkeypatch):
     calls = {}
 
-    def fake_calculate_token_cost(price, usage_units):
+    def fake_calculate_cost(price, usage_record):
         calls["price"] = price
-        calls["usage_units"] = usage_units
+        calls["usage_record"] = usage_record
         return Decimal("1.23000000")
 
-    monkeypatch.setattr(ai_capability_kernel, "calculate_token_cost", fake_calculate_token_cost)
+    monkeypatch.setattr(ai_capability_kernel, "calculate_usage_cost", fake_calculate_cost)
 
-    amount = ai_capability_kernel.TypedPricingResolver().calculate_text_cost(
+    usage_record = ai_capability_kernel.normalize_text_usage(
+        prompt_tokens=1,
+        cached_input_tokens=0,
+        completion_tokens=1,
+        raw_usage={"prompt_tokens": 1, "completion_tokens": 1},
+    )
+    amount = ai_capability_kernel.TypedPricingResolver().calculate_cost(
         _price(),
-        {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "total_tokens": 2},
+        usage_record,
     )
 
     assert amount == Decimal("1.23000000")
     assert calls["price"].ref == "openai:custom-model@2026-06-23"
-    assert calls["usage_units"]["total_tokens"] == 2
+    assert calls["usage_record"].usage_units()["total_tokens"] == 2
 
 
 async def _call(session_factory: _FakeSessionFactory):
@@ -464,7 +476,7 @@ async def test_gateway_marks_cost_calculation_failed_and_raises_app_error_when_p
             usage={"prompt_tokens": 100, "completion_tokens": 50},
         )
 
-    def fail_calculate_token_cost(*_args, **_kwargs):
+    def fail_calculate_cost(*_args, **_kwargs):
         raise RuntimeError("price table broken")
 
     async def fake_mark_failed(_db, received_call_id, **kwargs):
@@ -477,7 +489,61 @@ async def test_gateway_marks_cost_calculation_failed_and_raises_app_error_when_p
 
     monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
     monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: _price())
-    monkeypatch.setattr(ai_capability_kernel, "calculate_token_cost", fail_calculate_token_cost)
+    monkeypatch.setattr(ai_capability_kernel, "calculate_usage_cost", fail_calculate_cost)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+    monkeypatch.setattr(ai_capability_kernel, "generate_text", fake_generate_text)
+
+    with pytest.raises(AppError) as exc:
+        await _call(session_factory)
+
+    assert exc.value.code == "MODEL_COST_CALCULATION_FAILED"
+    assert recorded["call_id"] == call_id
+    assert recorded["failure_phase"] == "pricing"
+    assert recorded["error_code"] == "MODEL_COST_CALCULATION_FAILED"
+    assert recorded["billable_status"] == "unknown"
+    assert recorded["cost_calculation_status"] == "failed"
+    assert [session.commits for session in session_factory.sessions] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_gateway_rejects_non_token_pricing_for_text_usage(monkeypatch):
+    session_factory = _FakeSessionFactory()
+    call_id = uuid.uuid4()
+    recorded: dict = {}
+    call_price = CallPrice(
+        ref="openai:custom-model@2026-06-23",
+        model_id="custom-model",
+        provider="openai",
+        provider_model="custom-model",
+        pricing_type="per_call",
+        version="2026-06-23",
+        currency="USD",
+        amount_per_call=Decimal("0.01000000"),
+    )
+
+    async def fake_create_pending(*_args, **_kwargs):
+        return SimpleNamespace(id=call_id)
+
+    async def fake_generate_text(*_args, **_kwargs):
+        return TextGenerationResult(
+            text="ok",
+            prompt_tokens=100,
+            completion_tokens=50,
+            usage={"prompt_tokens": 100, "completion_tokens": 50},
+        )
+
+    async def fake_mark_failed(_db, received_call_id, **kwargs):
+        recorded["call_id"] = received_call_id
+        recorded.update(kwargs)
+        return True
+
+    async def fail_mark_succeeded(*_args, **_kwargs):
+        raise AssertionError("text usage with non-token pricing must not be marked succeeded")
+
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: call_price)
     monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
     monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_failed", fake_mark_failed)
     monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)

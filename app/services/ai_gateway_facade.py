@@ -94,7 +94,7 @@ async def generate_text_with_ledger(
 
     response_hash, output_size_bytes = kernel.hash_text(result.text)
     try:
-        usage_units = USAGE_NORMALIZER.normalize_text(result)
+        usage_record = USAGE_NORMALIZER.normalize_text(result)
     except AppError as exc:
         await USAGE_LEDGER_WRITER.mark_failed(
             ledger_session_factory,
@@ -106,8 +106,9 @@ async def generate_text_with_ledger(
             cost_calculation_status="failed",
         )
         raise
+    usage_units = usage_record.usage_units()
     try:
-        cost_amount = TYPED_PRICING_RESOLVER.calculate_text_cost(price, usage_units)
+        cost_amount = TYPED_PRICING_RESOLVER.calculate_cost(price, usage_record)
     except Exception as exc:
         await USAGE_LEDGER_WRITER.mark_failed(
             ledger_session_factory,

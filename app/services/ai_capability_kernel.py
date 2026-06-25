@@ -11,8 +11,9 @@ from app.core.ai_capabilities import ResolvedModel
 from app.core.config import settings
 from app.core.exceptions import AppError, ValidationAppError
 from app.core.model_registry import TextModel, get_enabled_model
-from app.core.pricing_registry import calculate_token_cost, require_price, validate_price_matches_model
-from app.core.usage_records import normalize_text_usage
+from app.core.pricing_registry import calculate_cost as calculate_usage_cost
+from app.core.pricing_registry import TokenPrice, require_price, validate_price_matches_model
+from app.core.usage_records import TextUsageRecord, UsageRecord, normalize_text_usage
 from app.integrations.ai_gateway import TextGenerationRequest, TextGenerationResult, generate_text
 from app.repositories.ai_call_log_repo import AiCallLogRepo
 
@@ -50,7 +51,7 @@ def _nested_int(data: dict[str, Any], path: tuple[str, ...]) -> int:
     return int(current)
 
 
-def text_usage_units(result: TextGenerationResult) -> dict[str, int]:
+def normalize_text_result_usage(result: TextGenerationResult) -> TextUsageRecord:
     if result.usage is None or result.prompt_tokens is None or result.completion_tokens is None:
         raise AppError(
             "MODEL_USAGE_MISSING",
@@ -66,7 +67,7 @@ def text_usage_units(result: TextGenerationResult) -> dict[str, int]:
         completion_tokens=result.completion_tokens,
         cached_input_tokens=cached_input_tokens,
         raw_usage=result.usage,
-    ).usage_units()
+    )
 
 
 def validate_ai_call_context(
@@ -141,16 +142,18 @@ class ProviderGateway:
 
 
 class UsageNormalizer:
-    def normalize_text(self, result: TextGenerationResult) -> dict[str, int]:
-        return text_usage_units(result)
+    def normalize_text(self, result: TextGenerationResult) -> TextUsageRecord:
+        return normalize_text_result_usage(result)
 
 
 class TypedPricingResolver:
     def require_rule(self, pricing_ref: str) -> Any:
         return require_price(pricing_ref)
 
-    def calculate_text_cost(self, price: Any, usage_units: dict[str, int]):
-        return calculate_token_cost(price, usage_units)
+    def calculate_cost(self, price: Any, usage_record: UsageRecord):
+        if isinstance(usage_record, TextUsageRecord) and not isinstance(price, TokenPrice):
+            raise RuntimeError("text usage requires per_token pricing")
+        return calculate_usage_cost(price, usage_record)
 
 
 async def _mark_failed_and_commit(
