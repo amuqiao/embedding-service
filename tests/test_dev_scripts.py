@@ -4,8 +4,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
-from scripts.jobs.cli import parse_duration, parse_statuses
+from scripts.jobs import queries
+from scripts.jobs.cli import app as jobs_cli_app
+from scripts.jobs.cli import _capacity_recommendation, parse_duration, parse_latency_group_by, parse_statuses
 from scripts.jobs.db import normalize_database_url
 from scripts.verify.env_config_check import (
     SCRIPT_OR_DEPLOYMENT_ENV_KEYS,
@@ -17,6 +20,7 @@ from scripts.verify.workflow_modes_smoke import WORKFLOW_MODE_CASES, _validate_r
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+RUNNER = CliRunner()
 
 
 def _service_command(service: str, **env_overrides: str) -> str:
@@ -119,6 +123,9 @@ def test_jobs_cli_help_is_available_without_db():
     assert "Job 只读查询与排障入口" in result.stdout
     assert "list" in result.stdout
     assert "types" in result.stdout
+    assert "summary" in result.stdout
+    assert "latency" in result.stdout
+    assert "capacity" in result.stdout
 
 
 def test_real_flow_cli_help_is_available_without_api():
@@ -176,9 +183,113 @@ def test_jobs_types_json_is_machine_readable_without_app_log_noise():
 def test_jobs_cli_parses_statuses_and_duration():
     assert parse_statuses(["queued,running", "failed"]) == ["queued", "running", "failed"]
     assert parse_duration("10m").total_seconds() == 600
+    assert parse_latency_group_by("job_type") == "job_type"
 
     with pytest.raises(ValueError):
         parse_statuses(["cancelled"])
+
+    with pytest.raises(ValueError):
+        parse_latency_group_by("worker")
+
+
+def test_jobs_capacity_recommendation_reports_gate_pressure():
+    payload = {
+        "current": {"active_jobs": 760},
+        "estimated": {"active_jobs_needed_upper_bound": 800},
+    }
+
+    recommendation = _capacity_recommendation(payload, 750)
+
+    assert recommendation["active_ratio"] > 1
+    assert "达到或超过门禁" in recommendation["message"]
+
+
+def test_jobs_summary_json_uses_stable_scope(monkeypatch):
+    def fake_with_connection(action):
+        return {
+            "jobs": {"active_jobs": 0},
+            "by_job_type": [],
+            "attempts": {},
+            "dispatch": {},
+            "callbacks": {},
+        }
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["summary", "--since", "10m", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["scope"]["since"] == "10m"
+    assert payload["jobs"]["active_jobs"] == 0
+
+
+def test_jobs_latency_json_uses_lifecycle_fields(monkeypatch):
+    def fake_with_connection(action):
+        return [
+            {
+                "group_key": "job_test_echo",
+                "total": 2,
+                "lifecycle_p95_seconds": 15.0,
+            }
+        ]
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["latency", "--since", "30m", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["scope"]["since"] == "30m"
+    assert payload["latency"][0]["lifecycle_p95_seconds"] == 15.0
+    assert "active_p95_seconds" not in payload["latency"][0]
+
+
+def test_jobs_capacity_json_separates_global_current_from_window(monkeypatch):
+    def fake_with_connection(action):
+        return {
+            "current": {"active_jobs": 12, "queued": 10, "running_active": 2},
+            "window": {"accepted_jobs": 20, "terminal_jobs": 18, "lifecycle_p95_seconds": 15.0},
+            "estimated": {"active_jobs_needed_upper_bound": 5.0},
+        }
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["capacity", "--since", "10m", "--max-active-jobs", "50", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["scope"]["current"] == "global"
+    assert payload["scope"]["window"]["since"] == "10m"
+    assert payload["current"]["active_jobs"] == 12
+    assert payload["window"]["lifecycle_p95_seconds"] == 15.0
+    assert payload["estimated"]["active_jobs_needed_upper_bound"] == 5.0
+    assert payload["estimated"]["active_ratio"] == 0.24
+    assert "workflow root" in payload["notes"]["active_jobs_needed_upper_bound"]
+
+
+def test_jobs_latency_rejects_invalid_group_by():
+    result = RUNNER.invoke(jobs_cli_app, ["latency", "--group-by", "worker", "--json"])
+
+    assert result.exit_code == 2
+    assert "无效 group-by" in result.stderr
+
+
+def test_jobs_summary_dispatch_counts_only_run_attempt_task(monkeypatch):
+    captured_sql: list[str] = []
+
+    def fake_fetch_one(conn, sql, params):
+        captured_sql.append(sql)
+        return {}
+
+    monkeypatch.setattr(queries, "_fetch_one", fake_fetch_one)
+    monkeypatch.setattr(queries, "_fetch_all", lambda conn, sql, params: [])
+
+    queries.summary(None, job_type=None, caller_id=None, since=None)
+
+    dispatch_sql = captured_sql[2]
+    assert "FROM dispatch_outbox d" in dispatch_sql
+    assert "d.task_name = 'jobs.run_attempt'" in dispatch_sql
 
 
 def test_jobs_db_normalizes_async_database_url_for_psycopg2():

@@ -14,6 +14,7 @@ from scripts.jobs import db, formatters, queries
 
 
 VALID_JOB_STATUSES = {"queued", "running", "succeeded", "failed"}
+VALID_LATENCY_GROUP_BY = {"all", "job_type", "caller_id", "status"}
 DURATION_RE = re.compile(r"^(?P<value>[1-9][0-9]*)(?P<unit>s|m|h|d)$")
 
 HELP_EPILOG = """\b
@@ -30,6 +31,9 @@ HELP_EPILOG = """\b
   attempts   查看 lifecycle attempts。
   callbacks  查看 lifecycle callback outbox。
   stuck      扫描疑似卡住的 Job、attempt 或 callback lease。
+  summary    汇总 Job、attempt、dispatch 和 callback 当前状态。
+  latency    按 job_type / caller / status 统计 Job 生命周期耗时。
+  capacity   查看 MAX_ACTIVE_JOBS 当前水位和窗口容量估算。
   types      查看当前注册的 job_type。
 
 \b
@@ -50,6 +54,9 @@ HELP_EPILOG = """\b
   ./scripts/jobs.sh inspect <job_id>
   ./scripts/jobs.sh timeline <job_id> --limit 50
   ./scripts/jobs.sh stuck --older-than 10m --json
+  ./scripts/jobs.sh summary --since 10m
+  ./scripts/jobs.sh latency --since 30m --group-by job_type
+  ./scripts/jobs.sh capacity --since 10m --max-active-jobs 750
   ./scripts/jobs.sh types --json
 
 \b
@@ -139,6 +146,12 @@ def parse_optional_duration(value: str | None) -> timedelta | None:
         raise typer.BadParameter(str(exc)) from exc
 
 
+def parse_latency_group_by(value: str) -> str:
+    if value not in VALID_LATENCY_GROUP_BY:
+        raise ValueError("无效 group-by：" + value + "；可选值：" + ", ".join(sorted(VALID_LATENCY_GROUP_BY)))
+    return value
+
+
 def _jobs_columns() -> list[tuple[str, str]]:
     return [
         ("job_id", "job_id"),
@@ -215,6 +228,21 @@ def _stuck_columns() -> list[tuple[str, str]]:
     ]
 
 
+def _latency_columns() -> list[tuple[str, str]]:
+    return [
+        ("group_key", "group"),
+        ("total", "total"),
+        ("started", "started"),
+        ("terminal", "terminal"),
+        ("succeeded", "succeeded"),
+        ("failed", "failed"),
+        ("success_rate", "success_rate"),
+        ("queue_wait_p95_seconds", "queue_p95_s"),
+        ("run_p95_seconds", "run_p95_s"),
+        ("lifecycle_p95_seconds", "lifecycle_p95_s"),
+    ]
+
+
 def _job_summary(job: dict) -> dict[str, Any]:
     return {
         "job_id": str(job.get("id")),
@@ -273,6 +301,48 @@ def _connect():
     except Exception as exc:
         print(f"ERROR: database unavailable: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
+
+
+def _since_window(value: str) -> tuple[timedelta, datetime]:
+    try:
+        window = parse_duration(value)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    return window, datetime.now(timezone.utc) - window
+
+
+def _env_max_active_jobs() -> int | None:
+    raw = db.env_value("MAX_ACTIVE_JOBS")
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _capacity_recommendation(payload: dict[str, Any], max_active_jobs: int | None) -> dict[str, Any]:
+    active_jobs = int(payload["current"].get("active_jobs") or 0)
+    needed = payload["estimated"].get("active_jobs_needed_upper_bound")
+    active_ratio = active_jobs / max_active_jobs if max_active_jobs and max_active_jobs > 0 else None
+    if max_active_jobs is None:
+        message = "未提供 MAX_ACTIVE_JOBS，无法判断当前水位比例。"
+    elif max_active_jobs == 0:
+        message = "MAX_ACTIVE_JOBS=0 表示跳过 active 门禁；生产不建议用它做容量保护。"
+    elif active_ratio is not None and active_ratio >= 1:
+        message = "当前 active 已达到或超过门禁；若组件健康且可排空，才小步提高 MAX_ACTIVE_JOBS。"
+    elif active_ratio is not None and active_ratio >= 0.8:
+        message = "当前 active 接近门禁；先确认 queued/running 可排空和 DB/Redis/worker 健康。"
+    elif needed is not None and max_active_jobs is not None and needed > max_active_jobs:
+        message = "按当前窗口生命周期上界估算，业务 active 需求可能高于门禁；先确认环境硬上限，再调整。"
+    else:
+        message = "当前窗口未显示 active 门禁压力；继续结合延迟、失败率和排空趋势判断。"
+    return {
+        "max_active_jobs": max_active_jobs,
+        "active_ratio": active_ratio,
+        "message": message,
+    }
 
 
 def _with_connection(action) -> Any:
@@ -486,6 +556,130 @@ def stuck(
         formatters.print_json({"items": rows})
         return
     _render_result(section="Stuck Jobs", target="items", rows=rows, columns=_stuck_columns())
+
+
+@app.command(help="汇总 Job、attempt、dispatch 和 callback 当前状态。")
+def summary(
+    job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
+    caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    since: Annotated[
+        str,
+        typer.Option("--since", help="只统计指定时间窗口内创建的 Job，例如 10m。"),
+    ] = "10m",
+    json_output: JsonOption = False,
+) -> None:
+    window, since_at = _since_window(since)
+    payload = _with_connection(
+        lambda conn: queries.summary(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+        )
+    )
+    payload = {
+        "scope": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id},
+        **payload,
+    }
+    if json_output:
+        formatters.print_json(payload)
+        return
+    formatters.section("Job Summary")
+    formatters.event("OK", "summary", f"since={since}")
+    formatters.print_json(payload)
+
+
+@app.command(help="统计 Job 生命周期耗时。")
+def latency(
+    job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
+    caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    since: Annotated[
+        str,
+        typer.Option("--since", help="只统计指定时间窗口内创建的 Job，例如 30m。"),
+    ] = "30m",
+    group_by: Annotated[
+        str,
+        typer.Option("--group-by", help="分组字段：all、job_type、caller_id 或 status。"),
+    ] = "job_type",
+    json_output: JsonOption = False,
+) -> None:
+    try:
+        group = parse_latency_group_by(group_by)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    window, since_at = _since_window(since)
+    rows = _with_connection(
+        lambda conn: queries.latency(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            group_by=group,
+        )
+    )
+    if json_output:
+        formatters.print_json(
+            {
+                "scope": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id},
+                "group_by": group,
+                "latency": rows,
+            }
+        )
+        return
+    _render_result(section="Job Latency", target="groups", rows=rows, columns=_latency_columns())
+
+
+@app.command(help="查看 MAX_ACTIVE_JOBS 当前水位和窗口容量估算。")
+def capacity(
+    since: Annotated[
+        str,
+        typer.Option("--since", help="估算窗口，例如 10m。"),
+    ] = "10m",
+    max_active_jobs: Annotated[
+        int | None,
+        typer.Option("--max-active-jobs", min=0, help="用于计算水位比例；默认读取环境或 .env。"),
+    ] = None,
+    json_output: JsonOption = False,
+) -> None:
+    window, since_at = _since_window(since)
+    limit = max_active_jobs if max_active_jobs is not None else _env_max_active_jobs()
+    payload = _with_connection(
+        lambda conn: queries.capacity(
+            conn,
+            job_type=None,
+            caller_id=None,
+            since=since_at,
+            window_seconds=window.total_seconds(),
+        )
+    )
+    if limit is not None and limit > 0:
+        payload["estimated"]["active_ratio"] = int(payload["current"].get("active_jobs") or 0) / limit
+        payload["estimated"]["headroom"] = limit - int(payload["current"].get("active_jobs") or 0)
+    else:
+        payload["estimated"]["active_ratio"] = None
+        payload["estimated"]["headroom"] = None
+    payload = {
+        "scope": {
+            "current": "global",
+            "window": {"since": since, "seconds": window.total_seconds()},
+        },
+        "max_active_jobs": limit,
+        "current": payload["current"],
+        "window": payload["window"],
+        "estimated": payload["estimated"],
+        "notes": {
+            "current_active_jobs": "全局实时门禁口径：queued + running 且 active_attempt_id 非空。",
+            "active_jobs_needed_upper_bound": "使用窗口 accepted_submit_rps * lifecycle_p95_seconds 得到的上界估算；workflow root 等待子任务时间会让它偏保守。",
+        },
+    }
+    payload["recommendation"] = _capacity_recommendation(payload, limit)
+    if json_output:
+        formatters.print_json(payload)
+        return
+    formatters.section("Job Capacity")
+    formatters.event("OK", "capacity", f"since={since}")
+    formatters.print_json(payload)
 
 
 @app.command(help="查看当前注册的 job_type。")

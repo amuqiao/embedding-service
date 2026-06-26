@@ -15,6 +15,8 @@
 | [`current/template-readiness.md`](current/template-readiness.md) | 当前仓库作为 AI Job 微服务模板复制给新业务前的就绪边界、必改项和最小验收 |
 | [`current/job-load-testing.md`](current/job-load-testing.md) | Job 发布、查询和完整异步流程的 Locust 压测选型、执行、指标和评估方法 |
 | [`current/job-load-test-plan.md`](current/job-load-test-plan.md) | Job 压测的分阶段执行命令、浏览器实时查看和离线报告查看方法 |
+| [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` 查询 Job 状态、定位异步任务问题和常见排障顺序 |
+| [`runbooks/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/MAX_ACTIVE_JOBS%20估算与生产调优.md) | `MAX_ACTIVE_JOBS` 估算、K8s 生产调优顺序和 PostgreSQL/Redis 瓶颈判断 |
 | [`api/service-contract.md`](api/service-contract.md) | 当前 HTTP envelope、Job、Callback、Billing、认证和公开 route 合同 |
 | [`api/extension-guide.md`](api/extension-guide.md) | 新增 `job_type`、HTTP 接口、模型、Prompt 和对象存储产物的接入入口 |
 | [`api/poster-title-image-api.md`](api/poster-title-image-api.md) | CPP 美术任务接入 AI 标题图生成的 vNext 目标接口草案，不覆盖当前实现合同 |
@@ -35,7 +37,7 @@
 ## 维护规则
 
 - 新增长期文档前先判断是否能合并进现有核心文档。
-- 普通文档不新增“相关文档”“阅读路径”“文档索引”等导航型列表。
+- 普通文档不新增“相关文档”“阅读路径”“文档索引”等导航型列表，也不维护前后阅读顺序；所有索引和阅读顺序统一在 `docs/README.md` 维护。
 - 当前实现事实优先以代码、测试和 `docs/current/` 为准。
 - 对外合同变化必须同步 `docs/api/`、schema、route、测试和顶层 `README.md`。
 - Job 内核变化必须同步 `docs/current/job-kernel.md` 和相关验证命令。
