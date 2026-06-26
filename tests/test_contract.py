@@ -78,10 +78,10 @@ def test_create_job_request_accepts_valid_payload():
 
 
 def test_default_prompt_templates_declares_poster_title_image_blocks():
-    templates = list_prompt_templates()
-    assert templates.version == "empty"
-    poster = next(item for item in templates.job_types if item.job_type == "poster_title_image")
-    assert {block.key for block in poster.prompt_blocks} == {
+    template = list_prompt_templates()
+    assert template.version == "poster_title_image.v1"
+    assert template.job_type == "poster_title_image"
+    assert {block.key for block in template.prompt_blocks} == {
         "style_probe",
         "additional_prompt",
         "layout_rules",
@@ -547,6 +547,32 @@ def test_openapi_declares_bearer_auth_for_protected_routes(monkeypatch):
     assert {"HTTPBearer": []} in prompt_templates["security"]
 
 
+def test_openapi_declares_prompt_templates_job_type_query_parameter(monkeypatch):
+    _patch_main_settings(monkeypatch)
+    schema = app.openapi()
+
+    prompt_templates = schema["paths"][f"{API_PREFIX}/prompt-templates"]["get"]
+    job_type = next(
+        parameter
+        for parameter in prompt_templates["parameters"]
+        if parameter["name"] == "job_type" and parameter["in"] == "query"
+    )
+
+    assert job_type["required"] is False
+    assert job_type["schema"]["default"] == "poster_title_image"
+
+
+def test_openapi_declares_prompt_template_response_data_schema(monkeypatch):
+    _patch_main_settings(monkeypatch)
+    schema = app.openapi()
+
+    prompt_templates = schema["paths"][f"{API_PREFIX}/prompt-templates"]["get"]
+    response_schema = prompt_templates["responses"]["200"]["content"]["application/json"]["schema"]
+    data_schema = response_schema["properties"]["data"]
+
+    assert data_schema["$ref"].endswith("/PromptTemplateResponseData")
+
+
 def test_openapi_omits_bearer_auth_when_http_auth_header_is_disabled(monkeypatch):
     _patch_main_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
 
@@ -627,6 +653,51 @@ def test_models_route_allows_missing_authorization_when_auth_header_is_disabled(
 
     assert response.status_code == 200
     assert response.json()["code"] == "0"
+
+
+def test_prompt_templates_route_defaults_to_poster_title_image(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(f"{API_PREFIX}/prompt-templates")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == "0"
+    assert body["data"]["job_type"] == "poster_title_image"
+    assert {block["key"] for block in body["data"]["prompt_blocks"]} == {
+        "style_probe",
+        "additional_prompt",
+        "layout_rules",
+    }
+
+
+def test_prompt_templates_route_filters_by_job_type(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(f"{API_PREFIX}/prompt-templates", params={"job_type": "poster_title_image"})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["job_type"] == "poster_title_image"
+
+
+def test_prompt_templates_route_rejects_unknown_job_type(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(f"{API_PREFIX}/prompt-templates", params={"job_type": "missing.job"})
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["code"] == "100011"
+    assert body["data"] is None
 
 
 def test_models_route_exposes_public_model_selection_metadata(monkeypatch):

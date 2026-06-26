@@ -198,6 +198,9 @@ def test_job_type_registry_exposes_required_metadata():
     assert poster_spec.side_effect_policy == "none"
     assert poster_spec.error_codes <= all_error_reasons()
     assert poster_spec.prompt_specs == ()
+    assert poster_spec.prompt_template_required_blocks == frozenset(
+        {"style_probe", "additional_prompt", "layout_rules"}
+    )
 
 
 def _job_type_spec(**overrides) -> JobTypeSpec:
@@ -217,6 +220,7 @@ def _job_type_spec(**overrides) -> JobTypeSpec:
         "log_events": (),
         "max_attempts": 1,
         "timeout_seconds": 60,
+        "prompt_template_required_blocks": frozenset(),
     }
     values.update(overrides)
     return JobTypeSpec(**values)
@@ -327,6 +331,42 @@ def test_validate_job_type_registry_rejects_builtin_llm_without_prompt_spec(monk
     monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
 
     with pytest.raises(ValueError, match="requires one prompt_spec"):
+        validate_job_type_registry()
+
+
+def test_validate_job_type_registry_rejects_missing_required_prompt_template_block(monkeypatch):
+    monkeypatch.setattr(
+        job_registry,
+        "all_job_type_specs",
+        lambda: {
+            "poster_title_image": _job_type_spec(
+                job_type="poster_title_image",
+                prompt_template_required_blocks=frozenset({"style_probe", "layout_rules"}),
+            )
+        },
+    )
+    monkeypatch.setattr(
+        prompt_templates,
+        "_load_prompt_config",
+        lambda: {
+            "version": "test",
+            "job_types": {
+                "poster_title_image": {
+                    "name": "Poster title image",
+                    "description": "Poster title image",
+                    "prompt_blocks": {
+                        "style_probe": {
+                            "role": "user",
+                            "label": "Style probe",
+                            "content": "",
+                        },
+                    },
+                },
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="missing blocks"):
         validate_job_type_registry()
 
 

@@ -41,7 +41,7 @@ from app.schemas.jobs import (
     PosterTitleImageResultItem,
     PosterTitleImageRuntimeFields,
 )
-from app.schemas.meta import LanguagesResponse, ModelsResponse, PromptTemplatesResponse
+from app.schemas.meta import LanguagesResponse, ModelsResponse, PromptTemplateResponseData
 
 _SCHEMAS: dict[str, type[BaseModel]] = {
     schema.__name__: schema
@@ -87,7 +87,7 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
         PosterTitleImageResult,
         ModelsResponse,
         LanguagesResponse,
-        PromptTemplatesResponse,
+        PromptTemplateResponseData,
     )
 }
 

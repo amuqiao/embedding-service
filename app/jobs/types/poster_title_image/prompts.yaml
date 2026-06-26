@@ -1,0 +1,39 @@
+version: poster_title_image.v1
+job_types:
+  poster_title_image:
+    name: "Poster title image"
+    description: "Generate transparent poster title image layers from reference title styles."
+    prompt_blocks:
+      style_probe:
+        role: "user"
+        label: "Style probe"
+        content: |
+          Analyze this title image and describe the visual design style of the LETTERFORMS ONLY.
+          Ignore any background, board, plaque, panel, canvas, atmospheric glow, haze, fog, or shadow behind or around the text - describe only what belongs to the letters themselves.
+
+          Output a single dense English paragraph suitable for use in an image generation prompt. Be precise and generative.
+
+          Cover only the following aspects of the letterforms themselves:
+          - Stroke weight and overall letter mass: is the typeface HEAVY/BOLD or light/thin? Describe the visual weight of the main strokes - thick slab, medium, or hairline-dominant.
+          - Letter dimensionality: flat / subtly embossed / 3D beveled / carved / extruded
+          - Material and surface texture: what the letter surfaces look like, such as metal, stone, glass, painted, or printed; include texture details inside the strokes
+          - Lighting on the letterforms: highlight direction and placement, color temperature, how light interacts with the letter surfaces and edges
+          - Color palette of the letters: fill color, stroke or outline color, any gradients within the letterforms - describe the letter color only, not any background color
+          - Special effects on or immediately around the letters: cracks, distress, wear, abrasion, debris particles or fragments adjacent to the letters - note their presence and style
+          - Typography character: serif style, stroke weight contrast, condensed or expanded proportions, decorative details, overall weight and mood
+          - Composition scale: how large the text fills the frame, such as "letters fill nearly the full frame width" or "compact centered cluster"
+          - Overall cinematic / genre mood
+
+          Do NOT mention or describe: background color, background texture, atmospheric glow or haze behind the text, the plaque or board silhouette, shadows cast behind the text, or any element that is not part of the letterforms themselves.
+
+          Output ONLY the style description paragraph - no headers, no preamble, no explanation.
+      additional_prompt:
+        role: "user"
+        label: "Additional title prompt"
+        content: |
+          High resolution, standalone title text only. The letterforms must be heavy and bold, with crisp hard edges. No drop shadow, outer glow, halo, blur, backing plate, brush stroke, banner, badge, ink splash, or non-text carrier element. Centered composition, complete and uncropped, ready as an isolated title layer for poster compositing.
+      layout_rules:
+        role: "user"
+        label: "Layout rules"
+        content: |
+          The title is a horizontal poster-title layer. Render the text large, filling 85-95% of the frame width. Prefer one line when the specific language and text width fit comfortably. For longer Latin or Cyrillic text, allow one natural grammatical line break only; never split inside a word. Use at most two lines.

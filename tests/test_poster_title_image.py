@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
+from app.core.exceptions import AppError
 from app.integrations.image import remove_green_background
 from app.integrations.object_storage import bare_sha256, sha256_digest
 from app.integrations.storage import LocalObjectStorage
@@ -109,7 +110,7 @@ def test_poster_title_image_create_request_accepts_custom_image_model_id(monkeyp
     from app.services.jobs import _validate_create_request
 
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.IMAGE_MODEL_GATE.resolve",
+        "app.jobs.types.poster_title_image.executor.IMAGE_MODEL_GATE.resolve",
         lambda model_id, *, require_edit: object(),
     )
     register_all_job_types()
@@ -159,6 +160,23 @@ def test_remove_green_background_matches_poc_chroma_key_strategy():
     assert result.getpixel((20, 20))[3] == 255
 
 
+def test_poster_title_image_missing_default_prompt_is_runtime_config_error(monkeypatch):
+    from app.jobs.types.poster_title_image.executor import _default_prompt_blocks
+
+    def fake_get_prompt_block_default(job_type, block_key):
+        raise RuntimeError(f"missing prompt block: {block_key}")
+
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.get_prompt_block_default",
+        fake_get_prompt_block_default,
+    )
+
+    with pytest.raises(AppError) as exc:
+        _default_prompt_blocks()
+
+    assert exc.value.code == "RUNTIME_CONFIG_MISSING"
+
+
 @pytest.mark.asyncio
 async def test_poster_title_image_executor_generates_transparent_title_layer(monkeypatch, tmp_path):
     local_storage = LocalObjectStorage(tmp_path)
@@ -189,11 +207,14 @@ async def test_poster_title_image_executor_generates_transparent_title_layer(mon
         assert kwargs["caller_id"] == "caller-1"
         return "heavy cracked stone letterforms"
 
-    monkeypatch.setattr("app.jobs.types.poster_title_image.storage", local_storage)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.output_target_from_job", lambda _job: output_target)
-    monkeypatch.setattr("app.jobs.types.poster_title_image._response_provider_model", lambda: "gpt-4o")
-    monkeypatch.setattr("app.jobs.types.poster_title_image._probe_style", fake_probe_style)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.generate_image_with_ledger", fake_generate_image_with_ledger)
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor.output_target_from_job", lambda _job: output_target)
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._response_provider_model", lambda: "gpt-4o")
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._probe_style", fake_probe_style)
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.generate_image_with_ledger",
+        fake_generate_image_with_ledger,
+    )
 
     job_id = uuid.uuid4()
     job = Job(
@@ -220,6 +241,8 @@ async def test_poster_title_image_executor_generates_transparent_title_layer(mon
     assert recorded["kwargs"]["model_id"] == "gpt-image-2"
     assert recorded["kwargs"]["response_model"] == "gpt-4o"
     assert GREEN_BACKGROUND_TEXT not in recorded["kwargs"]["prompt"]
+    assert "poster-title layer" in recorded["kwargs"]["prompt"]
+    assert "standalone title text only" in recorded["kwargs"]["prompt"]
 
     output_key = "ai-jobs/job-1/poster-title/{}/es/title-layer.png".format(job_id)
     written = local_storage.read_bytes(bucket="local-dev", region="local", key=output_key)
@@ -230,7 +253,7 @@ async def test_poster_title_image_executor_generates_transparent_title_layer(mon
 
 @pytest.mark.asyncio
 async def test_style_probe_uses_ai_ledger(monkeypatch):
-    from app.jobs.types.poster_title_image import _probe_style
+    from app.jobs.types.poster_title_image.executor import _probe_style
 
     recorded = {}
 
@@ -244,7 +267,7 @@ async def test_style_probe_uses_ai_ledger(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.generate_text_with_images_with_ledger",
+        "app.jobs.types.poster_title_image.executor.generate_text_with_images_with_ledger",
         fake_generate_text_with_images_with_ledger,
     )
     job = Job(

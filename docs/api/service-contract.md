@@ -163,10 +163,37 @@ CallbackResponseEnvelope
 ```http
 GET /api/v1/ai-jobs/models
 GET /api/v1/ai-jobs/languages
-GET /api/v1/ai-jobs/prompt-templates
+GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
 ```
 
-模型配置来自 `MODEL_CONFIG_PATH`，语种目录来自 `app/core/language_catalog.py`，Prompt 配置来自 `PROMPT_CONFIG_PATH`。这些接口只暴露当前服务允许调用方看到的元信息，不暴露 provider 密钥或内部 pricing 明细。
+模型配置来自 `MODEL_CONFIG_PATH`，语种目录来自 `app/core/language_catalog.py`，Prompt 配置来自 `PROMPT_CONFIG_PATH` 和各 `job_type` 垂直目录下的 `prompts.yaml`。这些接口只暴露当前服务允许调用方看到的元信息，不暴露 provider 密钥或内部 pricing 明细。
+
+`GET /prompt-templates` 支持可选 query 参数 `job_type`。未传时默认使用 `poster_title_image`，响应只返回该 `job_type` 的模板；传入未知 `job_type` 会返回 `INVALID_JOB_TYPE`。
+
+`GET /prompt-templates` 成功响应：
+
+```text
+HttpEnvelope[PromptTemplateResponseData]
+  data.version
+  data.job_type
+  data.name
+  data.description
+  data.prompt_blocks[]
+```
+
+`PromptTemplateResponseData.prompt_blocks[]` 的单个提示词块包含：
+
+```text
+PromptBlockTemplate
+  key
+  role
+  label
+  default_content
+```
+
+`key` 是稳定提示词块标识，调用方可按对应 `job_type` 的任务创建合同回填到 `prompt_overrides`。`role`、`label` 和 `default_content` 只描述默认模板展示和覆盖入口；服务端仍会在执行时把模板块、任务参数和固定业务编排拼成最终模型请求。
+
+`data.version` 表示本次返回的这个 `job_type` 模板版本。模板由 `job_type` 垂直目录维护时，该版本来自对应目录的 `prompts.yaml`，不等同于全局 `PROMPT_CONFIG_PATH` 文件版本。
 
 `GET /models` 成功响应：
 

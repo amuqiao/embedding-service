@@ -66,6 +66,16 @@ def validate_job_type_registry() -> None:
         raise ValueError(f"prompt config references unknown job_types: {unknown_template_job_types}")
 
     for spec in specs.values():
+        if spec.prompt_template_required_blocks:
+            template = prompt_templates.get_template(spec.job_type)
+            if template is None:
+                raise ValueError(f"job_type {spec.job_type} requires prompt template")
+            block_keys = {block.key for block in template.prompt_blocks}
+            missing_blocks = _missing(set(spec.prompt_template_required_blocks), block_keys)
+            if missing_blocks:
+                raise ValueError(
+                    f"job_type {spec.job_type} prompt template missing blocks: {missing_blocks}"
+                )
         missing_errors = _missing(set(spec.error_codes), known_errors)
         if missing_errors:
             raise ValueError(f"job_type {spec.job_type} references unknown errors: {missing_errors}")

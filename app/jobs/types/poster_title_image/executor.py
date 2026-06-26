@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppError
 from app.core.language_catalog import require_supported_language
 from app.core.model_registry import get_enabled_model
+from app.core.prompt_templates import get_prompt_block_default
 from app.integrations.ai_adapters.base import ImageInput
 from app.integrations.image import remove_green_background
 from app.integrations.object_storage import sha256_digest
@@ -35,42 +36,10 @@ from app.services.jobs import trigger_request_id_from_job
 
 POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID = "gpt-4o"
 POSTER_TITLE_IMAGE_MAX_INPUT_BYTES = 20 * 1024 * 1024
+POSTER_TITLE_IMAGE_JOB_TYPE = "poster_title_image"
+POSTER_TITLE_IMAGE_PROMPT_BLOCKS = ("style_probe", "additional_prompt", "layout_rules")
 GREEN_SCREEN = "#00FF00"
 IMAGE_MODEL_GATE = ImageModelGate()
-
-STYLE_PROBE_PROMPT = """\
-Analyze this title image and describe the visual design style of the LETTERFORMS ONLY.
-Ignore any background, board, plaque, panel, canvas, atmospheric glow, haze, fog, or shadow behind or around the text — describe only what belongs to the letters themselves.
-
-Output a single dense English paragraph suitable for use in an image generation prompt. Be precise and generative.
-
-Cover only the following aspects of the letterforms themselves:
-- Stroke weight and overall letter mass: is the typeface HEAVY/BOLD or light/thin? Describe the visual weight of the main strokes — thick slab, medium, or hairline-dominant.
-- Letter dimensionality: flat / subtly embossed / 3D beveled / carved / extruded
-- Material and surface texture: what the letter surfaces look like (metal, stone, glass, painted, printed); texture details inside the strokes
-- Lighting on the letterforms: highlight direction and placement, color temperature, how light interacts with the letter surfaces and edges
-- Color palette of the letters: fill color, stroke or outline color, any gradients within the letterforms — describe the letter color only, not any background color
-- Special effects ON or immediately around the letters: cracks, distress, wear, abrasion, debris particles or fragments adjacent to the letters — note their presence and style
-- Typography character: serif style, stroke weight contrast, condensed or expanded proportions, decorative details, overall weight and mood
-- Composition scale: how large the text fills the frame — e.g. "letters fill nearly the full frame width" or "compact centered cluster"
-- Overall cinematic / genre mood
-
-Do NOT mention or describe: background color, background texture, atmospheric glow or haze behind the text, the plaque or board silhouette, shadows cast behind the text, or any element that is not part of the letterforms themselves.
-
-Output ONLY the style description paragraph — no headers, no preamble, no explanation.\
-"""
-
-DEFAULT_LAYOUT_RULES = (
-    "The title is a horizontal poster-title layer. Render the text large, filling 85-95% of the frame width. "
-    "Prefer one line when the specific language and text width fit comfortably. For longer Latin or Cyrillic text, "
-    "allow one natural grammatical line break only; never split inside a word. Use at most two lines."
-)
-
-DEFAULT_ADDITIONAL_PROMPT = (
-    "High resolution, standalone title text only. The letterforms must be heavy and bold, with crisp hard edges. "
-    "No drop shadow, outer glow, halo, blur, backing plate, brush stroke, banner, badge, ink splash, or non-text carrier element. "
-    "Centered composition, complete and uncropped, ready as an isolated title layer for poster compositing."
-)
 
 PROMPT_TEMPLATE = """\
 Generate a high-resolution standalone title graphic. {bg_header}
@@ -153,11 +122,31 @@ async def _probe_style(
     raise AppError("MODEL_OUTPUT_INVALID", "style probe did not return text")
 
 
-def _title_prompt(item: PosterTitleImageItemParams, *, language_name: str, style_desc: str) -> str:
+def _default_prompt_blocks() -> dict[str, str]:
+    try:
+        return {
+            block_key: get_prompt_block_default(POSTER_TITLE_IMAGE_JOB_TYPE, block_key)
+            for block_key in POSTER_TITLE_IMAGE_PROMPT_BLOCKS
+        }
+    except RuntimeError as exc:
+        raise AppError("RUNTIME_CONFIG_MISSING", str(exc)) from exc
+
+
+def _title_prompt(
+    item: PosterTitleImageItemParams,
+    *,
+    language_name: str,
+    style_desc: str,
+    default_prompt_blocks: dict[str, str],
+) -> str:
     overrides = item.prompt_overrides
-    layout_rules = overrides.layout_rules if overrides and overrides.layout_rules else DEFAULT_LAYOUT_RULES
+    layout_rules = (
+        overrides.layout_rules if overrides and overrides.layout_rules else default_prompt_blocks["layout_rules"]
+    )
     additional_prompt = (
-        overrides.additional_prompt if overrides and overrides.additional_prompt else DEFAULT_ADDITIONAL_PROMPT
+        overrides.additional_prompt
+        if overrides and overrides.additional_prompt
+        else default_prompt_blocks["additional_prompt"]
     )
     return PROMPT_TEMPLATE.format(
         bg_header=f"Output as PNG with a perfectly solid flat background color {GREEN_SCREEN}. No transparency.",
@@ -198,6 +187,7 @@ class PosterTitleImageJob(JobExecutor):
     runtime_fields_schema_name = "PosterTitleImageRuntimeFields"
     canonical_result_schema = PosterTitleImageResult
     public_result_schema = PosterTitleImageResult
+    prompt_template_required_blocks = frozenset(POSTER_TITLE_IMAGE_PROMPT_BLOCKS)
     allow_callback = True
     max_attempts = 1
     timeout_seconds = 600
@@ -209,6 +199,7 @@ class PosterTitleImageJob(JobExecutor):
             "OSS_FETCH_FAILED",
             "OSS_OBJECT_NOT_FOUND",
             "OSS_WRITE_FAILED",
+            "RUNTIME_CONFIG_MISSING",
         }
     )
 
@@ -236,6 +227,7 @@ class PosterTitleImageJob(JobExecutor):
         ai_scope_id = ai_billing_scope_id_from_job(job)
         output_target = output_target_from_job(job)
         response_model = _response_provider_model()
+        default_prompt_blocks = _default_prompt_blocks()
 
         started = time.monotonic()
         ai_model_ms = 0
@@ -249,7 +241,7 @@ class PosterTitleImageJob(JobExecutor):
                 style_prompt = (
                     item.prompt_overrides.style_probe
                     if item.prompt_overrides and item.prompt_overrides.style_probe
-                    else STYLE_PROBE_PROMPT
+                    else default_prompt_blocks["style_probe"]
                 )
                 style_desc = await _probe_style(
                     reference_image,
@@ -260,7 +252,12 @@ class PosterTitleImageJob(JobExecutor):
                     job=job,
                     attempt_id=attempt_id,
                 )
-                prompt = _title_prompt(item, language_name=language_name, style_desc=style_desc)
+                prompt = _title_prompt(
+                    item,
+                    language_name=language_name,
+                    style_desc=style_desc,
+                    default_prompt_blocks=default_prompt_blocks,
+                )
                 for image_index in range(1, item.model_options.draw_count + 1):
                     generated = await generate_image_with_ledger(
                         caller_id=job.caller_id,

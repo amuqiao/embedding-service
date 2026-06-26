@@ -235,20 +235,21 @@ GET /api/v1/ai-jobs/languages
 
 获取指定任务类型下的默认提示词模板。调用方可以展示模板内容，并在创建任务时通过 `prompt_overrides` 临时覆盖；临时覆盖只对本次任务生效。
 
+当前模板内容由 `poster_title_image` 垂直目录下的 `prompts.yaml` 维护；服务级发现、校验和对外响应以 [`service-contract.md`](service-contract.md) 为准。
+
 ### Method / Path
 
 ```http
-GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image&language=es&model_id=gpt-image-2
+GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
 ```
 
 ### Query
 
 | 参数 | 必填 | 说明 |
 |---|---:|---|
-| `job_type` | 是 | 固定为 `poster_title_image` |
-| `language` | 否 | 语种代码；不传时返回通用默认模板 |
-| `model_id` | 否 | 模型 ID；不传时返回该任务类型默认模型模板 |
-| `schema_version` | 否 | 模板 schema 版本；不传时默认为 `default` |
+| `job_type` | 否 | 当前默认值为 `poster_title_image`；显式传入时也必须为 `poster_title_image` |
+
+当前实现不接收 `language`、`model_id` 或 `schema_version` 作为模板查询条件。语言、模型和 item 级差异由创建任务时的 `job_params.items[]` 与 `prompt_overrides` 表达。
 
 ### Response
 
@@ -257,46 +258,28 @@ GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image&language=es&mod
   "code": "0",
   "msg": "success",
   "data": {
-    "schema_version": "default",
+    "version": "poster_title_image.v1",
     "job_type": "poster_title_image",
-    "language": "es",
-    "model_id": "gpt-image-2",
-    "groups": [
+    "name": "Poster title image",
+    "description": "Generate transparent poster title image layers from reference title styles.",
+    "prompt_blocks": [
       {
-        "group_key": "style_probe",
-        "display_name": "风格探针",
-        "editable": true,
-        "prompts": [
-          {
-            "prompt_key": "style_probe",
-            "prompt_ref": "poster_title_image.style_probe.v1",
-            "content": "Analyze the reference title image and describe the visual design style of the letterforms only..."
-          }
-        ]
+        "key": "style_probe",
+        "role": "user",
+        "label": "Style probe",
+        "default_content": "Analyze this title image and describe the visual design style of the LETTERFORMS ONLY..."
       },
       {
-        "group_key": "additional_prompt",
-        "display_name": "附加提示词",
-        "editable": true,
-        "prompts": [
-          {
-            "prompt_key": "additional_prompt",
-            "prompt_ref": "poster_title_image.additional_prompt.v1",
-            "content": "Keep the result suitable for a standalone poster title layer..."
-          }
-        ]
+        "key": "additional_prompt",
+        "role": "user",
+        "label": "Additional title prompt",
+        "default_content": "High resolution, standalone title text only..."
       },
       {
-        "group_key": "layout_rules",
-        "display_name": "排版规则",
-        "editable": true,
-        "prompts": [
-          {
-            "prompt_key": "layout_rules",
-            "prompt_ref": "poster_title_image.layout_rules.es.v1",
-            "content": "标题为横向标题区。先评估该语言文案的视觉宽度..."
-          }
-        ]
+        "key": "layout_rules",
+        "role": "user",
+        "label": "Layout rules",
+        "default_content": "The title is a horizontal poster-title layer..."
       }
     ]
   },
@@ -307,20 +290,19 @@ GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image&language=es&mod
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `schema_version` | string | 模板 schema 版本，默认 `default` |
-| `job_type` | string | 任务类型 |
-| `language` | string 或 null | 本次返回模板对应的语种 |
-| `model_id` | string 或 null | 本次返回模板对应的模型 |
-| `groups[].group_key` | string | 提示词分组 key |
-| `groups[].display_name` | string | 分组展示名称 |
-| `groups[].editable` | boolean | 调用方是否允许编辑该分组 |
-| `groups[].prompts[].prompt_key` | string | 提示词 key |
-| `groups[].prompts[].prompt_ref` | string | 服务端提示词引用 |
-| `groups[].prompts[].content` | string | 默认提示词内容 |
+| `data.version` | string | Prompt 配置版本 |
+| `data.job_type` | string | 任务类型，当前为 `poster_title_image` |
+| `data.name` | string | 模板展示名称 |
+| `data.description` | string | 模板说明 |
+| `data.prompt_blocks[]` | array | 可展示和可覆盖的提示词块 |
+| `prompt_blocks[].key` | string | 稳定提示词块 key |
+| `prompt_blocks[].role` | string | 默认消息角色 |
+| `prompt_blocks[].label` | string | 展示标签 |
+| `prompt_blocks[].default_content` | string | 默认提示词内容 |
 
-稳定分组：
+稳定提示词块：
 
-| `group_key` | 说明 | 创建任务覆盖字段 |
+| `prompt_blocks[].key` | 说明 | 创建任务覆盖字段 |
 |---|---|---|
 | `style_probe` | 风格探针 | `job_params.items[].prompt_overrides.style_probe` |
 | `additional_prompt` | 附加提示词 | `job_params.items[].prompt_overrides.additional_prompt` |

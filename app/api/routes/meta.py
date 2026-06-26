@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.api.operations import OperationID
 from app.core.security import require_service_auth
 from app.core.language_catalog import list_languages_response
 from app.core.model_registry import list_models_response
-from app.core.prompt_templates import list_prompt_templates
-from app.schemas.meta import LanguagesResponse, ModelsResponse, PromptTemplatesResponse
+from app.core.prompt_templates import DEFAULT_PROMPT_TEMPLATE_JOB_TYPE, list_prompt_templates
+from app.schemas.meta import LanguagesResponse, ModelsResponse, PromptTemplateResponseData
 
 router = APIRouter(tags=["meta"], dependencies=[Depends(require_service_auth)])
 
@@ -31,8 +31,14 @@ async def list_languages():
 
 @router.get(
     "/prompt-templates",
-    response_model=PromptTemplatesResponse,
+    response_model=PromptTemplateResponseData,
     operation_id=OperationID.LIST_PROMPT_TEMPLATES,
 )
-async def prompt_templates():
-    return list_prompt_templates()
+async def prompt_templates(
+    job_type: str = Query(
+        default=DEFAULT_PROMPT_TEMPLATE_JOB_TYPE,
+        min_length=1,
+        description="Job type whose prompt template should be returned.",
+    )
+):
+    return list_prompt_templates(job_type=job_type)

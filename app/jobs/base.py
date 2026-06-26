@@ -45,6 +45,7 @@ class JobTypeSpec:
     max_attempts: int
     timeout_seconds: int
     prompt_specs: tuple[PromptSpec, ...] = ()
+    prompt_template_required_blocks: frozenset[str] = frozenset()
 
 
 def _schema_name(schema: type[BaseModel] | None) -> str:
@@ -79,6 +80,7 @@ class JobExecutor(ABC):
     log_events: tuple[str, ...] = ()
     large_artifact_keys: frozenset[str] = frozenset()
     prompt_specs: tuple[PromptSpec, ...] = ()
+    prompt_template_required_blocks: frozenset[str] = frozenset()
     requires_text_generation_model: bool = False
 
     @property
@@ -176,4 +178,5 @@ class JobExecutor(ABC):
             max_attempts=self.max_attempts,
             timeout_seconds=self.timeout_seconds,
             prompt_specs=self.prompt_specs,
+            prompt_template_required_blocks=self.prompt_template_required_blocks,
         )

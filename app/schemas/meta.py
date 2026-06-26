@@ -59,13 +59,9 @@ class PromptBlockTemplate(BaseModel):
     default_content: str
 
 
-class JobTypeTemplate(BaseModel):
+class PromptTemplateResponseData(BaseModel):
+    version: str
     job_type: str
     name: str
     description: str
     prompt_blocks: list[PromptBlockTemplate]
-
-
-class PromptTemplatesResponse(BaseModel):
-    version: str
-    job_types: list[JobTypeTemplate]

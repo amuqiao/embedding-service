@@ -1,22 +1,61 @@
+from pathlib import Path
 from typing import Any
 
 import yaml
 
 from app.core.config import settings
-from app.schemas.meta import JobTypeTemplate, PromptBlockTemplate, PromptTemplatesResponse
+from app.core.exceptions import ValidationAppError
+from app.schemas.meta import PromptBlockTemplate, PromptTemplateResponseData
 
 PROMPT_CONFIG_SECTIONS = ("job_types", "prompts")
+PROMPT_CONFIG_JOB_TEMPLATE_VERSIONS_KEY = "_job_template_versions"
+PROMPT_CONFIG_FILE_TOP_LEVEL_KEYS = frozenset({"version", *PROMPT_CONFIG_SECTIONS})
+DEFAULT_PROMPT_TEMPLATE_JOB_TYPE = "poster_title_image"
+APP_DIR = Path(__file__).resolve().parents[1]
+JOB_PROMPT_CONFIG_ROOT = APP_DIR / "jobs" / "types"
+
+
+def _read_prompt_config_file(path: Path) -> dict[str, Any]:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"prompt config not found: {path}") from exc
+    data = yaml.safe_load(raw)
+    if not isinstance(data, dict):
+        raise RuntimeError(f"prompt config must be a YAML object: {path}")
+    unknown_keys = sorted(set(data) - PROMPT_CONFIG_FILE_TOP_LEVEL_KEYS)
+    if unknown_keys:
+        raise RuntimeError(f"prompt config contains unknown top-level keys: {unknown_keys}")
+    return data
+
+
+def _merge_prompt_config(base: dict[str, Any], overlay: dict[str, Any], *, source: Path) -> None:
+    version = _prompt_version(overlay)
+    for section in PROMPT_CONFIG_SECTIONS:
+        section_config = overlay.get(section)
+        if section_config is None:
+            continue
+        if not isinstance(section_config, dict):
+            raise RuntimeError(f"prompt config {section} must be a YAML object: {source}")
+        target = base.setdefault(section, {})
+        if not isinstance(target, dict):
+            raise RuntimeError(f"prompt config {section} must be a YAML object")
+        for key, value in section_config.items():
+            if key in target:
+                raise RuntimeError(f"duplicate prompt config key in {section}: {key}")
+            target[key] = value
+            if section == "job_types":
+                versions = base.setdefault(PROMPT_CONFIG_JOB_TEMPLATE_VERSIONS_KEY, {})
+                if not isinstance(versions, dict):
+                    raise RuntimeError("prompt config job template versions must be a YAML object")
+                versions[key] = version
 
 
 def _load_prompt_config() -> dict[str, Any]:
-    try:
-        raw = settings.registry.prompt_config_path.read_text(encoding="utf-8")
-    except FileNotFoundError as exc:
-        raise RuntimeError(f"prompt config not found: {settings.registry.prompt_config_path}") from exc
-    data = yaml.safe_load(raw)
-    if not isinstance(data, dict):
-        raise RuntimeError("prompt config must be a YAML object")
-    return data
+    config = _read_prompt_config_file(settings.registry.prompt_config_path)
+    for path in sorted(JOB_PROMPT_CONFIG_ROOT.glob("*/prompts.yaml")):
+        _merge_prompt_config(config, _read_prompt_config_file(path), source=path)
+    return config
 
 
 def _block_content(block: dict[str, Any]) -> str:
@@ -27,6 +66,11 @@ def _block_content(block: dict[str, Any]) -> str:
 
 
 def _required_prompt_section(config: dict[str, Any], section: str) -> dict[str, Any]:
+    if section == PROMPT_CONFIG_JOB_TEMPLATE_VERSIONS_KEY:
+        section_config = config.get(section, {})
+        if not isinstance(section_config, dict):
+            raise RuntimeError(f"prompt config {section} must be a YAML object")
+        return section_config
     if section == "prompts" and section not in config:
         return {}
     section_config = config.get(section)
@@ -80,7 +124,7 @@ def _prompt_output_schema_refs(config: dict[str, Any]) -> dict[str, str]:
     return refs
 
 
-def _template_blocks(config: dict[str, Any], job_config: dict[str, Any]) -> list[PromptBlockTemplate]:
+def _template_blocks(job_config: dict[str, Any]) -> list[PromptBlockTemplate]:
     block_configs = job_config.get("prompt_blocks")
     if not isinstance(block_configs, dict) or not block_configs:
         raise RuntimeError("job prompt_blocks must be a non-empty YAML object")
@@ -106,34 +150,54 @@ def _template_blocks(config: dict[str, Any], job_config: dict[str, Any]) -> list
     return blocks
 
 
-def _job_templates() -> list[JobTypeTemplate]:
+def _job_template(job_type: str, job_config: dict[str, Any], *, version: str) -> PromptTemplateResponseData:
+    if not isinstance(job_type, str) or not isinstance(job_config, dict):
+        raise RuntimeError("invalid prompt config job_type item")
+    name = job_config.get("name")
+    description = job_config.get("description")
+    if not isinstance(name, str) or not isinstance(description, str):
+        raise RuntimeError(f"job_type {job_type} requires name and description")
+    return PromptTemplateResponseData(
+        version=version,
+        job_type=job_type,
+        name=name,
+        description=description,
+        prompt_blocks=_template_blocks(job_config),
+    )
+
+
+def _job_template_for_type(job_type: str) -> PromptTemplateResponseData:
     config = _load_prompt_config()
     job_configs = _required_prompt_section(config, "job_types")
 
-    templates: list[JobTypeTemplate] = []
-    for job_type, job_config in job_configs.items():
-        if not isinstance(job_type, str) or not isinstance(job_config, dict):
-            raise RuntimeError("invalid prompt config job_type item")
-        name = job_config.get("name")
-        description = job_config.get("description")
-        if not isinstance(name, str) or not isinstance(description, str):
-            raise RuntimeError(f"job_type {job_type} requires name and description")
-        templates.append(
-            JobTypeTemplate(
-                job_type=job_type,
-                name=name,
-                description=description,
-                prompt_blocks=_template_blocks(config, job_config),
-            )
-        )
-    return templates
+    normalized_job_type = job_type.strip()
+    if not normalized_job_type:
+        raise ValidationAppError("INVALID_JOB_TYPE", "job_type must be a non-empty string")
+    job_config = job_configs.get(normalized_job_type)
+    if not isinstance(job_config, dict):
+        raise ValidationAppError("INVALID_JOB_TYPE", f"不支持的 job_type: {normalized_job_type}")
+    version = _job_template_version(config, normalized_job_type)
+    return _job_template(normalized_job_type, job_config, version=version)
+
+
+def _prompt_version(config: dict[str, Any]) -> str:
+    version = config.get("version")
+    if not isinstance(version, str) or not version.strip():
+        raise RuntimeError("prompt config version must be a non-empty string")
+    return version.strip()
+
+
+def _job_template_version(config: dict[str, Any], job_type: str) -> str:
+    versions = config.get(PROMPT_CONFIG_JOB_TEMPLATE_VERSIONS_KEY)
+    if isinstance(versions, dict):
+        version = versions.get(job_type)
+        if isinstance(version, str) and version.strip():
+            return version
+    return _prompt_version(config)
 
 
 def prompt_version() -> str:
-    version = _load_prompt_config().get("version")
-    if not isinstance(version, str):
-        raise RuntimeError("prompt config version must be a string")
-    return version
+    return _prompt_version(_load_prompt_config())
 
 
 def all_prompt_refs() -> set[str]:
@@ -150,14 +214,12 @@ def prompt_template_job_types() -> set[str]:
 
 def validate_prompt_config_shape(*, known_output_schemas: set[str] | None = None) -> None:
     config = _load_prompt_config()
-    version = config.get("version")
-    if not isinstance(version, str) or not version.strip():
-        raise RuntimeError("prompt config version must be a non-empty string")
+    _prompt_version(config)
     _prompt_entry_configs(config)
     for section in PROMPT_CONFIG_SECTIONS:
         for prompt_ref, prompt_config in _required_prompt_section(config, section).items():
             if section == "job_types":
-                _template_blocks(config, prompt_config)
+                _template_blocks(prompt_config)
             else:
                 _validate_prompt_blocks(prompt_ref, prompt_config)
             name = prompt_config.get("name")
@@ -203,9 +265,23 @@ def get_output_contract(job_type: str) -> str:
     return output_contract.strip()
 
 
-def list_prompt_templates() -> PromptTemplatesResponse:
-    return PromptTemplatesResponse(version=prompt_version(), job_types=_job_templates())
+def list_prompt_templates(job_type: str = DEFAULT_PROMPT_TEMPLATE_JOB_TYPE) -> PromptTemplateResponseData:
+    return _job_template_for_type(job_type)
 
 
-def get_template(job_type: str) -> JobTypeTemplate | None:
-    return next((item for item in _job_templates() if item.job_type == job_type), None)
+def get_template(job_type: str) -> PromptTemplateResponseData | None:
+    try:
+        return _job_template_for_type(job_type)
+    except ValidationAppError:
+        return None
+
+
+def get_prompt_block_default(job_type: str, block_key: str) -> str:
+    try:
+        template = _job_template_for_type(job_type)
+    except ValidationAppError as exc:
+        raise RuntimeError(f"job_type {job_type} does not define prompt template") from exc
+    for block in template.prompt_blocks:
+        if block.key == block_key:
+            return block.default_content
+    raise RuntimeError(f"job_type {job_type} does not define prompt block: {block_key}")
