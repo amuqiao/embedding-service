@@ -79,6 +79,7 @@ class JobExecutor(ABC):
     log_events: tuple[str, ...] = ()
     large_artifact_keys: frozenset[str] = frozenset()
     prompt_specs: tuple[PromptSpec, ...] = ()
+    requires_text_generation_model: bool = False
 
     @property
     def job_type(self) -> str:

@@ -11,7 +11,7 @@ from app.core.security import require_service_auth
 from app.main import API_PREFIX, app
 from app.schemas.errors import build_error_envelope
 from app.schemas.jobs import CreateJobRequest, JobResult
-from app.schemas.meta import ModelOut, ModelsResponse
+from app.schemas.meta import ModelOut, ModelParameterOut, ModelsResponse
 from app.services.executor import _prompt_messages
 from app.services.jobs import _validate_create_request, validate_job_status_payload
 
@@ -175,7 +175,7 @@ def test_create_job_validation_allows_non_model_runtime(monkeypatch):
     monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda job_type: GenericHandler())
     monkeypatch.setattr("app.services.jobs.get_template", lambda job_type: None)
     monkeypatch.setattr(
-        "app.services.jobs.get_enabled_model",
+        "app.services.jobs.require_enabled_text_model",
         lambda model_id: (_ for _ in ()).throw(AssertionError("model registry should not be called")),
     )
 
@@ -183,6 +183,83 @@ def test_create_job_validation_allows_non_model_runtime(monkeypatch):
 
     assert job_params == {"input": {"value": 1}}
     assert runtime_fields == {}
+
+
+def test_create_job_validation_rejects_non_text_model_for_builtin_text_runtime(monkeypatch):
+    class BuiltinTextHandler:
+        name = "generic.builtin_text"
+        allow_callback = True
+
+        def normalize_job_params(self, job_params):
+            return job_params
+
+        def runtime_job_fields(self, job_params):
+            return {"model_id": "image-model"}
+
+        def validate_normalized_job_params(self, job_params):
+            pass
+
+        def job_type_spec(self):
+            return SimpleNamespace(execution_mode="builtin_llm_text_runtime")
+
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "contract-non-text-model",
+            "job_type": "generic.builtin_text",
+            "job_params": {"input": {"value": 1}},
+        }
+    )
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda job_type: BuiltinTextHandler())
+    monkeypatch.setattr("app.services.jobs.get_template", lambda job_type: None)
+
+    def reject_non_text_model(model_id):
+        raise AppError("MODEL_NOT_AVAILABLE", f"模型不支持文本生成: {model_id}")
+
+    monkeypatch.setattr("app.services.jobs.require_enabled_text_model", reject_non_text_model)
+
+    with pytest.raises(AppError) as exc:
+        _validate_create_request(payload)
+
+    assert exc.value.code == "MODEL_NOT_AVAILABLE"
+
+
+def test_create_job_validation_rejects_non_text_model_for_custom_text_executor(monkeypatch):
+    class CustomTextHandler:
+        name = "generic.custom_text"
+        allow_callback = True
+        requires_text_generation_model = True
+
+        def normalize_job_params(self, job_params):
+            return job_params
+
+        def runtime_job_fields(self, job_params):
+            return {"model_id": "image-model"}
+
+        def validate_normalized_job_params(self, job_params):
+            pass
+
+        def job_type_spec(self):
+            return SimpleNamespace(execution_mode="custom_executor")
+
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "contract-custom-non-text-model",
+            "job_type": "generic.custom_text",
+            "job_params": {"input": {"value": 1}},
+        }
+    )
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda job_type: CustomTextHandler())
+    monkeypatch.setattr("app.services.jobs.get_template", lambda job_type: None)
+
+    def reject_non_text_model(model_id):
+        raise AppError("MODEL_NOT_AVAILABLE", f"模型不支持文本生成: {model_id}")
+
+    monkeypatch.setattr("app.services.jobs.require_enabled_text_model", reject_non_text_model)
+
+    with pytest.raises(AppError) as exc:
+        _validate_create_request(payload)
+
+    assert exc.value.code == "MODEL_NOT_AVAILABLE"
 
 
 def test_create_job_validation_preserves_runtime_app_error(monkeypatch):
@@ -561,13 +638,24 @@ def test_models_route_exposes_public_model_selection_metadata(monkeypatch):
                 ModelOut(
                     id="custom-model",
                     name="Custom Model",
+                    model_type="text",
                     provider="openai",
                     enabled=True,
                     capabilities=["text_generation"],
                     input_media_types=["text/plain"],
                     output_media_types=["text/plain"],
-                    context_window=12345,
-                    supports_json_output=True,
+                    limits={"context_window": 12345},
+                    features={"supports_json_output": True},
+                    parameters=[
+                        ModelParameterOut(
+                            name="size",
+                            label="Size",
+                            type="select",
+                            required=False,
+                            default="1024x1024",
+                            options=["1024x1024", "1536x1024"],
+                        )
+                    ],
                     notes="Caller-facing note",
                 )
             ],
@@ -579,11 +667,26 @@ def test_models_route_exposes_public_model_selection_metadata(monkeypatch):
 
     assert response.status_code == 200
     model = response.json()["data"]["models"][0]
+    assert model["model_type"] == "text"
     assert model["capabilities"] == ["text_generation"]
     assert model["input_media_types"] == ["text/plain"]
     assert model["output_media_types"] == ["text/plain"]
+    assert model["limits"] == {"context_window": 12345}
+    assert model["features"] == {"supports_json_output": True}
+    assert model["parameters"] == [
+        {
+            "name": "size",
+            "label": "Size",
+            "type": "select",
+            "required": False,
+            "default": "1024x1024",
+            "options": ["1024x1024", "1536x1024"],
+        }
+    ]
     hidden_fields = {
         "pricing_ref",
+        "adapter",
+        "adapter_model",
         "provider_model",
         "litellm_model",
         "requires_env",
@@ -592,11 +695,35 @@ def test_models_route_exposes_public_model_selection_metadata(monkeypatch):
         "drop_params",
     }
     assert hidden_fields.isdisjoint(model)
+    assert "context_window" not in model
+    assert "supports_json_output" not in model
 
     model_schema = app.openapi()["components"]["schemas"]["ModelOut"]["properties"]
-    assert {"capabilities", "input_media_types", "output_media_types"} <= set(model_schema)
+    assert {
+        "model_type",
+        "capabilities",
+        "input_media_types",
+        "output_media_types",
+        "limits",
+        "features",
+        "parameters",
+    } <= set(model_schema)
     model_required = set(app.openapi()["components"]["schemas"]["ModelOut"]["required"])
-    assert {"capabilities", "input_media_types", "output_media_types"} <= model_required
+    assert {
+        "model_type",
+        "capabilities",
+        "input_media_types",
+        "output_media_types",
+        "limits",
+        "features",
+        "parameters",
+    } <= model_required
+    assert "context_window" not in model_schema
+    assert "supports_json_output" not in model_schema
+    parameter_schema = app.openapi()["components"]["schemas"]["ModelParameterOut"]["properties"]
+    assert {"name", "label", "type", "required", "default", "options", "min", "max"} <= set(parameter_schema)
+    parameter_required = set(app.openapi()["components"]["schemas"]["ModelParameterOut"]["required"])
+    assert parameter_required == {"name", "label", "type", "required", "default"}
     assert hidden_fields.isdisjoint(model_schema)
 
     operation = app.openapi()["paths"][f"{API_PREFIX}/models"]["get"]

@@ -8,7 +8,6 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError, ValidationAppError
-from app.core.model_registry import get_enabled_model
 from app.core.prompt_templates import get_template
 from app.jobs.factory import get_job_executor
 from app.models.job import Job
@@ -20,7 +19,8 @@ from app.services.job_runtime import (
     write_runtime_json,
     workflow_plan_from_job,
 )
-from app.services.jobs import _validate_prompt
+from app.services.jobs import _requires_text_generation_model, _validate_prompt
+from app.services.ai_capability_kernel import require_enabled_text_model
 from app.workflows.base import FAILURE_POLICIES
 
 
@@ -445,8 +445,8 @@ async def _create_child_job(
             f"child job_type 缺少运行时适配: {job_type}",
         ) from exc
     model_id = runtime_fields.get("model_id")
-    if model_id and not get_enabled_model(model_id):
-        raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不可用: {model_id}")
+    if model_id and _requires_text_generation_model(handler):
+        require_enabled_text_model(model_id)
     template = get_template(job_type)
     if template:
         prompt_payload = runtime_fields.get("prompt_payload")

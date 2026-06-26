@@ -4,17 +4,11 @@ from typing import Any
 
 import litellm
 
-
-@dataclass
-class TextGenerationResult:
-    text: str
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
-    usage: dict[str, Any] | None = None
+from app.integrations.ai_adapters.base import TextGenerationResult
 
 
 @dataclass(frozen=True)
-class TextGenerationRequest:
+class LiteLLMTextGenerationRequest:
     litellm_model: str
     messages: list[dict[str, str]]
     temperature: float
@@ -50,7 +44,7 @@ def _usage_int(usage: object | None, key: str) -> int | None:
     return int(raw or 0)
 
 
-async def generate_text(request: TextGenerationRequest) -> TextGenerationResult:
+async def generate_text(request: LiteLLMTextGenerationRequest) -> TextGenerationResult:
     # asyncio.wait_for 是唯一可靠的总时长截断（httpx read_timeout 对 chunked LLM 响应无效）；
     # litellm.acompletion 同时传入相同 timeout 以控制泄漏线程的退出上限。
     response = await asyncio.wait_for(

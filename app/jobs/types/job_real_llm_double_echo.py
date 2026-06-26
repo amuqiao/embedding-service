@@ -51,6 +51,7 @@ class JobRealLlmDoubleEchoJob(JobExecutor):
     allow_callback = False
     max_attempts = 1
     timeout_seconds = 240
+    requires_text_generation_model = True
     prompt_specs = (
         PromptSpec(
             step_name=FIRST_LLM_STEP_NAME,

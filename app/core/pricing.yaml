@@ -63,3 +63,10 @@ prices:
     input_per_1m: "2.00"
     cached_input_per_1m: "0.50"
     output_per_1m: "8.00"
+
+  openai:gpt-image-2@2026-06-23:
+    model_id: gpt-image-2
+    provider: openai
+    provider_model: gpt-image-2
+    pricing_type: per_image
+    amount_per_image: "0.04"

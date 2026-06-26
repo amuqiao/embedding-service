@@ -184,19 +184,41 @@ HttpEnvelope[ModelsResponse]
 ModelOut
   id
   name
+  model_type
   provider
   enabled
   capabilities
   input_media_types
   output_media_types
-  context_window
-  supports_json_output
+  limits
+  features
+  parameters[]
   notes
 ```
 
-`capabilities`、`input_media_types` 和 `output_media_types` 是调用方选择模型需要的公开能力元信息。`capabilities` 使用本服务定义的稳定能力值，不直接透传 provider 原始能力名；`input_media_types` 和 `output_media_types` 使用 MIME type。未来可以新增能力值或媒体类型，调用方应忽略未知值。
+`model_type` 是模型目录粗分类，当前取值为 `text`、`image`、`audio` 或 `video`。调用方可以用 `model_type` 做目录分组或粗筛，但具体可执行任务必须看 `capabilities`。例如后续语音转文本模型可以是 `model_type=audio` 且输出 `text/plain`。
 
-`pricing_ref`、价格矩阵、provider raw usage schema、provider key、provider model、LiteLLM model、required env 和 generation 参数不属于公开模型合同。
+`capabilities`、`input_media_types`、`output_media_types`、`limits`、`features` 和 `parameters` 是调用方选择模型需要的公开能力元信息。`capabilities` 使用本服务定义的稳定能力值，不直接透传 provider 原始能力名；`input_media_types` 和 `output_media_types` 使用 MIME type。未来可以新增能力值或媒体类型，调用方应忽略未知值。
+
+`limits` 和 `features` 是类型化公开元信息。文本模型当前会在 `limits.context_window` 暴露上下文窗口，并在 `features.supports_json_output` 暴露是否支持 JSON 输出。调用方应读取 `limits` 和 `features`，不要依赖跨类型顶层字段。
+
+`parameters[]` 是模型目录中允许对调用方展示的可配置参数 schema。单个参数包含：
+
+```text
+ModelParameterOut
+  name
+  label
+  type
+  required
+  default
+  options?
+  min?
+  max?
+```
+
+`label` 是展示名称。`type` 当前取值为 `string`、`integer`、`number`、`boolean` 或 `select`。`select` 参数使用 `options` 表达允许值；`integer` 和 `number` 参数可以使用 `min` / `max` 表达数值范围。不适用的可选字段会从响应中省略。模型支持某个公开参数不代表所有 `job_type` 都允许提交该参数；最终可提交字段仍由对应 `job_type` 的 `job_params` 合同和服务端校验决定。
+
+`adapter`、`adapter_model`、`pricing_ref`、价格矩阵、provider raw usage schema、provider key、provider model、required env、generation 参数和非公开 provider 参数不属于公开模型合同。
 
 `GET /languages` 成功响应：
 
@@ -216,4 +238,4 @@ LanguageOut
 
 `language` 是提交任务时使用的程序化语种代码，当前取值来自 [`业务语种规范.md`](业务语种规范.md) 的三方语种表。`display_name` 和 `native_name` 只用于展示，调用方不应基于展示名称做业务判断。`in` 是三方合同中的印尼语代码，本服务不会在内部目录接口中映射为 `id`。
 
-兼容性说明：Phase 2 为 `ModelOut` 新增 `capabilities`、`input_media_types` 和 `output_media_types`，并新增 `GET /languages`。宽松 JSON 客户端可以忽略新增字段；严格 schema 或生成 SDK 客户端需要同步更新模型和语种定义。
+合同说明：当前 `ModelOut` 使用 `model_type`、`capabilities`、`input_media_types`、`output_media_types`、`limits`、`features` 和 `parameters` 描述模型公开能力；语种目录通过 `GET /languages` 独立暴露。生成 SDK 客户端应以本文字段为准同步模型和语种定义。

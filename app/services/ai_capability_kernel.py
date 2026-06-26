@@ -14,7 +14,8 @@ from app.core.model_registry import TextModel, get_enabled_model
 from app.core.pricing_registry import calculate_cost as calculate_usage_cost
 from app.core.pricing_registry import TokenPrice, require_price, validate_price_matches_model
 from app.core.usage_records import TextUsageRecord, UsageRecord, normalize_text_usage
-from app.integrations.ai_gateway import TextGenerationRequest, TextGenerationResult, generate_text
+from app.integrations.ai_adapters.base import TextGenerationRequest, TextGenerationResult
+from app.integrations.ai_adapters.registry import require_text_generation_adapter
 from app.repositories.ai_call_log_repo import AiCallLogRepo
 
 KNOWN_SCOPE_TYPES = {"job", "sync_api", "internal", "batch"}
@@ -99,6 +100,10 @@ def require_enabled_text_model(model_id: str) -> TextModel:
     model = get_enabled_model(model_id)
     if model is None:
         raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不可用: {model_id}")
+    if not hasattr(model, "model_type"):
+        raise RuntimeError(f"model {model_id} requires model_type")
+    if model.model_type != "text":
+        raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不支持文本生成: {model_id}")
     validate_price_matches_model(
         pricing_ref=model.pricing_ref,
         model_id=model.id,
@@ -119,7 +124,7 @@ class ModelGate:
                 model_id=model.id,
                 provider=model.provider,
                 provider_model=model.provider_model,
-                litellm_model=model.litellm_model,
+                adapter_model=model.adapter_model,
                 pricing_ref=model.pricing_ref,
             ),
         )
@@ -127,9 +132,12 @@ class ModelGate:
 
 class ProviderGateway:
     async def generate_text(self, model: TextModel, messages: list[dict[str, str]]) -> TextGenerationResult:
-        return await generate_text(
+        if model.temperature is None or model.num_retries is None or model.drop_params is None:
+            raise RuntimeError(f"text model {model.id} requires generation config")
+        adapter = require_text_generation_adapter(model.adapter)
+        return await adapter.generate_text(
             TextGenerationRequest(
-                litellm_model=model.litellm_model,
+                adapter_model=model.adapter_model,
                 messages=messages,
                 temperature=model.temperature,
                 timeout_seconds=settings.ai_provider.model_call_timeout_seconds,

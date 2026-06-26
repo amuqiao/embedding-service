@@ -11,6 +11,7 @@ from app.jobs.runner import execute_job, fail_job
 from app.jobs.types.register import register_all_job_types
 from app.tasks import jobs as task_jobs
 from app.workflows.orchestrator import (
+    _create_child_job,
     advance_workflow_after_child_terminal,
     create_ready_child_jobs,
     reconcile_workflow_root,
@@ -71,6 +72,87 @@ def test_should_retry_attempt_respects_platform_retry_policy(monkeypatch):
     assert task_jobs._should_retry_attempt("job_test_add", {"code": "JOB_TIMEOUT"}) is True
     assert task_jobs._should_retry_attempt("job_test_add", {"code": "MODEL_CALL_FAILED"}) is False
     assert task_jobs._should_retry_attempt("job_test_add", {"code": "AI_LEDGER_UPDATE_FAILED"}) is False
+
+
+@pytest.mark.asyncio
+async def test_workflow_child_validation_rejects_non_text_model_for_builtin_text_runtime(monkeypatch):
+    class BuiltinTextHandler:
+        timeout_seconds = 300
+        max_attempts = 1
+
+        def normalize_job_params(self, job_params):
+            return job_params
+
+        def validate_normalized_job_params(self, job_params):
+            pass
+
+        def runtime_job_fields(self, job_params):
+            return {"model_id": "image-model"}
+
+        def job_type_spec(self):
+            return SimpleNamespace(execution_mode="builtin_llm_text_runtime")
+
+    root_job = _running_add_job()
+    monkeypatch.setattr("app.workflows.orchestrator.get_job_executor", lambda job_type: BuiltinTextHandler())
+
+    def reject_non_text_model(model_id):
+        raise AppError("MODEL_NOT_AVAILABLE", f"模型不支持文本生成: {model_id}")
+
+    monkeypatch.setattr("app.workflows.orchestrator.require_enabled_text_model", reject_non_text_model)
+    monkeypatch.setattr(
+        "app.workflows.orchestrator.JobRepo.create",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("child job should not be created")),
+    )
+
+    with pytest.raises(AppError) as exc:
+        await _create_child_job(
+            _FakeDB(),
+            root_job=root_job,
+            node={"key": "child-1", "job_type": "job_real_llm_echo", "job_params": {"value": 1}},
+        )
+
+    assert exc.value.code == "MODEL_NOT_AVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_workflow_child_validation_rejects_non_text_model_for_custom_text_executor(monkeypatch):
+    class CustomTextHandler:
+        timeout_seconds = 300
+        max_attempts = 1
+        requires_text_generation_model = True
+
+        def normalize_job_params(self, job_params):
+            return job_params
+
+        def validate_normalized_job_params(self, job_params):
+            pass
+
+        def runtime_job_fields(self, job_params):
+            return {"model_id": "image-model"}
+
+        def job_type_spec(self):
+            return SimpleNamespace(execution_mode="custom_executor")
+
+    root_job = _running_add_job()
+    monkeypatch.setattr("app.workflows.orchestrator.get_job_executor", lambda job_type: CustomTextHandler())
+
+    def reject_non_text_model(model_id):
+        raise AppError("MODEL_NOT_AVAILABLE", f"模型不支持文本生成: {model_id}")
+
+    monkeypatch.setattr("app.workflows.orchestrator.require_enabled_text_model", reject_non_text_model)
+    monkeypatch.setattr(
+        "app.workflows.orchestrator.JobRepo.create",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("child job should not be created")),
+    )
+
+    with pytest.raises(AppError) as exc:
+        await _create_child_job(
+            _FakeDB(),
+            root_job=root_job,
+            node={"key": "child-1", "job_type": "job_real_llm_double_echo", "job_params": {"value": 1}},
+        )
+
+    assert exc.value.code == "MODEL_NOT_AVAILABLE"
 
 
 @pytest.mark.asyncio

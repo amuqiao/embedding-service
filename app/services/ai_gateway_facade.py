@@ -6,7 +6,7 @@ from typing import Any
 
 from app.core.database import AsyncSessionLocal
 from app.core.exceptions import AppError
-from app.integrations.ai_gateway import TextGenerationResult
+from app.integrations.ai_adapters.base import TextGenerationResult
 from app.services import ai_capability_kernel as kernel
 
 
@@ -62,7 +62,7 @@ async def generate_text_with_ledger(
         model_id=resolved_model.model_id,
         provider=resolved_model.provider,
         provider_model=resolved_model.provider_model,
-        litellm_model=resolved_model.litellm_model,
+        litellm_model=resolved_model.adapter_model,
         pricing_ref=price.ref,
         pricing_version=price.version,
         request_hash=request_hash,

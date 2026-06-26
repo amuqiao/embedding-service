@@ -11,7 +11,7 @@ class ResolvedModel:
     model_id: str
     provider: str
     provider_model: str
-    litellm_model: str
+    adapter_model: str
     pricing_ref: str
 
 

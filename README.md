@@ -74,7 +74,7 @@ API 前缀由 `SERVICE_API_PREFIX` 配置，默认是 `/api/v1/ai-jobs`。
 
 Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts.yaml`。当前内置测试和示例 `job_type` 只用于模板验证与接入样例，边界见 [模板采用就绪度](docs/current/template-readiness.md)；新增正式 LLM 能力时再按项目规范补充 Prompt 模板、`job_type` 注册和验证用例。
 
-模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML，配置项包括对外 `model_id`、LiteLLM model id、上下文窗口、所需环境变量和模型调用参数。
+模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML，配置项包括对外 `model_id`、`model_type`、`adapter`、`provider_model`、`adapter_model`、所需环境变量、`limits` / `features` 类型化元信息、内部模型调用参数和可由 `/models` 展示的 `parameters.public`。
 
 除 `/health` 和 `/healthz` 外，请求必须携带：
 

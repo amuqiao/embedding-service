@@ -2,8 +2,11 @@ version: "1"
 models:
   - id: gpt-5.5
     name: GPT-5.5
+    model_type: text
+    adapter: litellm
     provider: openai
-    litellm_model: openai/gpt-5.5
+    provider_model: gpt-5.5
+    adapter_model: openai/gpt-5.5
     pricing_ref: openai:gpt-5.5@2026-06-23
     enabled: true
     capabilities:
@@ -12,8 +15,12 @@ models:
       - text/plain
     output_media_types:
       - text/plain
-    context_window: 1050000
-    supports_json_output: true
+    limits:
+      context_window: 1050000
+    features:
+      supports_json_output: true
+    parameters:
+      public: []
     notes: "Default high-capability text generation model."
     requires_env:
       - OPENAI_API_KEY
@@ -24,8 +31,11 @@ models:
 
   - id: gpt-5.4
     name: GPT-5.4
+    model_type: text
+    adapter: litellm
     provider: openai
-    litellm_model: openai/gpt-5.4
+    provider_model: gpt-5.4
+    adapter_model: openai/gpt-5.4
     pricing_ref: openai:gpt-5.4@2026-06-23
     enabled: true
     capabilities:
@@ -34,8 +44,12 @@ models:
       - text/plain
     output_media_types:
       - text/plain
-    context_window: 1050000
-    supports_json_output: true
+    limits:
+      context_window: 1050000
+    features:
+      supports_json_output: true
+    parameters:
+      public: []
     notes: ""
     requires_env:
       - OPENAI_API_KEY
@@ -46,8 +60,11 @@ models:
 
   - id: gpt-5.4-mini
     name: GPT-5.4 mini
+    model_type: text
+    adapter: litellm
     provider: openai
-    litellm_model: openai/gpt-5.4-mini
+    provider_model: gpt-5.4-mini
+    adapter_model: openai/gpt-5.4-mini
     pricing_ref: openai:gpt-5.4-mini@2026-06-23
     enabled: true
     capabilities:
@@ -56,8 +73,12 @@ models:
       - text/plain
     output_media_types:
       - text/plain
-    context_window: 400000
-    supports_json_output: true
+    limits:
+      context_window: 400000
+    features:
+      supports_json_output: true
+    parameters:
+      public: []
     notes: ""
     requires_env:
       - OPENAI_API_KEY
@@ -68,8 +89,11 @@ models:
 
   - id: gpt-5.4-nano
     name: GPT-5.4 nano
+    model_type: text
+    adapter: litellm
     provider: openai
-    litellm_model: openai/gpt-5.4-nano
+    provider_model: gpt-5.4-nano
+    adapter_model: openai/gpt-5.4-nano
     pricing_ref: openai:gpt-5.4-nano@2026-06-23
     enabled: true
     capabilities:
@@ -78,8 +102,12 @@ models:
       - text/plain
     output_media_types:
       - text/plain
-    context_window: 400000
-    supports_json_output: true
+    limits:
+      context_window: 400000
+    features:
+      supports_json_output: true
+    parameters:
+      public: []
     notes: ""
     requires_env:
       - OPENAI_API_KEY
@@ -90,8 +118,11 @@ models:
 
   - id: gpt-4o
     name: GPT-4o
+    model_type: text
+    adapter: litellm
     provider: openai
-    litellm_model: openai/gpt-4o
+    provider_model: gpt-4o
+    adapter_model: openai/gpt-4o
     pricing_ref: openai:gpt-4o@2026-06-23
     enabled: true
     capabilities:
@@ -100,8 +131,12 @@ models:
       - text/plain
     output_media_types:
       - text/plain
-    context_window: 128000
-    supports_json_output: true
+    limits:
+      context_window: 128000
+    features:
+      supports_json_output: true
+    parameters:
+      public: []
     notes: "Compatibility model; default is gpt-5.5."
     requires_env:
       - OPENAI_API_KEY
@@ -112,8 +147,11 @@ models:
 
   - id: gpt-4o-mini
     name: GPT-4o mini
+    model_type: text
+    adapter: litellm
     provider: openai
-    litellm_model: openai/gpt-4o-mini
+    provider_model: gpt-4o-mini
+    adapter_model: openai/gpt-4o-mini
     pricing_ref: openai:gpt-4o-mini@2026-06-23
     enabled: true
     capabilities:
@@ -122,8 +160,12 @@ models:
       - text/plain
     output_media_types:
       - text/plain
-    context_window: 128000
-    supports_json_output: true
+    limits:
+      context_window: 128000
+    features:
+      supports_json_output: true
+    parameters:
+      public: []
     notes: "Compatibility model; default is gpt-5.5."
     requires_env:
       - OPENAI_API_KEY
@@ -134,8 +176,11 @@ models:
 
   - id: gpt-4.1
     name: GPT-4.1
+    model_type: text
+    adapter: litellm
     provider: openai
-    litellm_model: openai/gpt-4.1
+    provider_model: gpt-4.1
+    adapter_model: openai/gpt-4.1
     pricing_ref: openai:gpt-4.1@2026-06-23
     enabled: true
     capabilities:
@@ -144,8 +189,12 @@ models:
       - text/plain
     output_media_types:
       - text/plain
-    context_window: 1047576
-    supports_json_output: true
+    limits:
+      context_window: 1047576
+    features:
+      supports_json_output: true
+    parameters:
+      public: []
     notes: "Compatibility model; default is gpt-5.5."
     requires_env:
       - OPENAI_API_KEY
@@ -153,3 +202,81 @@ models:
       temperature: 0.7
       num_retries: 0
       drop_params: true
+
+  - id: gpt-image-2
+    name: gpt-image-2
+    model_type: image
+    adapter: litellm
+    provider: openai
+    provider_model: gpt-image-2
+    adapter_model: openai/gpt-image-2
+    pricing_ref: openai:gpt-image-2@2026-06-23
+    enabled: true
+    capabilities:
+      - image_generation
+      - image_edit
+    input_media_types:
+      - text/plain
+      - image/png
+      - image/jpeg
+      - image/webp
+    output_media_types:
+      - image/png
+      - image/jpeg
+      - image/webp
+    limits:
+      max_output_count: 4
+    features:
+      native_transparency: false
+      supports_edit: true
+    parameters:
+      public:
+        - name: n
+          label: 数量
+          type: integer
+          required: false
+          min: 1
+          max: 4
+          default: 1
+        - name: size
+          label: 尺寸
+          type: select
+          required: false
+          options:
+            - auto
+            - 1024x1024
+            - 1536x1024
+            - 1024x1536
+            - 1024x1792
+            - 1792x1024
+          default: auto
+        - name: background
+          label: 背景
+          type: select
+          required: false
+          options:
+            - opaque
+            - auto
+          default: auto
+        - name: quality
+          label: 质量
+          type: select
+          required: false
+          options:
+            - auto
+            - high
+            - medium
+            - low
+          default: auto
+        - name: output_format
+          label: 格式
+          type: select
+          required: false
+          options:
+            - png
+            - jpeg
+            - webp
+          default: png
+    notes: ""
+    requires_env:
+      - OPENAI_API_KEY

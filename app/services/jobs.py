@@ -12,13 +12,13 @@ from app.core.callback_security import validate_callback_url_security
 from app.core.exceptions import AppError, InternalAppError, NotFoundAppError, ValidationAppError
 from app.core.config import settings
 from app.core.error_registry import get_error_spec
-from app.core.model_registry import get_enabled_model
 from app.core.prompt_templates import get_template
 from app.integrations.storage import sha256_digest, storage
 from app.models.job import Job
 from app.repositories.job_repo import JobRepo
 from app.schemas.errors import JobErrorDetail
 from app.schemas.jobs import CreateJobRequest, CreateJobResponse, JobResult, JobStatusResponse
+from app.services.ai_capability_kernel import require_enabled_text_model
 from app.services.job_runtime import (
     build_runtime_snapshot,
     configured_output_target,
@@ -261,6 +261,13 @@ def validate_job_status_payload(payload: dict[str, Any]):
     return validate_job_view_payload(payload)
 
 
+def _requires_text_generation_model(handler: Any) -> bool:
+    spec = handler.job_type_spec()
+    return spec.execution_mode == "builtin_llm_text_runtime" or bool(
+        getattr(handler, "requires_text_generation_model", False)
+    )
+
+
 def _validate_create_request(payload: CreateJobRequest) -> tuple[Any, dict[str, Any], dict[str, Any]]:
     handler, job_params = validate_create_contract(payload)
     try:
@@ -287,8 +294,8 @@ def _validate_create_request(payload: CreateJobRequest) -> tuple[Any, dict[str, 
             f"job_type 缺少运行时适配: {payload.job_type}",
         ) from exc
     model_id = runtime_fields.get("model_id")
-    if model_id and not get_enabled_model(model_id):
-        raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不可用: {model_id}")
+    if model_id and _requires_text_generation_model(handler):
+        require_enabled_text_model(model_id)
     # Validate prompt blocks against YAML template if available
     template = get_template(payload.job_type)
     if template:
