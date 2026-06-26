@@ -76,6 +76,7 @@
 只读排障使用 `jobs.sh`，不要直接写修复脚本作为默认流程：
 
 ```bash
+./scripts/jobs.sh doctor --since 10m
 ./scripts/jobs.sh list --status running --since 24h --limit 20
 ./scripts/jobs.sh show <job_id>
 ./scripts/jobs.sh inspect <job_id>

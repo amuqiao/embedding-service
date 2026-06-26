@@ -204,15 +204,88 @@ def test_jobs_capacity_recommendation_reports_gate_pressure():
     assert "达到或超过门禁" in recommendation["message"]
 
 
+def _summary_payload(
+    *,
+    total: int = 2,
+    queued: int = 0,
+    running_active: int = 0,
+    failed: int = 0,
+    dispatch_due: int = 0,
+    dispatch_dead_letter: int = 0,
+    callbacks_due: int = 0,
+    callbacks_dead_letter: int = 0,
+) -> dict:
+    return {
+        "jobs": {
+            "total": total,
+            "queued": queued,
+            "running": running_active,
+            "running_active": running_active,
+            "running_inactive": 0,
+            "succeeded": max(total - queued - running_active - failed, 0),
+            "failed": failed,
+            "active_jobs": queued + running_active,
+            "oldest_created_at": None,
+            "newest_created_at": None,
+        },
+        "by_job_type": [
+            {
+                "job_type": "job_test_echo",
+                "total": total,
+                "queued": queued,
+                "running": running_active,
+                "active_jobs": queued + running_active,
+                "succeeded": max(total - queued - running_active - failed, 0),
+                "failed": failed,
+            }
+        ]
+        if total
+        else [],
+        "attempts": {"total": total, "pending": queued, "running": running_active, "succeeded": 0, "failed": failed},
+        "dispatch": {
+            "total": total,
+            "pending": dispatch_due,
+            "leased": 0,
+            "published": max(total - dispatch_due - dispatch_dead_letter, 0),
+            "retrying": 0,
+            "dead_letter": dispatch_dead_letter,
+            "due": dispatch_due,
+        },
+        "callbacks": {
+            "total": total,
+            "pending": callbacks_due,
+            "leased": 0,
+            "delivering": 0,
+            "delivered": max(total - callbacks_due - callbacks_dead_letter, 0),
+            "failed": 0,
+            "dead_letter": callbacks_dead_letter,
+            "due": callbacks_due,
+        },
+    }
+
+
+def test_jobs_summary_default_is_human_readable(monkeypatch):
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", lambda action: _summary_payload(queued=1, running_active=1))
+
+    result = RUNNER.invoke(jobs_cli_app, ["summary", "--since", "10m"])
+
+    assert result.exit_code == 0
+    assert "== Job Summary ==" in result.stdout
+    assert "== Attempts ==" in result.stdout
+    assert "running" in result.stdout
+    assert "succeeded" in result.stdout
+    assert "== Dispatch ==" in result.stdout
+    assert "published" in result.stdout
+    assert "== Callbacks ==" in result.stdout
+    assert "delivering" in result.stdout
+    assert "delivered" in result.stdout
+    assert "job_test_echo" in result.stdout
+    assert '"scope"' not in result.stdout
+
+
 def test_jobs_summary_json_uses_stable_scope(monkeypatch):
     def fake_with_connection(action):
-        return {
-            "jobs": {"active_jobs": 0},
-            "by_job_type": [],
-            "attempts": {},
-            "dispatch": {},
-            "callbacks": {},
-        }
+        return _summary_payload(total=0)
 
     monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
 
@@ -222,6 +295,78 @@ def test_jobs_summary_json_uses_stable_scope(monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["scope"]["since"] == "10m"
     assert payload["jobs"]["active_jobs"] == 0
+    assert set(payload) >= {"scope", "jobs", "by_job_type", "attempts", "dispatch", "callbacks"}
+
+
+def test_jobs_doctor_default_reports_empty_window_next_checks(monkeypatch):
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", lambda action: _summary_payload(total=0))
+
+    result = RUNNER.invoke(jobs_cli_app, ["doctor", "--since", "10m"])
+
+    assert result.exit_code == 0
+    assert "no jobs found" in result.stdout
+    assert "扩大 --since 窗口" in result.stdout
+    assert "./scripts/jobs.sh list --since 10m" in result.stdout
+    assert "./scripts/jobs.sh show <job_id>" in result.stdout
+    assert "./scripts/dev.sh status" in result.stdout
+
+
+def test_jobs_doctor_json_treats_empty_window_as_ok(monkeypatch):
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", lambda action: _summary_payload(total=0))
+
+    result = RUNNER.invoke(jobs_cli_app, ["doctor", "--since", "10m", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "ok"
+    findings = {item["metric"]: item for item in payload["findings"]}
+    assert findings["jobs.total"]["status"] == "info"
+
+
+def test_jobs_doctor_default_prints_filter_scope(monkeypatch):
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", lambda action: _summary_payload(total=0))
+
+    result = RUNNER.invoke(
+        jobs_cli_app,
+        ["doctor", "--since", "10m", "--job-type", "job_test_echo", "--caller-id", "default"],
+    )
+
+    assert result.exit_code == 0
+    assert "job_type=job_test_echo" in result.stdout
+    assert "caller_id=default" in result.stdout
+    assert "./scripts/jobs.sh list --since 10m --job-type job_test_echo --caller-id default --limit 20" in result.stdout
+
+
+def test_jobs_doctor_json_reports_abnormal_metrics(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.jobs.cli._with_connection",
+        lambda action: _summary_payload(
+            total=5,
+            queued=2,
+            running_active=1,
+            failed=1,
+            dispatch_due=2,
+            dispatch_dead_letter=1,
+            callbacks_due=1,
+            callbacks_dead_letter=1,
+        ),
+    )
+
+    result = RUNNER.invoke(jobs_cli_app, ["doctor", "--since", "10m", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert set(payload) >= {"scope", "summary", "status", "findings", "next_checks"}
+    assert payload["scope"]["since"] == "10m"
+    assert payload["summary"]["jobs"]["failed"] == 1
+    assert payload["status"] == "critical"
+    findings = {item["metric"]: item for item in payload["findings"]}
+    assert findings["dispatch.dead_letter"]["status"] == "critical"
+    assert findings["callbacks.dead_letter"]["status"] == "critical"
+    assert findings["jobs.failed"]["status"] == "warning"
+    assert findings["jobs.queued"]["value"] == 2
+    assert findings["jobs.running_active"]["value"] == 1
+    assert "./scripts/jobs.sh stuck --older-than 10m" in payload["next_checks"]
 
 
 def test_jobs_latency_json_uses_lifecycle_fields(monkeypatch):

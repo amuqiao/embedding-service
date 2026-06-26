@@ -32,6 +32,7 @@ HELP_EPILOG = """\b
   callbacks  查看 lifecycle callback outbox。
   stuck      扫描疑似卡住的 Job、attempt 或 callback lease。
   summary    汇总 Job、attempt、dispatch 和 callback 当前状态。
+  doctor     基于 summary 数据给出维护人员排障摘要和下一步检查。
   latency    按 job_type / caller / status 统计 Job 生命周期耗时。
   capacity   查看 MAX_ACTIVE_JOBS 当前水位和窗口容量估算。
   types      查看当前注册的 job_type。
@@ -55,6 +56,7 @@ HELP_EPILOG = """\b
   ./scripts/jobs.sh timeline <job_id> --limit 50
   ./scripts/jobs.sh stuck --older-than 10m --json
   ./scripts/jobs.sh summary --since 10m
+  ./scripts/jobs.sh doctor --since 10m
   ./scripts/jobs.sh latency --since 30m --group-by job_type
   ./scripts/jobs.sh capacity --since 10m --max-active-jobs 750
   ./scripts/jobs.sh types --json
@@ -62,7 +64,7 @@ HELP_EPILOG = """\b
 \b
 保护边界：
   只读查询不修改 DB，不触发真实业务调用，不投递消息，不重试 Job，不重放 callback。
-  单个 job_id 不存在时返回非 0，不把空结果解释为成功。
+  单个 job_id 不存在时返回非 0；列表、summary 和 doctor 的空结果会在成功输出中明确说明。
 
 \b
 Exit Codes:
@@ -243,6 +245,68 @@ def _latency_columns() -> list[tuple[str, str]]:
     ]
 
 
+def _summary_job_columns() -> list[tuple[str, str]]:
+    return [
+        ("total", "total"),
+        ("queued", "queued"),
+        ("running", "running"),
+        ("running_active", "running_active"),
+        ("running_inactive", "running_inactive"),
+        ("succeeded", "succeeded"),
+        ("failed", "failed"),
+        ("active_jobs", "active_jobs"),
+        ("oldest_created_at", "oldest_created_at"),
+        ("newest_created_at", "newest_created_at"),
+    ]
+
+
+def _summary_attempt_columns() -> list[tuple[str, str]]:
+    return [
+        ("total", "total"),
+        ("pending", "pending"),
+        ("running", "running"),
+        ("succeeded", "succeeded"),
+        ("failed", "failed"),
+    ]
+
+
+def _summary_dispatch_columns() -> list[tuple[str, str]]:
+    return [
+        ("total", "total"),
+        ("pending", "pending"),
+        ("leased", "leased"),
+        ("published", "published"),
+        ("retrying", "retrying"),
+        ("dead_letter", "dead_letter"),
+        ("due", "due"),
+    ]
+
+
+def _summary_callback_columns() -> list[tuple[str, str]]:
+    return [
+        ("total", "total"),
+        ("pending", "pending"),
+        ("leased", "leased"),
+        ("delivering", "delivering"),
+        ("delivered", "delivered"),
+        ("failed", "failed"),
+        ("dead_letter", "dead_letter"),
+        ("due", "due"),
+    ]
+
+
+def _summary_by_job_type_columns() -> list[tuple[str, str]]:
+    return [
+        ("job_type", "job_type"),
+        ("total", "total"),
+        ("queued", "queued"),
+        ("running", "running"),
+        ("active_jobs", "active_jobs"),
+        ("succeeded", "succeeded"),
+        ("failed", "failed"),
+    ]
+
+
 def _job_summary(job: dict) -> dict[str, Any]:
     return {
         "job_id": str(job.get("id")),
@@ -343,6 +407,181 @@ def _capacity_recommendation(payload: dict[str, Any], max_active_jobs: int | Non
         "active_ratio": active_ratio,
         "message": message,
     }
+
+
+def _count(value: Any) -> int:
+    return int(value or 0)
+
+
+def _summary_payload(
+    *,
+    since: str,
+    window: timedelta,
+    job_type: str | None,
+    caller_id: str | None,
+    summary_payload: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "scope": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id},
+        **summary_payload,
+    }
+
+
+def _summary_next_checks(scope: dict[str, Any], *, no_jobs_found: bool) -> list[str]:
+    filters = []
+    if scope.get("job_type"):
+        filters.append(f"--job-type {scope['job_type']}")
+    if scope.get("caller_id"):
+        filters.append(f"--caller-id {scope['caller_id']}")
+    filter_text = (" " + " ".join(filters)) if filters else ""
+    checks = [
+        f"./scripts/jobs.sh list --since {scope['since']}{filter_text} --limit 20",
+        "./scripts/jobs.sh show <job_id>",
+    ]
+    if no_jobs_found:
+        checks.insert(0, f"扩大 --since 窗口后重试，例如 ./scripts/jobs.sh doctor --since 1h{filter_text}")
+        checks.append("./scripts/dev.sh status")
+    return checks
+
+
+def _diagnose_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    jobs = payload.get("jobs") or {}
+    dispatch = payload.get("dispatch") or {}
+    callbacks = payload.get("callbacks") or {}
+    scope = payload["scope"]
+    findings: list[dict[str, Any]] = []
+
+    def add(status: str, metric: str, value: int, message: str) -> None:
+        findings.append({"status": status, "metric": metric, "value": value, "message": message})
+
+    total_jobs = _count(jobs.get("total"))
+    no_jobs_found = total_jobs == 0
+    if no_jobs_found:
+        add("info", "jobs.total", 0, "no jobs found in the selected window.")
+    else:
+        add("ok", "jobs.total", total_jobs, "selected window contains jobs.")
+
+    dispatch_due = _count(dispatch.get("due"))
+    dispatch_dead_letter = _count(dispatch.get("dead_letter"))
+    callbacks_due = _count(callbacks.get("due"))
+    callbacks_dead_letter = _count(callbacks.get("dead_letter"))
+    failed_jobs = _count(jobs.get("failed"))
+    queued_jobs = _count(jobs.get("queued"))
+    running_active = _count(jobs.get("running_active"))
+
+    if dispatch_dead_letter:
+        add("critical", "dispatch.dead_letter", dispatch_dead_letter, "dispatch outbox has dead-lettered run_attempt messages.")
+    elif dispatch_due:
+        add("warning", "dispatch.due", dispatch_due, "dispatch outbox has due run_attempt messages waiting to publish.")
+    else:
+        add("ok", "dispatch.due", 0, "no due dispatch messages.")
+
+    if callbacks_dead_letter:
+        add("critical", "callbacks.dead_letter", callbacks_dead_letter, "callback outbox has dead-lettered deliveries.")
+    elif callbacks_due:
+        add("warning", "callbacks.due", callbacks_due, "callback outbox has due deliveries waiting to run.")
+    else:
+        add("ok", "callbacks.due", 0, "no due callback deliveries.")
+
+    if failed_jobs:
+        add("warning", "jobs.failed", failed_jobs, "jobs failed in the selected window.")
+    else:
+        add("ok", "jobs.failed", 0, "no failed jobs in the selected window.")
+
+    if queued_jobs:
+        add("warning", "jobs.queued", queued_jobs, "queued jobs remain in the selected window.")
+    else:
+        add("ok", "jobs.queued", 0, "no queued jobs in the selected window.")
+
+    if running_active:
+        add("info", "jobs.running_active", running_active, "jobs are actively running.")
+    else:
+        add("ok", "jobs.running_active", 0, "no active running jobs in the selected window.")
+
+    if any(item["status"] == "critical" for item in findings):
+        status = "critical"
+    elif any(item["status"] == "warning" for item in findings):
+        status = "warning"
+    else:
+        status = "ok"
+
+    next_checks = _summary_next_checks(scope, no_jobs_found=no_jobs_found)
+    if dispatch_due or dispatch_dead_letter:
+        next_checks.append("./scripts/jobs.sh stuck --older-than 10m")
+    if callbacks_due or callbacks_dead_letter:
+        next_checks.append("./scripts/jobs.sh callbacks <job_id>")
+    if failed_jobs:
+        next_checks.append("./scripts/jobs.sh inspect <job_id>")
+
+    return {
+        "scope": scope,
+        "summary": {key: payload[key] for key in ("jobs", "by_job_type", "attempts", "dispatch", "callbacks")},
+        "status": status,
+        "findings": findings,
+        "next_checks": next_checks,
+    }
+
+
+def _fetch_summary_payload(*, since: str, job_type: str | None, caller_id: str | None) -> dict[str, Any]:
+    window, since_at = _since_window(since)
+    raw_payload = _with_connection(
+        lambda conn: queries.summary(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+        )
+    )
+    return _summary_payload(
+        since=since,
+        window=window,
+        job_type=job_type,
+        caller_id=caller_id,
+        summary_payload=raw_payload,
+    )
+
+
+def _render_summary(payload: dict[str, Any]) -> None:
+    scope = payload["scope"]
+    jobs = payload.get("jobs") or {}
+    no_jobs_found = _count(jobs.get("total")) == 0
+
+    formatters.section("Job Summary")
+    formatters.event(
+        "OK",
+        "summary",
+        f"since={scope['since']} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'}",
+    )
+    if no_jobs_found:
+        print("no jobs found in the selected window.")
+    formatters.print_table([jobs], _summary_job_columns())
+    formatters.section("Attempts")
+    formatters.print_table([payload.get("attempts") or {}], _summary_attempt_columns())
+    formatters.section("Dispatch")
+    formatters.print_table([payload.get("dispatch") or {}], _summary_dispatch_columns())
+    formatters.section("Callbacks")
+    formatters.print_table([payload.get("callbacks") or {}], _summary_callback_columns())
+    formatters.section("By Job Type")
+    formatters.print_table(payload.get("by_job_type") or [], _summary_by_job_type_columns(), empty_message="no jobs found")
+    if no_jobs_found:
+        formatters.section("Next Checks")
+        for item in _summary_next_checks(scope, no_jobs_found=True):
+            print(f"- {item}")
+
+
+def _render_doctor(payload: dict[str, Any]) -> None:
+    scope = payload["scope"]
+    formatters.section("Job Doctor")
+    formatters.event(
+        payload["status"].upper(),
+        "doctor",
+        f"since={scope['since']} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'}",
+    )
+    for finding in payload["findings"]:
+        formatters.event(finding["status"].upper(), finding["metric"], f"{finding['value']} - {finding['message']}")
+    formatters.section("Next Checks")
+    for item in payload["next_checks"]:
+        print(f"- {item}")
 
 
 def _with_connection(action) -> Any:
@@ -568,25 +807,29 @@ def summary(
     ] = "10m",
     json_output: JsonOption = False,
 ) -> None:
-    window, since_at = _since_window(since)
-    payload = _with_connection(
-        lambda conn: queries.summary(
-            conn,
-            job_type=job_type,
-            caller_id=caller_id,
-            since=since_at,
-        )
-    )
-    payload = {
-        "scope": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id},
-        **payload,
-    }
+    payload = _fetch_summary_payload(since=since, job_type=job_type, caller_id=caller_id)
     if json_output:
         formatters.print_json(payload)
         return
-    formatters.section("Job Summary")
-    formatters.event("OK", "summary", f"since={since}")
-    formatters.print_json(payload)
+    _render_summary(payload)
+
+
+@app.command(help="基于 summary 数据给出维护人员排障摘要和下一步检查。")
+def doctor(
+    job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
+    caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    since: Annotated[
+        str,
+        typer.Option("--since", help="只诊断指定时间窗口内创建的 Job，例如 10m。"),
+    ] = "10m",
+    json_output: JsonOption = False,
+) -> None:
+    summary_payload = _fetch_summary_payload(since=since, job_type=job_type, caller_id=caller_id)
+    payload = _diagnose_summary(summary_payload)
+    if json_output:
+        formatters.print_json(payload)
+        return
+    _render_doctor(payload)
 
 
 @app.command(help="统计 Job 生命周期耗时。")

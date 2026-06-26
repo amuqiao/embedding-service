@@ -176,6 +176,7 @@ OSS_PUBLIC_ENDPOINT=
 Job 只读排障由 `jobs.sh` 承接：
 
 ```bash
+./scripts/jobs.sh doctor --since 10m
 ./scripts/jobs.sh list --status running --since 24h --limit 20
 ./scripts/jobs.sh show <job_id>
 ./scripts/jobs.sh inspect <job_id>

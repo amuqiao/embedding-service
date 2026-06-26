@@ -43,12 +43,13 @@ Job 是否积压?
 最常用的排查顺序：
 
 ```text
-1. summary 看全局状态
-2. capacity 看 MAX_ACTIVE_JOBS 当前水位
-3. latency 看 queue/run/lifecycle p95
-4. list 找具体异常 Job
-5. inspect 深挖单个 Job
-6. stuck 查 lease/outbox 卡住
+1. doctor 先判断当前窗口是否需要处理，以及下一步查什么
+2. summary 看 Job、attempt、dispatch、callback 概览
+3. capacity 看 MAX_ACTIVE_JOBS 当前水位
+4. latency 看 queue/run/lifecycle p95
+5. list 找具体异常 Job
+6. inspect 深挖单个 Job
+7. stuck 查 lease/outbox 卡住
 ```
 
 ## 使用前提
@@ -73,13 +74,15 @@ DB_SSL        可选；false/0/no/off 时追加 sslmode=disable
 
 ```bash
 ./scripts/jobs.sh summary --since 10m --json
+./scripts/jobs.sh doctor --since 10m --json
 ```
 
 ## 命令速查
 
 | 命令 | 用途 | 常用场景 |
 | --- | --- | --- |
-| `summary` | 汇总 Job、attempt、dispatch、callback 状态 | 第一眼看是否积压、失败、callback 堵塞 |
+| `doctor` | 对 summary 结果做诊断并给下一步命令 | 新维护人员或不确定从哪里查时先用 |
+| `summary` | 汇总 Job、attempt、dispatch、callback 状态 | 看当前窗口的关键计数和水位 |
 | `capacity` | 查看全局 active 水位和窗口估算 | 判断是否接近 `MAX_ACTIVE_JOBS` |
 | `latency` | 按维度统计生命周期耗时 | 判断慢在排队、执行还是整体生命周期 |
 | `list` | 查看最近 Job 摘要 | 找异常 Job 样本 |
@@ -93,13 +96,41 @@ DB_SSL        可选；false/0/no/off 时追加 sslmode=disable
 
 ## 全局排障
 
-### 1. 看当前 10 分钟整体状态
+### 1. 先让脚本判断下一步
+
+```bash
+./scripts/jobs.sh doctor --since 10m
+```
+
+`doctor` 是给人读的诊断入口。它使用 `summary` 同一组只读数据，但会把结果转成：
+
+```text
+当前状态是否需要关注
+关键发现是什么
+下一步建议执行哪些命令
+```
+
+空窗口会直接说明当前 `--since` 范围内没有 Job，并提示扩大窗口、查看最近列表或确认服务状态。维护人员不需要先对照字段表才能判断 `total=0` 是什么含义。
+
+需要机器解析时使用：
+
+```bash
+./scripts/jobs.sh doctor --since 10m --json
+```
+
+### 2. 看当前 10 分钟整体状态
 
 ```bash
 ./scripts/jobs.sh summary --since 10m
 ```
 
-常看字段：
+`summary` 默认输出人读摘要，适合快速确认关键计数。需要完整字段时使用：
+
+```bash
+./scripts/jobs.sh summary --since 10m --json
+```
+
+JSON 中常看字段：
 
 ```text
 jobs.active_jobs      当前窗口内 queued + running_active
@@ -136,7 +167,7 @@ callbacks.due 高
   -> callback 投递或目标服务异常
 ```
 
-### 2. 看 MAX_ACTIVE_JOBS 水位
+### 3. 看 MAX_ACTIVE_JOBS 水位
 
 ```bash
 ./scripts/jobs.sh capacity --since 10m --max-active-jobs 750
@@ -176,7 +207,7 @@ estimated.headroom
 
 注意：`capacity.current` 是全局实时值，不受 `--since` 限制；`capacity.window` 受 `--since` 限制；`estimated.active_jobs_needed_upper_bound` 来自窗口估算，但 `estimated.active_ratio` 和 `estimated.headroom` 来自全局实时 `current.active_jobs`。
 
-### 3. 看延迟分布
+### 4. 看延迟分布
 
 ```bash
 ./scripts/jobs.sh latency --since 30m --group-by job_type
@@ -430,6 +461,7 @@ tests/test_dev_scripts.py
 ./scripts/jobs.sh --help
 ./scripts/jobs.sh types
 
+./scripts/jobs.sh doctor --since 10m
 ./scripts/jobs.sh summary --since 10m
 ./scripts/jobs.sh capacity --since 10m --max-active-jobs 750
 ./scripts/jobs.sh latency --since 30m --group-by job_type
