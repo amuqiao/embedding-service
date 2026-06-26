@@ -1200,6 +1200,23 @@ def test_verify_sh_documents_workflow_modes_smoke_command():
     assert "run_workflow_modes_smoke()" in tasks_sh
 
 
+def test_verify_sh_documents_image_inspect_command():
+    result = subprocess.run(
+        ["./scripts/verify.sh", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    verify_sh = (ROOT_DIR / "scripts/verify.sh").read_text(encoding="utf-8")
+    tasks_sh = (ROOT_DIR / "scripts/verify/tasks.sh").read_text(encoding="utf-8")
+
+    assert "image-inspect" in result.stdout
+    assert "image-inspect)" in verify_sh
+    assert "run_image_inspect" in verify_sh
+    assert "run_image_inspect()" in tasks_sh
+
+
 def test_workflow_modes_smoke_validates_successful_root_result():
     case = WORKFLOW_MODE_CASES[0]
     job = {

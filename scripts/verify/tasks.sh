@@ -78,6 +78,7 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/dev/check_ports.py" \
     "$ROOT_DIR/scripts/verify/env_config_check.py" \
     "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" \
+    "$ROOT_DIR/scripts/verify/image_inspect.py" \
     "$ROOT_DIR/scripts/verify/migration_roundtrip.py" \
     "$ROOT_DIR/scripts/verify/registry_check.py" \
     "$ROOT_DIR/scripts/verify/workflow_modes_smoke.py" \
@@ -108,6 +109,21 @@ run_env_config_check() {
   section "Env Config"
   require_project_python
   "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/env_config_check.py" "$@"
+}
+
+run_image_inspect() {
+  local arg
+  local json_output=false
+  for arg in "$@"; do
+    if [[ "$arg" == "--json" ]]; then
+      json_output=true
+    fi
+  done
+  if [[ "$json_output" != "true" ]]; then
+    section "Image Inspect"
+  fi
+  require_project_python
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/image_inspect.py" "$@"
 }
 
 run_check() {
