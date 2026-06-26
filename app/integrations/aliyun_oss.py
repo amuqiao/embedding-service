@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -52,7 +53,7 @@ class AliyunOSSClient:
         return normalize_object_key(self.config.normalized_project_root, key)
 
     def get_object(self, key: str) -> bytes:
-        _, body, _ = self._request("GET", key.strip().strip("/"))
+        _, body, _ = self._request("GET", self.object_key(key))
         return body
 
     def put_object(self, key: str, data: bytes, *, content_type: str = "application/octet-stream") -> dict[str, str]:
@@ -65,6 +66,26 @@ class AliyunOSSClient:
 
     def delete_object(self, key: str) -> None:
         self._request("DELETE", self.object_key(key))
+
+    def signed_get_url(self, key: str, *, expires_seconds: int = 3600) -> str:
+        if expires_seconds <= 0:
+            raise AliyunOSSError("signed URL expires_seconds must be greater than 0")
+        object_key = self.object_key(key)
+        expires_at = str(int(time.time()) + expires_seconds)
+        string_to_sign = "\n".join(["GET", "", "", expires_at, f"/{self.config.bucket}/{object_key}"])
+        digest = hmac.new(
+            self.config.access_key_secret.encode("utf-8"),
+            string_to_sign.encode("utf-8"),
+            hashlib.sha1,
+        ).digest()
+        query = urllib.parse.urlencode(
+            {
+                "OSSAccessKeyId": self.config.access_key_id,
+                "Expires": expires_at,
+                "Signature": base64.b64encode(digest).decode("ascii"),
+            }
+        )
+        return f"{self._request_url(object_key)}?{query}"
 
     def _request(
         self,

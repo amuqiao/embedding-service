@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from typing import Any
+from urllib.parse import quote
 
 from app.core.exceptions import AppError
 from app.integrations.object_storage.aliyun_url import parse_aliyun_oss_url
@@ -69,6 +70,32 @@ def cpp_oss_url_ref_from_canonical(
         "content_type": ref.content_type,
         "sha256": bare_sha256(ref.content_hash),
     }
+
+
+def cpp_oss_url_ref_from_output_object(
+    *,
+    bucket: str,
+    region: str,
+    key: str,
+    content_type: str,
+    content_hash: str,
+) -> dict[str, str]:
+    ref = CanonicalObjectRef(
+        provider="aliyun_oss",
+        bucket=bucket,
+        region=region,
+        key=key,
+        content_type=content_type,
+        content_hash=content_hash,
+    )
+    encoded_key = quote(key.lstrip("/"), safe="/")
+    public_endpoint = f"{bucket}.oss-{region}.aliyuncs.com"
+    internal_endpoint = f"{bucket}.oss-{region}-internal.aliyuncs.com"
+    return cpp_oss_url_ref_from_canonical(
+        ref,
+        public_url=f"https://{public_endpoint}/{encoded_key}",
+        internal_url=f"https://{internal_endpoint}/{encoded_key}",
+    )
 
 
 def _required_str(payload: Mapping[str, Any], key: str) -> str:
