@@ -19,6 +19,7 @@ from app.repositories.job_repo import JobRepo
 from app.schemas.errors import JobErrorDetail
 from app.schemas.jobs import CreateJobRequest, CreateJobResponse, JobResult, JobStatusResponse
 from app.services.ai_capability_kernel import require_enabled_text_model
+from app.services.billing import get_scope_billing, job_cost_from_billing
 from app.services.job_runtime import (
     build_runtime_snapshot,
     configured_output_target,
@@ -148,7 +149,7 @@ def _progress_stage(job: Job) -> str:
     return "calling_model"
 
 
-def _job_payload(job: Job) -> dict[str, Any]:
+def _job_payload(job: Job, *, cost: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         return validate_job_status_payload(
             {
@@ -163,6 +164,7 @@ def _job_payload(job: Job) -> dict[str, Any]:
                 },
                 "job_result": job.result,
                 "job_error": _job_error_detail(job.error),
+                "cost": cost,
                 "callback": _callback_state(job),
                 "status_url": _status_url(job.id),
                 "created_at": job.created_at,
@@ -178,8 +180,8 @@ def _job_payload(job: Job) -> dict[str, Any]:
         ) from exc
 
 
-def _job_to_response(job: Job, request_id: str = "-") -> JobStatusResponse:
-    return JobStatusResponse.model_validate(_job_payload(job))
+def _job_to_response(job: Job, request_id: str = "-", *, cost: dict[str, Any] | None = None) -> JobStatusResponse:
+    return JobStatusResponse.model_validate(_job_payload(job, cost=cost))
 
 
 def _validate_prompt(job_type: str, prompt_payload: dict[str, Any]) -> None:
@@ -296,10 +298,12 @@ def _validate_create_request(payload: CreateJobRequest) -> tuple[Any, dict[str, 
     model_id = runtime_fields.get("model_id")
     if model_id and _requires_text_generation_model(handler):
         require_enabled_text_model(model_id)
-    # Validate prompt blocks against YAML template if available
+    # Validate runtime prompt payload only for job types that declare prompt specs.
+    # Some custom executors publish prompt template metadata for operator visibility
+    # while still taking prompt overrides through job_params.
     template = get_template(payload.job_type)
-    if template:
-        prompt_payload = runtime_fields.get("prompt_payload")
+    prompt_payload = runtime_fields.get("prompt_payload")
+    if template and handler.prompt_specs:
         if not isinstance(prompt_payload, dict):
             raise ValidationAppError("INVALID_INPUT", "job_type runtime fields must include prompt_payload")
         _validate_prompt(payload.job_type, prompt_payload)
@@ -426,7 +430,12 @@ async def get_job_response(
     job = await JobRepo.get_for_caller(db, job_id, caller_id)
     if not job:
         raise NotFoundAppError("JOB_NOT_FOUND", f"job_id 不存在: {job_id}")
-    return _job_to_response(job, request_id)
+    cost = None
+    if job.status in {"succeeded", "failed"}:
+        billing = await get_scope_billing(db, scope_type="job", scope_id=str(job.id), caller_id=caller_id)
+        mapped = job_cost_from_billing(billing)
+        cost = mapped.model_dump() if mapped is not None else None
+    return _job_to_response(job, request_id, cost=cost)
 
 
 def create_job_response(job: Job, request_id: str = "-") -> CreateJobResponse:

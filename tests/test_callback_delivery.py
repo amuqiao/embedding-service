@@ -136,6 +136,7 @@ def test_build_callback_body_uses_public_fields():
         "job_progress": {"percent": 100, "message": "completed", "stage": "completed"},
         "job_result": {"a": 2, "b": 3, "result": 5},
         "job_error": None,
+        "cost": None,
         "callback": {
             "status": "pending",
             "attempt": 0,

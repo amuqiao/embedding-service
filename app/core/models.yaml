@@ -127,8 +127,12 @@ models:
     enabled: true
     capabilities:
       - text_generation
+      - multimodal_text_generation
     input_media_types:
       - text/plain
+      - image/png
+      - image/jpeg
+      - image/webp
     output_media_types:
       - text/plain
     limits:

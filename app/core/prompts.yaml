@@ -1,5 +1,32 @@
 version: empty
-job_types: {}
+job_types:
+  poster_title_image:
+    name: "Poster title image"
+    description: "Generate transparent poster title image layers from reference title styles."
+    prompt_blocks:
+      style_probe:
+        role: "user"
+        label: "Style probe"
+        content: |
+          Analyze this title image and describe the visual design style of the LETTERFORMS ONLY.
+          Ignore any background, board, plaque, panel, canvas, atmospheric glow, haze, fog, or shadow behind or around the text - describe only what belongs to the letters themselves.
+
+          Output a single dense English paragraph suitable for use in an image generation prompt. Be precise and generative.
+
+          Cover stroke weight, dimensionality, material, texture, lighting, letter colors, outlines, gradients, wear, typography character, composition scale, and cinematic mood.
+          Do NOT mention or describe background color, background texture, atmospheric glow, haze, backing plate, or any element that is not part of the letterforms themselves.
+
+          Output ONLY the style description paragraph - no headers, no preamble, no explanation.
+      additional_prompt:
+        role: "user"
+        label: "Additional title prompt"
+        content: |
+          High resolution, standalone title text only. The letterforms must be heavy and bold, with crisp hard edges. No drop shadow, outer glow, halo, blur, backing plate, brush stroke, banner, badge, ink splash, or non-text carrier element. Centered composition, complete and uncropped, ready as an isolated title layer for poster compositing.
+      layout_rules:
+        role: "user"
+        label: "Layout rules"
+        content: |
+          The title is a horizontal poster-title layer. Render the text large, filling 85-95% of the frame width. Prefer one line when the specific language and text width fit comfortably. For longer Latin or Cyrillic text, allow one natural grammatical line break only; never split inside a word. Use at most two lines.
 prompts:
   job_real_llm_echo.calling_model:
     name: "Real LLM echo"

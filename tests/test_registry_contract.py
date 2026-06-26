@@ -186,6 +186,19 @@ def test_job_type_registry_exposes_required_metadata():
         ),
     )
 
+    assert "poster_title_image" in specs
+    poster_spec = specs["poster_title_image"]
+    assert poster_spec.params_schema == "PosterTitleImageParams"
+    assert poster_spec.runtime_fields_schema == "PosterTitleImageRuntimeFields"
+    assert poster_spec.canonical_result_schema == "PosterTitleImageResult"
+    assert poster_spec.public_result_schema == "PosterTitleImageResult"
+    assert poster_spec.allow_callback is True
+    assert poster_spec.execution_mode == "custom_executor"
+    assert poster_spec.platform_retry_policy == "no_platform_retry"
+    assert poster_spec.side_effect_policy == "none"
+    assert poster_spec.error_codes <= all_error_reasons()
+    assert poster_spec.prompt_specs == ()
+
 
 def _job_type_spec(**overrides) -> JobTypeSpec:
     values = {
@@ -223,6 +236,7 @@ def _job_type_spec(**overrides) -> JobTypeSpec:
 )
 def test_validate_job_type_registry_rejects_invalid_phase3_metadata(monkeypatch, overrides, message):
     monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: {"job_test_add": _job_type_spec(**overrides)})
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
 
     with pytest.raises(ValueError, match=message):
         validate_job_type_registry()
@@ -342,6 +356,18 @@ def test_validate_job_type_registry_rejects_bad_prompt_spec_field_type(monkeypat
 def test_registry_consistency_check_passes():
     register_all_job_types()
     validate_all_registries(app)
+
+
+def test_poster_title_image_prompt_template_is_published():
+    template = prompt_templates.get_template("poster_title_image")
+
+    assert template is not None
+    assert template.job_type == "poster_title_image"
+    assert {block.key for block in template.prompt_blocks} == {
+        "style_probe",
+        "additional_prompt",
+        "layout_rules",
+    }
 
 
 def test_create_app_validates_registries_on_startup(monkeypatch):

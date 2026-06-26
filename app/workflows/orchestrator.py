@@ -448,7 +448,7 @@ async def _create_child_job(
     if model_id and _requires_text_generation_model(handler):
         require_enabled_text_model(model_id)
     template = get_template(job_type)
-    if template:
+    if template and handler.prompt_specs:
         prompt_payload = runtime_fields.get("prompt_payload")
         if not isinstance(prompt_payload, dict):
             raise ValidationAppError("INVALID_INPUT", "child job_type runtime fields must include prompt_payload")

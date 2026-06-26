@@ -173,7 +173,14 @@ class JobRepo:
         return value if isinstance(value, str) and value else None
 
     @staticmethod
-    def _terminal_callback_payload(job: Job, *, event_id: uuid.UUID, event_type: str, now: datetime) -> dict[str, Any]:
+    def _terminal_callback_payload(
+        job: Job,
+        *,
+        event_id: uuid.UUID,
+        event_type: str,
+        now: datetime,
+        cost: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         progress_stage = "completed" if job.status == "succeeded" else "failed"
         callback_status = "pending" if event_type in set(JobRepo._callback_events(job)) else "skipped"
         return {
@@ -195,6 +202,7 @@ class JobRepo:
                 },
                 "job_result": job.result,
                 "job_error": JobRepo._job_error_detail(job.error),
+                "cost": cost,
                 "callback": {
                     "status": callback_status,
                     "attempt": 0,
@@ -234,6 +242,11 @@ class JobRepo:
         subscribed = event_type in set(JobRepo._callback_events(job))
         outbox_status = "pending" if subscribed else "skipped"
         event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{CALLBACK_EVENT_NAMESPACE}:{job.id}:{event_type}")
+        from app.services.billing import get_scope_billing, job_cost_from_billing
+
+        billing = await get_scope_billing(db, scope_type="job", scope_id=str(job.id), caller_id=job.caller_id)
+        mapped_cost = job_cost_from_billing(billing)
+        cost = mapped_cost.model_dump() if mapped_cost is not None else None
         outbox = CallbackOutbox(
             job_id=job.id,
             event_id=event_id,
@@ -241,7 +254,13 @@ class JobRepo:
             callback_url=job.callback_url,
             signature_version="hmac-sha256:v1",
             status=outbox_status,
-            payload=JobRepo._terminal_callback_payload(job, event_id=event_id, event_type=event_type, now=now),
+            payload=JobRepo._terminal_callback_payload(
+                job,
+                event_id=event_id,
+                event_type=event_type,
+                now=now,
+                cost=cost,
+            ),
             next_attempt_at=now if subscribed else None,
         )
         db.add(outbox)

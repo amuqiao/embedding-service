@@ -6,11 +6,18 @@ import yaml
 
 from app.core.config import settings
 from app.core.pricing_registry import validate_price_matches_model
-from app.integrations.ai_adapters.registry import validate_model_adapter, validate_text_generation_adapter
+from app.integrations.ai_adapters.registry import (
+    validate_image_generation_adapter,
+    validate_model_adapter,
+    validate_multimodal_text_generation_adapter,
+    validate_text_generation_adapter,
+)
 from app.schemas.meta import ModelOut, ModelParameterOut, ModelsResponse
 
 KNOWN_MODEL_TYPES = frozenset({"text", "image", "audio", "video"})
-KNOWN_MODEL_CAPABILITIES = frozenset({"text_generation", "image_generation", "image_edit", "tts", "video_generation"})
+KNOWN_MODEL_CAPABILITIES = frozenset(
+    {"text_generation", "multimodal_text_generation", "image_generation", "image_edit", "tts", "video_generation"}
+)
 MEDIA_TYPE_PATTERN = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
 KNOWN_MODEL_PARAMETER_TYPES = frozenset({"string", "integer", "number", "boolean", "select"})
 MODEL_PARAMETERS_FIELDS = frozenset({"public"})
@@ -477,6 +484,10 @@ def validate_model_catalog() -> None:
         validate_model_adapter(model.adapter)
         if "text_generation" in model.capabilities:
             validate_text_generation_adapter(model.adapter)
+        if "multimodal_text_generation" in model.capabilities:
+            validate_multimodal_text_generation_adapter(model.adapter)
+        if "image_generation" in model.capabilities or "image_edit" in model.capabilities:
+            validate_image_generation_adapter(model.adapter)
         validate_price_matches_model(
             pricing_ref=model.pricing_ref,
             model_id=model.id,

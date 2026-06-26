@@ -13,9 +13,20 @@ from app.core.exceptions import AppError, ValidationAppError
 from app.core.model_registry import TextModel, get_enabled_model
 from app.core.pricing_registry import calculate_cost as calculate_usage_cost
 from app.core.pricing_registry import TokenPrice, require_price, validate_price_matches_model
-from app.core.usage_records import TextUsageRecord, UsageRecord, normalize_text_usage
-from app.integrations.ai_adapters.base import TextGenerationRequest, TextGenerationResult
-from app.integrations.ai_adapters.registry import require_text_generation_adapter
+from app.core.usage_records import ImageUsageRecord, TextUsageRecord, UsageRecord, normalize_text_usage
+from app.integrations.ai_adapters.base import (
+    ImageGenerationRequest,
+    ImageGenerationResult,
+    ImageInput,
+    MultimodalTextGenerationRequest,
+    TextGenerationRequest,
+    TextGenerationResult,
+)
+from app.integrations.ai_adapters.registry import (
+    require_image_generation_adapter,
+    require_multimodal_text_generation_adapter,
+    require_text_generation_adapter,
+)
 from app.repositories.ai_call_log_repo import AiCallLogRepo
 
 KNOWN_SCOPE_TYPES = {"job", "sync_api", "internal", "batch"}
@@ -39,6 +50,19 @@ def hash_payload(value: Any) -> tuple[str, int]:
 def hash_text(value: str) -> tuple[str, int]:
     encoded = value.encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest(), len(encoded)
+
+
+def hash_bytes(value: bytes) -> tuple[str, int]:
+    return "sha256:" + hashlib.sha256(value).hexdigest(), len(value)
+
+
+def hash_bytes_list(values: list[bytes]) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    for value in values:
+        digest.update(value)
+        size += len(value)
+    return "sha256:" + digest.hexdigest(), size
 
 
 def _nested_int(data: dict[str, Any], path: tuple[str, ...]) -> int:
@@ -113,11 +137,67 @@ def require_enabled_text_model(model_id: str) -> TextModel:
     return model
 
 
+def require_enabled_image_model(model_id: str) -> TextModel:
+    model = get_enabled_model(model_id)
+    if model is None:
+        raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不可用: {model_id}")
+    if not hasattr(model, "model_type"):
+        raise RuntimeError(f"model {model_id} requires model_type")
+    if model.model_type != "image":
+        raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不支持图片生成: {model_id}")
+    validate_price_matches_model(
+        pricing_ref=model.pricing_ref,
+        model_id=model.id,
+        provider=model.provider,
+        provider_model=model.provider_model,
+    )
+    return model
+
+
 class ModelGate:
     def resolve(self, model_id: str) -> ModelGateResult:
         model = require_enabled_text_model(model_id)
         if "text_generation" not in model.capabilities:
             raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不支持文本生成: {model_id}")
+        return ModelGateResult(
+            model=model,
+            resolved_model=ResolvedModel(
+                model_id=model.id,
+                provider=model.provider,
+                provider_model=model.provider_model,
+                adapter_model=model.adapter_model,
+                pricing_ref=model.pricing_ref,
+            ),
+        )
+
+    def resolve_multimodal_text(self, model_id: str, *, required_media_types: set[str]) -> ModelGateResult:
+        model = require_enabled_text_model(model_id)
+        if "multimodal_text_generation" not in model.capabilities:
+            raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不支持多模态文本生成: {model_id}")
+        missing_media_types = sorted(required_media_types - set(model.input_media_types))
+        if missing_media_types:
+            raise ValidationAppError(
+                "MODEL_NOT_AVAILABLE",
+                f"模型不支持输入媒体类型: {', '.join(missing_media_types)}",
+            )
+        return ModelGateResult(
+            model=model,
+            resolved_model=ResolvedModel(
+                model_id=model.id,
+                provider=model.provider,
+                provider_model=model.provider_model,
+                adapter_model=model.adapter_model,
+                pricing_ref=model.pricing_ref,
+            ),
+        )
+
+
+class ImageModelGate:
+    def resolve(self, model_id: str, *, require_edit: bool) -> ModelGateResult:
+        model = require_enabled_image_model(model_id)
+        required_capability = "image_edit" if require_edit else "image_generation"
+        if required_capability not in model.capabilities:
+            raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不支持图片生成能力: {model_id}")
         return ModelGateResult(
             model=model,
             resolved_model=ResolvedModel(
@@ -148,10 +228,65 @@ class ProviderGateway:
             )
         )
 
+    async def generate_text_with_images(
+        self,
+        model: TextModel,
+        *,
+        prompt: str,
+        reference_images: list[ImageInput],
+    ) -> TextGenerationResult:
+        adapter = require_multimodal_text_generation_adapter(model.adapter)
+        return await adapter.generate_text_with_images(
+            MultimodalTextGenerationRequest(
+                adapter_model=model.adapter_model,
+                provider_model=model.provider_model,
+                prompt=prompt,
+                reference_images=reference_images,
+                timeout_seconds=settings.ai_provider.model_call_timeout_seconds,
+                api_key=settings.ai_provider.openai_api_key_value or None,
+                api_base=settings.ai_provider.openai_base_url or None,
+            )
+        )
+
+    async def generate_image(
+        self,
+        model: TextModel,
+        *,
+        response_model: str,
+        prompt: str,
+        reference_images: list[ImageInput],
+        size: str,
+        quality: str,
+        background: str,
+        output_format: str,
+    ) -> ImageGenerationResult:
+        adapter = require_image_generation_adapter(model.adapter)
+        return await adapter.generate_image(
+            ImageGenerationRequest(
+                adapter_model=model.adapter_model,
+                provider_model=model.provider_model,
+                response_model=response_model,
+                prompt=prompt,
+                reference_images=reference_images,
+                size=size,
+                quality=quality,
+                background=background,
+                output_format=output_format,
+                timeout_seconds=settings.ai_provider.model_call_timeout_seconds,
+                api_key=settings.ai_provider.openai_api_key_value or None,
+                api_base=settings.ai_provider.openai_base_url or None,
+            )
+        )
+
 
 class UsageNormalizer:
     def normalize_text(self, result: TextGenerationResult) -> TextUsageRecord:
         return normalize_text_result_usage(result)
+
+    def normalize_image(self, result: ImageGenerationResult) -> ImageUsageRecord:
+        if not result.images:
+            raise AppError("MODEL_OUTPUT_INVALID", "provider response did not include generated images")
+        return ImageUsageRecord(image_count=len(result.images), raw_usage=result.usage or {})
 
 
 class TypedPricingResolver:

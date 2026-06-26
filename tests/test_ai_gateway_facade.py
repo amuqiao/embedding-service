@@ -7,7 +7,7 @@ import pytest
 from app.core.exceptions import AppError
 from app.core.error_registry import get_error_spec
 from app.core.pricing_registry import CallPrice, TokenPrice
-from app.integrations.ai_adapters.base import TextGenerationResult
+from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
 from app.services import ai_capability_kernel
 from app.services import ai_gateway_facade
 
@@ -57,6 +57,21 @@ def _model() -> SimpleNamespace:
     )
 
 
+def _image_model() -> SimpleNamespace:
+    return SimpleNamespace(
+        id="custom-image-model",
+        model_type="image",
+        adapter="litellm",
+        provider="openai",
+        provider_model="custom-image-model",
+        adapter_model="openai/custom-image-model",
+        pricing_ref="openai:custom-image-model@2026-06-23",
+        capabilities=("image_generation", "image_edit"),
+        input_media_types=("text/plain", "image/png"),
+        output_media_types=("image/png",),
+    )
+
+
 def _price() -> TokenPrice:
     return TokenPrice(
         ref="openai:custom-model@2026-06-23",
@@ -101,6 +116,26 @@ def test_model_gate_rejects_model_without_text_generation_capability(monkeypatch
         ai_capability_kernel.ModelGate().resolve("custom-model")
 
     assert exc.value.code == "MODEL_NOT_AVAILABLE"
+
+
+def test_model_gate_rejects_multimodal_text_without_supported_media_type(monkeypatch):
+    model = SimpleNamespace(
+        **{
+            **_model().__dict__,
+            "capabilities": ("text_generation", "multimodal_text_generation"),
+            "input_media_types": ("text/plain",),
+        }
+    )
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: model)
+
+    with pytest.raises(AppError) as exc:
+        ai_capability_kernel.ModelGate().resolve_multimodal_text(
+            "custom-model",
+            required_media_types={"image/png"},
+        )
+
+    assert exc.value.code == "MODEL_NOT_AVAILABLE"
+    assert "image/png" in exc.value.message
 
 
 def test_text_model_gate_rejects_missing_model_type(monkeypatch):
@@ -149,6 +184,108 @@ async def test_provider_gateway_builds_text_generation_request_from_model(monkey
     assert request.api_base == "https://example.test/v1"
     assert request.num_retries == 1
     assert request.drop_params is False
+
+
+@pytest.mark.asyncio
+async def test_provider_gateway_builds_multimodal_text_request_from_model(monkeypatch):
+    recorded: dict = {}
+
+    async def fake_generate_text_with_images(request):
+        recorded["request"] = request
+        return TextGenerationResult(text="ok", prompt_tokens=1, completion_tokens=1, usage={})
+
+    def fake_require_multimodal_text_generation_adapter(adapter_name):
+        recorded["adapter_name"] = adapter_name
+        return SimpleNamespace(generate_text_with_images=fake_generate_text_with_images)
+
+    monkeypatch.setattr(
+        ai_capability_kernel,
+        "require_multimodal_text_generation_adapter",
+        fake_require_multimodal_text_generation_adapter,
+    )
+    monkeypatch.setattr(
+        ai_capability_kernel,
+        "settings",
+        SimpleNamespace(
+            ai_provider=SimpleNamespace(
+                model_call_timeout_seconds=45,
+                openai_api_key_value="test-key",
+                openai_base_url="https://example.test/v1",
+            )
+        ),
+    )
+
+    image = ImageInput(data=b"image", content_type="image/png", detail="low")
+    await ai_capability_kernel.ProviderGateway().generate_text_with_images(
+        _model(),
+        prompt="describe",
+        reference_images=[image],
+    )
+
+    assert recorded["request"]
+    assert recorded["adapter_name"] == "litellm"
+    request = recorded["request"]
+    assert request.adapter_model == "openai/custom-model"
+    assert request.provider_model == "custom-model"
+    assert request.prompt == "describe"
+    assert request.reference_images == [image]
+    assert request.timeout_seconds == 45
+    assert request.api_key == "test-key"
+    assert request.api_base == "https://example.test/v1"
+
+
+@pytest.mark.asyncio
+async def test_provider_gateway_builds_image_generation_request_from_model(monkeypatch):
+    recorded: dict = {}
+
+    async def fake_generate_image(request):
+        recorded["request"] = request
+        return ImageGenerationResult(images=[b"png"], usage={"image_generation_call_count": 1})
+
+    def fake_require_image_generation_adapter(adapter_name):
+        recorded["adapter_name"] = adapter_name
+        return SimpleNamespace(generate_image=fake_generate_image)
+
+    monkeypatch.setattr(ai_capability_kernel, "require_image_generation_adapter", fake_require_image_generation_adapter)
+    monkeypatch.setattr(
+        ai_capability_kernel,
+        "settings",
+        SimpleNamespace(
+            ai_provider=SimpleNamespace(
+                model_call_timeout_seconds=45,
+                openai_api_key_value="test-key",
+                openai_base_url="https://example.test/v1",
+            )
+        ),
+    )
+
+    image = ImageInput(data=b"image", content_type="image/png", detail="low")
+    await ai_capability_kernel.ProviderGateway().generate_image(
+        _image_model(),
+        response_model="gpt-4o",
+        prompt="draw",
+        reference_images=[image],
+        size="auto",
+        quality="high",
+        background="transparent",
+        output_format="png",
+    )
+
+    assert recorded["request"]
+    assert recorded["adapter_name"] == "litellm"
+    request = recorded["request"]
+    assert request.adapter_model == "openai/custom-image-model"
+    assert request.provider_model == "custom-image-model"
+    assert request.response_model == "gpt-4o"
+    assert request.prompt == "draw"
+    assert request.reference_images == [image]
+    assert request.size == "auto"
+    assert request.quality == "high"
+    assert request.background == "transparent"
+    assert request.output_format == "png"
+    assert request.timeout_seconds == 45
+    assert request.api_key == "test-key"
+    assert request.api_base == "https://example.test/v1"
 
 
 @pytest.mark.parametrize(

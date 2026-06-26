@@ -77,10 +77,15 @@ def test_create_job_request_accepts_valid_payload():
     assert payload.metadata == {"caller_task_id": "task-1"}
 
 
-def test_default_prompt_templates_declares_no_builtin_job_types():
+def test_default_prompt_templates_declares_poster_title_image_blocks():
     templates = list_prompt_templates()
     assert templates.version == "empty"
-    assert templates.job_types == []
+    poster = next(item for item in templates.job_types if item.job_type == "poster_title_image")
+    assert {block.key for block in poster.prompt_blocks} == {
+        "style_probe",
+        "additional_prompt",
+        "layout_rules",
+    }
 
 
 def test_runtime_prompt_builds_generic_user_and_work_note_messages():

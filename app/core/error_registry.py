@@ -59,6 +59,7 @@ _SPECS: dict[str, ErrorSpec] = {
         scope="job",
         owner="jobs",
     ),
+    "ALL_ITEMS_FAILED": ErrorSpec("100420", "ALL_ITEMS_FAILED", "all batch items failed", 502, scope="job", owner="jobs"),
     "UNAUTHORIZED": ErrorSpec("200001", "UNAUTHORIZED", "missing or invalid service token", 401, scope="http"),
     "FORBIDDEN": ErrorSpec("200003", "FORBIDDEN", "caller forbidden", 403, scope="http"),
     "JOB_NOT_FOUND": ErrorSpec("300004", "JOB_NOT_FOUND", "job not found", 404, scope="job", owner="jobs"),

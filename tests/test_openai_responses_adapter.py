@@ -1,0 +1,101 @@
+from types import SimpleNamespace
+
+import pytest
+
+from app.integrations.ai_adapters import openai_responses_adapter
+from app.integrations.ai_adapters.base import ImageGenerationRequest, ImageInput, MultimodalTextGenerationRequest
+from app.integrations.ai_adapters.openai_responses_adapter import OpenAIResponsesAdapter
+
+
+@pytest.mark.asyncio
+async def test_generate_text_with_images_uses_provider_model(monkeypatch):
+    recorded: dict = {}
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            recorded.update(kwargs)
+            return SimpleNamespace(
+                output=[
+                    SimpleNamespace(
+                        type="message",
+                        content=[SimpleNamespace(type="output_text", text="ok")],
+                    )
+                ],
+                usage=SimpleNamespace(model_dump=lambda: {"input_tokens": 3, "output_tokens": 4}),
+            )
+
+    monkeypatch.setattr(
+        openai_responses_adapter,
+        "_client",
+        lambda **_kwargs: SimpleNamespace(responses=FakeResponses()),
+    )
+
+    result = await OpenAIResponsesAdapter().generate_text_with_images(
+        MultimodalTextGenerationRequest(
+            adapter_model="openai/gpt-4o",
+            provider_model="gpt-4o",
+            prompt="describe title style",
+            reference_images=[ImageInput(data=b"image", content_type="image/png", detail="low")],
+            timeout_seconds=30,
+            api_key="test-key",
+            api_base=None,
+        )
+    )
+
+    assert recorded["model"] == "gpt-4o"
+    assert recorded["input"][0]["role"] == "user"
+    assert recorded["input"][0]["content"][0]["type"] == "input_image"
+    assert recorded["input"][0]["content"][1] == {"type": "input_text", "text": "describe title style"}
+    assert result.text == "ok"
+    assert result.prompt_tokens == 3
+    assert result.completion_tokens == 4
+
+
+@pytest.mark.asyncio
+async def test_generate_image_uses_response_model_and_provider_tool_model(monkeypatch):
+    recorded: dict = {}
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            recorded.update(kwargs)
+            return SimpleNamespace(
+                output=[
+                    SimpleNamespace(
+                        type="image_generation_call",
+                        result="cG5n",
+                        revised_prompt="revised",
+                    )
+                ],
+                usage=None,
+            )
+
+    monkeypatch.setattr(
+        openai_responses_adapter,
+        "_client",
+        lambda **_kwargs: SimpleNamespace(responses=FakeResponses()),
+    )
+
+    result = await OpenAIResponsesAdapter().generate_image(
+        ImageGenerationRequest(
+            adapter_model="openai/gpt-image-2",
+            provider_model="gpt-image-2",
+            response_model="gpt-4o",
+            prompt="draw transparent title",
+            reference_images=[ImageInput(data=b"image", content_type="image/png", detail="low")],
+            size="auto",
+            quality="high",
+            background="transparent",
+            output_format="png",
+            timeout_seconds=30,
+            api_key="test-key",
+            api_base=None,
+        )
+    )
+
+    assert recorded["model"] == "gpt-4o"
+    assert recorded["tools"][0]["model"] == "gpt-image-2"
+    assert recorded["tools"][0]["action"] == "edit"
+    assert recorded["tools"][0]["background"] == "transparent"
+    assert recorded["tool_choice"] == {"type": "image_generation"}
+    assert result.images == [b"png"]
+    assert result.revised_prompt == "revised"

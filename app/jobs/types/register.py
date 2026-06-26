@@ -13,6 +13,7 @@ def register_all_job_types() -> None:
     )
     from app.jobs.types.job_real_llm_double_echo import JobRealLlmDoubleEchoJob
     from app.jobs.types.job_real_llm_echo import JobRealLlmEchoJob
+    from app.jobs.types.poster_title_image import PosterTitleImageJob
 
     for executor_cls in (
         ArithmeticJob,
@@ -22,6 +23,7 @@ def register_all_job_types() -> None:
         JobTestWorkflowJob,
         JobRealLlmEchoJob,
         JobRealLlmDoubleEchoJob,
+        PosterTitleImageJob,
     ):
         register(executor_cls())
     register_test_workflows()

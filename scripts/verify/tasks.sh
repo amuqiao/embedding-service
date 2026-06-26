@@ -80,6 +80,7 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" \
     "$ROOT_DIR/scripts/verify/image_inspect.py" \
     "$ROOT_DIR/scripts/verify/migration_roundtrip.py" \
+    "$ROOT_DIR/scripts/verify/oss_config_check.py" \
     "$ROOT_DIR/scripts/verify/registry_check.py" \
     "$ROOT_DIR/scripts/verify/workflow_modes_smoke.py" \
     "$ROOT_DIR/scripts/load/locustfile.py" \
@@ -91,7 +92,9 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/real_flow/__init__.py" \
     "$ROOT_DIR/scripts/real_flow/cli.py" \
     "$ROOT_DIR/scripts/real_flow/flows/__init__.py" \
-    "$ROOT_DIR/scripts/real_flow/flows/llm_job_billing.py"
+    "$ROOT_DIR/scripts/real_flow/flows/llm_job_billing.py" \
+    "$ROOT_DIR/scripts/real_flow/flows/oss_image_upload.py" \
+    "$ROOT_DIR/scripts/real_flow/flows/poster_title_image.py"
   event "OK" "dev/check_ports.py" "py_compile"
   event "OK" "verify/*.py" "py_compile"
   event "OK" "load/*.py" "py_compile"
@@ -109,6 +112,12 @@ run_env_config_check() {
   section "Env Config"
   require_project_python
   "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/env_config_check.py" "$@"
+}
+
+run_oss_config_check() {
+  section "OSS Config"
+  require_project_python
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/oss_config_check.py" "$@"
 }
 
 run_image_inspect() {

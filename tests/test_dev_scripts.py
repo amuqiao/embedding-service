@@ -149,6 +149,8 @@ def test_real_flow_cli_help_is_available_without_api():
     assert "真实业务流程验证入口" in result.stdout
     assert "llm-job-billing" in result.stdout
     assert "llm-job-double-billing" in result.stdout
+    assert "oss-upload-image" in result.stdout
+    assert "poster-title-image" in result.stdout
 
 
 def test_shell_entrypoints_require_command_without_help():
@@ -1198,6 +1200,23 @@ def test_verify_sh_documents_workflow_modes_smoke_command():
     assert "workflow-modes-smoke)" in verify_sh
     assert "run_workflow_modes_smoke" in verify_sh
     assert "run_workflow_modes_smoke()" in tasks_sh
+
+
+def test_verify_sh_documents_oss_config_command():
+    result = subprocess.run(
+        ["./scripts/verify.sh", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    verify_sh = (ROOT_DIR / "scripts/verify.sh").read_text(encoding="utf-8")
+    tasks_sh = (ROOT_DIR / "scripts/verify/tasks.sh").read_text(encoding="utf-8")
+
+    assert "oss-config" in result.stdout
+    assert "oss-config)" in verify_sh
+    assert "run_oss_config_check" in verify_sh
+    assert "run_oss_config_check()" in tasks_sh
 
 
 def test_verify_sh_documents_image_inspect_command():

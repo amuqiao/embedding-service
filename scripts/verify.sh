@@ -33,6 +33,7 @@ usage() {
   migration-roundtrip 使用临时本地 PostgreSQL 数据库验证 Alembic upgrade/downgrade/re-upgrade。
   e2e                 无正式 job_type 时不可用；新增正式能力后再恢复。
   env-config          校验 env 文件键名；默认检查 .env.example 和已存在的本地/测试 env，可传文件路径。
+  oss-config          校验阿里云 OSS 配置；默认只检查本地配置，--remote 才访问 OSS，--upload-image 可上传图片。
   image-inspect       检测本地路径或 http(s) URL 图片类型、尺寸、alpha 通道和透明背景。
   check               执行脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest。
   help                显示帮助。
@@ -50,6 +51,7 @@ usage() {
 
 幂等性和副作用：
   test/check/env-config 不修改服务状态。
+  oss-config 默认不修改服务状态；--remote 会写入并删除一个临时 OSS 对象；--upload-image 会上传指定本地图片。
   image-inspect 默认只读取入参图片；URL 入参会发起 HTTP GET。
   workflow-smoke 会向已运行的本地 API 创建一个内置 job_test_echo 测试 Job。
   workflow-modes-smoke 会向已运行的本地 API 创建 6 个内置 workflow 测试 Job。
@@ -59,6 +61,8 @@ usage() {
   ./scripts/verify.sh check
   ./scripts/verify.sh test
   ./scripts/verify.sh env-config
+  ./scripts/verify.sh oss-config
+  ./scripts/verify.sh oss-config --remote
   ./scripts/verify.sh image-inspect .data/title.png --require-transparent-background
   ./scripts/verify.sh image-inspect https://example.com/title.png --json
   ./scripts/verify.sh workflow-smoke
@@ -113,6 +117,10 @@ case "$command" in
   env-config)
     shift
     run_env_config_check "$@"
+    ;;
+  oss-config)
+    shift
+    run_oss_config_check "$@"
     ;;
   image-inspect)
     shift
