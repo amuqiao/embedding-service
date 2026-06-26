@@ -9,8 +9,7 @@
 | [`current/architecture.md`](current/architecture.md) | 当前服务边界、模块职责、运行形态、AI gateway/billing 边界和验证基线 |
 | [`current/ai-capability.md`](current/ai-capability.md) | 当前 AI 调用入口、model/prompt/pricing registry、AI kernel 组件和文本 provider path |
 | [`current/ai-billing.md`](current/ai-billing.md) | 当前 AI call ledger、usage/cost 事实源、Job billing 聚合和非资金账本边界 |
-| [`current/job-kernel.md`](current/job-kernel.md) | 当前 Job、幂等键、Attempt、Dispatch outbox、Callback outbox 和 audit event 的职责划分 |
-| [`current/job-kernel-table-design.md`](current/job-kernel-table-design.md) | 当前 Job kernel 表设计意图、核心表/辅助表边界和 workflow MVP 表设计原则 |
+| [`current/job-kernel.md`](current/job-kernel.md) | 当前 Job、幂等键、Attempt、Dispatch outbox、Callback outbox、root/child lineage 和表设计边界 |
 | [`current/workflow-kernel.md`](current/workflow-kernel.md) | 当前 DAG-lite root/child workflow、child Job 执行、root 汇总和 billing scope 行为 |
 | [`current/template-readiness.md`](current/template-readiness.md) | 当前仓库作为 AI Job 微服务模板复制给新业务前的就绪边界、必改项和最小验收 |
 | [`current/job-load-testing.md`](current/job-load-testing.md) | Job 发布、查询和完整异步流程的 Locust 压测选型、执行、指标和评估方法 |

@@ -29,6 +29,12 @@ from scripts.verify.workflow_modes_smoke import WORKFLOW_MODE_CASES, _validate_r
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+
+
+def _workflow_mode_case(mode: str):
+    return next(case for case in WORKFLOW_MODE_CASES if case.mode == mode)
+
+
 RUNNER = CliRunner()
 
 
@@ -188,7 +194,71 @@ def test_jobs_types_json_is_machine_readable_without_app_log_noise():
     assert {"arithmetic", "job_test_add", "job_test_echo", "job_test_collect", "job_test_workflow"} <= job_types
     assert "job_real_llm_echo" in job_types
     assert "job_real_llm_double_echo" in job_types
+    specs = {item["job_type"]: item for item in payload["job_types"]}
+    assert specs["poster_title_image"]["visibility"] == "public"
+    assert specs["poster_title_image"]["role"] == "root"
+    assert specs["job_test_collect"]["visibility"] == "demo"
+    assert specs["job_test_collect"]["role"] == "leaf"
+    assert payload["applied_filters"] == {
+        "all": False,
+        "visibility": None,
+        "role": None,
+        "default_human_catalog": False,
+    }
     assert result.stderr == ""
+
+
+def test_jobs_types_human_output_defaults_to_root_catalog():
+    result = subprocess.run(
+        ["./scripts/jobs.sh", "types"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "poster_title_image" in result.stdout
+    assert "job_test_workflow" in result.stdout
+    assert "job_test_collect" not in result.stdout
+    assert "job_test_echo" not in result.stdout
+    assert "visibility" in result.stdout
+    assert "role" in result.stdout
+    assert "use --all for the full registry" in result.stdout
+    assert result.stderr == ""
+
+
+def test_jobs_types_json_filters_by_visibility_and_role():
+    result = subprocess.run(
+        ["./scripts/jobs.sh", "types", "--json", "--visibility", "demo", "--role", "leaf"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert [item["job_type"] for item in payload["job_types"]] == ["job_test_collect"]
+    assert payload["applied_filters"] == {
+        "all": False,
+        "visibility": "demo",
+        "role": "leaf",
+        "default_human_catalog": False,
+    }
+    assert result.stderr == ""
+
+
+def test_jobs_types_rejects_invalid_filter_value():
+    result = subprocess.run(
+        ["./scripts/jobs.sh", "types", "--json", "--role", "worker"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "Invalid value for --role" in result.stderr
 
 
 def test_jobs_cli_parses_statuses_and_duration():
@@ -1237,7 +1307,7 @@ def test_verify_sh_documents_image_inspect_command():
 
 
 def test_workflow_modes_smoke_validates_successful_root_result():
-    case = WORKFLOW_MODE_CASES[0]
+    case = _workflow_mode_case("group")
     job = {
         "job_id": "job-1",
         "job_status": "succeeded",
@@ -1265,7 +1335,7 @@ def test_workflow_modes_smoke_validates_successful_root_result():
 
 
 def test_workflow_modes_smoke_rejects_missing_child_node():
-    case = WORKFLOW_MODE_CASES[0]
+    case = _workflow_mode_case("group")
     job = {
         "job_id": "job-1",
         "job_status": "succeeded",
@@ -1293,7 +1363,7 @@ def test_workflow_modes_smoke_rejects_missing_child_node():
 
 
 def test_workflow_modes_smoke_rejects_invalid_child_result_shape():
-    case = WORKFLOW_MODE_CASES[4]
+    case = _workflow_mode_case("starmap")
     job = {
         "job_id": "job-1",
         "job_status": "succeeded",

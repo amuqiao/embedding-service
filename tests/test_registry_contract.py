@@ -9,7 +9,7 @@ from app.core.error_registry import all_error_reasons
 from app.core import prompt_templates
 from app.core.registry_checks import validate_all_registries, validate_job_type_registry
 from app.main import app
-from app.jobs.base import JobTypeSpec, PromptSpec
+from app.jobs.base import JobExecutor, JobTypeSpec, PromptSpec
 from app.jobs.types.register import register_all_job_types
 from app.jobs import registry as job_registry
 
@@ -81,6 +81,8 @@ def test_job_type_registry_exposes_required_metadata():
     assert spec.runtime_fields_schema == "JobTestAddRuntimeFields"
     assert spec.canonical_result_schema == "JobTestAddResult"
     assert spec.public_result_schema == "JobTestAddResult"
+    assert spec.visibility == "demo"
+    assert spec.role == "root_or_leaf"
     assert spec.allow_callback is True
     assert spec.execution_mode == "custom_executor"
     assert spec.platform_retry_policy == "no_platform_retry"
@@ -94,6 +96,8 @@ def test_job_type_registry_exposes_required_metadata():
     assert arithmetic_spec.runtime_fields_schema == "ArithmeticRuntimeFields"
     assert arithmetic_spec.canonical_result_schema == "ArithmeticResult"
     assert arithmetic_spec.public_result_schema == "ArithmeticResult"
+    assert arithmetic_spec.visibility == "demo"
+    assert arithmetic_spec.role == "root"
     assert arithmetic_spec.allow_callback is True
     assert arithmetic_spec.execution_mode == "custom_executor"
     assert arithmetic_spec.platform_retry_policy == "no_platform_retry"
@@ -107,6 +111,8 @@ def test_job_type_registry_exposes_required_metadata():
     assert echo_spec.runtime_fields_schema == "JobTestEchoRuntimeFields"
     assert echo_spec.canonical_result_schema == "JobTestEchoResult"
     assert echo_spec.public_result_schema == "JobTestEchoResult"
+    assert echo_spec.visibility == "demo"
+    assert echo_spec.role == "root_or_leaf"
     assert echo_spec.allow_callback is True
     assert echo_spec.execution_mode == "custom_executor"
     assert echo_spec.platform_retry_policy == "no_platform_retry"
@@ -120,6 +126,8 @@ def test_job_type_registry_exposes_required_metadata():
     assert workflow_spec.runtime_fields_schema == "JobTestWorkflowRuntimeFields"
     assert workflow_spec.canonical_result_schema == "JobTestWorkflowResult"
     assert workflow_spec.public_result_schema == "JobTestWorkflowResult"
+    assert workflow_spec.visibility == "demo"
+    assert workflow_spec.role == "root"
     assert workflow_spec.allow_callback is True
     assert workflow_spec.execution_mode == "custom_executor"
     assert workflow_spec.platform_retry_policy == "no_platform_retry"
@@ -133,6 +141,8 @@ def test_job_type_registry_exposes_required_metadata():
     assert collect_spec.runtime_fields_schema == "JobTestCollectRuntimeFields"
     assert collect_spec.canonical_result_schema == "JobTestCollectResult"
     assert collect_spec.public_result_schema == "JobTestCollectResult"
+    assert collect_spec.visibility == "demo"
+    assert collect_spec.role == "leaf"
     assert collect_spec.allow_callback is True
     assert collect_spec.execution_mode == "custom_executor"
     assert collect_spec.platform_retry_policy == "no_platform_retry"
@@ -146,6 +156,8 @@ def test_job_type_registry_exposes_required_metadata():
     assert real_llm_spec.runtime_fields_schema == "JobRealLlmEchoRuntimeFields"
     assert real_llm_spec.canonical_result_schema == "JobRealLlmEchoResult"
     assert real_llm_spec.public_result_schema == "JobRealLlmEchoResult"
+    assert real_llm_spec.visibility == "demo"
+    assert real_llm_spec.role == "root_or_leaf"
     assert real_llm_spec.allow_callback is False
     assert real_llm_spec.execution_mode == "builtin_llm_text_runtime"
     assert real_llm_spec.platform_retry_policy == "no_platform_retry"
@@ -166,6 +178,8 @@ def test_job_type_registry_exposes_required_metadata():
     assert double_llm_spec.runtime_fields_schema == "JobRealLlmDoubleEchoRuntimeFields"
     assert double_llm_spec.canonical_result_schema == "JobRealLlmDoubleEchoResult"
     assert double_llm_spec.public_result_schema == "JobRealLlmDoubleEchoResult"
+    assert double_llm_spec.visibility == "demo"
+    assert double_llm_spec.role == "root_or_leaf"
     assert double_llm_spec.allow_callback is False
     assert double_llm_spec.execution_mode == "custom_executor"
     assert double_llm_spec.platform_retry_policy == "no_platform_retry"
@@ -192,6 +206,8 @@ def test_job_type_registry_exposes_required_metadata():
     assert poster_spec.runtime_fields_schema == "PosterTitleImageRuntimeFields"
     assert poster_spec.canonical_result_schema == "PosterTitleImageResult"
     assert poster_spec.public_result_schema == "PosterTitleImageResult"
+    assert poster_spec.visibility == "public"
+    assert poster_spec.role == "root"
     assert poster_spec.allow_callback is True
     assert poster_spec.execution_mode == "custom_executor"
     assert poster_spec.platform_retry_policy == "no_platform_retry"
@@ -206,6 +222,8 @@ def test_job_type_registry_exposes_required_metadata():
 def _job_type_spec(**overrides) -> JobTypeSpec:
     values = {
         "job_type": "job_test_add",
+        "visibility": "demo",
+        "role": "root_or_leaf",
         "execution_mode": "custom_executor",
         "platform_retry_policy": "no_platform_retry",
         "side_effect_policy": "none",
@@ -226,6 +244,35 @@ def _job_type_spec(**overrides) -> JobTypeSpec:
     return JobTypeSpec(**values)
 
 
+def test_job_executor_requires_explicit_visibility_and_role():
+    class MissingVisibilityJob(JobExecutor):
+        name = "missing_visibility"
+        role = "root"
+        params_schema = None
+        runtime_fields_schema_name = "dict"
+        canonical_result_schema = None
+        public_result_schema = None
+
+        def runtime_job_fields(self, job_params):
+            return {}
+
+    class MissingRoleJob(JobExecutor):
+        name = "missing_role"
+        visibility = "demo"
+        params_schema = None
+        runtime_fields_schema_name = "dict"
+        canonical_result_schema = None
+        public_result_schema = None
+
+        def runtime_job_fields(self, job_params):
+            return {}
+
+    with pytest.raises(ValueError, match="visibility"):
+        MissingVisibilityJob().job_type_spec()
+    with pytest.raises(ValueError, match="role"):
+        MissingRoleJob().job_type_spec()
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
@@ -233,6 +280,8 @@ def _job_type_spec(**overrides) -> JobTypeSpec:
         ({"side_effect_policy": "unknown"}, "side_effect_policy"),
         ({"platform_retry_policy": ""}, "platform_retry_policy"),
         ({"platform_retry_policy": "retry_everything"}, "platform_retry_policy"),
+        ({"visibility": "private"}, "visibility"),
+        ({"role": "worker"}, "role"),
         ({"max_attempts": 0}, "max_attempts"),
         ({"timeout_seconds": 0}, "timeout_seconds"),
         ({"max_attempts": 2, "platform_retry_policy": "no_platform_retry"}, "platform_retry_policy"),

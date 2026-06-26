@@ -188,6 +188,7 @@ class JobResult(StrictBaseModel):
 class JobTestAddParams(StrictBaseModel):
     a: NumberValue
     b: NumberValue
+    sleep_seconds: float = Field(default=0, ge=0, le=55)
 
     @field_validator("a", "b")
     @classmethod
@@ -236,6 +237,7 @@ class JobTestEchoResult(StrictBaseModel):
 
 class JobTestCollectParams(StrictBaseModel):
     items: list[str] = Field(min_length=1, max_length=10)
+    sleep_seconds: float = Field(default=0, ge=0, le=55)
 
 
 class JobTestCollectRuntimeFields(StrictBaseModel):
@@ -248,8 +250,9 @@ class JobTestCollectResult(StrictBaseModel):
 
 
 class JobTestWorkflowParams(StrictBaseModel):
-    mode: Literal["chain", "group", "chord", "map", "starmap", "chunks"]
+    mode: Literal["single", "chain", "group", "chord", "map", "starmap", "chunks"]
     label: str = Field(default="workflow-smoke", min_length=1, max_length=64)
+    sleep_seconds: float = Field(default=0, ge=0, le=55)
 
 
 class JobTestWorkflowRuntimeFields(StrictBaseModel):

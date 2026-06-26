@@ -67,6 +67,7 @@ HELP_EPILOG = """\b
   ./scripts/jobs.sh doctor --since 10m
   ./scripts/jobs.sh latency --since 30m --group-by job_type
   ./scripts/jobs.sh capacity --since 10m --caller-id default --max-active-jobs 1000
+  ./scripts/jobs.sh types --all
   ./scripts/jobs.sh types --json
 
 \b
@@ -404,6 +405,50 @@ def _registered_job_type_specs() -> list[dict[str, Any]]:
         if errors:
             print(errors, file=sys.stderr)
         raise
+
+
+def _filter_job_type_specs(
+    specs: list[dict[str, Any]],
+    *,
+    all_types: bool,
+    visibility: str | None,
+    role: str | None,
+    default_human_catalog: bool,
+) -> tuple[list[dict[str, Any]], dict[str, str | bool | None]]:
+    from app.jobs.base import JOB_TYPE_ROLES, JOB_TYPE_VISIBILITIES
+
+    if visibility is not None and visibility not in JOB_TYPE_VISIBILITIES:
+        raise typer.BadParameter(
+            f"visibility must be one of: {', '.join(sorted(JOB_TYPE_VISIBILITIES))}",
+            param_hint="--visibility",
+        )
+    if role is not None and role not in JOB_TYPE_ROLES:
+        raise typer.BadParameter(
+            f"role must be one of: {', '.join(sorted(JOB_TYPE_ROLES))}",
+            param_hint="--role",
+        )
+
+    filtered = specs
+    applied: dict[str, str | bool | None] = {
+        "all": all_types,
+        "visibility": visibility,
+        "role": role,
+        "default_human_catalog": False,
+    }
+    if visibility is not None:
+        filtered = [spec for spec in filtered if spec.get("visibility") == visibility]
+    if role is not None:
+        filtered = [spec for spec in filtered if spec.get("role") == role]
+    if not all_types and visibility is None and role is None and default_human_catalog:
+        filtered = [
+            spec
+            for spec in filtered
+            if spec.get("visibility") != "internal" and spec.get("role") == "root"
+        ]
+        applied["visibility"] = "not_internal"
+        applied["role"] = "root"
+        applied["default_human_catalog"] = True
+    return filtered, applied
 
 
 def _render_result(*, section: str, target: str, rows: list[dict], columns: list[tuple[str, str]]) -> None:
@@ -1768,18 +1813,41 @@ def capacity(
 
 
 @app.command(help="查看当前注册的 job_type。")
-def types(json_output: JsonOption = False) -> None:
+def types(
+    json_output: JsonOption = False,
+    all_types: Annotated[
+        bool,
+        typer.Option("--all", help="显示全部 job_type；人读输出默认只展示非 internal 的 root 入口。"),
+    ] = False,
+    visibility: Annotated[
+        str | None,
+        typer.Option("--visibility", help="按 visibility 过滤：public、demo 或 internal。"),
+    ] = None,
+    role: Annotated[
+        str | None,
+        typer.Option("--role", help="按 role 过滤：root、leaf 或 root_or_leaf。"),
+    ] = None,
+) -> None:
     try:
         specs = _registered_job_type_specs()
     except Exception as exc:
         print(f"ERROR: job type registry unavailable: {exc}", file=sys.stderr)
         raise typer.Exit(4) from exc
+    specs, applied_filters = _filter_job_type_specs(
+        specs,
+        all_types=all_types,
+        visibility=visibility,
+        role=role,
+        default_human_catalog=not json_output,
+    )
     if json_output:
-        formatters.print_json({"job_types": specs})
+        formatters.print_json({"job_types": specs, "applied_filters": applied_filters})
         return
     rows = [
         {
             "job_type": spec["job_type"],
+            "visibility": spec["visibility"],
+            "role": spec["role"],
             "params_schema": spec["params_schema"],
             "public_result_schema": spec["public_result_schema"],
             "allow_callback": spec["allow_callback"],
@@ -1794,6 +1862,8 @@ def types(json_output: JsonOption = False) -> None:
         rows=rows,
         columns=[
             ("job_type", "job_type"),
+            ("visibility", "visibility"),
+            ("role", "role"),
             ("params_schema", "params_schema"),
             ("public_result_schema", "public_result_schema"),
             ("allow_callback", "callback"),
@@ -1801,6 +1871,10 @@ def types(json_output: JsonOption = False) -> None:
             ("timeout_seconds", "timeout"),
         ],
     )
+    if applied_filters["default_human_catalog"]:
+        print(
+            "NOTE      showing non-internal role=root catalog; use --all for the full registry.",
+        )
 
 
 if __name__ == "__main__":

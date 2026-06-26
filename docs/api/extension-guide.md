@@ -6,13 +6,44 @@
 
 1. 在 `app/schemas/jobs.py` 中定义 Params、Runtime fields 和 Result schema。
 2. 在 `app/jobs/types/<job_type>.py` 中实现 `JobExecutor`。
-3. 在 executor 上声明稳定 `name`、`params_model`、`runtime_model`、`result_model` 和 retry/side-effect 元数据。
+3. 在 executor 上声明稳定 `name`、`visibility`、`role`、`params_schema`、`runtime_fields_schema_name`、`canonical_result_schema`、`public_result_schema` 和 retry/side-effect 元数据。
 4. 在 `app/jobs/types/register.py` 显式导入并注册。
 5. 如需模型调用，通过 `app/services/ai_gateway_facade.py` 进入，不直接调用 provider adapter。
 6. 如需大输入或大结果，使用 runtime ref、result ref 和对象存储边界，不把大 payload 直接塞进 Job response。
 7. 补充 schema、registry、workflow 和 contract 测试。
 
 `job_type` 名称是外部合同；发布后不要随意改名。`job_params` 字段由该 `job_type` 独占校验，不在通用 Job envelope 中新增业务专用字段。
+
+`visibility` 用于目录展示和接入心智模型，当前取值为：
+
+| visibility | 用途 |
+|---|---|
+| `public` | 正式业务入口，可作为调用方合同宣传 |
+| `demo` | 模板示例、smoke 或压测入口，不是正式业务合同 |
+| `internal` | 未来保留给只供服务内部使用的 helper job_type；当前仓库没有内置 internal 类型 |
+
+`role` 描述该 `job_type` 在目录中的预期入口角色，不替代 Job 实例上的 root/child lineage：
+
+| role | 用途 |
+|---|---|
+| `root` | 面向调用方或示例的聚合根入口 |
+| `leaf` | 只作为 workflow child node 的可执行任务 |
+| `root_or_leaf` | 既可直接提交为 root，也可被 workflow 复用为 child |
+
+## 新增 workflow job_type
+
+需要 root/child 编排时，新增业务自己的 `job_type` 和 workflow definition，不开放任意 DAG 提交。
+
+1. 在 `app/schemas/jobs.py` 中定义 root `job_type` 的 Params、Runtime fields 和 Result schema。
+2. 在 `app/jobs/types/<job_type>.py` 中实现 root `JobExecutor`，root executor 使用 `role="root"`，只声明 schema 和运行时字段；实际执行由 workflow orchestration 推进 internal child Jobs。
+3. 使用 `app.workflows` 的 `task`、`chain`、`group`、`chord`、`map_items`、`starmap_items` 或 `chunks` 生成受控 `workflow_plan`。
+4. 在 `app/jobs/types/register.py` 中注册 executor 和 workflow definition。
+5. 按业务语义选择 `failure_policy`；默认 `fail_fast`，需要容忍部分 child 失败时才显式使用 `allow_partial`。
+6. 补充 compiler、orchestrator、registry、workflow smoke 或业务 e2e 测试。
+
+workflow child node 应引用 `role="leaf"` 或 `role="root_or_leaf"` 的 executor。当前这只是 registry catalog 约定；Job 实例是否为 child 仍由 `is_internal`、`root_job_id`、`parent_job_id` 和 `workflow_node_key` 表达。
+
+当前开发者示例是 `job_test_workflow`，标记为 `visibility="demo"`、`role="root"`。它覆盖 `single`、`chain`、`group`、`chord`、`map`、`starmap` 和 `chunks`，可作为本地理解 root/child 模式和压测 workflow 链路的参考，但不是正式业务 API 合同。
 
 ## 新增 HTTP 接口
 

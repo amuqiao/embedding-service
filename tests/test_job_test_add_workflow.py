@@ -19,6 +19,11 @@ def test_job_test_add_is_registered_and_validates_params():
 
     assert handler.job_type == "job_test_add"
     assert handler.normalize_job_params({"a": 2, "b": 3}) == {"a": 2, "b": 3}
+    assert handler.normalize_job_params({"a": 2, "b": 3, "sleep_seconds": 0}) == {
+        "a": 2,
+        "b": 3,
+        "sleep_seconds": 0,
+    }
 
     invalid_payloads = [
         {"a": 2},

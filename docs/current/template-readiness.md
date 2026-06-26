@@ -17,8 +17,8 @@
 | 可靠发布 | `dispatch_outbox` 负责 DB -> Taskiq，`callback_outbox` 负责 DB -> caller callback |
 | 提交幂等 | `job_submission_keys` 按 caller + `client_request_id` 保证重复提交可控 |
 | 恢复 | recovery loop 处理 due dispatch、stale attempt、callback、AI ledger stale pending 和 workflow reconciler |
-| Workflow | `job_aggregates` 自索引表达 root/child，DAG-lite 支持 `chain`、`group`、`chord`、`map`、`starmap`、`chunks`；child AI 调用聚合到 root Job billing |
-| 验证 | `check`、单 Job smoke、六模式 workflow smoke 都已有稳定脚本入口 |
+| Workflow | `job_aggregates` 自索引表达 root/child，DAG-lite 支持 `single`、`chain`、`group`、`chord`、`map`、`starmap`、`chunks`；child AI 调用聚合到 root Job billing |
+| 验证 | `check`、单 Job smoke、workflow modes smoke 都已有稳定脚本入口 |
 
 ## 复制后必须改
 
@@ -45,6 +45,14 @@
 - `job_real_llm_echo`
 - `job_real_llm_double_echo`
 
+这些 job_type 在 registry 中使用 `visibility="demo"` 标记。`jobs.sh types` 的人读输出默认展示非 internal 的 `role="root"` 入口；需要查看 leaf、`root_or_leaf` 或全部 demo 类型时使用：
+
+```bash
+./scripts/jobs.sh types --all
+./scripts/jobs.sh types --visibility demo
+./scripts/jobs.sh types --role leaf
+```
+
 这些能力不是新业务的正式 API 合同。业务服务复制模板后有两种选择：
 
 | 选择 | 适用场景 |
@@ -56,7 +64,7 @@
 
 ## 当前不包含
 
-- `poster_title_image` 尚未实现为当前 route 或 `job_type`。
+- `poster_title_image` 是当前模板内的真实业务示例 `job_type`，不属于通用模板 smoke；复制模板时应按业务需要保留、替换或移除。
 - 当前稳定 Job cost 查询是 `GET /api/v1/ai-jobs/jobs/{job_id}/billing`，不是 `/cost`。
 - 非终态 Job 不返回增量 `job_result`。
 - `scripts/verify.sh` 的稳定命令不覆盖真实模型 e2e 或外部对象存储 e2e。

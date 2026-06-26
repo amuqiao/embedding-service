@@ -45,7 +45,7 @@ LOAD_CALLER_ID=locust-load
 | 容量触顶 | `submit`           | `MAX_ACTIVE_JOBS` 是否先触发，API 是否仍健康                 |
 | 完整压测 | `flow`             | worker 消费、队列积压和端到端完成耗时                          |
 
-`flow` 场景会先 `POST /jobs`，再循环 `GET /jobs/{job_id}`，最后上报 `JOB flow terminal latency`。默认压测任务是 `job_test_echo`，Locust 默认传入 `LOAD_ECHO_SLEEP_SECONDS=15`，用于模拟 15 秒执行耗时。
+`flow` 场景会先 `POST /jobs`，再循环 `GET /jobs/{job_id}`，最后上报 `JOB flow terminal latency`。默认压测任务是 `job_test_echo`，Locust 默认传入 `LOAD_ECHO_SLEEP_SECONDS=15`，用于模拟 15 秒执行耗时。需要压 root/child workflow 链路时，切换到 `job_test_workflow`，并用 `LOAD_WORKFLOW_MODE` 和 `LOAD_WORKFLOW_SLEEP_SECONDS` 控制固定示例模式。
 
 ## 判定方法
 
@@ -151,6 +151,37 @@ sed -n '1,50p' ".run/load/${RUN_ID}-flow-smoke_exceptions.csv"
 如果 `JOB flow terminal latency` 有失败，先看是否超过 `LOAD_FLOW_TIMEOUT_SECONDS` 仍未到 `succeeded`。这类失败表示 Job 流程超时，不等同于 `GET /jobs/{job_id}` HTTP 请求失败。
 
 本地 `job_test_echo` 使用 `asyncio.sleep` 模拟 15 秒等待，因此即使 `WORKER_CONCURRENCY=1`，也可能看到多个任务在同一 worker 事件循环中重叠等待。不要仅凭 `WORKER_CONCURRENCY=1` 推断端到端吞吐一定是 `1 / 15s`。
+
+## Workflow 模式压测
+
+需要覆盖 root orchestration、internal child 创建、child attempt 执行、downstream advance 和 root finalize 时，使用 `job_test_workflow`：
+
+```bash
+LOAD_SCENARIO=flow \
+LOAD_JOB_TYPE=job_test_workflow \
+LOAD_WORKFLOW_MODE=group \
+LOAD_WORKFLOW_SLEEP_SECONDS=15 \
+LOAD_POLL_INTERVAL_SECONDS=0.5 \
+LOAD_FLOW_TIMEOUT_SECONDS=90 \
+uv run --group load locust -f scripts/load/locustfile.py \
+  --host "$HOST" \
+  --headless -u 4 -r 1 -t 60s \
+  --csv ".run/load/${RUN_ID}-workflow-group-smoke" \
+  --html ".run/load/${RUN_ID}-workflow-group-smoke.html"
+```
+
+常用模式：
+
+| 模式 | 压测重点 |
+|---|---|
+| `single` | root + one child 的 workflow 形态 |
+| `group` | 并行 fan-out child 创建和完成 |
+| `chord` | 并行 child 完成后的 join 依赖 |
+| `chain` | 线性 `depends_on` 推进 |
+| `chunks` | 分块 child 创建 |
+| `starmap` | 参数展开到多个算术 child |
+
+这些模式是固定开发者示例，不是任意 DAG 压测入口。需要失败率、大结果或可变 fan-out 时，应新增压测专用 `job_type`。
 
 ## 发布接口压测
 

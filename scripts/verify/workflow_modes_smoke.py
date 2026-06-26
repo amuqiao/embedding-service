@@ -1,4 +1,4 @@
-"""Submit six DAG-lite workflow modes and wait for root jobs to finish."""
+"""Submit DAG-lite workflow modes and wait for root jobs to finish."""
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ class WorkflowModeCase:
 
 
 WORKFLOW_MODE_CASES = (
+    WorkflowModeCase("single", 1, ("only",), {"only": "echo"}),
     WorkflowModeCase("chain", 3, ("a", "b", "c"), {"a": "echo", "b": "echo", "c": "echo"}),
     WorkflowModeCase("group", 3, ("a", "b", "c"), {"a": "echo", "b": "echo", "c": "echo"}),
     WorkflowModeCase("chord", 3, ("a", "b", "join"), {"a": "echo", "b": "echo", "join": "echo"}),
@@ -147,7 +148,7 @@ def _validate_node_result(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Submit six DAG-lite workflow modes and wait for completion.")
+    parser = argparse.ArgumentParser(description="Submit DAG-lite workflow modes and wait for completion.")
     parser.add_argument("--api-url", required=True)
     parser.add_argument("--timeout-seconds", type=int, default=60)
     args = parser.parse_args()

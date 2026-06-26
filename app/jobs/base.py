@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 EXECUTION_MODES = frozenset({"custom_executor", "builtin_llm_text_runtime"})
 PLATFORM_RETRY_POLICIES = frozenset({"no_platform_retry", "retry_transient_platform_errors"})
 SIDE_EFFECT_POLICIES = frozenset({"none", "success_side_effect"})
+JOB_TYPE_VISIBILITIES = frozenset({"public", "internal", "demo"})
+JOB_TYPE_ROLES = frozenset({"root", "leaf", "root_or_leaf"})
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,8 @@ class PromptSpec:
 @dataclass(frozen=True)
 class JobTypeSpec:
     job_type: str
+    visibility: str
+    role: str
     execution_mode: str
     platform_retry_policy: str
     side_effect_policy: str
@@ -56,6 +60,8 @@ class JobExecutor(ABC):
     """ABC and template-method base class for one registered job_type."""
 
     name: str = ""
+    visibility: str = ""
+    role: str = ""
     allow_callback: bool = True
     max_attempts: int = 1
     timeout_seconds: int = 300
@@ -159,8 +165,18 @@ class JobExecutor(ABC):
         return "success_side_effect"
 
     def job_type_spec(self) -> JobTypeSpec:
+        if "visibility" not in type(self).__dict__:
+            raise ValueError(f"{self.name} must declare visibility")
+        if "role" not in type(self).__dict__:
+            raise ValueError(f"{self.name} must declare role")
+        if self.visibility not in JOB_TYPE_VISIBILITIES:
+            raise ValueError(f"{self.name} declares invalid visibility: {self.visibility}")
+        if self.role not in JOB_TYPE_ROLES:
+            raise ValueError(f"{self.name} declares invalid role: {self.role}")
         return JobTypeSpec(
             job_type=self.name,
+            visibility=self.visibility,
+            role=self.role,
             execution_mode=self._execution_mode(),
             platform_retry_policy=(
                 self.platform_retry_policy if self.platform_retry_policy is not None else "no_platform_retry"

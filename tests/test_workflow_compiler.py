@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from app.jobs import registry as job_registry
 from app.workflows import (
     WorkflowDefinition,
     WorkflowSpec,
@@ -196,6 +197,7 @@ def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
     register_all_job_types()
 
     expected = {
+        "single": ("only",),
         "chain": ("a", "b", "c"),
         "group": ("a", "b", "c"),
         "chord": ("a", "b", "join"),
@@ -204,11 +206,15 @@ def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
         "chunks": ("chunk.0", "chunk.1", "chunk.2"),
     }
     for mode, node_keys in expected.items():
-        plan = compile_registered_workflow("job_test_workflow", {"mode": mode, "label": mode})
+        plan = compile_registered_workflow(
+            "job_test_workflow",
+            {"mode": mode, "label": mode, "sleep_seconds": 3},
+        )
         nodes = _nodes_by_key(plan)
         assert plan["kind"] == "dag_lite"
         assert plan["workflow_type"] == "job_test_workflow"
         assert tuple(nodes) == node_keys
+        assert all(node["job_params"].get("sleep_seconds") == 3 for node in nodes.values())
     definition = WorkflowDefinition(
         workflow_type="test.workflow",
         build=lambda params: chain(
@@ -234,3 +240,25 @@ def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
             )
         )
     workflow_registry.clear_for_tests()
+
+
+def test_test_workflow_sleep_normalization_preserves_legacy_payload_shape():
+    register_all_job_types()
+
+    workflow = job_registry.get("job_test_workflow")
+    collect = job_registry.get("job_test_collect")
+
+    assert workflow.normalize_job_params({"mode": "group", "label": "x"}) == {
+        "mode": "group",
+        "label": "x",
+    }
+    assert workflow.normalize_job_params({"mode": "group", "label": "x", "sleep_seconds": 0}) == {
+        "mode": "group",
+        "label": "x",
+        "sleep_seconds": 0,
+    }
+    assert collect.normalize_job_params({"items": ["a", "b"]}) == {"items": ["a", "b"]}
+    assert collect.normalize_job_params({"items": ["a", "b"], "sleep_seconds": 0}) == {
+        "items": ["a", "b"],
+        "sleep_seconds": 0,
+    }

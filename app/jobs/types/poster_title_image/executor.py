@@ -183,6 +183,8 @@ def _item_error(exc: Exception) -> PosterTitleImageError:
 @register_job_type
 class PosterTitleImageJob(JobExecutor):
     name = "poster_title_image"
+    visibility = "public"
+    role = "root"
     params_schema = PosterTitleImageParams
     runtime_fields_schema_name = "PosterTitleImageRuntimeFields"
     canonical_result_schema = PosterTitleImageResult

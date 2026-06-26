@@ -7,7 +7,13 @@ from app.core import prompt_templates
 from app.core.config import settings
 from app.core.error_registry import all_error_reasons, all_error_specs
 from app.core.logging import all_log_events
-from app.jobs.base import EXECUTION_MODES, PLATFORM_RETRY_POLICIES, SIDE_EFFECT_POLICIES
+from app.jobs.base import (
+    EXECUTION_MODES,
+    JOB_TYPE_ROLES,
+    JOB_TYPE_VISIBILITIES,
+    PLATFORM_RETRY_POLICIES,
+    SIDE_EFFECT_POLICIES,
+)
 from app.jobs import registry as job_registry
 from app.schemas.registry import all_schema_names
 
@@ -107,6 +113,10 @@ def validate_job_type_registry() -> None:
             raise ValueError(
                 f"job_type {spec.job_type} declares invalid platform_retry_policy: {spec.platform_retry_policy}"
             )
+        if spec.visibility not in JOB_TYPE_VISIBILITIES:
+            raise ValueError(f"job_type {spec.job_type} declares invalid visibility: {spec.visibility}")
+        if spec.role not in JOB_TYPE_ROLES:
+            raise ValueError(f"job_type {spec.job_type} declares invalid role: {spec.role}")
         if spec.max_attempts < 1:
             raise ValueError(f"job_type {spec.job_type} must declare max_attempts >= 1")
         if spec.timeout_seconds < 1:

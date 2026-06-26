@@ -5,13 +5,14 @@
 ## Current Baseline
 
 - DAG-lite root / child workflow 已经落地，复用 `job_aggregates`、`job_execution_attempts`、`dispatch_outbox`、Taskiq worker 和 recovery。
-- 当前支持 `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 模式示例。
+- 当前支持 `single`、`chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 模式示例。
 - root Job 是公开查询、callback 和 billing 入口；internal child Job 是内部执行资源。
 - child AI 调用已聚合到 root Job billing scope。
 
 ## Remaining Gaps
 
 - 还没有正式业务 `job_type` 使用 workflow 执行真实业务输入、对象存储产物和 callback mock。
+- 普通 non-workflow Job 当前仍由 public root Job 直接执行；尚未统一成 `root + one child`。
 - 还没有公开 running result snapshot、child node 查询或 node / child 级 cost attribution 合同。
 - `fail_fast` 当前不承诺取消已经 dispatch 或 running 的 child Job。
 - workflow observability 仍是基础排障能力，没有专用运维 UI、dead letter UI 或 per-node metrics。
@@ -20,10 +21,11 @@
 ## Planned Work
 
 1. 接入首个正式业务 workflow `job_type` 时，只新增该业务需要的 workflow definition、schema、executor 和最小 e2e。
-2. 如果调用方需要运行中结果或节点明细，先升级 `docs/api/service-contract.md`、schema 和 contract tests，再暴露查询。
-3. 如果需要取消语义，单独设计 cancellation 合同；不要把它塞进当前 `fail_fast`。
-4. 如果 root billing 无法满足排障或结算分析，再为 node / child attribution 增加持久化字段和查询测试。
-5. 如果 recovery 扫描延迟成为真实瓶颈，再评估 workflow wakeup outbox；现在不新增。
+2. 如果要把普通单任务也统一成 root 聚合根 + one leaf child，优先把它编译成 one-node `workflow_plan`；不要新增第二套 root/child 表达。
+3. 如果调用方需要运行中结果或节点明细，先升级 `docs/api/service-contract.md`、schema 和 contract tests，再暴露查询。
+4. 如果需要取消语义，单独设计 cancellation 合同；不要把它塞进当前 `fail_fast`。
+5. 如果 root billing 无法满足排障或结算分析，再为 node / child attribution 增加持久化字段和查询测试。
+6. 如果 recovery 扫描延迟成为真实瓶颈，再评估 workflow wakeup outbox；现在不新增。
 
 ## Acceptance
 
@@ -38,3 +40,4 @@
 - 不开放任意 DAG 提交。
 - 不把 child Job 升级为默认公共查询资源。
 - 不让 workflow kernel 直接调用 AI provider。
+- 不用嵌套 `parent_job_id` 表达 `chain`；执行顺序继续由 `workflow_plan.nodes[].depends_on` 表达。

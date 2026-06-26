@@ -12,6 +12,8 @@ from app.services.job_runtime import job_params_from_job
 @register_job_type
 class JobTestEchoJob(JobExecutor):
     name = "job_test_echo"
+    visibility = "demo"
+    role = "root_or_leaf"
     params_schema = JobTestEchoParams
     runtime_fields_schema_name = "JobTestEchoRuntimeFields"
     canonical_result_schema = JobTestEchoResult

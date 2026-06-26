@@ -44,6 +44,8 @@ def _messages(prompt_payload: dict[str, Any], input_text: str) -> list[dict[str,
 @register_job_type
 class JobRealLlmDoubleEchoJob(JobExecutor):
     name = "job_real_llm_double_echo"
+    visibility = "demo"
+    role = "root_or_leaf"
     params_schema = JobRealLlmDoubleEchoParams
     runtime_fields_schema_name = "JobRealLlmDoubleEchoRuntimeFields"
     canonical_result_schema = JobRealLlmDoubleEchoResult

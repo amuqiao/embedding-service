@@ -170,9 +170,17 @@ class JobLoadUser(HttpUser):
                 "repeat": int(env_value("LOAD_ECHO_REPEAT", "1") or "1"),
                 "sleep_seconds": env_float("LOAD_ECHO_SLEEP_SECONDS", 15.0),
             }
+        if self.job_type == "job_test_workflow":
+            return {
+                "mode": env_value("LOAD_WORKFLOW_MODE", "group"),
+                "label": f"load-{sequence}",
+                "sleep_seconds": env_float("LOAD_WORKFLOW_SLEEP_SECONDS", 15.0),
+            }
         raw = env_value("LOAD_JOB_PARAMS_JSON")
         if not raw:
-            raise RuntimeError("LOAD_JOB_PARAMS_JSON is required when LOAD_JOB_TYPE is not job_test_echo")
+            raise RuntimeError(
+                "LOAD_JOB_PARAMS_JSON is required when LOAD_JOB_TYPE is not job_test_echo or job_test_workflow"
+            )
         return json.loads(raw)
 
     def _load_query_job_ids(self) -> list[str]:

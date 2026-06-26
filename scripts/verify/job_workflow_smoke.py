@@ -1,4 +1,4 @@
-"""Submit a template echo job and wait for the local Taskiq workflow to finish.
+"""Submit a template echo job and wait for the local Taskiq execution path to finish.
 
 The shell wrapper prints the "Workflow Smoke" section. This script prints one
 success summary with job_id; failures raise RuntimeError with the failing object

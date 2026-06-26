@@ -220,7 +220,7 @@ POST /api/v1/ai-jobs/jobs
 GET  /api/v1/ai-jobs/jobs/{job_id}
 ```
 
-第一版默认使用内置 `job_test_echo`。它不调用真实模型，适合压测 API、数据库、Taskiq 发布、worker 消费和 Job 查询路径。不要一开始压真实模型 `job_type`，否则模型供应商延迟、限流和费用会掩盖服务自身瓶颈。
+第一版默认使用内置 `job_test_echo`。它不调用真实模型，适合压测 API、数据库、Taskiq 发布、worker 消费和 Job 查询路径。需要压 workflow root / internal child / root finalize 链路时，使用内置 `job_test_workflow`。这些压测类型在 registry 中标记为 `visibility="demo"`，查看完整目录时使用 `./scripts/jobs.sh types --all`。不要一开始压真实模型 `job_type`，否则模型供应商延迟、限流和费用会掩盖服务自身瓶颈。
 
 ## 场景结构
 
@@ -393,9 +393,11 @@ JOB flow terminal latency
 |---|---:|---|
 | `LOAD_SCENARIO` | `flow` | `submit`、`query` 或 `flow` |
 | `LOAD_JOB_TYPE` | `job_test_echo` | 压测使用的 `job_type` |
-| `LOAD_JOB_PARAMS_JSON` | 无 | 非 `job_test_echo` 时使用的 `job_params` JSON |
+| `LOAD_JOB_PARAMS_JSON` | 无 | 非内置动态压测 job 时使用的 `job_params` JSON |
 | `LOAD_ECHO_REPEAT` | `1` | `job_test_echo.repeat` |
 | `LOAD_ECHO_SLEEP_SECONDS` | `15` | 压测默认让 `job_test_echo` 模拟执行耗时 |
+| `LOAD_WORKFLOW_MODE` | `group` | `job_test_workflow.mode`，可选 `single`、`chain`、`group`、`chord`、`map`、`starmap`、`chunks` |
+| `LOAD_WORKFLOW_SLEEP_SECONDS` | `15` | `job_test_workflow` 子任务模拟执行耗时 |
 | `LOAD_POLL_INTERVAL_SECONDS` | `0.5` | `flow` 轮询间隔 |
 | `LOAD_FLOW_TIMEOUT_SECONDS` | `30` | `flow` 单个 Job 等待终态超时 |
 | `LOAD_QUERY_JOB_IDS` | 无 | `query` 场景用逗号分隔 Job ID |
@@ -404,7 +406,18 @@ JOB flow terminal latency
 | `LOAD_WAIT_MAX_SECONDS` | `1.0` | Locust 用户两次任务之间的最大等待 |
 | `LOAD_CALLER_ID` | `locust-load` | `X-AI-Service-Caller-ID` |
 
-非 `job_test_echo` 的压测示例：
+Workflow root / child 链路压测示例：
+
+```bash
+LOAD_JOB_TYPE=job_test_workflow \
+LOAD_WORKFLOW_MODE=group \
+LOAD_WORKFLOW_SLEEP_SECONDS=15 \
+LOAD_SCENARIO=flow \
+LOAD_FLOW_TIMEOUT_SECONDS=90 \
+uv run --group load locust -f scripts/load/locustfile.py --host http://127.0.0.1:8100 --headless -u 10 -r 2 -t 5m
+```
+
+其它业务 `job_type` 的压测示例：
 
 ```bash
 LOAD_JOB_TYPE=your_job_type \
@@ -427,7 +440,7 @@ uv run --group load locust -f scripts/load/locustfile.py --host http://127.0.0.1
 | `--web-host` | `127.0.0.1` | Locust web UI 监听地址 |
 | `--web-port` | `8089` | Locust web UI 监听端口 |
 
-如果需要模拟耗时、失败率或大结果，不要把这些逻辑塞进 Locust。应按 `docs/api/extension-guide.md` 新增明确的压测专用 `job_type`，例如暴露 `sleep_ms`、`result_size_bytes` 和 `should_fail`。
+如果需要模拟失败率、大结果或可变 fan-out，不要把这些逻辑塞进 Locust，也不要把 `job_test_workflow` 扩展成通用压测 DSL。应按 [`../api/extension-guide.md`](../api/extension-guide.md) 新增明确的压测专用 `job_type`，例如暴露 `sleep_seconds`、`result_size_bytes` 和 `should_fail`。
 
 ## 指标门禁
 

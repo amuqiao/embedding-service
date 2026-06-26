@@ -11,6 +11,8 @@ from app.services.job_runtime import job_params_from_job
 @register_job_type
 class ArithmeticJob(JobExecutor):
     name = "arithmetic"
+    visibility = "demo"
+    role = "root"
     params_schema = ArithmeticParams
     runtime_fields_schema_name = "ArithmeticRuntimeFields"
     canonical_result_schema = ArithmeticResult

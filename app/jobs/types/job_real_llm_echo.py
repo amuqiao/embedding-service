@@ -12,6 +12,8 @@ from app.schemas.jobs import JobRealLlmEchoParams, JobRealLlmEchoResult, JobReal
 @register_job_type
 class JobRealLlmEchoJob(JobExecutor):
     name = "job_real_llm_echo"
+    visibility = "demo"
+    role = "root_or_leaf"
     params_schema = JobRealLlmEchoParams
     runtime_fields_schema_name = "JobRealLlmEchoRuntimeFields"
     canonical_result_schema = JobRealLlmEchoResult
