@@ -17,6 +17,8 @@ HttpEnvelope[T]
 
 route 函数只返回内层 data schema；外层 envelope 由应用统一包装。
 
+`request_id` 是请求追踪 ID。调用方可以通过 `X-Request-ID` 传入 1 到 128 个字符的 ASCII 字母、数字、点号、下划线、冒号或连字符；服务会在响应 envelope 和 `X-Request-ID` 响应头中返回同一个值。调用方不传时，服务端为本次请求生成 32 位小写 UUID hex。传入非法值时返回 `REQUEST_ID_INVALID` 错误 envelope，并使用服务端生成的 `request_id` 标记该错误响应。
+
 错误响应使用 `ErrorEnvelope`，错误码事实源是 `app/core/error_registry.py`。
 
 ## 认证
@@ -156,14 +158,15 @@ CallbackResponseEnvelope
 
 `204`、空 body、非 JSON body、缺少 `accepted`、`accepted` 不是 boolean，或 `accepted=false` 都会被视为未接受。非 2xx、超时、网络错误或未接受响应会触发 Callback 重试，直到成功或达到最大尝试次数。
 
-## 模型与 Prompt 元信息
+## 模型、语种与 Prompt 元信息
 
 ```http
 GET /api/v1/ai-jobs/models
+GET /api/v1/ai-jobs/languages
 GET /api/v1/ai-jobs/prompt-templates
 ```
 
-模型配置来自 `MODEL_CONFIG_PATH`，Prompt 配置来自 `PROMPT_CONFIG_PATH`。这两个接口只暴露当前服务允许调用方看到的元信息，不暴露 provider 密钥或内部 pricing 明细。
+模型配置来自 `MODEL_CONFIG_PATH`，语种目录来自 `app/core/language_catalog.py`，Prompt 配置来自 `PROMPT_CONFIG_PATH`。这些接口只暴露当前服务允许调用方看到的元信息，不暴露 provider 密钥或内部 pricing 明细。
 
 `GET /models` 成功响应：
 
@@ -195,4 +198,22 @@ ModelOut
 
 `pricing_ref`、价格矩阵、provider raw usage schema、provider key、provider model、LiteLLM model、required env 和 generation 参数不属于公开模型合同。
 
-兼容性说明：Phase 2 为 `ModelOut` 新增 `capabilities`、`input_media_types` 和 `output_media_types`。宽松 JSON 客户端可以忽略新增字段；严格 schema 或生成 SDK 客户端需要同步更新模型定义。
+`GET /languages` 成功响应：
+
+```text
+HttpEnvelope[LanguagesResponse]
+  data.languages[]
+```
+
+`LanguagesResponse.languages[]` 的单个语种条目包含：
+
+```text
+LanguageOut
+  language
+  display_name
+  native_name
+```
+
+`language` 是提交任务时使用的程序化语种代码，当前取值来自 [`业务语种规范.md`](业务语种规范.md) 的三方语种表。`display_name` 和 `native_name` 只用于展示，调用方不应基于展示名称做业务判断。`in` 是三方合同中的印尼语代码，本服务不会在内部目录接口中映射为 `id`。
+
+兼容性说明：Phase 2 为 `ModelOut` 新增 `capabilities`、`input_media_types` 和 `output_media_types`，并新增 `GET /languages`。宽松 JSON 客户端可以忽略新增字段；严格 schema 或生成 SDK 客户端需要同步更新模型和语种定义。

@@ -1,4 +1,5 @@
 import pytest
+import re
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from fastapi.security import HTTPAuthorizationCredentials
@@ -13,6 +14,8 @@ from app.schemas.jobs import CreateJobRequest, JobResult
 from app.schemas.meta import ModelOut, ModelsResponse
 from app.services.executor import _prompt_messages
 from app.services.jobs import _validate_create_request, validate_job_status_payload
+
+UUID_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 @pytest.fixture(autouse=True)
@@ -443,8 +446,8 @@ def test_openapi_declares_unified_response_envelope_for_jobs():
     assert any(
         parameter["name"] == "X-Request-ID"
         and parameter["schema"]["pattern"] == r"^[a-zA-Z0-9._:-]{1,128}$"
-        and parameter["schema"]["default"] == "default"
-        and parameter["example"] == "default"
+        and "default" not in parameter["schema"]
+        and parameter["example"] == "trace-id-123"
         for parameter in operation["parameters"]
     )
 
@@ -456,6 +459,8 @@ def test_openapi_declares_bearer_auth_for_protected_routes(monkeypatch):
     security_schemes = schema["components"]["securitySchemes"]
     assert security_schemes["HTTPBearer"] == {"type": "http", "scheme": "bearer"}
 
+    languages = schema["paths"][f"{API_PREFIX}/languages"]["get"]
+    assert {"HTTPBearer": []} in languages["security"]
     prompt_templates = schema["paths"][f"{API_PREFIX}/prompt-templates"]["get"]
     assert {"HTTPBearer": []} in prompt_templates["security"]
 
@@ -599,6 +604,37 @@ def test_models_route_exposes_public_model_selection_metadata(monkeypatch):
     assert response_schema["properties"]["data"]["$ref"].endswith("/ModelsResponse")
 
 
+def test_languages_route_exposes_shared_language_catalog(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(f"{API_PREFIX}/languages")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"code", "msg", "data", "request_id", "server_time"}
+    assert body["code"] == "0"
+    languages = body["data"]["languages"]
+    assert len(languages) == 22
+    assert languages[0] == {
+        "language": "zh",
+        "display_name": "Chinese (Simplified)",
+        "native_name": "中文（简体）",
+    }
+    codes = {language["language"] for language in languages}
+    assert "in" in codes
+    assert "id" not in codes
+    assert all(set(language) == {"language", "display_name", "native_name"} for language in languages)
+
+    language_schema = app.openapi()["components"]["schemas"]["LanguageOut"]
+    assert set(language_schema["required"]) == {"language", "display_name", "native_name"}
+    operation = app.openapi()["paths"][f"{API_PREFIX}/languages"]["get"]
+    response_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert response_schema["properties"]["data"]["$ref"].endswith("/LanguagesResponse")
+
+
 def test_legal_request_id_allows_dot_and_colon(monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -616,18 +652,26 @@ def test_legal_request_id_allows_dot_and_colon(monkeypatch):
     assert response.headers["X-Request-ID"] == "trace.id:part-1"
 
 
-def test_missing_request_id_uses_default(monkeypatch):
+def test_missing_request_id_generates_unique_trace_id(monkeypatch):
     from fastapi.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     client = TestClient(app, raise_server_exceptions=False)
 
     response = client.get(f"{API_PREFIX}/models")
+    second_response = client.get(f"{API_PREFIX}/models")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["request_id"] == "default"
-    assert response.headers["X-Request-ID"] == "default"
+    second_body = second_response.json()
+    assert body["request_id"]
+    assert body["request_id"] != "default"
+    assert UUID_HEX_RE.fullmatch(body["request_id"])
+    assert body["request_id"] == response.headers["X-Request-ID"]
+    assert second_body["request_id"]
+    assert second_body["request_id"] != body["request_id"]
+    assert UUID_HEX_RE.fullmatch(second_body["request_id"])
+    assert second_body["request_id"] == second_response.headers["X-Request-ID"]
 
 
 def test_invalid_request_id_returns_error_envelope(monkeypatch):
@@ -646,6 +690,28 @@ def test_invalid_request_id_returns_error_envelope(monkeypatch):
     assert body["code"] == "100002"
     assert body["data"]["header"] == "X-Request-ID"
     assert body["request_id"] == response.headers["X-Request-ID"]
+    assert UUID_HEX_RE.fullmatch(body["request_id"])
+    _assert_iso_server_time(body["server_time"])
+
+
+def test_empty_request_id_header_returns_error_envelope(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(
+        f"{API_PREFIX}/models",
+        headers={"X-Request-ID": ""},
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["code"] == "100002"
+    assert body["data"]["header"] == "X-Request-ID"
+    assert body["request_id"]
+    assert body["request_id"] == response.headers["X-Request-ID"]
+    assert UUID_HEX_RE.fullmatch(body["request_id"])
     _assert_iso_server_time(body["server_time"])
 
 

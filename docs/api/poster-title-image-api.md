@@ -41,8 +41,8 @@ CPP 传入参考图、AI 服务返回生成图片时都使用 `OSS URL Ref`。AI
 
 ```json
 {
-  "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/poster-title/018f9a7f/es-ES/title-layer.png",
-  "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/es-ES/title-layer.png",
+  "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/poster-title/018f9a7f/es/title-layer.png",
+  "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/es/title-layer.png",
   "content_type": "image/png",
   "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 }
@@ -135,7 +135,7 @@ CPP 可以调用服务级基础模型目录 `GET /api/v1/ai-jobs/models` 渲染�
 
 CPP 可以调用服务级基础语言目录 `GET /api/v1/ai-jobs/languages` 渲染语言名称。该接口只返回语言基础信息，不接收 `job_type`，不返回 `poster_title_image` 业务字段。
 
-本文不定义 `/languages` 的响应结构；该接口需要在共享服务合同中另行发布。发布前，`poster_title_image` 可用语言只以本文 `POST /jobs` 的 Job constraints 和服务端校验为准。
+本文不重复定义 `/languages` 的完整响应结构；该接口的权威合同以 [`service-contract.md`](service-contract.md) 为准，语种主表见 [`业务语种规范.md`](业务语种规范.md)。`poster_title_image` 可用语言是共享语种目录与本文 `POST /jobs` Job constraints 的交集，并以服务端校验为准。
 
 ## 3. Prompt Templates
 
@@ -144,7 +144,7 @@ CPP 可以调用服务级基础语言目录 `GET /api/v1/ai-jobs/languages` 渲�
 ### Method / Path
 
 ```http
-GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image&language=es-ES&model_id=gpt-image-2
+GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image&language=es&model_id=gpt-image-2
 ```
 
 ### Purpose
@@ -169,7 +169,7 @@ CPP 用该接口获取指定 `job_type` 下的默认提示词。提示词按组�
   "data": {
     "schema_version": "default",
     "job_type": "poster_title_image",
-    "language": "es-ES",
+    "language": "es",
     "model_id": "gpt-image-2",
     "groups": [
       {
@@ -203,7 +203,7 @@ CPP 用该接口获取指定 `job_type` 下的默认提示词。提示词按组�
         "prompts": [
           {
             "prompt_key": "layout_rules",
-            "prompt_ref": "poster_title_image.layout_rules.es-ES.v1",
+            "prompt_ref": "poster_title_image.layout_rules.es.v1",
             "content": "标题为横向标题区。先评估该语言文案的视觉宽度..."
           }
         ]
@@ -247,8 +247,8 @@ POST /api/v1/ai-jobs/jobs
   "job_params": {
     "items": [
       {
-        "item_id": "es-ES",
-        "language": "es-ES",
+        "item_id": "es",
+        "language": "es",
         "title_text": "Cuando el amor se alejó",
         "model_id": "gpt-image-2",
         "model_options": {
@@ -259,8 +259,8 @@ POST /api/v1/ai-jobs/jobs
           "output_format": "png"
         },
         "reference_image": {
-          "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/artwork_cover/material/200000000000006250/160001000000006250/title/es-ES.png",
-          "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/artwork_cover/material/200000000000006250/160001000000006250/title/es-ES.png",
+          "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/artwork_cover/material/200000000000006250/160001000000006250/title/es.png",
+          "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/artwork_cover/material/200000000000006250/160001000000006250/title/es.png",
           "content_type": "image/png",
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -271,8 +271,8 @@ POST /api/v1/ai-jobs/jobs
         }
       },
       {
-        "item_id": "pt-BR",
-        "language": "pt-BR",
+        "item_id": "pt",
+        "language": "pt",
         "title_text": "Quando o amor se foi",
         "model_id": "gpt-image-2",
         "model_options": {
@@ -283,8 +283,8 @@ POST /api/v1/ai-jobs/jobs
           "output_format": "png"
         },
         "reference_image": {
-          "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/artwork_cover/material/200000000000006250/160001000000006250/title/pt-BR.png",
-          "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/artwork_cover/material/200000000000006250/160001000000006250/title/pt-BR.png",
+          "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/artwork_cover/material/200000000000006250/160001000000006250/title/pt.png",
+          "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/artwork_cover/material/200000000000006250/160001000000006250/title/pt.png",
           "content_type": "image/png",
           "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         },
@@ -319,7 +319,7 @@ Field rules:
 | `job_type` | 是 | 固定为 `poster_title_image` |
 | `job_params.items` | 是 | 批量生成 item，至少 1 个，最多由本接口 Job 约束决定 |
 | `job_params.items[].item_id` | 是 | 调用方提供的稳定 item 关联键；同一 Job 内唯一，不应由服务端推导 |
-| `job_params.items[].language` | 是 | 来自语言列表接口，且必须符合本接口 Job 约束 |
+| `job_params.items[].language` | 是 | 语种代码，必须来自共享语言列表并符合本接口 Job 约束 |
 | `job_params.items[].title_text` | 是 | 目标语言标题文本 |
 | `job_params.items[].model_id` | 是 | 来自模型列表接口，且必须符合本接口 Job 约束 |
 | `job_params.items[].model_options.size` | 是 | 目标输出尺寸 |
@@ -340,11 +340,13 @@ Field rules:
 
 Job constraints:
 
+本表是 `poster_title_image` vNext 自身约束。新增地区变体前，必须先进入共享语种目录，不能在本接口单独维护平行语种代码。
+
 | 约束 | 值 |
 |---|---:|
 | `job_params.items` | 1 到 20 个 item |
 | `job_params.items[].item_id` | 1 到 64 个字符；同一 Job 内唯一 |
-| `job_params.items[].language` | `ja`、`ko`、`ar`、`th`、`ru`、`fr`、`de`、`es-ES`、`es-419`、`pt-BR`、`pt-PT`、`pl`；首版同一 Job 内唯一 |
+| `job_params.items[].language` | `ja`、`ko`、`ar`、`th`、`ru`、`fr`、`de`、`es`、`pt`、`pl`；首版同一 Job 内唯一 |
 | `job_params.items[].title_text` | 1 到 200 个字符 |
 | `job_params.items[].model_id` | 首版固定为 `gpt-image-2` |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
@@ -472,14 +474,14 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         },
         "items": [
           {
-            "item_id": "es-ES",
-            "language": "es-ES",
+            "item_id": "es",
+            "language": "es",
             "status": "succeeded",
             "images": [
               {
                 "object": {
-                  "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/poster-title/018f9a7f/es-ES/title-layer.png",
-                  "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/es-ES/title-layer.png",
+                  "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/poster-title/018f9a7f/es/title-layer.png",
+                  "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/es/title-layer.png",
                   "content_type": "image/png",
                   "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                 }
@@ -488,8 +490,8 @@ GET /api/v1/ai-jobs/jobs/{job_id}
             "error": null
           },
           {
-            "item_id": "pt-BR",
-            "language": "pt-BR",
+            "item_id": "pt",
+            "language": "pt",
             "status": "running",
             "images": [],
             "error": null
@@ -546,14 +548,14 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         },
         "items": [
           {
-            "item_id": "es-ES",
-            "language": "es-ES",
+            "item_id": "es",
+            "language": "es",
             "status": "succeeded",
             "images": [
               {
                 "object": {
-                  "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/poster-title/018f9a7f/es-ES/title-layer.png",
-                  "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/es-ES/title-layer.png",
+                  "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/poster-title/018f9a7f/es/title-layer.png",
+                  "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/es/title-layer.png",
                   "content_type": "image/png",
                   "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                 }
@@ -562,14 +564,14 @@ GET /api/v1/ai-jobs/jobs/{job_id}
             "error": null
           },
           {
-            "item_id": "pt-BR",
-            "language": "pt-BR",
+            "item_id": "pt",
+            "language": "pt",
             "status": "succeeded",
             "images": [
               {
                 "object": {
-                  "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/poster-title/018f9a7f/pt-BR/title-layer.png",
-                  "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/pt-BR/title-layer.png",
+                  "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/poster-title/018f9a7f/pt/title-layer.png",
+                  "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/pt/title-layer.png",
                   "content_type": "image/png",
                   "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
                 }
@@ -633,8 +635,8 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         },
         "items": [
           {
-            "item_id": "es-ES",
-            "language": "es-ES",
+            "item_id": "es",
+            "language": "es",
             "status": "failed",
             "images": [],
             "error": {
@@ -646,8 +648,8 @@ GET /api/v1/ai-jobs/jobs/{job_id}
             }
           },
           {
-            "item_id": "pt-BR",
-            "language": "pt-BR",
+            "item_id": "pt",
+            "language": "pt",
             "status": "failed",
             "images": [],
             "error": {

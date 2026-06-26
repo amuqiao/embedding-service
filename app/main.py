@@ -102,10 +102,12 @@ def _install_envelope_openapi_contract(schema: dict) -> None:
             "minLength": 1,
             "maxLength": 128,
             "pattern": r"^[a-zA-Z0-9._:-]{1,128}$",
-            "default": DEFAULT_REQUEST_ID,
         },
-        "example": DEFAULT_REQUEST_ID,
-        "description": "Optional request trace ID. Invalid values return HTTP 400 with code 100002.",
+        "example": "trace-id-123",
+        "description": (
+            "Optional request trace ID. When omitted, the service generates one. "
+            "Invalid values return HTTP 400 with code 100002."
+        ),
     }
     for path, path_item in schema.get("paths", {}).items():
         if not path.startswith(API_PREFIX):
@@ -142,7 +144,6 @@ _HEALTH_PATHS = {"/health", "/healthz"}
 _ENVELOPE_FIELDS = {"code", "msg", "data", "request_id", "server_time"}
 # 只允许 ASCII 字母、数字、点号、下划线、冒号和连字符，最长 128 字符
 _REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9._:-]{1,128}$")
-DEFAULT_REQUEST_ID = "default"
 
 
 def _new_request_id() -> str:
@@ -171,7 +172,7 @@ def _filtered_headers(response: Response) -> dict[str, str]:
 class RequestIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         raw_id = request.headers.get("X-Request-ID")
-        if raw_id and not _REQUEST_ID_RE.fullmatch(raw_id):
+        if raw_id is not None and not _REQUEST_ID_RE.fullmatch(raw_id):
             request_id = _new_request_id()
             request.state.request_id = request_id
             set_request_id(request_id)
@@ -188,7 +189,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
                 content=jsonable_encoder(body),
                 headers={"X-Request-ID": request_id},
             )
-        request_id = raw_id if raw_id else DEFAULT_REQUEST_ID
+        request_id = raw_id if raw_id is not None else _new_request_id()
         request.state.request_id = request_id
         set_request_id(request_id)
         started = time.monotonic()

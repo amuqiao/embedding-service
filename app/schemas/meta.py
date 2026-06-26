@@ -21,6 +21,16 @@ class ModelsResponse(BaseModel):
     cost_estimate_available: bool | None = None
 
 
+class LanguageOut(BaseModel):
+    language: str
+    display_name: str
+    native_name: str
+
+
+class LanguagesResponse(BaseModel):
+    languages: list[LanguageOut]
+
+
 class PromptBlockTemplate(BaseModel):
     key: str
     role: str

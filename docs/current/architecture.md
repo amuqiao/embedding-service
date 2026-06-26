@@ -53,6 +53,14 @@ API 与 worker 可以多副本运行。并发安全依赖数据库唯一约束�
 
 HTTP 成功响应由统一 middleware 包装为 `HttpEnvelope[T]`。route 函数只返回内层 data schema，例如 `JobResponseData`、`JobBillingResponseData`。
 
+请求身份和请求追踪是两条边界：
+
+- `require_service_auth` 解析 `X-AI-Service-Caller-ID`，得到 caller 身份。
+- `RequestIDMiddleware` 解析或生成本次 HTTP 请求的 `request_id`。`X-Request-ID` 只作为可选链路追踪输入，不表示 caller 身份。
+- 对外 header 规则、错误语义和格式约束以 [`../api/service-contract.md`](../api/service-contract.md) 为准。
+
+`RequestIDMiddleware` 会把最终 `request_id` 写入 `request.state.request_id`、日志上下文和 `X-Request-ID` 响应头。成功响应由 `SuccessEnvelopeMiddleware` 使用同一个 `request.state.request_id` 生成 `HttpEnvelope.request_id`；错误响应由异常处理或 `RequestIDMiddleware` 早返回的 `ErrorEnvelope` 使用同一个 `request_id`。创建 Job 时，route 将该值传入 Job service，写入 `runtime_fields._system.trigger_request_id`；后续 Callback payload 的 `trigger_request_id` 也来自该值。
+
 公开 Job route：
 
 - `POST /api/v1/ai-jobs/jobs`
@@ -62,6 +70,7 @@ HTTP 成功响应由统一 middleware 包装为 `HttpEnvelope[T]`。route 函数
 元信息 route：
 
 - `GET /api/v1/ai-jobs/models`
+- `GET /api/v1/ai-jobs/languages`
 - `GET /api/v1/ai-jobs/prompt-templates`
 
 健康检查 route：

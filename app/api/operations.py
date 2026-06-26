@@ -9,6 +9,7 @@ OperationChannel = Literal["http", "callback", "external_write", "internal_servi
 
 class OperationID:
     LIST_MODELS = "list_models"
+    LIST_LANGUAGES = "list_languages"
     LIST_PROMPT_TEMPLATES = "list_prompt_templates"
     CREATE_AI_JOB = "create_ai_job"
     GET_AI_JOB = "get_ai_job"
@@ -44,6 +45,19 @@ _OPERATIONS: dict[str, OperationSpec] = {
         auth_boundary=_SERVICE_AUTH_BOUNDARY,
         request_schema=None,
         response_data_schema="ModelsResponse",
+        error_codes=_SERVICE_AUTH_ERRORS,
+        idempotency_key=None,
+        side_effects=(),
+        log_events=("request_completed", "request_failed"),
+    ),
+    OperationID.LIST_LANGUAGES: OperationSpec(
+        operation_id=OperationID.LIST_LANGUAGES,
+        channel="http",
+        method="GET",
+        path="/languages",
+        auth_boundary=_SERVICE_AUTH_BOUNDARY,
+        request_schema=None,
+        response_data_schema="LanguagesResponse",
         error_codes=_SERVICE_AUTH_ERRORS,
         idempotency_key=None,
         side_effects=(),

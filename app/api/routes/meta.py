@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends
 
 from app.api.operations import OperationID
 from app.core.security import require_service_auth
+from app.core.language_catalog import list_languages_response
 from app.core.model_registry import list_models_response
 from app.core.prompt_templates import list_prompt_templates
-from app.schemas.meta import ModelsResponse, PromptTemplatesResponse
+from app.schemas.meta import LanguagesResponse, ModelsResponse, PromptTemplatesResponse
 
 router = APIRouter(tags=["meta"], dependencies=[Depends(require_service_auth)])
 
@@ -17,6 +18,15 @@ router = APIRouter(tags=["meta"], dependencies=[Depends(require_service_auth)])
 )
 async def list_models():
     return list_models_response()
+
+
+@router.get(
+    "/languages",
+    response_model=LanguagesResponse,
+    operation_id=OperationID.LIST_LANGUAGES,
+)
+async def list_languages():
+    return list_languages_response()
 
 
 @router.get(

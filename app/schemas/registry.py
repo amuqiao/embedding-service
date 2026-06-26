@@ -28,7 +28,7 @@ from app.schemas.jobs import (
     JobRealLlmDoubleEchoResult,
     JobRealLlmDoubleEchoRuntimeFields,
 )
-from app.schemas.meta import ModelsResponse, PromptTemplatesResponse
+from app.schemas.meta import LanguagesResponse, ModelsResponse, PromptTemplatesResponse
 
 _SCHEMAS: dict[str, type[BaseModel]] = {
     schema.__name__: schema
@@ -60,6 +60,7 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
         JobRealLlmDoubleEchoRuntimeFields,
         JobRealLlmDoubleEchoResult,
         ModelsResponse,
+        LanguagesResponse,
         PromptTemplatesResponse,
     )
 }
