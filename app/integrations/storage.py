@@ -1,17 +1,25 @@
-import hashlib
 from pathlib import Path
 from typing import Protocol
 
 from app.core.exceptions import AppError
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
 from app.core.config import settings
-
-
-def sha256_digest(data: bytes) -> str:
-    return "sha256:" + hashlib.sha256(data).hexdigest()
+from app.integrations.object_storage import ObjectWriteResult, sha256_digest
 
 
 class ObjectStorage(Protocol):
+    def read_bytes(self, *, bucket: str, key: str, region: str) -> bytes: ...
+
+    def write_bytes(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        region: str,
+        data: bytes,
+        content_type: str = "application/octet-stream",
+    ) -> dict: ...
+
     def read_text(self, *, bucket: str, key: str, region: str) -> str: ...
 
     def write_text(self, *, bucket: str, key: str, region: str, content: str) -> dict: ...
@@ -23,13 +31,16 @@ class LocalObjectStorage:
 
     def _path(self, bucket: str, key: str) -> Path:
         clean_key = key.lstrip("/")
-        resolved = (self.root / bucket / clean_key).resolve()
         root_resolved = self.root.resolve()
-        if not str(resolved).startswith(str(root_resolved)):
+        bucket_root = (self.root / bucket).resolve()
+        if bucket_root != root_resolved and root_resolved not in bucket_root.parents:
+            raise AppError("INVALID_INPUT", "OSS bucket contains illegal path traversal")
+        resolved = (bucket_root / clean_key).resolve()
+        if resolved != bucket_root and bucket_root not in resolved.parents:
             raise AppError("INVALID_INPUT", "OSS key contains illegal path traversal")
         return resolved
 
-    def read_text(self, *, bucket: str, key: str, region: str) -> str:
+    def read_bytes(self, *, bucket: str, key: str, region: str) -> bytes:
         path = self._path(bucket, key)
         if not path.exists():
             raise AppError(
@@ -38,27 +49,49 @@ class LocalObjectStorage:
                 details={"oss_bucket": bucket, "oss_key": key, "oss_region": region},
             )
         try:
-            return path.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            raise AppError("INVALID_INPUT", "OSS object must be UTF-8 text") from exc
+            return path.read_bytes()
         except OSError as exc:
             raise AppError("OSS_FETCH_FAILED", "Failed to read OSS object") from exc
 
-    def write_text(self, *, bucket: str, key: str, region: str, content: str) -> dict:
+    def write_bytes(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        region: str,
+        data: bytes,
+        content_type: str = "application/octet-stream",
+    ) -> dict:
         path = self._path(bucket, key)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            data = content.encode("utf-8")
             path.write_bytes(data)
         except OSError as exc:
             raise AppError("OSS_WRITE_FAILED", "Failed to write OSS object") from exc
-        return {
-            "oss_bucket": bucket,
-            "oss_key": key,
-            "oss_region": region,
-            "content_hash": sha256_digest(data),
-            "content_size_bytes": len(data),
-        }
+        return ObjectWriteResult(
+            provider="local",
+            bucket=bucket,
+            key=key,
+            region=region,
+            content_type=content_type,
+            content_hash=sha256_digest(data),
+            content_size_bytes=len(data),
+        ).to_legacy_dict()
+
+    def read_text(self, *, bucket: str, key: str, region: str) -> str:
+        try:
+            return self.read_bytes(bucket=bucket, key=key, region=region).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AppError("INVALID_INPUT", "OSS object must be UTF-8 text") from exc
+
+    def write_text(self, *, bucket: str, key: str, region: str, content: str) -> dict:
+        return self.write_bytes(
+            bucket=bucket,
+            key=key,
+            region=region,
+            data=content.encode("utf-8"),
+            content_type="text/plain; charset=utf-8",
+        )
 
 
 class AliyunObjectStorage:
@@ -79,10 +112,10 @@ class AliyunObjectStorage:
                 details={"oss_region": region, "configured_region": self.client.config.region},
             )
 
-    def read_text(self, *, bucket: str, key: str, region: str) -> str:
+    def read_bytes(self, *, bucket: str, key: str, region: str) -> bytes:
         self._assert_target(bucket=bucket, region=region)
         try:
-            data = self.client.get_object(key)
+            return self.client.get_object(key)
         except AliyunOSSError as exc:
             message = str(exc)
             code = "OSS_OBJECT_NOT_FOUND" if "status=404" in message else "OSS_FETCH_FAILED"
@@ -91,29 +124,50 @@ class AliyunObjectStorage:
                 "OSS object not found" if code == "OSS_OBJECT_NOT_FOUND" else "Failed to read OSS object",
                 details={"oss_bucket": bucket, "oss_key": key, "oss_region": region},
             ) from exc
-        try:
-            return data.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise AppError("INVALID_INPUT", "OSS object must be UTF-8 text") from exc
 
-    def write_text(self, *, bucket: str, key: str, region: str, content: str) -> dict:
+    def write_bytes(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        region: str,
+        data: bytes,
+        content_type: str = "application/octet-stream",
+    ) -> dict:
         self._assert_target(bucket=bucket, region=region)
-        data = content.encode("utf-8")
         try:
-            self.client.put_object(key, data, content_type="text/plain; charset=utf-8")
+            self.client.put_object(key, data, content_type=content_type)
         except AliyunOSSError as exc:
             raise AppError(
                 "OSS_WRITE_FAILED",
                 "Failed to write OSS object",
                 details={"oss_bucket": bucket, "oss_key": key, "oss_region": region},
             ) from exc
-        return {
-            "oss_bucket": bucket,
-            "oss_key": self.client.object_key(key),
-            "oss_region": region,
-            "content_hash": sha256_digest(data),
-            "content_size_bytes": len(data),
-        }
+        return ObjectWriteResult(
+            provider="aliyun_oss",
+            bucket=bucket,
+            key=self.client.object_key(key),
+            region=region,
+            content_type=content_type,
+            content_hash=sha256_digest(data),
+            content_size_bytes=len(data),
+        ).to_legacy_dict()
+
+    def read_text(self, *, bucket: str, key: str, region: str) -> str:
+        data = self.read_bytes(bucket=bucket, key=key, region=region)
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AppError("INVALID_INPUT", "OSS object must be UTF-8 text") from exc
+
+    def write_text(self, *, bucket: str, key: str, region: str, content: str) -> dict:
+        return self.write_bytes(
+            bucket=bucket,
+            key=key,
+            region=region,
+            data=content.encode("utf-8"),
+            content_type="text/plain; charset=utf-8",
+        )
 
 
 def _build_storage() -> ObjectStorage:
