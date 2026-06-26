@@ -59,6 +59,7 @@ def connect_readonly(database_url: str | None = None, *, statement_timeout_ms: i
         raise ValueError("DATABASE_URL is required")
     conn = psycopg2.connect(
         normalize_database_url(raw_url, db_ssl=env_value("DB_SSL")),
+        connect_timeout=5,
         cursor_factory=RealDictCursor,
     )
     conn.autocommit = False

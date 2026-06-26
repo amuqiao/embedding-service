@@ -43,13 +43,15 @@ Job 是否积压?
 最常用的排查顺序：
 
 ```text
-1. doctor 先判断当前窗口是否需要处理，以及下一步查什么
-2. summary 看 Job、attempt、dispatch、callback 概览
-3. capacity 看 MAX_ACTIVE_JOBS 当前水位
-4. latency 看 queue/run/lifecycle p95
-5. list 找具体异常 Job
-6. inspect 深挖单个 Job
-7. stuck 查 lease/outbox 卡住
+1. pressure 在压测后汇总 HTTP、capacity、latency、stuck、failed 和 API log，先判断瓶颈方向
+2. drain 判断压测前后是否已经排空，未排空时不要开始下一档
+3. doctor 在非压测场景下先判断当前窗口是否需要处理，以及下一步查什么
+4. summary 看 Job、attempt、dispatch、callback 概览
+5. capacity 看 MAX_ACTIVE_JOBS 当前水位
+6. latency 看 queue/run/lifecycle p95
+7. list 找具体异常 Job
+8. inspect 深挖单个 Job
+9. stuck 查 lease/outbox 卡住
 ```
 
 ## 使用前提
@@ -65,7 +67,7 @@ Job 是否积压?
 
 ```text
 DATABASE_URL  必填，可来自运行环境或根目录 .env
-DB_SSL        可选；false/0/no/off 时追加 sslmode=disable
+DB_SSL        可选；false/0/no/off 且 DATABASE_URL 未显式配置 sslmode 时，使用 sslmode=disable
 ```
 
 在 Pod 内排障时，原则相同：确保当前环境有正确的 `DATABASE_URL`，然后执行同一组命令。
@@ -81,7 +83,9 @@ DB_SSL        可选；false/0/no/off 时追加 sslmode=disable
 
 | 命令 | 用途 | 常用场景 |
 | --- | --- | --- |
+| `pressure` | 聚合压测窗口并给出瓶颈方向 | 每一档 Locust 压测后首选 |
 | `doctor` | 对 summary 结果做诊断并给下一步命令 | 新维护人员或不确定从哪里查时先用 |
+| `drain` | 判断当前 scope 是否还有 active 或 stuck 证据 | 压测前后判断是否可以进入下一档 |
 | `summary` | 汇总 Job、attempt、dispatch、callback 状态 | 看当前窗口的关键计数和水位 |
 | `capacity` | 查看全局 active 水位和窗口估算 | 判断是否接近 `MAX_ACTIVE_JOBS` |
 | `latency` | 按维度统计生命周期耗时 | 判断慢在排队、执行还是整体生命周期 |
@@ -96,7 +100,78 @@ DB_SSL        可选；false/0/no/off 时追加 sslmode=disable
 
 ## 全局排障
 
-### 1. 先让脚本判断下一步
+### 1. 压测后先做一键诊断
+
+每一档 Locust 压测结束后，优先用 `pressure`，不要先手工分别查 CSV、日志、failed Job 和 stuck：
+
+```bash
+./scripts/jobs.sh pressure \
+  --since 10m \
+  --caller-id default \
+  --max-active-jobs 1000 \
+  --locust-prefix .run/load/<run-prefix> \
+  --api-log logs/api.log \
+  --api-log-tail 2000
+```
+
+如果不传 `--max-active-jobs`，脚本会读取环境或 `.env` 中的 `MAX_ACTIVE_JOBS`。
+
+`pressure` 会合并这些证据：
+
+```text
+Locust CSV
+  POST /jobs 请求数、失败数、p95/p99、HTTP 500/503 失败分布。
+
+capacity
+  全局 active 水位、窗口接单数、终态数、估算 active 需求。
+
+latency
+  queue wait、run、lifecycle p95 和终态成功率。
+
+stuck / failed samples
+  lease、dispatch、callback 卡住证据，以及 failed Job 分组。
+
+API log
+  在 --api-log-tail 范围内按日志时间过滤到 --since 窗口后，扫描 TooManyConnectionsError、900500、Traceback、容量门禁日志签名。
+```
+
+常见信号：
+
+```text
+status=ok
+  -> 当前窗口没有明显瓶颈信号；仍需 drain --strict 通过后才能进入下一档。
+
+signal=http_503_gate_hit
+  -> 主要是 503 容量门禁；如果 health 仍 200 且可排空，说明保护生效。
+
+signal=http_5xx
+  -> 出现 HTTP 500 或非 503 的 5xx；不要继续升压，先查 API/DB/Redis/日志。
+
+signal=http_failures_db_mismatch
+  -> Locust 大量失败但 DB 接单数对不上，常见于服务不可达、路径/前缀错误、认证错误或响应体不是 Job JSON。
+
+signal=api_log_db_connection_pressure / db_connection_pressure
+  -> 日志或 failed Job 明确出现数据库连接耗尽；先治理连接池、PostgreSQL 连接上限、API/worker 并发，不要继续放大 MAX_ACTIVE_JOBS。
+
+signal=window_not_terminal
+  -> 压测窗口尚未全部到终态；当前 lifecycle p95 和容量估算只能当中间态。
+
+signal=published_dispatch_not_claimed
+  -> dispatch 已发布但 worker 未领取；先查 worker/broker 消费。
+```
+
+注意：API log 过滤依赖应用日志行首的 `YYYY-MM-DD HH:MM:SS,mmm` 时间戳，Traceback 的续行会归到前一个有时间戳的日志事件。连续压多档时，优先给每档使用独立日志或收窄 `--since` / `--api-log-tail`，避免上一档的异常污染本档判断。
+
+`pressure` 返回 `critical` 时，本档直接判定不通过。下一步通常是：
+
+```bash
+./scripts/jobs.sh drain --since 10m --caller-id default --older-than 1m --strict
+./scripts/jobs.sh list --status failed --since 10m --caller-id default --limit 20
+./scripts/jobs.sh inspect <job_id> --events-limit 50
+./scripts/dev.sh status
+```
+
+### 2. 非压测场景先让脚本判断下一步
 
 ```bash
 ./scripts/jobs.sh doctor --since 10m
@@ -118,7 +193,51 @@ DB_SSL        可选；false/0/no/off 时追加 sslmode=disable
 ./scripts/jobs.sh doctor --since 10m --json
 ```
 
-### 2. 看当前 10 分钟整体状态
+### 3. 判断是否排空
+
+压测前和每一档压测后，先用 `drain` 判断是否还有 active Job 或疑似 stuck 证据：
+
+```bash
+./scripts/jobs.sh drain --since 30m --caller-id default
+./scripts/jobs.sh drain --since 30m --caller-id default --strict --json
+```
+
+`--strict` 适合脚本化压测；只要当前 scope 未排空就返回非 0。不要只用 `list --status queued,running --since 30m` 判断排空，因为这个命令按 `created_at` 窗口筛选，可能漏掉窗口外创建但仍占全局 active 门禁的老 Job。
+
+关键字段：
+
+```text
+current.active_jobs
+  当前 scope 的实时 active 计数。
+
+window.active_jobs
+  当前 --since 窗口内创建的 active Job。
+
+stuck.total
+  当前 --since 和 --older-than 条件下发现的疑似 stuck 数量。
+```
+
+判断方式：
+
+```text
+status=drained
+  -> 当前 scope 没有 active、running_inactive、failed 或 stuck 证据，可以进入下一档压测或结束本轮观察。
+
+status=not_drained 且 stuck.total=0
+  -> 还有 queued/running/running_inactive 或 failed，先等待排空或 inspect 失败样本，再复查 latency 和 capacity。
+
+status=not_drained 且 stuck.total>0
+  -> 先看 stuck.sample，再 inspect 对应 job_id。
+```
+
+压测刚结束时可以把 stuck 判定窗口调短，快速定位本轮残留：
+
+```bash
+./scripts/jobs.sh drain --since 20m --caller-id default --older-than 1m --json
+./scripts/jobs.sh stuck --since 20m --caller-id default --older-than 1m --json
+```
+
+### 4. 看当前 10 分钟整体状态
 
 ```bash
 ./scripts/jobs.sh summary --since 10m
@@ -167,16 +286,16 @@ callbacks.due 高
   -> callback 投递或目标服务异常
 ```
 
-### 3. 看 MAX_ACTIVE_JOBS 水位
+### 5. 看 MAX_ACTIVE_JOBS 水位
 
 ```bash
-./scripts/jobs.sh capacity --since 10m --max-active-jobs 750
+./scripts/jobs.sh capacity --since 10m --caller-id default --max-active-jobs <当前值>
 ```
 
 如果不传 `--max-active-jobs`，脚本会尝试读取环境或 `.env` 里的 `MAX_ACTIVE_JOBS`：
 
 ```bash
-./scripts/jobs.sh capacity --since 10m
+./scripts/jobs.sh capacity --since 10m --caller-id default
 ```
 
 关键字段：
@@ -189,7 +308,8 @@ window.accepted_jobs
   估算窗口内创建的 Job 数。
 
 window.accepted_submit_rps
-  accepted_jobs / window_seconds。
+  accepted_jobs / effective_window_seconds。
+  effective_window_seconds 优先使用 first_created_at 到 newest_created_at 的实际跨度；没有跨度时退回 --since 秒数。
 
 window.lifecycle_p95_seconds
   Job 从 created_at 到 finished_at 的 p95 生命周期时长。
@@ -207,7 +327,11 @@ estimated.headroom
 
 注意：`capacity.current` 是全局实时值，不受 `--since` 限制；`capacity.window` 受 `--since` 限制；`estimated.active_jobs_needed_upper_bound` 来自窗口估算，但 `estimated.active_ratio` 和 `estimated.headroom` 来自全局实时 `current.active_jobs`。
 
-### 4. 看延迟分布
+如果传了 `--caller-id` 或 `--job-type`，过滤只作用于 `capacity.window` 的估算口径；`capacity.current` 仍然是全局 active 门禁口径。这样既能按本轮压测 caller 估算 RPS，又不会误读全局门禁水位。
+
+压测刚结束且 `terminal_jobs < accepted_jobs` 时，不要过早采信 lifecycle p95 和容量上界。先等 `drain` 排空，或至少明确当前估算只代表“尚未完全终态”的中间状态。
+
+### 6. 看延迟分布
 
 ```bash
 ./scripts/jobs.sh latency --since 30m --group-by job_type
@@ -309,7 +433,8 @@ callbacks
 
 ```bash
 ./scripts/jobs.sh stuck --older-than 10m --limit 50
-./scripts/jobs.sh stuck --older-than 30m --json
+./scripts/jobs.sh stuck --older-than 30m --caller-id default --json
+./scripts/jobs.sh stuck --older-than 1m --since 20m --caller-id default --json
 ```
 
 `stuck` 用来找明显不该长期停留的状态，例如：
@@ -324,11 +449,60 @@ terminal_callback_not_settled
 
 如果 `stuck` 有结果，先看 `issue` 和 `detail`，再用 `inspect <job_id>` 追单个 Job。
 
+压测排障时优先加 `--caller-id` 和 `--since`，避免历史数据或其他调用方污染本轮判断。`published_dispatch_not_claimed` 表示 dispatch 已发布但 attempt 仍未被 worker 领取，通常下一步看 worker 日志、broker 消费和 `inspect <job_id>` 的 timeline。
+
 ## 典型排障路径
+
+### 压测后出现 HTTP 500
+
+先不要继续提高 `MAX_ACTIVE_JOBS` 或 Locust 用户数，用 `pressure` 直接聚合本轮证据：
+
+```bash
+./scripts/jobs.sh pressure \
+  --since 10m \
+  --caller-id default \
+  --max-active-jobs <当前值> \
+  --locust-prefix .run/load/<run-prefix> \
+  --api-log logs/api.log \
+  --api-log-tail 2000
+```
+
+如果输出同时包含下面信号，瓶颈已经可以定位到数据库连接预算，而不是 `MAX_ACTIVE_JOBS` 门禁：
+
+```text
+critical http     http_5xx
+critical database api_log_db_connection_pressure
+critical execution job_failures
+critical database db_connection_pressure
+```
+
+继续确认失败样本：
+
+```bash
+./scripts/jobs.sh list --caller-id default --status failed --since 10m --limit 20
+./scripts/jobs.sh inspect <job_id> --events-limit 50
+```
+
+如果 `failure_phase=execute` 且错误类型是 `TooManyConnectionsError`，本档压测不通过。下一步是降低入口速率、降低 `MAX_ACTIVE_JOBS`，或治理 PostgreSQL 连接池和 API/worker 总连接数。
+
+本地 `MAX_ACTIVE_JOBS=1000` 的一次 `submit -u 20 -r 10 -t 30s` 复测中，Locust 记录 `POST /jobs` 562 次请求、2 次 HTTP 500。`pressure` 给出的关键结果是：
+
+```text
+status=critical
+http.post_jobs.failure_count=2
+api_log.matches.too_many_connections=9
+failure_groups[0].detail_type=TooManyConnectionsError
+stuck.sample_count=1
+stuck.sample[0].issue=published_dispatch_not_claimed
+capacity.current.active_jobs=2
+```
+
+这类结果应立即停止升压。即使 `/health` 仍是 200，也不能把这一档视为通过；需要先处理 DB 连接压力和 worker/broker 领取残留。
 
 ### POST /jobs 返回 503
 
 ```bash
+./scripts/jobs.sh pressure --since 10m --caller-id default --max-active-jobs <当前值> --locust-prefix .run/load/<run-prefix>
 ./scripts/jobs.sh capacity --since 10m --max-active-jobs <当前值>
 ./scripts/jobs.sh summary --since 10m
 ./scripts/jobs.sh latency --since 30m --group-by job_type
@@ -337,15 +511,44 @@ terminal_callback_not_settled
 判断：
 
 ```text
-active_ratio 接近 1，queued/running 能排空，组件健康
+pressure 命中 http_503_gate_hit，failures.csv 响应体含 active_jobs/limit，queued/running 能排空，组件健康
   -> 可以按 MAX_ACTIVE_JOBS 估算文档小步调大。
 
-active_ratio 接近 1，但 queued 持续增长
+503 同时 queued 持续增长或 drain 不通过
   -> 先扩 worker 消费能力，不要只调大 MAX_ACTIVE_JOBS。
 
 出现 500、TooManyConnectionsError、Pod restart、OOM
   -> 先查硬瓶颈，不要调大 MAX_ACTIVE_JOBS。
 ```
+
+### 压测 HTTP 0 失败，但 Job 没排空
+
+先确认 Locust 的 HTTP 结果，再用 `jobs.sh` 查 Job 终态：
+
+```bash
+sed -n '1,20p' .run/load/<run>_stats.csv
+sed -n '1,50p' .run/load/<run>_failures.csv
+./scripts/jobs.sh drain --since 20m --caller-id default --older-than 1m --json
+./scripts/jobs.sh latency --since 20m --caller-id default --group-by job_type --json
+```
+
+如果 `failures.csv` 为空，但 `drain` 显示 `failed > 0` 或 `stuck.total > 0`，说明 HTTP 接单成功不等于 Job 执行成功。继续找样本：
+
+```bash
+./scripts/jobs.sh list --caller-id default --status failed --since 20m --limit 20
+./scripts/jobs.sh list --caller-id default --status queued,running --since 20m --limit 20
+./scripts/jobs.sh inspect <job_id> --events-limit 50
+```
+
+本地 `MAX_ACTIVE_JOBS=750` 的一次 submit 压测中，Locust `POST /jobs` 没有 HTTP 失败，但 `drain` 发现 1 个 failed Job 和 1 个长期 queued Job。`inspect` failed Job 后看到：
+
+```text
+failure_phase=execute
+error.details.type=TooManyConnectionsError
+error.details.message=sorry, too many clients already
+```
+
+这类结果应判定为执行侧或数据库连接容量压力，而不是 API 接单失败。`inspect` queued Job 后看到 `dispatch.published` 后没有 `attempt.claimed`，`stuck --older-than 1m --since 20m --caller-id default` 应报告 `published_dispatch_not_claimed`，下一步查 worker/broker 消费。
 
 ### 任务积压但没有 503
 
@@ -447,6 +650,8 @@ tests/test_dev_scripts.py
 
 `summary --since` 统计的是指定窗口内创建的 Job 及其关联 attempt/outbox 状态；它不是全库实时总览。
 
+`drain.current` 是当前 scope 的实时 active 计数，适合判断是否可以进入下一档压测。`drain.window` 是 `--since` 窗口内创建的 Job 统计，适合复盘本轮压测。
+
 `capacity.current` 是全局实时 active 水位；`capacity.window` 才是窗口统计。不要把两者直接当成同一个时间范围。
 
 `lifecycle_p95_seconds` 是 `finished_at - created_at`。它适合做容量上界估算，但不等于精确 active 门禁占用时长；workflow root 等待子任务时可能不占 active 门禁。
@@ -461,9 +666,12 @@ tests/test_dev_scripts.py
 ./scripts/jobs.sh --help
 ./scripts/jobs.sh types
 
+./scripts/jobs.sh pressure --since 10m --caller-id default --max-active-jobs <当前值> --locust-prefix .run/load/<run-prefix> --api-log logs/api.log
 ./scripts/jobs.sh doctor --since 10m
+./scripts/jobs.sh drain --since 30m --caller-id default
+./scripts/jobs.sh drain --since 30m --caller-id default --strict --json
 ./scripts/jobs.sh summary --since 10m
-./scripts/jobs.sh capacity --since 10m --max-active-jobs 750
+./scripts/jobs.sh capacity --since 10m --caller-id default --max-active-jobs <当前值>
 ./scripts/jobs.sh latency --since 30m --group-by job_type
 
 ./scripts/jobs.sh list --status queued,running --since 30m --limit 20
@@ -474,5 +682,5 @@ tests/test_dev_scripts.py
 ./scripts/jobs.sh attempts <job_id>
 ./scripts/jobs.sh callbacks <job_id>
 
-./scripts/jobs.sh stuck --older-than 10m --limit 50
+./scripts/jobs.sh stuck --older-than 10m --since 30m --caller-id default --limit 50
 ```

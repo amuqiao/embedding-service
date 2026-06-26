@@ -310,6 +310,40 @@ def latency(
     )
 
 
+def failure_groups(
+    conn: connection,
+    *,
+    job_type: str | None,
+    caller_id: str | None,
+    since: datetime | None,
+    limit: int,
+) -> list[dict]:
+    filters, params = _scope_filters(table_alias="j", job_type=job_type, caller_id=caller_id, since=since)
+    params["limit"] = limit
+    return _fetch_all(
+        conn,
+        f"""
+        SELECT
+          COALESCE(j.error->>'code', '-') AS error_code,
+          COALESCE(a.error_kind, '-') AS error_kind,
+          COALESCE(a.failure_phase, '-') AS failure_phase,
+          COALESCE(j.error->'details'->>'type', '-') AS detail_type,
+          COALESCE(j.error->'details'->>'message', j.error->>'message', '-') AS detail_message,
+          count(*) AS count,
+          max(j.updated_at) AS newest_updated_at
+        FROM job_aggregates j
+        LEFT JOIN job_execution_attempts a ON a.id = j.active_attempt_id
+        WHERE j.deleted_at IS NULL
+          AND j.status = 'failed'
+          {filters}
+        GROUP BY 1, 2, 3, 4, 5
+        ORDER BY count DESC, newest_updated_at DESC
+        LIMIT %(limit)s
+        """,
+        params,
+    )
+
+
 def capacity(
     conn: connection,
     *,
@@ -318,7 +352,6 @@ def capacity(
     since: datetime,
     window_seconds: float,
 ) -> dict[str, Any]:
-    scope_filters, scope_params = _scope_filters(table_alias="j", job_type=job_type, caller_id=caller_id)
     window_filters, window_params = _scope_filters(
         table_alias="j",
         job_type=job_type,
@@ -337,9 +370,8 @@ def capacity(
           count(*) FILTER (WHERE j.status = 'running' AND j.active_attempt_id IS NOT NULL) AS running_active
         FROM job_aggregates j
         WHERE j.deleted_at IS NULL
-        {scope_filters}
         """,
-        scope_params,
+        {},
     ) or {}
     window = _fetch_one(
         conn,
@@ -347,6 +379,8 @@ def capacity(
         SELECT
           count(*) AS accepted_jobs,
           count(*) FILTER (WHERE j.finished_at IS NOT NULL) AS terminal_jobs,
+          min(j.created_at) AS first_created_at,
+          max(j.created_at) AS newest_created_at,
           percentile_cont(0.95) WITHIN GROUP (
             ORDER BY EXTRACT(EPOCH FROM (j.finished_at - j.created_at))
           ) FILTER (WHERE j.finished_at IS NOT NULL) AS lifecycle_p95_seconds
@@ -358,7 +392,15 @@ def capacity(
     ) or {}
     accepted_jobs = int(window.get("accepted_jobs") or 0)
     lifecycle_p95_seconds = window.get("lifecycle_p95_seconds")
-    accepted_submit_rps = accepted_jobs / window_seconds if window_seconds > 0 else None
+    first_created_at = window.get("first_created_at")
+    newest_created_at = window.get("newest_created_at")
+    observed_span_seconds = (
+        (newest_created_at - first_created_at).total_seconds()
+        if first_created_at is not None and newest_created_at is not None and newest_created_at > first_created_at
+        else None
+    )
+    effective_window_seconds = observed_span_seconds if observed_span_seconds and observed_span_seconds > 0 else window_seconds
+    accepted_submit_rps = accepted_jobs / effective_window_seconds if effective_window_seconds > 0 else None
     active_jobs_needed_upper_bound = (
         accepted_submit_rps * float(lifecycle_p95_seconds)
         if accepted_submit_rps is not None and lifecycle_p95_seconds is not None
@@ -366,7 +408,13 @@ def capacity(
     )
     return {
         "current": active,
-        "window": window | {"window_seconds": window_seconds, "accepted_submit_rps": accepted_submit_rps},
+        "window": window
+        | {
+            "window_seconds": window_seconds,
+            "observed_span_seconds": observed_span_seconds,
+            "effective_window_seconds": effective_window_seconds,
+            "accepted_submit_rps": accepted_submit_rps,
+        },
         "estimated": {"active_jobs_needed_upper_bound": active_jobs_needed_upper_bound},
     }
 
@@ -416,21 +464,34 @@ def timeline(conn: connection, job_id: str, *, limit: int) -> list[dict]:
     return _fetch_all(
         conn,
         """
-        SELECT e.id::text, e.job_id::text, e.attempt_id::text, e.callback_id::text,
-               e.event_type, e.from_status, e.to_status, e.reason, e.payload, e.created_at
-        FROM job_audit_events e
-        JOIN job_aggregates j ON j.id = e.job_id
-        WHERE e.job_id = %(job_id)s
-          AND j.deleted_at IS NULL
-        ORDER BY e.created_at ASC
-        LIMIT %(limit)s
+        SELECT *
+        FROM (
+          SELECT e.id::text, e.job_id::text, e.attempt_id::text, e.callback_id::text,
+                 e.event_type, e.from_status, e.to_status, e.reason, e.payload, e.created_at
+          FROM job_audit_events e
+          JOIN job_aggregates j ON j.id = e.job_id
+          WHERE e.job_id = %(job_id)s
+            AND j.deleted_at IS NULL
+          ORDER BY e.created_at DESC
+          LIMIT %(limit)s
+        ) recent_events
+        ORDER BY created_at ASC
         """,
         {"job_id": job_id, "limit": limit},
     )
 
 
-def stuck(conn: connection, *, older_than: timedelta, limit: int) -> list[dict]:
+def stuck(
+    conn: connection,
+    *,
+    older_than: timedelta,
+    limit: int,
+    job_type: str | None = None,
+    caller_id: str | None = None,
+    since: datetime | None = None,
+) -> list[dict]:
     cutoff = datetime.now(timezone.utc) - older_than
+    scope_filters, scope_params = _scope_filters(table_alias="j", job_type=job_type, caller_id=caller_id, since=since)
     return _fetch_all(
         conn,
         """
@@ -448,6 +509,7 @@ def stuck(conn: connection, *, older_than: timedelta, limit: int) -> list[dict]:
             AND d.status IN ('pending', 'retrying')
             AND d.created_at < %(cutoff)s
             AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= now())
+            {scope_filters}
         )
         UNION ALL
         (
@@ -463,7 +525,7 @@ def stuck(conn: connection, *, older_than: timedelta, limit: int) -> list[dict]:
             AND a.status = 'pending'
             AND d.status = 'published'
             AND d.published_at < %(cutoff)s
-            AND d.next_attempt_at <= now()
+            {scope_filters}
         )
         UNION ALL
         (
@@ -476,7 +538,8 @@ def stuck(conn: connection, *, older_than: timedelta, limit: int) -> list[dict]:
           WHERE j.deleted_at IS NULL
             AND j.status = 'running'
             AND a.status = 'running'
-            AND a.lease_expires_at < now()
+            AND a.lease_expires_at < %(cutoff)s
+            {scope_filters}
         )
         UNION ALL
         (
@@ -488,7 +551,8 @@ def stuck(conn: connection, *, older_than: timedelta, limit: int) -> list[dict]:
           JOIN job_aggregates j ON j.id = c.job_id
           WHERE j.deleted_at IS NULL
             AND c.status = 'leased'
-            AND c.lease_expires_at < now()
+            AND c.lease_expires_at < %(cutoff)s
+            {scope_filters}
         )
         UNION ALL
         (
@@ -501,9 +565,85 @@ def stuck(conn: connection, *, older_than: timedelta, limit: int) -> list[dict]:
             AND j.status IN ('succeeded', 'failed')
             AND j.callback_status IN ('pending', 'delivering')
             AND j.finished_at < %(cutoff)s
+            {scope_filters}
         )
         ORDER BY since_at ASC NULLS LAST
         LIMIT %(limit)s
-        """,
-        {"cutoff": cutoff, "limit": limit},
+        """.format(scope_filters=scope_filters),
+        {"cutoff": cutoff, "limit": limit, **scope_params},
     )
+
+
+def drain_status(
+    conn: connection,
+    *,
+    job_type: str | None,
+    caller_id: str | None,
+    since: datetime,
+    older_than: timedelta,
+) -> dict[str, Any]:
+    current_filters, current_params = _scope_filters(table_alias="j", job_type=job_type, caller_id=caller_id)
+    window_filters, window_params = _scope_filters(
+        table_alias="j",
+        job_type=job_type,
+        caller_id=caller_id,
+        since=since,
+    )
+    current = _fetch_one(
+        conn,
+        f"""
+        SELECT
+          count(*) FILTER (WHERE j.status = 'queued') AS queued,
+          count(*) FILTER (WHERE j.status = 'running') AS running,
+          count(*) FILTER (WHERE j.status = 'running' AND j.active_attempt_id IS NOT NULL) AS running_active,
+          count(*) FILTER (WHERE j.status = 'running' AND j.active_attempt_id IS NULL) AS running_inactive,
+          count(*) FILTER (
+            WHERE j.status = 'queued'
+               OR (j.status = 'running' AND j.active_attempt_id IS NOT NULL)
+          ) AS active_jobs
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NULL
+        {current_filters}
+        """,
+        current_params,
+    ) or {}
+    window = _fetch_one(
+        conn,
+        f"""
+        SELECT
+          count(*) AS total,
+          count(*) FILTER (WHERE j.status = 'queued') AS queued,
+          count(*) FILTER (WHERE j.status = 'running') AS running,
+          count(*) FILTER (WHERE j.status = 'running' AND j.active_attempt_id IS NOT NULL) AS running_active,
+          count(*) FILTER (WHERE j.status = 'running' AND j.active_attempt_id IS NULL) AS running_inactive,
+          count(*) FILTER (
+            WHERE j.status = 'queued'
+               OR (j.status = 'running' AND j.active_attempt_id IS NOT NULL)
+          ) AS active_jobs,
+          count(*) FILTER (WHERE j.status = 'succeeded') AS succeeded,
+          count(*) FILTER (WHERE j.status = 'failed') AS failed,
+          min(j.created_at) AS oldest_created_at,
+          max(j.created_at) AS newest_created_at
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NULL
+        {window_filters}
+        """,
+        window_params,
+    ) or {}
+    stuck_rows = stuck(
+        conn,
+        older_than=older_than,
+        limit=1000,
+        job_type=job_type,
+        caller_id=caller_id,
+        since=since,
+    )
+    return {
+        "current": current,
+        "window": window,
+        "stuck": {
+            "total": len(stuck_rows),
+            "sample": stuck_rows[:20],
+            "truncated": len(stuck_rows) >= 1000,
+        },
+    }

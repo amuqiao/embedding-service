@@ -171,9 +171,16 @@ uv run --group load locust -f scripts/load/locustfile.py \
 ```bash
 sed -n '1,20p' ".run/load/${RUN_ID}-submit-u20_stats.csv"
 sed -n '1,50p' ".run/load/${RUN_ID}-submit-u20_failures.csv"
-./scripts/jobs.sh list --caller-id default --status queued --since 10m --limit 20
-./scripts/jobs.sh list --caller-id default --status running --since 10m --limit 20
-./scripts/jobs.sh stuck --older-than 5m
+./scripts/jobs.sh pressure \
+  --caller-id default \
+  --since 10m \
+  --max-active-jobs "${MAX_ACTIVE_JOBS}" \
+  --locust-prefix ".run/load/${RUN_ID}-submit-u20" \
+  --api-log logs/api.log \
+  --api-log-tail 2000
+./scripts/jobs.sh drain --caller-id default --since 10m --older-than 1m --json
+./scripts/jobs.sh list --caller-id default --status failed --since 10m --limit 20
+./scripts/jobs.sh stuck --caller-id default --since 10m --older-than 1m
 ```
 
 如果失败响应包含下面结构，说明接单容量门禁生效：
@@ -209,13 +216,13 @@ uv run --group load locust -f scripts/load/locustfile.py \
 ```bash
 sed -n '1,20p' ".run/load/${RUN_ID}-max${MAX_ACTIVE_JOBS:-50}-submit-paced-u4_stats.csv"
 sed -n '1,50p' ".run/load/${RUN_ID}-max${MAX_ACTIVE_JOBS:-50}-submit-paced-u4_failures.csv"
-./scripts/jobs.sh list --caller-id default --status queued --since 10m --limit 20
-./scripts/jobs.sh list --caller-id default --status running --since 10m --limit 20
-./scripts/jobs.sh stuck --older-than 10m --limit 20
+./scripts/jobs.sh drain --caller-id default --since 10m --strict
+./scripts/jobs.sh list --caller-id default --status failed --since 10m --limit 20
+./scripts/jobs.sh stuck --caller-id default --since 10m --older-than 10m --limit 20
 curl -s -i "$HOST/health"
 ```
 
-稳定档要求：失败率为 0，API 健康检查 200，压测后 `queued/running/stuck` 均可排空。
+稳定档要求：HTTP 失败率为 0，API 健康检查 200，压测后 `drain --strict` 通过，即没有 active、failed 或 stuck 证据。
 
 ### 2. 触顶档
 
@@ -236,9 +243,9 @@ uv run --group load locust -f scripts/load/locustfile.py \
 ```bash
 sed -n '1,20p' ".run/load/${RUN_ID}-max${MAX_ACTIVE_JOBS:-50}-submit-u8_stats.csv"
 sed -n '1,50p' ".run/load/${RUN_ID}-max${MAX_ACTIVE_JOBS:-50}-submit-u8_failures.csv"
-./scripts/jobs.sh list --caller-id default --status queued --since 10m --limit 20
-./scripts/jobs.sh list --caller-id default --status running --since 10m --limit 20
-./scripts/jobs.sh stuck --older-than 10m --limit 20
+./scripts/jobs.sh drain --caller-id default --since 10m --older-than 1m --json
+./scripts/jobs.sh list --caller-id default --status failed --since 10m --limit 20
+./scripts/jobs.sh stuck --caller-id default --since 10m --older-than 1m --limit 20
 curl -s -i "$HOST/health"
 ```
 
@@ -400,7 +407,17 @@ LOAD_SCENARIO=submit
 Locust: -u 20 -r 10 -t 30s
 ```
 
-本轮目标是从初始 `MAX_ACTIVE_JOBS=1000` 向下收敛，找到当前本地单 API、单 worker、PostgreSQL 本地容器配置下的接单上界。`750` 是本轮已测档位中的最高无失败值；`775` 已经出现 500 和 queued 残留，因此当前建议把 `750` 作为本环境的最大已验证档位。
+本轮目标是从初始 `MAX_ACTIVE_JOBS=1000` 向下收敛，找到当前本地单 API、单 worker、PostgreSQL 本地容器配置下的接单上界。`750` 是历史按 HTTP 接单结果统计的最高无失败值；`775` 已经出现 500 和 queued 残留。当前 `.env` 可以是 `MAX_ACTIVE_JOBS=1000`，但这个值在本地形态下必须重新压测证明，不能直接视为安全值。
+
+后续使用 `scripts/jobs.sh drain/inspect/stuck` 复测发现，HTTP 0 失败不等于 Job 全链路通过。后续再认定某个档位为安全档时，必须同时满足：
+
+```text
+Locust HTTP failures = 0
+./scripts/jobs.sh drain --strict 通过
+summary.jobs.failed = 0
+drain.stuck.total = 0，pressure.stuck.sample_count = 0
+/health = 200
+```
 
 ### 复现命令
 
@@ -409,15 +426,12 @@ Locust: -u 20 -r 10 -t 30s
 空载基线检查：
 
 ```bash
-./scripts/jobs.sh list --caller-id default --status queued --since 30m --limit 1000 --json \
-  | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("jobs", [])))'
-./scripts/jobs.sh list --caller-id default --status running --since 30m --limit 1000 --json \
-  | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("jobs", [])))'
-./scripts/jobs.sh stuck --older-than 10m --limit 20
+./scripts/jobs.sh drain --caller-id default --since 30m --strict
+./scripts/jobs.sh stuck --caller-id default --since 30m --older-than 10m --limit 20
 curl -s -i http://127.0.0.1:18200/health
 ```
 
-`queued=0`、`running=0`、`stuck=0`、`/health=200` 后再开始该档压测。
+`drain --strict` 通过、`stuck=0`、`/health=200` 后再开始该档压测。
 
 切换档位并重启 API：
 
@@ -442,14 +456,20 @@ uv run --group load locust -f scripts/load/locustfile.py \
 ```bash
 sed -n '1,20p' .run/load/20260626-max750-submit-u20_stats.csv
 sed -n '1,50p' .run/load/20260626-max750-submit-u20_failures.csv
-tail -n 600 logs/api.log | rg -n 'TooManyConnectionsError|too many clients|900500|Traceback'
+./scripts/jobs.sh pressure \
+  --caller-id default \
+  --since 20m \
+  --max-active-jobs 750 \
+  --locust-prefix .run/load/20260626-max750-submit-u20 \
+  --api-log logs/api.log \
+  --api-log-tail 2000
 curl -s -i http://127.0.0.1:18200/health
-./scripts/jobs.sh list --caller-id default --status queued --since 10m --limit 1000 --json \
-  | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("jobs", [])))'
-./scripts/jobs.sh list --caller-id default --status running --since 10m --limit 1000 --json \
-  | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("jobs", [])))'
-./scripts/jobs.sh stuck --older-than 10m --limit 20
+./scripts/jobs.sh drain --caller-id default --since 20m --older-than 1m --json
+./scripts/jobs.sh list --caller-id default --status failed --since 20m --limit 20
+./scripts/jobs.sh stuck --caller-id default --since 20m --older-than 1m --limit 20
 ```
+
+`pressure` 的 API log 扫描会按日志时间过滤到 `--since` 窗口，但仍只扫描 `--api-log-tail` 指定的尾部行数。连续压多档时，优先收窄 `--since` 或为每档保留独立日志，避免旧异常污染新档判断。
 
 如果本地工具环境里 `./scripts/dev.sh restart api` 后 `status api` 显示 `stale`，用独立终端执行 `./scripts/dev.sh start api`，再继续压测；不要把这个工具进程保活问题当作 API 压测失败。
 
@@ -457,7 +477,8 @@ curl -s -i http://127.0.0.1:18200/health
 
 | `MAX_ACTIVE_JOBS` | 命令后缀 | 请求数 | 失败数 | CSV RPS | p95 | 失败证据 | `/health` | 排空结果 | 判定 |
 | ---: | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
-| 1000 | `max1000-submit-u20` | 765 | 14 | 26.35 | 530ms | HTTP 500；API 日志有 `TooManyConnectionsError` | 200 | 留下 queued 残留，等待恢复后再继续 | 不安全 |
+| 1000 | `max1000-submit-u20-held` | 562 | 2 | 19.36 | 730ms | HTTP 500；`pressure` 命中 `http_5xx`、`api_log_db_connection_pressure`、`db_connection_pressure` | 200 | `drain --strict` 不通过，剩余 2 个 queued、2 个 failed，且出现 `published_dispatch_not_claimed` | 不安全 |
+| 1000 | `max1000-submit-u20-net` | 773 | 773 | 26.60 | 3ms | Locust `Expecting value`，failures.csv 无 HTTP 状态码，DB 接单数不匹配 | down/stale | 本轮不是有效容量压测 | 无效运行 |
 | 800 | `max800-submit-u20` | 723 | 2 | 25.05 | 570ms | HTTP 500；API 日志有 `TooManyConnectionsError` | 200 | 可恢复 | 不安全 |
 | 775 | `max775-submit-u20` | 647 | 8 | 22.28 | 820ms | HTTP 500；API 日志有 `TooManyConnectionsError` | 200 | 短时出现 3 条 queued/pending，随后可排空 | 不安全 |
 | 750 | `max750-submit-u20` | 753 | 0 | 26.02 | 490ms | 无 | 200 | 可排空 | 当前已测最高无失败档 |
@@ -466,7 +487,17 @@ curl -s -i http://127.0.0.1:18200/health
 
 ### 瓶颈结论
 
-当前本地瓶颈不是 `job_test_echo` 任务本身，也不是 Locust 脚本异常，而是 `MAX_ACTIVE_JOBS` 放得过大后，`POST /jobs` / publish 路径会先打爆 PostgreSQL 连接预算。失败档在客户端表现为 HTTP 500：
+当前本地瓶颈不是 `job_test_echo` 任务本身，也不是 Locust 脚本异常，而是 `MAX_ACTIVE_JOBS` 放得过大后，`POST /jobs` / publish 路径会先打爆 PostgreSQL 连接预算。`20260626-max1000-submit-u20-held` 复测中，`scripts/jobs.sh pressure` 一次性给出以下关键证据：
+
+```text
+critical http      http_5xx
+critical database  api_log_db_connection_pressure
+critical execution job_failures
+critical database  db_connection_pressure
+warning lifecycle  window_not_terminal
+```
+
+失败档在客户端表现为 HTTP 500：
 
 ```text
 {"code":"900500","msg":"internal error","data":null}
@@ -478,23 +509,25 @@ API 日志中的根因是：
 asyncpg.exceptions.TooManyConnectionsError: sorry, too many clients already
 ```
 
-`MAX_ACTIVE_JOBS=600` 时失败主要是 503 容量保护，API 仍健康，说明保护阈值有效。继续提高到 `775`、`800` 或 `1000` 后出现 500，说明容量保护已经放得过大，DB 连接成为先坏掉的资源。`775` 压测结束后还短时出现 3 条 queued/pending，虽然后续可排空，但该档已经不能作为安全值。
+`MAX_ACTIVE_JOBS=600` 时失败主要是 503 容量保护，API 仍健康，说明保护阈值有效。继续提高到 `775`、`800` 或 `1000` 后出现 500，说明容量保护已经放得过大，DB 连接成为先坏掉的资源。`775` 压测结束后还短时出现 3 条 queued/pending，虽然后续可排空，但该档已经不能作为安全值。`1000` 复测时 `drain --strict` 明确不通过，窗口内有 failed Job，且仍有 active Job 需要继续排空，因此应停止升压。
+
+`max1000-submit-u20-net` 这轮是工具环境下服务已 stale 后产生的无效压测：Locust 收到的不是 Job JSON，`pressure` 应报告 `http_failures_db_mismatch`，用于提示先查 API 存活、路径/前缀、认证和响应体。它不能作为容量上限证据；容量结论以 `max1000-submit-u20-held` 这轮服务保持运行的复测为准。
 
 ### 安全值判断
 
-本轮当前已测最高无失败档：
+本轮历史已测最高 HTTP 无失败档：
 
 ```text
 MAX_ACTIVE_JOBS=750
 ```
 
-因此本地 `.env` 已恢复到：
+当前本地 `.env` 若配置为：
 
 ```text
-MAX_ACTIVE_JOBS=750
+MAX_ACTIVE_JOBS=1000
 ```
 
-如果要给长期本地开发或更接近生产的配置留余量，可以先用 `700`；但本轮实测的最大通过档位是 `750`，不是 `700`。继续提高 `MAX_ACTIVE_JOBS` 前，先调大或治理 PostgreSQL 连接容量、应用 DB pool、API 进程数和 worker 消费能力；否则 active Job 上限放大只会把 503 保护变成 500 内部错误。
+这表示当前配置正在验证更高上限，不表示它已经通过。按本轮复测结果，`1000` 在当前本地形态下不安全。如果要给长期本地开发或更接近生产的配置留余量，可以先用 `700`；历史最大通过档位是 `750`，但它也需要用当前 `pressure + drain --strict` 门槛复测后才能重新确认为安全档。继续提高 `MAX_ACTIVE_JOBS` 前，先调大或治理 PostgreSQL 连接容量、应用 DB pool、API 进程数和 worker 消费能力；否则 active Job 上限放大只会把 503 保护变成 500 内部错误。
 
 本轮结果只用于当前本地形态的上界判断。若要用前文公式反推业务所需 `MAX_ACTIVE_JOBS`，需要另跑稳定长压并记录 accepted submit RPS、端到端 active 时长和 p95/p99，而不是直接把这张阶梯表当业务容量模型。
 
