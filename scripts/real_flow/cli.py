@@ -7,14 +7,99 @@ import typer
 from scripts.real_flow.flows import llm_job_billing, oss_image_upload, poster_title_image
 
 
-HELP_EPILOG = """\b
+POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
+常用示例：
+
+\b
+  # 单 item：使用本地透明 PNG 参考图，脚本自动转成 API reference_image URL Ref。
+  ./scripts/real-flow.sh poster-title-image \\
+    --confirm-cost \\
+    --reference-image .data/title/英语.png \\
+    --model-id gpt-image-2 \\
+    --language es \\
+    --title-text "Cuando el amor se alejo" \\
+    --json
+
+\b
+  # 单 item：生成后下载全部输出图，并校验 sha256。
+  ./scripts/real-flow.sh poster-title-image \\
+    --confirm-cost \\
+    --reference-image .data/title/英语.png \\
+    --language es \\
+    --title-text "Cuando el amor se alejo" \\
+    --download-outputs \\
+    --json
+
+\b
+  # 多 item：每个 item 在 JSON 中指定 language/title_text/reference。
+  ./scripts/real-flow.sh poster-title-image \\
+    --confirm-cost \\
+    --items-json .data/title/poster-items.json \\
+    --download-outputs \\
+    --json
+
+\b
+  # 已有 OSS URL Ref：不 stage 本地图片，直接把四字段作为 reference_image。
+  ./scripts/real-flow.sh poster-title-image \\
+    --confirm-cost \\
+    --language es \\
+    --title-text "Cuando el amor se alejo" \\
+    --reference-public-url "https://bucket.oss-region.aliyuncs.com/path/title.png" \\
+    --reference-internal-url "https://bucket.oss-region-internal.aliyuncs.com/path/title.png" \\
+    --reference-content-type image/png \\
+    --reference-sha256 "<64位小写sha256>" \\
+    --json
+
+\b
+  # STORAGE_BACKEND=aliyun_oss 且传本地参考图时，需要显式确认上传。
+  ./scripts/real-flow.sh poster-title-image \\
+    --confirm-cost \\
+    --confirm-upload \\
+    --reference-image .data/title/英语.png \\
+    --language es \\
+    --title-text "Cuando el amor se alejo" \\
+    --download-outputs \\
+    --json
+
+\b
+items-json 最小格式：
+  {
+    "items": [
+      {
+        "item_id": "es",
+        "language": "es",
+        "title_text": "Cuando el amor se alejo",
+        "reference": {
+          "image": ".data/title/英语.png",
+          "content_type": "image/png"
+        }
+      }
+    ]
+  }
+
+\b
+参考图要求：
+  必须是透明背景 PNG 标题图层，不是完整海报图。
+  最大 20 MB，最大 4096x4096，总像素不超过 16777216。
+  STORAGE_BACKEND=local 时，本地图片会写入 LOCAL_OBJECT_STORAGE_PATH 并生成 reference_image 四字段。
+  STORAGE_BACKEND=aliyun_oss 时，本地图片会上传到 OSS；也可以直接传 --reference-public-url / --reference-internal-url / --reference-content-type / --reference-sha256。
+
+\b
+语种与输出：
+  poster_title_image 当前支持 ja / ko / ar / th / ru / fr / de / es / pt / pl。
+  同一 Job 内 item_id 和 language 都必须唯一；同一 Job 内所有 item 的 model_id 必须一致。
+  --download-outputs 默认保存到 .data/real-flow/poster-title-image/<job_id>/<item_id>-<language>/。
+"""
+
+
+HELP_EPILOG = f"""\b
 作用域：
   手动验证真实业务流程。命令会调用本地 API、创建真实 Job、等待 worker 执行，并查询结果证据。
   本入口允许真实 LLM 调用，可能产生费用；不会被 ./scripts/verify.sh check 默认执行。
 
 \b
 命令说明：
-  llm-job-billing   创建 job_real_llm_echo，触发真实 LLM，并查询 /jobs/{job_id}/billing。
+  llm-job-billing   创建 job_real_llm_echo，触发真实 LLM，并查询 /jobs/{{job_id}}/billing。
   llm-job-double-billing   创建 job_real_llm_double_echo，触发两次真实 LLM，并查询汇总 billing。
   oss-upload-image  上传本地图片到阿里云 OSS，返回 URL Ref。
   poster-title-image   创建 poster_title_image，触发真实 gpt-image-2 标题图生成，并查询结果和 billing。
@@ -30,18 +115,12 @@ HELP_EPILOG = """\b
   ./scripts/real-flow.sh llm-job-billing --confirm-cost --input-text "用一句话回复：计费验证成功" --json
   ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini --json
   ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png --signed-url-expires-seconds 3600 --json
-  ./scripts/real-flow.sh poster-title-image --confirm-cost --model-id gpt-image-2 --language es --title-text "Cuando el amor se alejo" --json
-  ./scripts/real-flow.sh poster-title-image --confirm-cost --items-json .data/title/poster-items.json --json
-  ./scripts/real-flow.sh poster-title-image --confirm-cost --language es --title-text "Cuando el amor se alejo" --download-outputs --json
+  ./scripts/real-flow.sh poster-title-image --confirm-cost --language es --title-text "Cuando el amor se alejo" --json
 
 \b
-poster-title-image 输出下载：
-  --download-outputs 会下载 Job 结果里的全部 job_result.items[].images[]，不是只下载第一张。
-  默认保存目录是 .data/real-flow/poster-title-image。
-  默认文件结构是 .data/real-flow/poster-title-image/<job_id>/<item_id>-<language>/<序号>-<原文件名>。
-  可用 --output-dir 指定目录，例如 --output-dir .data/poster-title-output。
-  STORAGE_BACKEND=local 时从本地对象存储复制；aliyun_oss 时先尝试 public_url，403 等失败后用本机 .env 的 OSS 凭证生成临时 signed URL 下载。
-  下载后会校验 sha256；--json 输出会在 summary.artifacts[] 返回 local_path、download_method 和 sha256_verified。
+进阶用法：
+  poster-title-image 的本地参考图、多 item JSON、OSS URL Ref 和输出下载示例：
+  ./scripts/real-flow.sh poster-title-image -h
 
 \b
 保护边界：
@@ -251,7 +330,11 @@ def oss_upload_image_command(
         raise typer.Exit(exc.exit_code) from exc
 
 
-@app.command("poster-title-image", help="真实调用 gpt-image-2 生成透明海报标题图，并查询 Job billing。")
+@app.command(
+    "poster-title-image",
+    help="真实调用 gpt-image-2 生成透明海报标题图，并查询 Job billing。",
+    epilog=POSTER_TITLE_IMAGE_HELP_EPILOG,
+)
 def poster_title_image_command(
     confirm_cost: Annotated[
         bool,

@@ -21,6 +21,91 @@ DURATION_RE = re.compile(r"^(?P<value>[1-9][0-9]*)(?P<unit>s|m|h|d)$")
 HTTP_STATUS_RE = re.compile(r"HTTP (?P<status>[0-9]{3})")
 LOG_TIMESTAMP_RE = re.compile(r"^(?P<timestamp>[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}),")
 
+LIST_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh list --status running --since 24h --limit 20
+  ./scripts/jobs.sh list --status queued,running --caller-id default --json
+"""
+
+SHOW_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh show <job_id>
+  ./scripts/jobs.sh show <job_id> --json
+"""
+
+INSPECT_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh inspect <job_id>
+  ./scripts/jobs.sh inspect <job_id> --events-limit 50 --json
+"""
+
+TIMELINE_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh timeline <job_id> --limit 50
+  ./scripts/jobs.sh timeline <job_id> --json
+"""
+
+ATTEMPTS_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh attempts <job_id>
+  ./scripts/jobs.sh attempts <job_id> --json
+"""
+
+CALLBACKS_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh callbacks <job_id>
+  ./scripts/jobs.sh callbacks <job_id> --json
+"""
+
+STUCK_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh stuck --older-than 10m --caller-id default
+  ./scripts/jobs.sh stuck --older-than 10m --caller-id default --json
+"""
+
+DRAIN_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh drain --since 30m --caller-id default
+  ./scripts/jobs.sh drain --since 30m --caller-id default --strict
+"""
+
+PRESSURE_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh pressure --since 20m --caller-id default --max-active-jobs 1000
+  ./scripts/jobs.sh pressure --since 20m --caller-id default --max-active-jobs 1000 --locust-prefix .run/load/<run>
+"""
+
+SUMMARY_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh summary --since 10m
+  ./scripts/jobs.sh summary --since 10m --caller-id default --json
+"""
+
+DOCTOR_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh doctor --since 10m
+  ./scripts/jobs.sh doctor --since 10m --caller-id default --json
+"""
+
+LATENCY_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh latency --since 30m --group-by job_type
+  ./scripts/jobs.sh latency --since 30m --group-by status --json
+"""
+
+CAPACITY_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh capacity --since 10m --caller-id default --max-active-jobs 1000
+  ./scripts/jobs.sh capacity --since 10m --json
+"""
+
+TYPES_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh types
+  ./scripts/jobs.sh types --all
+  ./scripts/jobs.sh types --json
+"""
+
 HELP_EPILOG = """\b
 作用域：
   在本地或 Pod 内查询 Job、attempt、callback 和 timeline 证据。
@@ -58,17 +143,13 @@ HELP_EPILOG = """\b
 常用示例：
   ./scripts/jobs.sh list --status running --since 24h --limit 20
   ./scripts/jobs.sh show <job_id>
-  ./scripts/jobs.sh inspect <job_id>
-  ./scripts/jobs.sh timeline <job_id> --limit 50
-  ./scripts/jobs.sh stuck --older-than 10m --caller-id default --json
-  ./scripts/jobs.sh drain --since 30m --caller-id default --strict
-  ./scripts/jobs.sh pressure --since 20m --caller-id default --max-active-jobs 1000 --locust-prefix .run/load/<run>
   ./scripts/jobs.sh summary --since 10m
-  ./scripts/jobs.sh doctor --since 10m
-  ./scripts/jobs.sh latency --since 30m --group-by job_type
-  ./scripts/jobs.sh capacity --since 10m --caller-id default --max-active-jobs 1000
-  ./scripts/jobs.sh types --all
-  ./scripts/jobs.sh types --json
+  ./scripts/jobs.sh types
+
+\b
+进阶用法：
+  各子命令的过滤参数、JSON 输出和排障示例请查看：
+  ./scripts/jobs.sh <command> -h
 
 \b
 保护边界：
@@ -1263,7 +1344,7 @@ def _render_pressure(payload: dict[str, Any]) -> None:
         print(f"- {item}")
 
 
-@app.command("list", help="查看最近 Job 摘要。")
+@app.command("list", help="查看最近 Job 摘要。", epilog=LIST_HELP_EPILOG)
 def list_jobs(
     status: Annotated[
         list[str] | None,
@@ -1307,7 +1388,7 @@ def list_jobs(
     _render_result(section="Jobs", target="jobs", rows=rows, columns=_jobs_columns())
 
 
-@app.command(help="查看单个 Job 权威状态。")
+@app.command(help="查看单个 Job 权威状态。", epilog=SHOW_HELP_EPILOG)
 def show(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
     job = _with_connection(lambda conn: queries.get_job(conn, job_id))
     if job is None:
@@ -1321,7 +1402,7 @@ def show(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
     formatters.print_json(_job_summary(job) | {"payload_summary": formatters.summarize_job_payload(job)})
 
 
-@app.command(help="聚合查看单个 Job。")
+@app.command(help="聚合查看单个 Job。", epilog=INSPECT_HELP_EPILOG)
 def inspect(
     job_id: JobIdArgument,
     events_limit: Annotated[
@@ -1391,7 +1472,7 @@ def _run_related_collection(
     _render_result(section=section, target=target, rows=rows, columns=columns)
 
 
-@app.command(help="查看 lifecycle job events。")
+@app.command(help="查看 lifecycle job events。", epilog=TIMELINE_HELP_EPILOG)
 def timeline(
     job_id: JobIdArgument,
     limit: LimitOption = 50,
@@ -1408,7 +1489,7 @@ def timeline(
     )
 
 
-@app.command(help="查看 lifecycle attempts。")
+@app.command(help="查看 lifecycle attempts。", epilog=ATTEMPTS_HELP_EPILOG)
 def attempts(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
     _run_related_collection(
         job_id,
@@ -1421,7 +1502,7 @@ def attempts(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
     )
 
 
-@app.command(help="查看 lifecycle callback outbox。")
+@app.command(help="查看 lifecycle callback outbox。", epilog=CALLBACKS_HELP_EPILOG)
 def callbacks(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
     _run_related_collection(
         job_id,
@@ -1434,7 +1515,7 @@ def callbacks(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
     )
 
 
-@app.command(help="扫描疑似卡住的 Job、attempt 或 callback lease。")
+@app.command(help="扫描疑似卡住的 Job、attempt 或 callback lease。", epilog=STUCK_HELP_EPILOG)
 def stuck(
     older_than: Annotated[
         str,
@@ -1483,7 +1564,7 @@ def stuck(
     _render_result(section="Stuck Jobs", target="items", rows=rows, columns=_stuck_columns())
 
 
-@app.command(help="判断压测前后 Job 是否已经排空。")
+@app.command(help="判断压测前后 Job 是否已经排空。", epilog=DRAIN_HELP_EPILOG)
 def drain(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
@@ -1531,7 +1612,7 @@ def drain(
         raise typer.Exit(4)
 
 
-@app.command(help="汇总压测窗口并判断瓶颈方向。")
+@app.command(help="汇总压测窗口并判断瓶颈方向。", epilog=PRESSURE_HELP_EPILOG)
 def pressure(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤窗口证据。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤窗口证据。")] = None,
@@ -1681,7 +1762,7 @@ def pressure(
     _render_pressure(payload)
 
 
-@app.command(help="汇总 Job、attempt、dispatch 和 callback 当前状态。")
+@app.command(help="汇总 Job、attempt、dispatch 和 callback 当前状态。", epilog=SUMMARY_HELP_EPILOG)
 def summary(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
@@ -1698,7 +1779,7 @@ def summary(
     _render_summary(payload)
 
 
-@app.command(help="基于 summary 数据给出维护人员排障摘要和下一步检查。")
+@app.command(help="基于 summary 数据给出维护人员排障摘要和下一步检查。", epilog=DOCTOR_HELP_EPILOG)
 def doctor(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
@@ -1716,7 +1797,7 @@ def doctor(
     _render_doctor(payload)
 
 
-@app.command(help="统计 Job 生命周期耗时。")
+@app.command(help="统计 Job 生命周期耗时。", epilog=LATENCY_HELP_EPILOG)
 def latency(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
@@ -1757,7 +1838,7 @@ def latency(
     _render_result(section="Job Latency", target="groups", rows=rows, columns=_latency_columns())
 
 
-@app.command(help="查看 MAX_ACTIVE_JOBS 当前水位和窗口容量估算。")
+@app.command(help="查看 MAX_ACTIVE_JOBS 当前水位和窗口容量估算。", epilog=CAPACITY_HELP_EPILOG)
 def capacity(
     job_type: Annotated[str | None, typer.Option("--job-type", help="窗口估算按 job_type 过滤；current 仍是全局门禁口径。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="窗口估算按 caller_id 过滤；current 仍是全局门禁口径。")] = None,
@@ -1812,7 +1893,7 @@ def capacity(
     formatters.print_json(payload)
 
 
-@app.command(help="查看当前注册的 job_type。")
+@app.command(help="查看当前注册的 job_type。", epilog=TYPES_HELP_EPILOG)
 def types(
     json_output: JsonOption = False,
     all_types: Annotated[
