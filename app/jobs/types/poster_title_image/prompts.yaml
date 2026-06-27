@@ -9,31 +9,34 @@ job_types:
         label: "Style probe"
         content: |
           Analyze this title image and describe the visual design style of the LETTERFORMS ONLY.
-          Ignore any background, board, plaque, panel, canvas, atmospheric glow, haze, fog, or shadow behind or around the text - describe only what belongs to the letters themselves.
+          Extract only reusable letterform attributes for a later image-generation prompt. Do not absorb, imitate, or describe any background, board, plaque, panel, canvas, carrier shape, texture field, atmospheric glow, haze, fog, halo, cast shadow, drop shadow, rim glow, lighting bloom, or object behind or around the text. Treat these as contamination unless they are visibly painted, engraved, or built into the strokes themselves.
 
-          Output a single dense English paragraph suitable for use in an image generation prompt. Be precise and generative.
+          Output a single stable English paragraph suitable for direct reuse inside a later image prompt. Be precise, generative, and self-contained. Describe what a new title's letters should look like, not what the surrounding image looks like.
 
           Cover only the following aspects of the letterforms themselves:
-          - Stroke weight and overall letter mass: is the typeface HEAVY/BOLD or light/thin? Describe the visual weight of the main strokes - thick slab, medium, or hairline-dominant.
+          - Stroke weight and overall letter mass: whether the type is heavy/bold, medium, or light/thin; describe the main stroke thickness and visual density.
           - Letter dimensionality: flat / subtly embossed / 3D beveled / carved / extruded
-          - Material and surface texture: what the letter surfaces look like, such as metal, stone, glass, painted, or printed; include texture details inside the strokes
-          - Lighting on the letterforms: highlight direction and placement, color temperature, how light interacts with the letter surfaces and edges
-          - Color palette of the letters: fill color, stroke or outline color, any gradients within the letterforms - describe the letter color only, not any background color
-          - Special effects on or immediately around the letters: cracks, distress, wear, abrasion, debris particles or fragments adjacent to the letters - note their presence and style
+          - Material and surface texture inside the strokes: metal, stone, glass, painted, printed, inked, carved, distressed, or smooth; include only texture that appears on the letter surfaces.
+          - Lighting on the letterforms: highlights, reflections, shading, bevel edge treatment, and color temperature only where light is visibly part of the letters.
+          - Color palette of the letters: fill color, stroke or outline color, inner gradients, inline accents, and edge colors; describe letter colors only, never background colors.
+          - Built-in letter effects: cracks, distress, wear, abrasion, engraved marks, chips, or small fragments that are clearly attached to or cut from the strokes; exclude separate debris, smoke, sparks, splashes, or particles.
           - Typography character: serif style, stroke weight contrast, condensed or expanded proportions, decorative details, overall weight and mood
-          - Composition scale: how large the text fills the frame, such as "letters fill nearly the full frame width" or "compact centered cluster"
-          - Overall cinematic / genre mood
+          - Composition scale of the text block: how large the letters fill the frame, such as "letters fill nearly the full frame width" or "compact centered wordmark"
+          - Overall cinematic / genre mood expressed by the letterforms only
 
-          Do NOT mention or describe: background color, background texture, atmospheric glow or haze behind the text, the plaque or board silhouette, shadows cast behind the text, or any element that is not part of the letterforms themselves.
+          Do NOT mention or describe: background color, background texture, atmospheric glow or haze behind the text, plaque or board silhouettes, frames, banners, badges, shadows cast behind the text, light rays, props, scenery, symbols, icons, or any element that is not part of the letterforms themselves.
+          Do NOT include instructions to reproduce the reference image background or carrier. Do NOT include uncertain phrases such as "appears to" or "maybe".
 
           Output ONLY the style description paragraph - no headers, no preamble, no explanation.
       additional_prompt:
         role: "user"
         label: "Additional title prompt"
         content: |
-          High resolution, standalone title text only. The letterforms must be heavy and bold, with crisp hard edges. No drop shadow, outer glow, halo, blur, backing plate, brush stroke, banner, badge, ink splash, or non-text carrier element. Centered composition, complete and uncropped, ready as an isolated title layer for poster compositing.
+          High-resolution poster title text only, spelling the requested title exactly with no missing, extra, replaced, or distorted characters. The letterforms must be heavy, bold, legible, and visually dominant, with crisp hard edges and clean internal counters. Render only the text itself: no illustration, icon, symbol, object, decoration, drop shadow, cast shadow, outer glow, halo, blur, bloom, smoke, spark, splash, backing plate, brush stroke, banner, badge, frame, plaque, panel, or any non-text carrier element.
+
+          Place the title on a perfectly uniform flat chroma green background for post-processing. The green area must be smooth and untextured, with no gradient, vignette, noise, shadow, reflection, glow, or lighting variation. Keep the text centered, complete, fully visible, and separated from the frame edges, ready to be isolated as a poster title layer.
       layout_rules:
         role: "user"
         label: "Layout rules"
         content: |
-          The title is a horizontal poster-title layer. Render the text large, filling 85-95% of the frame width. Prefer one line when the specific language and text width fit comfortably. For longer Latin or Cyrillic text, allow one natural grammatical line break only; never split inside a word. Use at most two lines.
+          The title is a horizontal poster-title layer. Render the text large and bold, filling about 85-95% of the frame width while preserving a clear safety margin on every side. Prefer one line when the specific language and text width fit comfortably. For longer text, allow one natural grammatical line break only; keep each line balanced, never split inside a word, and use at most two lines. Do not crop, truncate, overlap, squeeze, warp, rotate, or scatter the text. The full title must remain centered, readable, and naturally spaced.

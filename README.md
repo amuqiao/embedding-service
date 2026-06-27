@@ -91,6 +91,8 @@ Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts
 
 模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML，配置项包括对外 `model_id`、`model_type`、`adapter`、`provider_model`、`adapter_model`、所需环境变量、`limits` / `features` 类型化元信息、内部模型调用参数和可由 `/models` 展示的 `parameters.public`。
 
+`poster_title_image` 的 Responses 宿主模型由服务端 `POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID` 配置，默认 `gpt-5.5`；该模型用于风格探针和 `image_generation` tool 调用，调用方不能通过 Job 参数覆盖。
+
 除 `/health` 和 `/healthz` 外，请求必须携带：
 
 ```http

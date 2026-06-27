@@ -1,16 +1,23 @@
 import io
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 
 from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
+from app.core.config import settings
 from app.core.exceptions import AppError
-from app.integrations.image import remove_green_background
+from app.integrations.image import (
+    remove_green_background,
+    transparent_title_layer_from_green_screen_bytes,
+    transparent_title_layer_from_green_screen_file,
+    transparent_title_layer_from_green_screen_oss_url,
+)
 from app.integrations.object_storage import bare_sha256, sha256_digest
 from app.integrations.storage import LocalObjectStorage
-from app.jobs.types.poster_title_image import POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID, PosterTitleImageJob
+from app.jobs.types.poster_title_image import PosterTitleImageJob
 from app.models.job import Job
 from app.schemas.billing import BillingEnvelope
 from app.schemas.jobs import CreateJobRequest, JobEnvelope, PosterTitleImageParams
@@ -144,12 +151,25 @@ def test_poster_title_image_create_request_rejects_unknown_image_model_id():
 
 def test_style_probe_response_model_supports_reference_image_input():
     result = ModelGate().resolve_multimodal_text(
-        POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID,
+        settings.registry.poster_title_image_response_model_id,
         required_media_types={"image/png"},
     )
 
-    assert result.resolved_model.model_id == POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID
-    assert result.resolved_model.provider_model == "gpt-4o"
+    assert result.resolved_model.model_id == settings.registry.poster_title_image_response_model_id
+    assert result.resolved_model.provider_model == "gpt-5.5"
+    assert result.model.features["supports_image_generation_tool"] is True
+
+
+def test_poster_title_image_response_model_requires_image_generation_tool(monkeypatch):
+    from app.jobs.types.poster_title_image.executor import _validate_response_model
+
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.settings",
+        SimpleNamespace(registry=SimpleNamespace(poster_title_image_response_model_id="gpt-4o")),
+    )
+
+    with pytest.raises(AppError, match="image_generation tool"):
+        _validate_response_model(required_media_types={"image/png"})
 
 
 def test_remove_green_background_matches_poc_chroma_key_strategy():
@@ -158,6 +178,32 @@ def test_remove_green_background_matches_poc_chroma_key_strategy():
 
     assert result.getpixel((0, 0))[3] == 0
     assert result.getpixel((20, 20))[3] == 255
+
+
+def test_transparent_title_layer_postprocess_supports_bytes_file_and_oss_url(tmp_path):
+    data = _png_bytes()
+    local_path = tmp_path / "title.png"
+    local_path.write_bytes(data)
+    local_storage = LocalObjectStorage(tmp_path)
+    local_storage.write_bytes(
+        bucket="local-dev",
+        region="local",
+        key="generated/title.png",
+        data=data,
+        content_type="image/png",
+    )
+
+    from_bytes = transparent_title_layer_from_green_screen_bytes(data)
+    from_file = transparent_title_layer_from_green_screen_file(local_path)
+    from_oss_url = transparent_title_layer_from_green_screen_oss_url(
+        "https://local-dev.oss-local-internal.aliyuncs.com/generated/title.png",
+        object_storage=local_storage,
+    )
+
+    for output in [from_bytes, from_file, from_oss_url]:
+        result = Image.open(io.BytesIO(output)).convert("RGBA")
+        assert result.getpixel((0, 0))[3] == 0
+        assert result.getpixel((20, 20))[3] == 255
 
 
 def test_poster_title_image_missing_default_prompt_is_runtime_config_error(monkeypatch):
@@ -195,10 +241,10 @@ async def test_poster_title_image_executor_generates_transparent_title_layer(mon
         "oss_prefix": "ai-jobs/job-1/",
     }
     generated_green = _png_bytes()
-    recorded = {}
+    recorded = []
 
     async def fake_generate_image_with_ledger(**kwargs):
-        recorded["kwargs"] = kwargs
+        recorded.append(kwargs)
         return ImageGenerationResult(images=[generated_green], usage={"image_count": 1})
 
     async def fake_probe_style(reference_image, prompt, **kwargs):
@@ -209,7 +255,7 @@ async def test_poster_title_image_executor_generates_transparent_title_layer(mon
 
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.output_target_from_job", lambda _job: output_target)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._response_provider_model", lambda: "gpt-4o")
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._response_provider_model", lambda: "gpt-5.5")
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._probe_style", fake_probe_style)
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.generate_image_with_ledger",
@@ -238,11 +284,14 @@ async def test_poster_title_image_executor_generates_transparent_title_layer(mon
     assert obj["public_url"].startswith("https://local-dev.oss-local.aliyuncs.com/")
     assert obj["internal_url"].startswith("https://local-dev.oss-local-internal.aliyuncs.com/")
     assert obj["content_type"] == "image/png"
-    assert recorded["kwargs"]["model_id"] == "gpt-image-2"
-    assert recorded["kwargs"]["response_model"] == "gpt-4o"
-    assert GREEN_BACKGROUND_TEXT not in recorded["kwargs"]["prompt"]
-    assert "poster-title layer" in recorded["kwargs"]["prompt"]
-    assert "standalone title text only" in recorded["kwargs"]["prompt"]
+    assert len(recorded) == 1
+    assert recorded[0]["model_id"] == "gpt-image-2"
+    assert recorded[0]["response_model"] == "gpt-5.5"
+    assert recorded[0]["background"] == "auto"
+    assert recorded[0]["output_format"] == "png"
+    assert GREEN_BACKGROUND_TEXT in recorded[0]["prompt"]
+    assert "poster-title layer" in recorded[0]["prompt"]
+    assert "poster title text only" in recorded[0]["prompt"]
 
     output_key = "ai-jobs/job-1/poster-title/{}/es/title-layer.png".format(job_id)
     written = local_storage.read_bytes(bucket="local-dev", region="local", key=output_key)
@@ -294,7 +343,7 @@ async def test_style_probe_uses_ai_ledger(monkeypatch):
 
     assert text == "bold stone title letters"
     assert recorded["operation"] == "poster_title_image.probe_style"
-    assert recorded["model_id"] == "gpt-4o"
+    assert recorded["model_id"] == "gpt-5.5"
     assert recorded["reference_images"] == [reference_image]
 
 
@@ -340,4 +389,4 @@ def test_job_envelope_rejects_non_terminal_cost():
         )
 
 
-GREEN_BACKGROUND_TEXT = "Output as a transparent PNG"
+GREEN_BACKGROUND_TEXT = "#00FF00"

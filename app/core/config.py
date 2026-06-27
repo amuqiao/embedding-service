@@ -50,6 +50,7 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "OPENAI_API_KEY": ("ai_provider", "openai_api_key"),
     "OPENAI_BASE_URL": ("ai_provider", "openai_base_url"),
     "DEFAULT_MODEL_ID": ("registry", "default_model_id"),
+    "POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID": ("registry", "poster_title_image_response_model_id"),
     "MODEL_CONFIG_PATH": ("registry", "model_config_path_raw"),
     "MODEL_CALL_TIMEOUT_SECONDS": ("ai_provider", "model_call_timeout_seconds"),
     "BILLING_ENABLED": ("billing", "enabled"),
@@ -342,6 +343,7 @@ class AIProviderSettings(ConfigSection):
 
 class RegistrySettings(ConfigSection):
     default_model_id: str = "gpt-5.5"
+    poster_title_image_response_model_id: str = "gpt-5.5"
     model_config_path_raw: str = "app/core/models.yaml"
     prompt_config_path_raw: str = "app/core/prompts.yaml"
 
@@ -511,10 +513,13 @@ class Settings(BaseSettings):
             for item in raw["models"]
             if isinstance(item, dict) and item.get("enabled") is True and isinstance(item.get("id"), str)
         }
-        if self.registry.default_model_id not in enabled_ids:
-            raise ValueError(
-                f"DEFAULT_MODEL_ID must exist in enabled model config: {self.registry.default_model_id}"
-            )
+        required_enabled_models = {
+            "DEFAULT_MODEL_ID": self.registry.default_model_id,
+            "POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID": self.registry.poster_title_image_response_model_id,
+        }
+        for env_name, model_id in required_enabled_models.items():
+            if model_id not in enabled_ids:
+                raise ValueError(f"{env_name} must exist in enabled model config: {model_id}")
 
 
 @lru_cache

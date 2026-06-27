@@ -267,7 +267,7 @@ async def test_provider_gateway_builds_image_generation_request_from_model(monke
         reference_images=[image],
         size="auto",
         quality="high",
-        background="transparent",
+        background="auto",
         output_format="png",
     )
 
@@ -281,7 +281,7 @@ async def test_provider_gateway_builds_image_generation_request_from_model(monke
     assert request.reference_images == [image]
     assert request.size == "auto"
     assert request.quality == "high"
-    assert request.background == "transparent"
+    assert request.background == "auto"
     assert request.output_format == "png"
     assert request.timeout_seconds == 45
     assert request.api_key == "test-key"

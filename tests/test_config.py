@@ -89,6 +89,19 @@ def test_template_identity_defaults_and_overrides():
     assert custom_settings.service.title == "Invoice AI Service"
 
 
+def test_poster_title_image_response_model_config_defaults_and_overrides():
+    default_settings = _build_settings()
+    assert default_settings.registry.poster_title_image_response_model_id == "gpt-5.5"
+
+    custom_settings = _build_settings(POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID="gpt-4o")
+    assert custom_settings.registry.poster_title_image_response_model_id == "gpt-4o"
+
+
+def test_settings_rejects_unknown_poster_title_image_response_model():
+    with pytest.raises(ValidationError, match="POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID"):
+        _build_settings(POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID="missing-model")
+
+
 def test_settings_requires_callback_signing_secret():
     with pytest.raises(ValidationError, match="CALLBACK_SIGNING_SECRET"):
         _build_settings(CALLBACK_SIGNING_SECRET="")

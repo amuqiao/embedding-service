@@ -80,11 +80,11 @@ async def test_generate_image_uses_response_model_and_provider_tool_model(monkey
             adapter_model="openai/gpt-image-2",
             provider_model="gpt-image-2",
             response_model="gpt-4o",
-            prompt="draw transparent title",
+            prompt="draw title",
             reference_images=[ImageInput(data=b"image", content_type="image/png", detail="low")],
             size="auto",
             quality="high",
-            background="transparent",
+            background="auto",
             output_format="png",
             timeout_seconds=30,
             api_key="test-key",
@@ -95,7 +95,7 @@ async def test_generate_image_uses_response_model_and_provider_tool_model(monkey
     assert recorded["model"] == "gpt-4o"
     assert recorded["tools"][0]["model"] == "gpt-image-2"
     assert recorded["tools"][0]["action"] == "edit"
-    assert recorded["tools"][0]["background"] == "transparent"
+    assert recorded["tools"][0]["background"] == "auto"
     assert recorded["tool_choice"] == {"type": "image_generation"}
     assert result.images == [b"png"]
     assert result.revised_prompt == "revised"

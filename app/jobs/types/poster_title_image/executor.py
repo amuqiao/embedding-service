@@ -5,12 +5,13 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.language_catalog import require_supported_language
 from app.core.model_registry import get_enabled_model
 from app.core.prompt_templates import get_prompt_block_default
 from app.integrations.ai_adapters.base import ImageInput
-from app.integrations.image import remove_green_background
+from app.integrations.image import transparent_title_layer_from_green_screen_bytes
 from app.integrations.object_storage import sha256_digest
 from app.integrations.storage import storage
 from app.jobs.adapters.cpp_oss_url_ref import canonical_ref_from_cpp_oss_url_ref, cpp_oss_url_ref_from_output_object
@@ -29,17 +30,18 @@ from app.schemas.jobs import (
     PosterTitleImageResultItem,
     PosterTitleImageRuntimeFields,
 )
-from app.services.ai_capability_kernel import ImageModelGate
+from app.services.ai_capability_kernel import ImageModelGate, ModelGate
 from app.services.ai_gateway_facade import generate_image_with_ledger, generate_text_with_images_with_ledger
 from app.services.job_runtime import ai_billing_scope_id_from_job, output_target_from_job
 from app.services.jobs import trigger_request_id_from_job
 
-POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID = "gpt-4o"
 POSTER_TITLE_IMAGE_MAX_INPUT_BYTES = 20 * 1024 * 1024
 POSTER_TITLE_IMAGE_JOB_TYPE = "poster_title_image"
 POSTER_TITLE_IMAGE_PROMPT_BLOCKS = ("style_probe", "additional_prompt", "layout_rules")
 GREEN_SCREEN = "#00FF00"
+POSTER_TITLE_IMAGE_PROVIDER_BACKGROUND = "auto"
 IMAGE_MODEL_GATE = ImageModelGate()
+RESPONSE_MODEL_GATE = ModelGate()
 
 PROMPT_TEMPLATE = """\
 Generate a high-resolution standalone title graphic. {bg_header}
@@ -71,10 +73,24 @@ Scale: Render the title LARGE — main-title proportions. The text block must fi
 
 
 def _response_provider_model() -> str:
-    model = get_enabled_model(POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID)
+    model_id = settings.registry.poster_title_image_response_model_id
+    model = get_enabled_model(model_id)
     if model is None:
-        raise AppError("MODEL_NOT_AVAILABLE", f"模型不可用: {POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID}")
+        raise AppError("MODEL_NOT_AVAILABLE", f"模型不可用: {model_id}")
     return model.provider_model
+
+
+def _response_model_id_for_reference(reference_image: ImageInput) -> str:
+    model_id = settings.registry.poster_title_image_response_model_id
+    _validate_response_model(required_media_types={reference_image.content_type})
+    return model_id
+
+
+def _validate_response_model(*, required_media_types: set[str]) -> None:
+    model_id = settings.registry.poster_title_image_response_model_id
+    result = RESPONSE_MODEL_GATE.resolve_multimodal_text(model_id, required_media_types=required_media_types)
+    if result.model.features.get("supports_image_generation_tool") is not True:
+        raise AppError("MODEL_NOT_AVAILABLE", f"模型不支持 image_generation tool 调用: {model_id}")
 
 
 def _load_reference_image(item: PosterTitleImageItemParams) -> ImageInput:
@@ -112,7 +128,7 @@ async def _probe_style(
         job_id=job.id,
         attempt_id=attempt_id,
         job_type=job.job_type,
-        model_id=POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID,
+        model_id=_response_model_id_for_reference(reference_image),
         prompt=prompt,
         reference_images=[reference_image],
     )
@@ -219,6 +235,7 @@ class PosterTitleImageJob(JobExecutor):
                 item.reference_image.model_dump(),
                 allowed_content_types={"image/png", "image/jpeg", "image/webp"},
             )
+            _validate_response_model(required_media_types={item.reference_image.content_type})
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:
         params = PosterTitleImageParams.model_validate(job.job_params)
@@ -277,12 +294,12 @@ class PosterTitleImageJob(JobExecutor):
                         reference_images=[reference_image],
                         size=item.model_options.size,
                         quality=item.model_options.quality,
-                        background="auto",
+                        background=POSTER_TITLE_IMAGE_PROVIDER_BACKGROUND,
                         output_format="png",
                     )
                     if len(generated.images) != 1:
                         raise AppError("MODEL_OUTPUT_INVALID", "image provider returned unexpected image count")
-                    image_bytes = remove_green_background(generated.images[0])
+                    image_bytes = transparent_title_layer_from_green_screen_bytes(generated.images[0])
                     key = _output_key(job, item, image_index)
                     written = storage.write_bytes(
                         bucket=output_target["oss_bucket"],

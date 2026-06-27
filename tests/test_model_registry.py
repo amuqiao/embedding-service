@@ -16,6 +16,8 @@ def _settings_kwargs(**overrides):
         "CALLBACK_RETRY_DELAY_SECONDS": 300,
     }
     values.update(overrides)
+    if "MODEL_CONFIG_PATH" in values and "POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID" not in values:
+        values["POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID"] = values.get("DEFAULT_MODEL_ID", "custom-model")
     return values
 
 

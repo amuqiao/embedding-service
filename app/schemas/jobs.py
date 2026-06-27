@@ -376,6 +376,9 @@ class PosterTitleImageModelOptions(StrictBaseModel):
     size: Literal["1024x1024", "1536x1024", "1024x1536", "auto"] = "auto"
     quality: Literal["low", "medium", "high", "auto"] = "high"
     draw_count: int = Field(default=1, ge=1, le=4)
+    # Public delivery contract: callers request a transparent title layer.
+    # The current gpt-image-2 provider call still uses background=auto and
+    # local green-screen post-processing to produce that transparent output.
     background: Literal["transparent"] = "transparent"
     output_format: Literal["png"] = "png"
 

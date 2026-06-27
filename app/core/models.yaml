@@ -1,4 +1,6 @@
 version: "1"
+# Keep provider capability metadata aligned with the model itself. Do not add
+# capabilities only because a job type wants to use the model.
 models:
   - id: gpt-5.5
     name: GPT-5.5
@@ -11,14 +13,19 @@ models:
     enabled: true
     capabilities:
       - text_generation
+      - multimodal_text_generation
     input_media_types:
       - text/plain
+      - image/png
+      - image/jpeg
+      - image/webp
     output_media_types:
       - text/plain
     limits:
       context_window: 1050000
     features:
       supports_json_output: true
+      supports_image_generation_tool: true
     parameters:
       public: []
     notes: "Default high-capability text generation model."
