@@ -33,6 +33,8 @@ Authorization: Bearer <service-key>
 
 本地可以通过 `DISABLE_HTTP_AUTH_HEADER=true` 关闭 Bearer 校验；可以通过 `DISABLE_CALLER_ID_HEADER=true` 忽略 `X-AI-Service-Caller-ID` 并统一使用 `default` caller。`Settings` 会要求 DB/Redis 指向 loopback；本地 `dev.sh` / `start-api.sh` 启动入口还会要求 `API_HOST` 是 loopback。绕过这些启动入口时，调用方必须自行保证 API 不绑定公开地址。
 
+`APP_ENV=test` 和 `APP_ENV=prd` 是发布模式，启动时会拒绝本地绕过认证、insecure callback、本地对象存储、`redis_list` broker 和明显占位的密钥。`.env.dev`、`.env.test` 和 `.env.prd` 不属于项目维护文件；是否使用这些本地自管文件由 `ENV_FILE` 或平台环境变量显式决定，服务不会根据 `APP_ENV` 自动加载。
+
 ## 创建 Job
 
 ```http
@@ -55,6 +57,15 @@ CreateJobRequest
 
 - `reject_duplicate`
 - `return_existing`
+
+外部提交准入由 `job_type.visibility` 和 `APP_ENV` 共同决定：
+
+| APP_ENV | 可外部提交的 job_type |
+|---|---|
+| `local` / `dev` | `visibility="public"` 或 `visibility="demo"` |
+| `test` / `prd` | 仅 `visibility="public"` |
+
+`visibility="internal"` 的 `job_type` 只供服务内部 workflow child 使用，任何环境都不能被外部直接提交。不允许提交的 `job_type` 返回 `INVALID_JOB_TYPE`。
 
 成功响应：
 

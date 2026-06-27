@@ -12,8 +12,13 @@ env_or_dotenv_value() {
     printf "%s" "$value"
     return
   fi
-  if [ -f "$ROOT_DIR/.env" ]; then
-    grep -E "^${key}=" "$ROOT_DIR/.env" 2>/dev/null | tail -n 1 | cut -d= -f2-
+  env_file="${ENV_FILE:-.env}"
+  case "$env_file" in
+    /*) ;;
+    *) env_file="$ROOT_DIR/$env_file" ;;
+  esac
+  if [ -f "$env_file" ]; then
+    grep -E "^${key}=" "$env_file" 2>/dev/null | tail -n 1 | cut -d= -f2-
   fi
 }
 

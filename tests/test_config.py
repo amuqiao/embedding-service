@@ -22,6 +22,7 @@ from scripts.verify.env_config_check import (
 
 def _settings_kwargs(**overrides):
     values = {
+        "APP_ENV": "local",
         "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/fastapi_best_ai_architecture",
         "SERVICE_API_KEY": "test-token",
         "CALLBACK_SIGNING_SECRET": "test-callback-secret",
@@ -71,6 +72,19 @@ def test_security_header_disable_flags_default_to_false():
 
     assert s.security.disable_http_auth_header is False
     assert s.security.disable_caller_id_header is False
+
+
+def test_app_env_defaults_and_release_envs():
+    local = _build_settings()
+    assert local.runtime.app_env == "local"
+    assert local.runtime.is_release_env is False
+
+    dev = _build_settings(APP_ENV="dev")
+    assert dev.runtime.app_env == "dev"
+    assert dev.runtime.is_release_env is False
+
+    with pytest.raises(ValidationError, match="APP_ENV"):
+        _build_settings(APP_ENV="prod")
 
 
 def test_template_identity_defaults_and_overrides():
@@ -184,6 +198,58 @@ def test_redis_list_broker_is_local_development_only():
         TASKIQ_BROKER_KIND="redis_stream",
     )
     assert remote_stream.broker.kind == "redis_stream"
+
+
+def _release_settings_kwargs(**overrides):
+    values = {
+        "APP_ENV": "test",
+        "SERVICE_API_KEY": "release-service-token-32",
+        "CALLBACK_SIGNING_SECRET": "release-callback-secret-32-bytes",
+        "ALLOW_INSECURE_CALLBACKS": False,
+        "STORAGE_BACKEND": "aliyun_oss",
+        "OSS_BUCKET": "bucket",
+        "OSS_REGION": "cn-test",
+        "OSS_ACCESS_KEY_ID": "access-key-id",
+        "OSS_ACCESS_KEY_SECRET": "access-key-secret",
+        "OSS_PROJECT_ROOT": "project/root",
+    }
+    values.update(overrides)
+    return values
+
+
+def test_release_app_env_accepts_production_grade_config():
+    settings = _build_settings(**_release_settings_kwargs())
+
+    assert settings.runtime.app_env == "test"
+    assert settings.runtime.is_release_env is True
+    assert settings.storage.backend == "aliyun_oss"
+
+
+def test_release_app_env_uses_same_rules_for_test_and_prd():
+    test_settings = _build_settings(**_release_settings_kwargs(APP_ENV="test"))
+    prd_settings = _build_settings(**_release_settings_kwargs(APP_ENV="prd"))
+
+    assert test_settings.runtime.is_release_env is True
+    assert prd_settings.runtime.is_release_env is True
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"DISABLE_HTTP_AUTH_HEADER": True}, "must not disable HTTP auth"),
+        ({"DISABLE_CALLER_ID_HEADER": True}, "must not disable HTTP auth"),
+        ({"ALLOW_INSECURE_CALLBACKS": True}, "must not allow insecure callbacks"),
+        ({"STORAGE_BACKEND": "local"}, "must not use STORAGE_BACKEND=local"),
+        ({"TASKIQ_BROKER_KIND": "redis_list"}, "must use TASKIQ_BROKER_KIND=redis_stream"),
+        ({"SERVICE_API_KEY": "<替换为随机 token>"}, "SERVICE_API_KEY"),
+        ({"SERVICE_API_KEY": "short"}, "SERVICE_API_KEY"),
+        ({"CALLBACK_SIGNING_SECRET": "<替换为随机 32 字节 hex>"}, "CALLBACK_SIGNING_SECRET"),
+        ({"CALLBACK_SIGNING_SECRET": "short"}, "CALLBACK_SIGNING_SECRET"),
+    ],
+)
+def test_release_app_env_rejects_non_release_safe_config(overrides, message):
+    with pytest.raises(ValidationError, match=message):
+        _build_settings(**_release_settings_kwargs(**overrides))
 
 
 def test_settings_rejects_buffers_below_minimum():
@@ -304,6 +370,76 @@ def test_env_config_check_rejects_lowercase_keys(tmp_path):
 
 def test_settings_dotenv_source_rejects_lowercase_keys():
     assert config_module._unknown_dotenv_keys({"service_api_key": "value"}) == ["service_api_key"]
+
+
+def test_settings_dotenv_source_reads_env_file_only_when_explicit(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "APP_ENV=local",
+                "DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/local_db",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env.test").write_text(
+        "\n".join(
+            [
+                "APP_ENV=test",
+                "DATABASE_URL=postgresql+asyncpg://postgres:postgres@test-db:5432/test_db",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "ROOT_DIR", tmp_path)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("ENV_FILE", raising=False)
+
+    implicit = config_module._flat_env_settings_source()
+    assert implicit["runtime"]["app_env"] == "local"
+    assert implicit["database"]["url"].endswith("/local_db")
+
+    monkeypatch.setenv("ENV_FILE", ".env.test")
+    explicit = config_module._flat_env_settings_source()
+    assert explicit["runtime"]["app_env"] == "test"
+    assert explicit["database"]["url"].endswith("/test_db")
+
+
+def test_settings_dotenv_source_can_skip_default_env_file(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "SERVICE_API_KEY=local-token",
+                "CALLBACK_SIGNING_SECRET=local-callback-secret",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env.test").write_text(
+        "APP_ENV=test\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "ROOT_DIR", tmp_path)
+    monkeypatch.setenv("ENV_FILE", ".env.test")
+    monkeypatch.setenv("APP_CONFIG_SKIP_DEFAULT_ENV_FILE", "true")
+    for key in config_module.APPLICATION_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    data = config_module._flat_env_settings_source()
+
+    assert data == {"runtime": {"app_env": "test"}}
+
+
+def test_settings_dotenv_source_requires_explicit_env_file_to_exist(monkeypatch, tmp_path):
+    monkeypatch.setattr(config_module, "ROOT_DIR", tmp_path)
+    monkeypatch.setenv("ENV_FILE", ".env.missing")
+
+    with pytest.raises(ValueError, match="ENV_FILE not found"):
+        config_module._flat_env_settings_source()
 
 
 def test_env_config_examples_match_declared_manifests():

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +21,7 @@ SERVICE_EXAMPLE_PATH = ROOT_DIR / ".env.example"
 SCRIPT_EXAMPLE_PATH = ROOT_DIR / "scripts" / ".env.example"
 
 KEY_PATTERN = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
+APP_ENV_VALUES = ("local", "dev", "test", "prd")
 
 
 @dataclass(frozen=True)
@@ -232,8 +235,60 @@ def default_env_files() -> list[Path]:
     return result
 
 
+def run_settings_validation(env_file: Path, app_env: str) -> int:
+    env = os.environ.copy()
+    for key in APPLICATION_ENV_KEYS:
+        env.pop(key, None)
+    env["ENV_FILE"] = str(env_file)
+    env["APP_ENV"] = app_env
+    env["APP_CONFIG_SKIP_DEFAULT_ENV_FILE"] = "true"
+
+    code = """
+import sys
+from pydantic import ValidationError
+try:
+    from app.core.config import settings
+except ValidationError as exc:
+    parts = []
+    for error in exc.errors():
+        loc = ".".join(str(item) for item in error.get("loc", ()))
+        msg = error.get("msg", str(error))
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    messages = "; ".join(parts)
+    print(f"ERROR: app config invalid: {messages}", file=sys.stderr)
+    raise SystemExit(1)
+except Exception as exc:
+    print(f"ERROR: app config invalid: {type(exc).__name__}", file=sys.stderr)
+    raise SystemExit(1)
+release = "true" if settings.runtime.is_release_env else "false"
+print(f"OK        app-config app_env={settings.runtime.app_env} release={release}")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        print(result.stdout.rstrip(), flush=True)
+    if result.stderr:
+        print(result.stderr.rstrip(), file=sys.stderr, flush=True)
+    return result.returncode
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check env files only expose supported configuration keys.")
+    parser.add_argument(
+        "--env-file",
+        help="Explicit application env file to check. Combine with --app-env to validate Settings startup rules.",
+    )
+    parser.add_argument(
+        "--app-env",
+        choices=APP_ENV_VALUES,
+        help="APP_ENV override for this validation. Requires --env-file and does not auto-select a file.",
+    )
     parser.add_argument(
         "files",
         nargs="*",
@@ -244,12 +299,22 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.env_file and args.files:
+        print("ERROR: --env-file cannot be combined with positional env files", file=sys.stderr)
+        return 2
+    if args.app_env and not args.env_file:
+        print("ERROR: --app-env requires --env-file", file=sys.stderr)
+        return 2
+
     issues: list[str] = check_example_alignment()
     checked = 0
-    paths = [Path(name) for name in args.files] if args.files else default_env_files()
+    paths = [Path(args.env_file)] if args.env_file else [Path(name) for name in args.files] if args.files else default_env_files()
     for path in paths:
         if not path.is_absolute():
             path = ROOT_DIR / path
+        if args.env_file and not path.exists():
+            print(f"ERROR: ENV_FILE not found: {path}", file=sys.stderr)
+            return 2
         if not path.exists():
             continue
         checked += 1
@@ -259,7 +324,14 @@ def main() -> int:
         for issue in issues:
             print(issue, file=sys.stderr)
         return 1
-    print(f"{'OK':<9} {'env-files':<10} checked={checked}")
+    print(f"{'OK':<9} {'env-files':<10} checked={checked}", flush=True)
+    if args.app_env:
+        env_file = Path(args.env_file)
+        if not env_file.is_absolute():
+            env_file = ROOT_DIR / env_file
+        result = run_settings_validation(env_file, args.app_env)
+        if result != 0:
+            return result
     return 0
 
 

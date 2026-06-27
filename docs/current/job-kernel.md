@@ -84,7 +84,7 @@ Transactional Outbox 本体只要求业务事实和待发布消息意图在同�
 | `visibility` | `public` / `demo` / `internal` | `public` 是正式业务入口；`demo` 是模板示例、smoke 或压测入口；`internal` 预留给只供服务内部使用的 helper job_type |
 | `role` | `root` / `leaf` / `root_or_leaf` | `root` 是聚合根入口；`leaf` 是 workflow child executor；`root_or_leaf` 表示可直提也可被 workflow 复用 |
 
-这两个字段是 registry/catalog intent，不是 Job 实例事实源。运行时 root/child lineage 仍由 `job_aggregates.root_job_id`、`parent_job_id`、`is_internal` 和 `workflow_node_key` 表达。
+这两个字段是 registry/catalog intent，同时参与外部提交准入。`APP_ENV=local/dev` 允许外部提交 `public` 和 `demo`；`APP_ENV=test/prd` 只允许外部提交 `public`。`internal` 只供服务内部 workflow child 使用，任何环境都不能被外部直接提交。运行时 root/child lineage 仍由 `job_aggregates.root_job_id`、`parent_job_id`、`is_internal` 和 `workflow_node_key` 表达。
 
 当前内置标记：
 

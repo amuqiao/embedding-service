@@ -36,6 +36,10 @@ def _valid_payload() -> dict:
     }
 
 
+def _job_type_spec(*, execution_mode: str = "custom_executor", visibility: str = "public"):
+    return SimpleNamespace(execution_mode=execution_mode, visibility=visibility)
+
+
 def _assert_iso_server_time(value: str) -> None:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     assert parsed.tzinfo is not None
@@ -170,6 +174,9 @@ def test_create_job_validation_allows_non_model_runtime(monkeypatch):
         def validate_normalized_job_params(self, job_params):
             pass
 
+        def job_type_spec(self):
+            return _job_type_spec()
+
     payload = CreateJobRequest.model_validate(
         {
             "client_request_id": "contract-no-model",
@@ -205,7 +212,7 @@ def test_create_job_validation_rejects_non_text_model_for_builtin_text_runtime(m
             pass
 
         def job_type_spec(self):
-            return SimpleNamespace(execution_mode="builtin_llm_text_runtime")
+            return _job_type_spec(execution_mode="builtin_llm_text_runtime")
 
     payload = CreateJobRequest.model_validate(
         {
@@ -244,7 +251,7 @@ def test_create_job_validation_rejects_non_text_model_for_custom_text_executor(m
             pass
 
         def job_type_spec(self):
-            return SimpleNamespace(execution_mode="custom_executor")
+            return _job_type_spec(execution_mode="custom_executor")
 
     payload = CreateJobRequest.model_validate(
         {
@@ -280,6 +287,9 @@ def test_create_job_validation_preserves_runtime_app_error(monkeypatch):
         def runtime_job_fields(self, job_params):
             return {}
 
+        def job_type_spec(self):
+            return _job_type_spec()
+
     payload = CreateJobRequest.model_validate(
         {
             "client_request_id": "contract-runtime-app-error",
@@ -308,6 +318,9 @@ def test_create_job_validation_wraps_unexpected_prerequisite_errors(monkeypatch)
 
         def runtime_job_fields(self, job_params):
             return {}
+
+        def job_type_spec(self):
+            return _job_type_spec()
 
     payload = CreateJobRequest.model_validate(
         {

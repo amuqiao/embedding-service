@@ -32,6 +32,7 @@
 | 价格配置 | 如果启用 billing，更新 `PRICING_CONFIG_PATH`，并保留 ledger 事实源 |
 | 对象存储 | 多副本或平台部署不能使用 `STORAGE_BACKEND=local`，应接外部对象存储 |
 | Callback 签名 | 设置业务级 `CALLBACK_SIGNING_SECRET`，不要复用模板本地值 |
+| 运行环境 | 设置 `APP_ENV`；`test/prd` 使用同一套发布模式校验 |
 
 ## 测试和示例能力边界
 
@@ -58,9 +59,9 @@
 | 选择 | 适用场景 |
 |---|---|
 | 保留 | 仅用于本地或内部验证环境继续运行模板 smoke |
-| 移除、禁用或由业务网关限制 | 共享环境或生产服务不允许任何测试 `job_type` 被外部调用 |
+| 移除或禁用 | 不需要保留模板验证能力的业务服务 |
 
-不要把 `job_test_*` 包装成正式业务能力。正式业务应新增自己的 `job_type`、schema、executor、workflow definition 和验证脚本。
+不要把 `job_test_*` 包装成正式业务能力。正式业务应新增自己的 `job_type`、schema、executor、workflow definition 和验证脚本。`APP_ENV=test` 或 `APP_ENV=prd` 时，服务只允许外部提交 `visibility="public"` 的 `job_type`；模板 `demo` 类型仍可保留在代码中供 `local/dev` 验证，但不能作为发布环境的外部入口。
 
 ## 当前不包含
 
@@ -73,8 +74,10 @@
 
 | 检查项 | 要求 |
 |---|---|
+| 运行环境 | `APP_ENV=test` 和 `APP_ENV=prd` 使用同一套发布模式校验 |
 | 本地绕过认证 | 生产不得启用 `DISABLE_HTTP_AUTH_HEADER=true` 或 `DISABLE_CALLER_ID_HEADER=true` |
 | 本地存储 | 多副本部署不得使用 `STORAGE_BACKEND=local` |
+| 本地配置文件 | 项目只维护 `.env.example`；`.env.dev`、`.env.test`、`.env.prd` 是开发者本地自管文件，必须通过 `ENV_FILE` 或平台注入显式选择 |
 | 部署入口 | 当前只提供 `compose-deps` 和 `compose-full`，不提供 Kubernetes、CI/CD 或云平台 Secrets 管理 |
 | 跨服务编排 | 跨多个微服务的业务流程不应塞进本服务内部 workflow |
 | 真实模型 e2e | 接入正式 `job_type` 后，应在 `examples/business/` 或业务仓库内维护真实业务 e2e |
@@ -100,6 +103,13 @@
 
 ```bash
 ./scripts/verify.sh check
+```
+
+准备发布到测试或生产环境前，先用目标配置文件在本地跑启动配置校验，提前发现 `APP_ENV=test/prd` 下的安全配置问题：
+
+```bash
+./scripts/verify.sh env-config --env-file .env.test --app-env test
+./scripts/verify.sh env-config --env-file .env.prd --app-env prd
 ```
 
 涉及 Job、Taskiq、Callback、Workflow 或 Recovery 的改动，还要跑本地服务 smoke：

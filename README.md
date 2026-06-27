@@ -61,9 +61,13 @@ K8s Pod 内运维入口只在已经部署的 Pod 中执行，不调用 `kubectl`
 
 `docker-compose.yml` 中的 `environment` 只覆盖容器运行形态必须不同的值，例如容器网络内的 `DATABASE_URL` / `REDIS_URL` 和容器内对象存储路径。业务配置、密钥、模型参数和限制参数应来自 `.env`、`ENV_FILE` 指定文件或运行时显式环境变量。
 
+`APP_ENV` 是应用运行环境身份，允许值为 `local`、`dev`、`test` 和 `prd`。它是配置安全规则开关，不是 API/worker 生命周期开关，也不是自动选择 env 文件的开关。`local/dev` 属于开发模式；`test/prd` 属于发布模式，使用同一套生产级启动校验。`test` 应作为发生产前的同构验证环境，和 `prd` 的行为差异只应来自数据库、Redis、对象存储和密钥等资源值。
+
+应用默认只自动读取根目录 `.env`。`.env.dev`、`.env.test` 和 `.env.prd` 可以作为开发者本地自管的配置草稿或复制粘贴来源，但项目不维护这些文件，也不会根据 `APP_ENV` 自动选择它们。需要显式使用某份文件时，由启动或部署入口设置 `ENV_FILE`，或由平台直接注入环境变量。
+
 脚本配置独立维护在 `scripts/.env`，模板是 `scripts/.env.example`。`API_PORT`、`API_HOST_PORT`、`POSTGRES_HOST_PORT`、`REDIS_HOST_PORT`、`COMPOSE_PROJECT_NAME`、`WORKER_CONCURRENCY`、`WORKER_LOGLEVEL` 和 `WORKER_RECOVERY_LOOP` 等只影响本地脚本或 compose 编排的变量不要写入应用 `.env`。
 
-`STORAGE_BACKEND=local` 只适用于本地开发或单机 compose；生产或多副本 Headless / Platform Service 形态必须使用外部对象存储后端，例如 `aliyun_oss`，避免 API / worker 节点之间读写不同本地磁盘。
+`APP_ENV=test` 或 `APP_ENV=prd` 时，启动会拒绝本地绕过认证、`ALLOW_INSECURE_CALLBACKS=true`、`STORAGE_BACKEND=local`、`TASKIQ_BROKER_KIND=redis_list` 和明显占位或过短的 `SERVICE_API_KEY` / `CALLBACK_SIGNING_SECRET`。`STORAGE_BACKEND=local` 只适用于本地开发或单机 compose；发布模式必须使用外部对象存储后端，例如 `aliyun_oss`，避免 API / worker 节点之间读写不同本地磁盘。
 
 模板身份默认值：
 
@@ -89,6 +93,8 @@ API 前缀由 `SERVICE_API_PREFIX` 配置，默认是 `/api/v1/ai-jobs`。
 
 Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts.yaml`。当前内置测试和示例 `job_type` 只用于模板验证与接入样例，边界见 [模板采用就绪度](docs/current/template-readiness.md)；新增正式 LLM 能力时再按项目规范补充 Prompt 模板、`job_type` 注册和验证用例。
 
+`APP_ENV=test` 或 `APP_ENV=prd` 时，`POST /jobs` 只允许提交 `visibility="public"` 的 `job_type`。`visibility="demo"` 的模板示例只能在 `local/dev` 用于本地验证、smoke 或压测；`visibility="internal"` 的类型只供服务内部 workflow child 使用，任何环境都不能被外部直接提交。
+
 模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML，配置项包括对外 `model_id`、`model_type`、`adapter`、`provider_model`、`adapter_model`、所需环境变量、`limits` / `features` 类型化元信息、内部模型调用参数和可由 `/models` 展示的 `parameters.public`。
 
 `poster_title_image` 的 Responses 宿主模型由服务端 `POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID` 配置，默认 `gpt-5.5`；该模型用于风格探针和 `image_generation` tool 调用，调用方不能通过 Job 参数覆盖。
@@ -110,6 +116,13 @@ Authorization: Bearer dev-service-key
 ```
 
 `check` 是模板级最小质量门，不调用真实模型，也不访问外部对象存储。内置 `workflow-smoke` 验证测试 `job_type` 的本地 Job 创建、异步执行和状态轮询流程；`workflow-modes-smoke` 验证 `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 六种 DAG-lite workflow 模式。真实模型业务链路需要在接入正式 `job_type` 后另行恢复 `smoke` / `e2e` 验证。
+
+发布到测试或生产环境前，可以在本地提前用目标配置文件执行启动配置校验。该命令不会连接数据库、Redis 或对象存储，只检查 env 键名和 `Settings` 启动规则，包括 `APP_ENV=test/prd` 的发布模式安全约束：
+
+```bash
+./scripts/verify.sh env-config --env-file .env.test --app-env test
+./scripts/verify.sh env-config --env-file .env.prd --app-env prd
+```
 
 ## 阿里云 OSS 连通性测试
 
@@ -181,6 +194,7 @@ OSS_PUBLIC_ENDPOINT=
 ./scripts/verify.sh workflow-smoke
 ./scripts/verify.sh workflow-modes-smoke
 ./scripts/verify.sh env-config
+./scripts/verify.sh env-config --env-file .env.test --app-env test
 ./scripts/verify.sh check
 ./scripts/verify.sh --help
 ```
@@ -189,7 +203,7 @@ OSS_PUBLIC_ENDPOINT=
 - `workflow-smoke`：使用内置 `job_test_echo` 验证本地 Job 创建、异步执行和状态轮询流程，不调用真实模型或外部供应商。
 - `workflow-modes-smoke`：使用内置 `job_test_workflow` 验证 `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 的 root/child Job e2e。
 - `smoke` / `mock-smoke` / `e2e`：当前未接入正式 LLM `job_type`，命令保留但不可用，新增正式模型能力后再恢复对应验证。
-- `env-config`：校验 env 文件键名。
+- `env-config`：校验 env 文件键名；传 `--env-file` 和 `--app-env` 时，还会实例化应用 `Settings`，提前验证 test/prd 发布模式配置是否能安全启动。
 - `check`：运行脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest。
 
 Job 只读排障由 `jobs.sh` 承接：

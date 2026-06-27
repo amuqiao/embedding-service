@@ -19,6 +19,9 @@ class _FakeDB:
 
 
 class _TestHandler:
+    name = "test.echo"
+    visibility = "public"
+    role = "root"
     allow_callback = True
     timeout_seconds = 300
     max_attempts = 1
@@ -32,10 +35,20 @@ class _TestHandler:
     def runtime_job_fields(self, job_params):
         return {}
 
+    def job_type_spec(self):
+        return SimpleNamespace(
+            job_type=self.name,
+            visibility=self.visibility,
+            role=self.role,
+            execution_mode="custom_executor",
+            platform_retry_policy="no_platform_retry",
+        )
+
 
 def _job_settings(**overrides):
     values = {
         "ALLOW_INSECURE_CALLBACKS": False,
+        "APP_ENV": "local",
         "CALLBACK_SIGNING_SECRET": "test-callback-secret",
         "CALLBACK_TIMEOUT_SECONDS": 5,
         "MAX_ACTIVE_JOBS": 5000,
@@ -47,6 +60,7 @@ def _job_settings(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(
+        runtime=config_module.RuntimeSettings(app_env=values["APP_ENV"]),
         service=config_module.ServiceSettings(api_prefix=values["SERVICE_API_PREFIX"]),
         storage=config_module.StorageSettings(
             oss_bucket=values["OSS_BUCKET"],
@@ -492,3 +506,64 @@ def test_validate_create_contract_rejects_callback_domain_resolving_to_metadata_
 
     assert exc.value.code == "INVALID_INPUT"
     assert "private or reserved" in exc.value.message
+
+
+@pytest.mark.parametrize("app_env", ["test", "prd"])
+def test_validate_create_contract_rejects_demo_job_type_in_release_env(monkeypatch, app_env):
+    handler = _TestHandler()
+    handler.visibility = "demo"
+    _patch_job_settings(monkeypatch, APP_ENV=app_env)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: handler)
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-1",
+            "job_type": "test.echo",
+            "job_params": {"value": {"hello": "world"}},
+        }
+    )
+
+    with pytest.raises(ValidationAppError) as exc:
+        validate_create_contract(payload)
+
+    assert exc.value.code == "INVALID_JOB_TYPE"
+    assert exc.value.details == {"job_type": "test.echo", "visibility": "demo", "app_env": app_env}
+
+
+@pytest.mark.parametrize("app_env", ["local", "dev"])
+def test_validate_create_contract_allows_demo_job_type_in_non_release_env(monkeypatch, app_env):
+    handler = _TestHandler()
+    handler.visibility = "demo"
+    _patch_job_settings(monkeypatch, APP_ENV=app_env)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: handler)
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-1",
+            "job_type": "test.echo",
+            "job_params": {"value": {"hello": "world"}},
+        }
+    )
+
+    returned_handler, job_params = validate_create_contract(payload)
+
+    assert returned_handler is handler
+    assert job_params == {"value": {"hello": "world"}}
+
+
+def test_validate_create_contract_rejects_internal_job_type_in_local_env(monkeypatch):
+    handler = _TestHandler()
+    handler.visibility = "internal"
+    _patch_job_settings(monkeypatch, APP_ENV="local")
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: handler)
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-1",
+            "job_type": "test.echo",
+            "job_params": {"value": {"hello": "world"}},
+        }
+    )
+
+    with pytest.raises(ValidationAppError) as exc:
+        validate_create_contract(payload)
+
+    assert exc.value.code == "INVALID_JOB_TYPE"
+    assert exc.value.details == {"job_type": "test.echo", "visibility": "internal", "app_env": "local"}

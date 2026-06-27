@@ -62,9 +62,13 @@ env_value_from() {
   grep -E "^${key}=" "$path" 2>/dev/null | tail -n 1 | cut -d= -f2- || true
 }
 
+application_env_file() {
+  resolve_repo_path "${ENV_FILE:-.env}"
+}
+
 env_value() {
   local key="$1"
-  env_value_from "$key" "$ROOT_DIR/.env"
+  env_value_from "$key" "$(application_env_file)"
 }
 
 script_env_value() {
@@ -74,7 +78,9 @@ script_env_value() {
 
 assert_local_url() {
   local key="$1"
+  local env_file
   local value
+  env_file="$(application_env_file)"
   value="$(env_value "$key")"
   [[ -n "$value" ]] || return 0
 
@@ -84,11 +90,13 @@ assert_local_url() {
       ;;
   esac
 
-  die "$key in .env does not look local: $value" 3
+  die "$key in $env_file does not look local: $value" 3
 }
 
 guard_local_env() {
-  [[ -f "$ROOT_DIR/.env" ]] || die ".env not found; run: ./scripts/dev.sh bootstrap" 2
+  local env_file
+  env_file="$(application_env_file)"
+  [[ -f "$env_file" ]] || die "$env_file not found; run: ./scripts/dev.sh bootstrap or set ENV_FILE to an existing file" 2
   assert_local_url DATABASE_URL
   assert_local_url REDIS_URL
 }

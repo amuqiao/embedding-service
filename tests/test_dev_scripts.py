@@ -21,6 +21,7 @@ from scripts.jobs.cli import (
 )
 from scripts.jobs.db import normalize_database_url
 from scripts.verify.env_config_check import (
+    APPLICATION_ENV_KEYS,
     SCRIPT_OR_DEPLOYMENT_ENV_KEYS,
     check_file,
     default_env_files,
@@ -37,6 +38,14 @@ def _workflow_mode_case(mode: str):
 
 
 RUNNER = CliRunner()
+
+
+def _clean_application_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("ENV_FILE", None)
+    for key in APPLICATION_ENV_KEYS:
+        env.pop(key, None)
+    return env
 
 
 def _service_command(service: str, **env_overrides: str) -> str:
@@ -95,6 +104,27 @@ def test_start_api_rejects_public_bind_when_auth_headers_are_disabled(flag):
 
 
 @pytest.mark.parametrize("flag", ["DISABLE_HTTP_AUTH_HEADER", "DISABLE_CALLER_ID_HEADER"])
+def test_start_api_rejects_public_bind_when_env_file_disables_auth_headers(tmp_path, flag):
+    env_file = tmp_path / ".env.test"
+    env_file.write_text(f"{flag}=true\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.update({"API_HOST": "0.0.0.0", "ENV_FILE": str(env_file)})
+    env.pop(flag, None)
+
+    result = subprocess.run(
+        ["./start-api.sh"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "API_HOST must be 127.0.0.1" in result.stderr
+
+
+@pytest.mark.parametrize("flag", ["DISABLE_HTTP_AUTH_HEADER", "DISABLE_CALLER_ID_HEADER"])
 def test_dev_start_rejects_public_bind_when_auth_headers_are_disabled(flag):
     env = os.environ.copy()
     env.update({"API_HOST": "0.0.0.0", flag: "true"})
@@ -110,6 +140,55 @@ def test_dev_start_rejects_public_bind_when_auth_headers_are_disabled(flag):
 
     assert result.returncode == 2
     assert "API_HOST must be 127.0.0.1" in result.stderr
+
+
+@pytest.mark.parametrize("flag", ["DISABLE_HTTP_AUTH_HEADER", "DISABLE_CALLER_ID_HEADER"])
+def test_dev_start_rejects_public_bind_when_env_file_disables_auth_headers(tmp_path, flag):
+    env_file = tmp_path / ".env.test"
+    env_file.write_text(f"{flag}=true\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.update({"API_HOST": "0.0.0.0", "ENV_FILE": str(env_file)})
+    env.pop(flag, None)
+
+    result = subprocess.run(
+        ["bash", "-lc", "source scripts/dev/services.sh >/dev/null; start_service api"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "API_HOST must be 127.0.0.1" in result.stderr
+
+
+def test_dev_local_env_guard_reads_selected_env_file(tmp_path):
+    env_file = tmp_path / ".env.test"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/app",
+                "REDIS_URL=redis://redis.example.com:6379/0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["ENV_FILE"] = str(env_file)
+
+    result = subprocess.run(
+        ["bash", "-lc", "source scripts/lib/common.sh >/dev/null; guard_local_env"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 3
+    assert f"REDIS_URL in {env_file}" in result.stderr
 
 
 def test_dev_worker_service_command_injects_script_env(tmp_path):
@@ -1510,6 +1589,160 @@ def test_verify_check_uses_default_env_config_scan():
     assert "env-config-argc=0" in result.stdout
     assert "env-config-arg=" not in result.stdout
     assert "alembic-revision-check" in result.stdout
+
+
+def _release_env_file_content(*, storage_backend: str = "aliyun_oss") -> str:
+    lines = [
+        "APP_ENV=local",
+        "DATABASE_URL=postgresql+asyncpg://postgres:postgres@db.example.com:5432/app",
+        "DB_SSL=true",
+        "SERVICE_API_KEY=release-service-token-32",
+        "DISABLE_HTTP_AUTH_HEADER=false",
+        "DISABLE_CALLER_ID_HEADER=false",
+        "REDIS_URL=redis://redis.example.com:6379/0",
+        "TASKIQ_BROKER_KIND=redis_stream",
+        "CALLBACK_SIGNING_SECRET=release-callback-secret-32-bytes",
+        "ALLOW_INSECURE_CALLBACKS=false",
+        f"STORAGE_BACKEND={storage_backend}",
+        "DEFAULT_MODEL_ID=gpt-5.5",
+        "POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID=gpt-5.5",
+    ]
+    if storage_backend == "aliyun_oss":
+        lines.extend(
+            [
+                "OSS_BUCKET=bucket",
+                "OSS_REGION=cn-test",
+                "OSS_ACCESS_KEY_ID=access-key-id",
+                "OSS_ACCESS_KEY_SECRET=access-key-secret",
+                "OSS_PROJECT_ROOT=project/root",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def test_env_config_check_validates_selected_env_file_with_app_env_override(tmp_path):
+    env_file = tmp_path / ".env.test"
+    env_file.write_text(_release_env_file_content(), encoding="utf-8")
+
+    result = subprocess.run(
+        ["./scripts/verify.sh", "env-config", "--env-file", str(env_file), "--app-env", "test"],
+        cwd=ROOT_DIR,
+        env=_clean_application_env(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "== Env Config ==" in result.stdout
+    assert "OK        env-files  checked=1" in result.stdout
+    assert "OK        app-config app_env=test release=true" in result.stdout
+
+
+def test_env_config_check_fails_release_unsafe_config(tmp_path):
+    env_file = tmp_path / ".env.test"
+    env_file.write_text(_release_env_file_content(storage_backend="local"), encoding="utf-8")
+
+    result = subprocess.run(
+        ["./scripts/verify.sh", "env-config", "--env-file", str(env_file), "--app-env", "test"],
+        cwd=ROOT_DIR,
+        env=_clean_application_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "app config invalid" in result.stderr
+    assert "STORAGE_BACKEND=local" in result.stderr
+
+
+def test_env_config_check_env_file_validation_ignores_root_dotenv(tmp_path):
+    env_file = tmp_path / ".env.test"
+    env_file.write_text(
+        "\n".join(
+            [
+                "APP_ENV=test",
+                "DATABASE_URL=postgresql+asyncpg://postgres:postgres@db.example.com:5432/app",
+                "DB_SSL=true",
+                "DISABLE_HTTP_AUTH_HEADER=false",
+                "DISABLE_CALLER_ID_HEADER=false",
+                "REDIS_URL=redis://redis.example.com:6379/0",
+                "TASKIQ_BROKER_KIND=redis_stream",
+                "ALLOW_INSECURE_CALLBACKS=false",
+                "STORAGE_BACKEND=aliyun_oss",
+                "OSS_BUCKET=bucket",
+                "OSS_REGION=cn-test",
+                "OSS_ACCESS_KEY_ID=access-key-id",
+                "OSS_ACCESS_KEY_SECRET=access-key-secret",
+                "OSS_PROJECT_ROOT=project/root",
+                "DEFAULT_MODEL_ID=gpt-5.5",
+                "POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID=gpt-5.5",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["./scripts/verify.sh", "env-config", "--env-file", str(env_file), "--app-env", "test"],
+        cwd=ROOT_DIR,
+        env=_clean_application_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "security.service_api_key" in result.stderr
+    assert "CALLBACK_SIGNING_SECRET" in result.stderr
+
+
+def test_env_config_check_with_app_env_reuses_env_key_manifest(tmp_path):
+    env_file = tmp_path / ".env.test"
+    env_file.write_text(_release_env_file_content() + "BAD_KEY=value\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["./scripts/verify.sh", "env-config", "--env-file", str(env_file), "--app-env", "test"],
+        cwd=ROOT_DIR,
+        env=_clean_application_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert f"{env_file}:" in result.stderr
+    assert "unknown config key: BAD_KEY" in result.stderr
+
+
+def test_env_config_check_app_env_requires_explicit_env_file():
+    result = subprocess.run(
+        ["./scripts/verify.sh", "env-config", "--app-env", "test"],
+        cwd=ROOT_DIR,
+        env=_clean_application_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "--app-env requires --env-file" in result.stderr
+
+
+def test_env_config_check_explicit_env_file_must_exist(tmp_path):
+    env_file = tmp_path / ".env.missing"
+
+    result = subprocess.run(
+        ["./scripts/verify.sh", "env-config", "--env-file", str(env_file), "--app-env", "test"],
+        cwd=ROOT_DIR,
+        env=_clean_application_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert f"ENV_FILE not found: {env_file}" in result.stderr
 
 
 def test_env_config_default_scan_includes_env_variants():

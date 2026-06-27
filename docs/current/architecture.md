@@ -99,6 +99,7 @@ AI billing 当前事实见 [`ai-billing.md`](ai-billing.md)。`GET /jobs/{job_id
 
 配置项表达稳定控制意图，不暴露底层派生值。典型入口：
 
+- `APP_ENV`
 - `SERVICE_API_PREFIX`
 - `DATABASE_URL`
 - `REDIS_URL`
@@ -109,6 +110,8 @@ AI billing 当前事实见 [`ai-billing.md`](ai-billing.md)。`GET /jobs/{job_id
 - `MAX_ACTIVE_JOBS`
 - `BILLING_ENABLED`
 - `CALLBACK_SIGNING_SECRET`
+
+`APP_ENV` 允许 `local`、`dev`、`test` 和 `prd`。它是配置安全规则开关，不是 API/worker 生命周期开关，也不是自动选择 env 文件的开关。`test/prd` 是发布模式，启动时使用同一套生产级校验：不能关闭 HTTP 鉴权或 caller header，不能允许 insecure callback，不能使用本地对象存储或 `redis_list` broker，且必须提供非占位的服务密钥和 Callback 签名密钥。应用默认只读取根目录 `.env`；其它 env 文件必须由 `ENV_FILE` 或平台环境变量显式选择，不会根据 `APP_ENV` 自动加载。
 
 配置加载优先级和本地/compose 运行规则以顶层 `README.md` 与 `AGENTS.md` 为准。
 

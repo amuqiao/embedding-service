@@ -19,8 +19,17 @@ _WORKER_SOFT_TIMEOUT_BUFFER: int = 300
 _WORKER_HARD_TIMEOUT_BUFFER: int = 60
 _JOB_STALE_RUNNING_BUFFER: int = 600
 _CALLBACK_DELIVERY_CLAIM_GRACE: int = 175
+_RELEASE_APP_ENVS = frozenset({"test", "prd"})
+_PLACEHOLDER_SECRET_VALUES = frozenset(
+    {
+        "<替换为随机 token>",
+        "<替换为随机 32 字节 hex>",
+        "dev-service-key",
+    }
+)
 
 APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
+    "APP_ENV": ("runtime", "app_env"),
     "TEMPLATE_NAME": ("service", "template_name"),
     "SERVICE_NAME": ("service", "name"),
     "SERVICE_TITLE": ("service", "title"),
@@ -141,14 +150,40 @@ def _unknown_dotenv_keys(dotenv: dict[str, str]) -> list[str]:
     return sorted(key for key in dotenv if key != key.upper() or key not in APPLICATION_ENV_KEYS)
 
 
-def _flat_env_settings_source() -> dict[str, Any]:
-    dotenv = _read_dotenv_values(ROOT_DIR / ".env")
+def _selected_env_file_path() -> Path | None:
+    value = os.environ.get("ENV_FILE", "").strip()
+    if not value:
+        return None
+    path = _resolve_repo_path(value)
+    if not path.exists():
+        raise ValueError(f"ENV_FILE not found: {path}")
+    return path
+
+
+def _load_application_dotenv(path: Path) -> dict[str, str]:
+    dotenv = _read_dotenv_values(path)
     unknown = _unknown_dotenv_keys(dotenv)
     if unknown:
         joined = ", ".join(unknown)
-        raise ValueError(f"unsupported keys in .env: {joined}")
+        raise ValueError(f"unsupported keys in {path}: {joined}")
+    return dotenv
 
-    raw: dict[str, str] = dict(dotenv)
+
+def _looks_like_placeholder_secret(value: str) -> bool:
+    normalized = value.strip()
+    return not normalized or normalized in _PLACEHOLDER_SECRET_VALUES or (
+        normalized.startswith("<") and normalized.endswith(">")
+    )
+
+
+def _flat_env_settings_source() -> dict[str, Any]:
+    default_env_path = ROOT_DIR / ".env"
+    raw: dict[str, str] = {}
+    if os.environ.get("APP_CONFIG_SKIP_DEFAULT_ENV_FILE") != "true":
+        raw.update(_load_application_dotenv(default_env_path))
+    selected_env_path = _selected_env_file_path()
+    if selected_env_path is not None and selected_env_path.resolve() != default_env_path.resolve():
+        raw.update(_load_application_dotenv(selected_env_path))
     for key, value in os.environ.items():
         if key in APPLICATION_ENV_KEYS:
             raw[key] = value
@@ -162,6 +197,21 @@ def _flat_env_settings_source() -> dict[str, Any]:
 
 class ConfigSection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class RuntimeSettings(ConfigSection):
+    app_env: str = "local"
+
+    @field_validator("app_env")
+    @classmethod
+    def validate_app_env(cls, value: str) -> str:
+        if value not in {"local", "dev", "test", "prd"}:
+            raise ValueError("APP_ENV must be local, dev, test, or prd")
+        return value
+
+    @property
+    def is_release_env(self) -> bool:
+        return self.app_env in _RELEASE_APP_ENVS
 
 
 class ServiceSettings(ConfigSection):
@@ -418,6 +468,7 @@ class ObservabilitySettings(ConfigSection):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="forbid", frozen=True)
 
+    runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     service: ServiceSettings = Field(default_factory=ServiceSettings)
     database: DatabaseSettings
     broker: BrokerSettings = Field(default_factory=BrokerSettings)
@@ -448,6 +499,25 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_config_invariants(self) -> "Settings":
+        if self.runtime.is_release_env:
+            if self.security.disable_http_auth_header or self.security.disable_caller_id_header:
+                raise ValueError("release APP_ENV must not disable HTTP auth or caller id headers")
+            if self.callback.allow_insecure_callbacks:
+                raise ValueError("release APP_ENV must not allow insecure callbacks")
+            if self.storage.backend == "local":
+                raise ValueError("release APP_ENV must not use STORAGE_BACKEND=local")
+            if self.broker.kind == "redis_list":
+                raise ValueError("release APP_ENV must use TASKIQ_BROKER_KIND=redis_stream")
+            if _looks_like_placeholder_secret(self.security.api_key) or len(self.security.api_key) < 16:
+                raise ValueError("release APP_ENV requires a non-placeholder SERVICE_API_KEY with at least 16 characters")
+            if (
+                _looks_like_placeholder_secret(self.callback.signing_secret_value)
+                or len(self.callback.signing_secret_value) < 32
+            ):
+                raise ValueError(
+                    "release APP_ENV requires a non-placeholder CALLBACK_SIGNING_SECRET with at least 32 characters"
+                )
+
         if self.security.disable_http_auth_header or self.security.disable_caller_id_header:
             for name, value in {
                 "DATABASE_URL": self.database.url,

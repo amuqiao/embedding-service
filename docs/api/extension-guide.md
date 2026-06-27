@@ -14,13 +14,13 @@
 
 `job_type` 名称是外部合同；发布后不要随意改名。`job_params` 字段由该 `job_type` 独占校验，不在通用 Job envelope 中新增业务专用字段。
 
-`visibility` 用于目录展示和接入心智模型，当前取值为：
+`visibility` 用于目录展示、接入心智模型和外部提交准入，当前取值为：
 
 | visibility | 用途 |
 |---|---|
-| `public` | 正式业务入口，可作为调用方合同宣传 |
-| `demo` | 模板示例、smoke 或压测入口，不是正式业务合同 |
-| `internal` | 未来保留给只供服务内部使用的 helper job_type；当前仓库没有内置 internal 类型 |
+| `public` | 正式业务入口，可作为调用方合同宣传；所有环境都允许外部提交 |
+| `demo` | 模板示例、smoke 或压测入口，不是正式业务合同；只允许 `APP_ENV=local/dev` 外部提交 |
+| `internal` | 只供服务内部 workflow child 使用；任何环境都不能被外部直接提交 |
 
 `role` 描述该 `job_type` 在目录中的预期入口角色，不替代 Job 实例上的 root/child lineage：
 
@@ -41,7 +41,7 @@
 5. 按业务语义选择 `failure_policy`；默认 `fail_fast`，需要容忍部分 child 失败时才显式使用 `allow_partial`。
 6. 补充 compiler、orchestrator、registry、workflow smoke 或业务 e2e 测试。
 
-workflow child node 应引用 `role="leaf"` 或 `role="root_or_leaf"` 的 executor。当前这只是 registry catalog 约定；Job 实例是否为 child 仍由 `is_internal`、`root_job_id`、`parent_job_id` 和 `workflow_node_key` 表达。
+workflow child node 应引用 `role="leaf"` 或 `role="root_or_leaf"` 的 executor。`visibility="internal"` 或内部 child Job 的创建由服务内部 workflow orchestrator 完成，不经过外部 `POST /jobs` 提交准入；Job 实例是否为 child 仍由 `is_internal`、`root_job_id`、`parent_job_id` 和 `workflow_node_key` 表达。
 
 当前开发者示例是 `job_test_workflow`，标记为 `visibility="demo"`、`role="root"`。它覆盖 `single`、`chain`、`group`、`chord`、`map`、`starmap` 和 `chunks`，可作为本地理解 root/child 模式和压测 workflow 链路的参考，但不是正式业务 API 合同。
 
