@@ -31,11 +31,13 @@ class TaskiqPublishDeferredError(RuntimeError):
 
 
 def _ensure_workflows_registered() -> None:
+    from app.core.database import init_db_engine
     from app.jobs.types.register import register_all_job_types
     from app.core.error_registry import freeze_error_registry
     from app.core.registry_checks import validate_job_type_registry
     from app.core.model_registry import validate_model_catalog
 
+    init_db_engine()
     register_all_job_types()
     freeze_error_registry()
     validate_job_type_registry()

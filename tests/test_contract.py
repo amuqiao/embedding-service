@@ -601,9 +601,9 @@ def test_openapi_omits_caller_id_header_when_caller_id_header_is_disabled(monkey
 def test_health_endpoints():
     from fastapi.testclient import TestClient
 
-    client = TestClient(app)
-    health = client.get("/health")
-    healthz = client.get("/healthz")
+    with TestClient(app) as client:
+        health = client.get("/health")
+        healthz = client.get("/healthz")
 
     # /health 是 liveness probe，始终返回 200
     assert health.status_code == 200
@@ -617,8 +617,8 @@ def test_health_endpoints():
 def test_unknown_route_uses_unified_error_envelope():
     from fastapi.testclient import TestClient
 
-    client = TestClient(app)
-    response = client.get("/definitely-not-found")
+    with TestClient(app) as client:
+        response = client.get("/definitely-not-found")
 
     assert response.status_code == 404
     body = response.json()
@@ -632,8 +632,8 @@ def test_unauthorized_route_uses_unified_error_envelope(monkeypatch):
     from fastapi.testclient import TestClient
 
     _patch_security_settings(monkeypatch)
-    client = TestClient(app, raise_server_exceptions=False)
-    response = client.get(f"{API_PREFIX}/models")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(f"{API_PREFIX}/models")
 
     assert response.status_code == 401
     body = response.json()
@@ -647,9 +647,8 @@ def test_models_route_allows_missing_authorization_when_auth_header_is_disabled(
     from fastapi.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.get(f"{API_PREFIX}/models")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(f"{API_PREFIX}/models")
 
     assert response.status_code == 200
     assert response.json()["code"] == "0"
@@ -659,9 +658,8 @@ def test_prompt_templates_route_defaults_to_poster_title_image(monkeypatch):
     from fastapi.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.get(f"{API_PREFIX}/prompt-templates")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(f"{API_PREFIX}/prompt-templates")
 
     assert response.status_code == 200
     body = response.json()
@@ -678,9 +676,8 @@ def test_prompt_templates_route_filters_by_job_type(monkeypatch):
     from fastapi.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.get(f"{API_PREFIX}/prompt-templates", params={"job_type": "poster_title_image"})
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(f"{API_PREFIX}/prompt-templates", params={"job_type": "poster_title_image"})
 
     assert response.status_code == 200
     assert response.json()["data"]["job_type"] == "poster_title_image"
@@ -690,9 +687,8 @@ def test_prompt_templates_route_rejects_unknown_job_type(monkeypatch):
     from fastapi.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.get(f"{API_PREFIX}/prompt-templates", params={"job_type": "missing.job"})
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(f"{API_PREFIX}/prompt-templates", params={"job_type": "missing.job"})
 
     assert response.status_code == 400
     body = response.json()
@@ -737,9 +733,8 @@ def test_models_route_exposes_public_model_selection_metadata(monkeypatch):
             ],
         ),
     )
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.get(f"{API_PREFIX}/models")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(f"{API_PREFIX}/models")
 
     assert response.status_code == 200
     model = response.json()["data"]["models"][0]
@@ -811,9 +806,8 @@ def test_languages_route_exposes_shared_language_catalog(monkeypatch):
     from fastapi.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.get(f"{API_PREFIX}/languages")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(f"{API_PREFIX}/languages")
 
     assert response.status_code == 200
     body = response.json()
@@ -842,12 +836,11 @@ def test_legal_request_id_allows_dot_and_colon(monkeypatch):
     from fastapi.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.get(
-        f"{API_PREFIX}/models",
-        headers={"X-Request-ID": "trace.id:part-1"},
-    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(
+            f"{API_PREFIX}/models",
+            headers={"X-Request-ID": "trace.id:part-1"},
+        )
 
     assert response.status_code == 200
     body = response.json()
@@ -859,10 +852,9 @@ def test_missing_request_id_generates_unique_trace_id(monkeypatch):
     from fastapi.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.get(f"{API_PREFIX}/models")
-    second_response = client.get(f"{API_PREFIX}/models")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(f"{API_PREFIX}/models")
+        second_response = client.get(f"{API_PREFIX}/models")
 
     assert response.status_code == 200
     body = response.json()
@@ -881,12 +873,11 @@ def test_invalid_request_id_returns_error_envelope(monkeypatch):
     from fastapi.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.get(
-        f"{API_PREFIX}/models",
-        headers={"X-Request-ID": "bad request id"},
-    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(
+            f"{API_PREFIX}/models",
+            headers={"X-Request-ID": "bad request id"},
+        )
 
     assert response.status_code == 400
     body = response.json()
@@ -901,12 +892,11 @@ def test_empty_request_id_header_returns_error_envelope(monkeypatch):
     from fastapi.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.get(
-        f"{API_PREFIX}/models",
-        headers={"X-Request-ID": ""},
-    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(
+            f"{API_PREFIX}/models",
+            headers={"X-Request-ID": ""},
+        )
 
     assert response.status_code == 400
     body = response.json()
@@ -922,13 +912,12 @@ def test_request_validation_error_uses_unified_error_envelope(monkeypatch):
     from fastapi.testclient import TestClient
 
     _patch_security_settings(monkeypatch)
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.post(
-        f"{API_PREFIX}/jobs",
-        headers={"Authorization": "Bearer test-token", "X-Request-ID": "contract-validation"},
-        json={"client_request_id": "missing-job-type"},
-    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            f"{API_PREFIX}/jobs",
+            headers={"Authorization": "Bearer test-token", "X-Request-ID": "contract-validation"},
+            json={"client_request_id": "missing-job-type"},
+        )
 
     assert response.status_code == 400
     body = response.json()
@@ -955,8 +944,8 @@ def test_error_envelope_builder_uses_error_registry_status():
 def test_method_not_allowed_uses_unified_error_envelope():
     from fastapi.testclient import TestClient
 
-    client = TestClient(app, raise_server_exceptions=False)
-    response = client.post(f"{API_PREFIX}/models")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(f"{API_PREFIX}/models")
 
     assert response.status_code == 405
     body = response.json()
@@ -976,8 +965,8 @@ def test_generic_http_exception_uses_unified_error_envelope():
         async def raise_http_error():
             raise StarletteHTTPException(status_code=418, detail={"reason": "teapot"})
 
-    client = TestClient(app, raise_server_exceptions=False)
-    response = client.get(route_path)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(route_path)
 
     assert response.status_code == 418
     body = response.json()
@@ -996,8 +985,8 @@ def test_unhandled_exception_uses_unified_error_envelope():
         async def raise_unhandled_error():
             raise RuntimeError("boom")
 
-    client = TestClient(app, raise_server_exceptions=False)
-    response = client.get(route_path)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(route_path)
 
     assert response.status_code == 500
     body = response.json()

@@ -65,7 +65,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=3)",
         ]
       interval: 5s
       timeout: 5s

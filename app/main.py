@@ -3,6 +3,7 @@ import json
 import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -17,6 +18,7 @@ from app.api.routes import health, jobs, meta
 from app.core.exceptions import AppError
 from app.core.logging import configure_logging, set_request_id
 from app.core.config import settings
+from app.core.database import close_db_engine, init_db_engine
 from app.core.error_registry import freeze_error_registry
 from app.core.registry_checks import validate_all_registries
 from app.schemas.errors import build_error_envelope
@@ -26,6 +28,15 @@ from app.jobs.types.register import register_all_job_types
 logger = logging.getLogger(__name__)
 
 API_PREFIX = settings.service.api_prefix
+
+
+@asynccontextmanager
+async def api_lifespan(_application: FastAPI):
+    init_db_engine()
+    try:
+        yield
+    finally:
+        await close_db_engine()
 
 
 def _remove_http_bearer_security(schema: dict) -> None:
@@ -375,7 +386,7 @@ def include_routes(application: FastAPI) -> None:
 
 def create_app() -> FastAPI:
     bootstrap_runtime()
-    application = FastAPI(title=settings.service.title, version="0.1.0")
+    application = FastAPI(title=settings.service.title, version="0.1.0", lifespan=api_lifespan)
     install_openapi(application)
     install_middlewares(application)
     install_exception_handlers(application)

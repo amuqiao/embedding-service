@@ -515,11 +515,35 @@ def test_create_app_validates_registries_on_startup(monkeypatch):
     assert calls["registry_app"] is created
 
 
+def test_api_lifespan_manages_database_engine(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app import main
+
+    calls = []
+
+    def fake_init_db_engine():
+        calls.append("init")
+
+    async def fake_close_db_engine():
+        calls.append("close")
+
+    monkeypatch.setattr(main, "init_db_engine", fake_init_db_engine)
+    monkeypatch.setattr(main, "close_db_engine", fake_close_db_engine)
+
+    created = main.create_app()
+    with TestClient(created):
+        pass
+
+    assert calls == ["init", "close"]
+
+
 def test_worker_registration_validates_job_type_registry(monkeypatch):
     from app.tasks import jobs as task_jobs
 
     calls = {}
 
+    monkeypatch.setattr("app.core.database.init_db_engine", lambda: calls.setdefault("db", True))
     monkeypatch.setattr("app.jobs.types.register.register_all_job_types", lambda: calls.setdefault("jobs", True))
     monkeypatch.setattr("app.core.error_registry.freeze_error_registry", lambda: calls.setdefault("errors", True))
     monkeypatch.setattr("app.core.registry_checks.validate_job_type_registry", lambda: calls.setdefault("registry", True))
@@ -527,7 +551,34 @@ def test_worker_registration_validates_job_type_registry(monkeypatch):
 
     task_jobs._ensure_workflows_registered()
 
-    assert calls == {"jobs": True, "errors": True, "registry": True, "models": True}
+    assert calls == {"db": True, "jobs": True, "errors": True, "registry": True, "models": True}
+
+
+@pytest.mark.asyncio
+async def test_taskiq_worker_events_manage_database_engine(monkeypatch):
+    from taskiq.events import TaskiqEvents
+
+    from app.tasks.taskiq_app import broker
+
+    calls = []
+
+    monkeypatch.setattr("app.tasks.taskiq_app.init_db_engine", lambda: calls.append("init"))
+
+    async def fake_close_db_engine():
+        calls.append("close")
+
+    monkeypatch.setattr("app.tasks.taskiq_app.close_db_engine", fake_close_db_engine)
+
+    startup_handlers = broker.event_handlers[TaskiqEvents.WORKER_STARTUP]
+    shutdown_handlers = broker.event_handlers[TaskiqEvents.WORKER_SHUTDOWN]
+
+    assert startup_handlers
+    assert shutdown_handlers
+
+    await startup_handlers[0](None)
+    await shutdown_handlers[0](None)
+
+    assert calls == ["init", "close"]
 
 
 def test_register_all_job_types_reregisters_after_clear():

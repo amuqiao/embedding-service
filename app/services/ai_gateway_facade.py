@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from app.core.database import AsyncSessionLocal
+from app.core.database import get_session_factory
 from app.core.exceptions import AppError
 from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
 from app.services import ai_capability_kernel as kernel
@@ -16,6 +16,10 @@ PROVIDER_GATEWAY = kernel.ProviderGateway()
 USAGE_NORMALIZER = kernel.UsageNormalizer()
 TYPED_PRICING_RESOLVER = kernel.TypedPricingResolver()
 USAGE_LEDGER_WRITER = kernel.UsageLedgerWriter()
+
+
+def _ledger_session_factory(ledger_session_factory: Callable[[], Any] | None) -> Callable[[], Any]:
+    return ledger_session_factory if ledger_session_factory is not None else get_session_factory()
 
 
 async def generate_text_with_ledger(
@@ -33,8 +37,9 @@ async def generate_text_with_ledger(
     scope_job_id: uuid.UUID | None = None,
     attempt_id: uuid.UUID | None = None,
     job_type: str | None = None,
-    ledger_session_factory: Callable[[], Any] = AsyncSessionLocal,
+    ledger_session_factory: Callable[[], Any] | None = None,
 ) -> TextGenerationResult:
+    ledger_session_factory = _ledger_session_factory(ledger_session_factory)
     kernel.validate_ai_call_context(
         caller_id=caller_id,
         scope_type=scope_type,
@@ -153,8 +158,9 @@ async def generate_text_with_images_with_ledger(
     scope_job_id: uuid.UUID | None = None,
     attempt_id: uuid.UUID | None = None,
     job_type: str | None = None,
-    ledger_session_factory: Callable[[], Any] = AsyncSessionLocal,
+    ledger_session_factory: Callable[[], Any] | None = None,
 ) -> TextGenerationResult:
+    ledger_session_factory = _ledger_session_factory(ledger_session_factory)
     kernel.validate_ai_call_context(
         caller_id=caller_id,
         scope_type=scope_type,
@@ -299,8 +305,9 @@ async def generate_image_with_ledger(
     scope_job_id: uuid.UUID | None = None,
     attempt_id: uuid.UUID | None = None,
     job_type: str | None = None,
-    ledger_session_factory: Callable[[], Any] = AsyncSessionLocal,
+    ledger_session_factory: Callable[[], Any] | None = None,
 ) -> ImageGenerationResult:
+    ledger_session_factory = _ledger_session_factory(ledger_session_factory)
     kernel.validate_ai_call_context(
         caller_id=caller_id,
         scope_type=scope_type,

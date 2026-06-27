@@ -356,6 +356,52 @@ async def _call(session_factory: _FakeSessionFactory):
     )
 
 
+@pytest.mark.asyncio
+async def test_gateway_resolves_default_ledger_session_factory_at_runtime(monkeypatch):
+    session_factory = _FakeSessionFactory()
+    call_id = uuid.uuid4()
+
+    async def fake_create_pending(*_args, **_kwargs):
+        return SimpleNamespace(id=call_id)
+
+    async def fake_generate_text(*_args, **_kwargs):
+        return TextGenerationResult(
+            text="ok",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage={"prompt_tokens": 1, "completion_tokens": 1},
+        )
+
+    async def fake_mark_succeeded(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(ai_gateway_facade, "get_session_factory", lambda: session_factory)
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fake_mark_succeeded)
+    monkeypatch.setattr(
+        ai_capability_kernel,
+        "require_text_generation_adapter",
+        lambda adapter_name: SimpleNamespace(generate_text=fake_generate_text),
+    )
+
+    result = await ai_gateway_facade.generate_text_with_ledger(
+        caller_id="caller-1",
+        scope_type="job",
+        scope_id="00000000-0000-0000-0000-000000000001",
+        operation="job_type.execute",
+        model_id="custom-model",
+        messages=[{"role": "user", "content": "hello"}],
+        job_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        attempt_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        job_type="job_type",
+    )
+
+    assert result.text == "ok"
+    assert [session.commits for session in session_factory.sessions] == [1, 1]
+
+
 def test_job_scope_context_allows_explicit_root_scope():
     child_job_id = uuid.UUID("00000000-0000-0000-0000-000000000011")
     root_job_id = uuid.UUID("00000000-0000-0000-0000-000000000012")

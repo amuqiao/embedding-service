@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from taskiq.events import TaskiqEvents
 from taskiq_redis import ListQueueBroker, RedisStreamBroker
 
 from app.core.config import settings
+from app.core.database import close_db_engine, init_db_engine
 
 
 def _build_broker():
@@ -14,6 +16,16 @@ def _build_broker():
 
 
 broker = _build_broker()
+
+
+@broker.on_event(TaskiqEvents.WORKER_STARTUP)
+async def _worker_startup(_state) -> None:
+    init_db_engine()
+
+
+@broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)
+async def _worker_shutdown(_state) -> None:
+    await close_db_engine()
 
 # Import task modules after broker creation so decorators register on this broker.
 from app.tasks import jobs as _jobs  # noqa: E402,F401

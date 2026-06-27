@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.core.database import engine
+from app.core.database import get_db_engine
 
 router = APIRouter(tags=["health"])
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ async def healthz():
     ok = True
 
     try:
-        async with engine.connect() as conn:
+        async with get_db_engine().connect() as conn:
             await conn.execute(text("SELECT 1"))
         checks["db"] = "ok"
     except Exception as exc:

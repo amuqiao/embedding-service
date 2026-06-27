@@ -44,6 +44,8 @@ Recovery / publisher loop
 
 API 与 worker 可以多副本运行。并发安全依赖数据库唯一约束、`SELECT ... FOR UPDATE SKIP LOCKED`、lease token、heartbeat 和 outbox 幂等键，而不是依赖单进程内存。
 
+API 进程的 PostgreSQL async engine 和 session factory 由 FastAPI lifespan 管理：API startup 创建连接池，API shutdown 释放连接池。静态合同初始化仍由 `bootstrap_runtime()` 完成，供 API、worker、脚本共享。Taskiq worker 和 recovery loop 不依赖 FastAPI lifespan；worker 在自己的启动路径初始化数据库访问，recovery loop 使用独立的一次性数据库连接。
+
 ## 主要模块
 
 | 层 | 当前 owner | 职责 |
