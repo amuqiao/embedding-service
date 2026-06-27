@@ -377,6 +377,48 @@ async def test_create_job_maps_invalid_workflow_plan_to_validation_error(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_create_job_rejects_poster_title_image_reference_outside_allowlist_before_persistence(monkeypatch):
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "poster-invalid-ref-1",
+            "job_type": "poster_title_image",
+            "job_params": {
+                "items": [
+                    {
+                        "item_id": "es",
+                        "language": "es",
+                        "title_text": "Cuando el amor se alejo",
+                        "model_id": "gpt-image-2",
+                        "reference_image": {
+                            "public_url": "https://not-allowed.oss-local.aliyuncs.com/reference/title.png",
+                            "internal_url": "https://not-allowed.oss-local-internal.aliyuncs.com/reference/title.png",
+                            "content_type": "image/png",
+                            "sha256": "a" * 64,
+                        },
+                    }
+                ]
+            },
+        }
+    )
+
+    async def fail_before_validation_boundary(*_args, **_kwargs):
+        raise AssertionError("poster_title_image reference validation should fail before persistence")
+
+    _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=0)
+    monkeypatch.setattr(
+        "app.services.jobs.JobRepo.advisory_lock_for_client_request",
+        fail_before_validation_boundary,
+    )
+    monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_before_validation_boundary)
+
+    with pytest.raises(AppError) as exc:
+        await create_job(_FakeDB(), payload, "caller-1")
+
+    assert exc.value.code == "POSTER_TITLE_IMAGE_REFERENCE_INVALID"
+    assert exc.value.details["source_reason"] == "INVALID_INPUT"
+
+
+@pytest.mark.asyncio
 async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch):
     existing = Job(
         id=uuid.uuid4(),

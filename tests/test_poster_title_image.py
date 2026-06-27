@@ -66,10 +66,20 @@ def _transparent_palette_png_bytes() -> bytes:
     return buf.getvalue()
 
 
-def _url_ref(key: str, data: bytes) -> dict:
+def _allowed_reference_bucket() -> str:
+    return settings.job.poster_title_image_allowed_oss_buckets[0]
+
+
+def _allowed_reference_region() -> str:
+    return settings.job.poster_title_image_allowed_oss_regions[0]
+
+
+def _url_ref(key: str, data: bytes, *, bucket: str | None = None, region: str | None = None) -> dict:
+    bucket = bucket or _allowed_reference_bucket()
+    region = region or _allowed_reference_region()
     return {
-        "public_url": f"https://local-dev.oss-local.aliyuncs.com/{key}",
-        "internal_url": f"https://local-dev.oss-local-internal.aliyuncs.com/{key}",
+        "public_url": f"https://{bucket}.oss-{region}.aliyuncs.com/{key}",
+        "internal_url": f"https://{bucket}.oss-{region}-internal.aliyuncs.com/{key}",
         "content_type": "image/png",
         "sha256": bare_sha256(sha256_digest(data)),
     }
@@ -134,7 +144,11 @@ def test_poster_title_image_rejects_draw_count_above_config(monkeypatch):
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
-            job=SimpleNamespace(poster_title_image_max_draw_count=1),
+            job=SimpleNamespace(
+                poster_title_image_max_draw_count=1,
+                poster_title_image_allowed_oss_buckets=("local-dev",),
+                poster_title_image_allowed_oss_regions=("local",),
+            ),
             registry=SimpleNamespace(poster_title_image_response_model_id="gpt-5.5"),
         ),
     )
@@ -146,6 +160,50 @@ def test_poster_title_image_rejects_draw_count_above_config(monkeypatch):
 
     assert exc.value.code == POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT
     assert exc.value.details == {"max_draw_count": 1, "draw_count": 2}
+
+
+def test_poster_title_image_accepts_configured_reference_oss_allowlist(monkeypatch):
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.settings",
+        SimpleNamespace(
+            job=SimpleNamespace(
+                poster_title_image_max_draw_count=4,
+                poster_title_image_allowed_oss_buckets=("cpp-rs-dev",),
+                poster_title_image_allowed_oss_regions=("ap-southeast-1",),
+            ),
+            registry=SimpleNamespace(poster_title_image_response_model_id="gpt-5.5"),
+        ),
+    )
+    params = _params(
+        _url_ref(
+            "reference/title.png",
+            b"x",
+            bucket="cpp-rs-dev",
+            region="ap-southeast-1",
+        )
+    )
+
+    PosterTitleImageJob().validate_normalized_job_params(params)
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        _url_ref("reference/title.png", b"x", bucket="not-allowed", region=_allowed_reference_region()),
+        _url_ref("reference/title.png", b"x", bucket=_allowed_reference_bucket(), region="not-allowed"),
+    ],
+)
+def test_poster_title_image_rejects_reference_oss_outside_allowlist(ref):
+    params = _params(ref)
+    validated = PosterTitleImageParams.model_validate(params)
+
+    assert validated.items[0].reference_image.public_url == ref["public_url"]
+
+    with pytest.raises(AppError) as exc:
+        PosterTitleImageJob().validate_normalized_job_params(params)
+
+    assert exc.value.code == POSTER_TITLE_IMAGE_REFERENCE_INVALID
+    assert exc.value.details["source_reason"] == "INVALID_INPUT"
 
 
 def test_poster_title_image_create_request_does_not_require_runtime_prompt_payload():
@@ -293,8 +351,8 @@ def test_poster_title_image_reference_validation_uses_business_error(monkeypatch
     data = _png_bytes()
     local_storage = LocalObjectStorage(tmp_path)
     local_storage.write_bytes(
-        bucket="local-dev",
-        region="local",
+        bucket=_allowed_reference_bucket(),
+        region=_allowed_reference_region(),
         key="reference/title.png",
         data=data,
         content_type="image/png",
@@ -359,17 +417,19 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
 
     local_storage = LocalObjectStorage(tmp_path)
     reference = _transparent_reference_png_bytes(accent=(0, 0, 255, 255))
+    reference_bucket = _allowed_reference_bucket()
+    reference_region = _allowed_reference_region()
     local_storage.write_bytes(
-        bucket="local-dev",
-        region="local",
+        bucket=reference_bucket,
+        region=reference_region,
         key="reference/title.png",
         data=reference,
         content_type="image/png",
     )
     output_target = {
         "type": "oss_prefix",
-        "oss_bucket": "local-dev",
-        "oss_region": "local",
+        "oss_bucket": reference_bucket,
+        "oss_region": reference_region,
         "oss_prefix": "ai-jobs/job-1/",
     }
     generated_green = _png_bytes()
@@ -422,7 +482,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     item = result["item"]
     assert item["status"] == "succeeded"
     obj = item["images"][0]["object"]
-    assert obj["public_url"].startswith("https://local-dev.oss-local.aliyuncs.com/")
+    assert obj["public_url"].startswith(f"https://{reference_bucket}.oss-{reference_region}.aliyuncs.com/")
     assert obj["content_type"] == "image/png"
     assert len(recorded) == 1
     assert recorded[0]["model_id"] == "gpt-image-2"
@@ -436,7 +496,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     assert "poster title text only" in recorded[0]["prompt"]
 
     output_key = "ai-jobs/job-1/poster-title/{}/es/title-layer.png".format(root_id)
-    written = local_storage.read_bytes(bucket="local-dev", region="local", key=output_key)
+    written = local_storage.read_bytes(bucket=reference_bucket, region=reference_region, key=output_key)
     output_image = Image.open(io.BytesIO(written)).convert("RGBA")
     assert output_image.getpixel((0, 0))[3] == 0
     assert output_image.getpixel((20, 20))[3] == 255
@@ -448,17 +508,19 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
 
     local_storage = LocalObjectStorage(tmp_path)
     reference = _transparent_reference_png_bytes(accent=(0, 0, 255, 255))
+    reference_bucket = _allowed_reference_bucket()
+    reference_region = _allowed_reference_region()
     local_storage.write_bytes(
-        bucket="local-dev",
-        region="local",
+        bucket=reference_bucket,
+        region=reference_region,
         key="reference/title.png",
         data=reference,
         content_type="image/png",
     )
     output_target = {
         "type": "oss_prefix",
-        "oss_bucket": "local-dev",
-        "oss_region": "local",
+        "oss_bucket": reference_bucket,
+        "oss_region": reference_region,
         "oss_prefix": "ai-jobs/job-1/",
     }
     generated_green = _png_bytes()
@@ -513,7 +575,7 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
         "ai-jobs/job-1/poster-title/{}/es/title-layer-2.png".format(root_id),
     ]
     for key in keys:
-        written = local_storage.read_bytes(bucket="local-dev", region="local", key=key)
+        written = local_storage.read_bytes(bucket=reference_bucket, region=reference_region, key=key)
         output_image = Image.open(io.BytesIO(written)).convert("RGBA")
         assert output_image.getpixel((0, 0))[3] == 0
 

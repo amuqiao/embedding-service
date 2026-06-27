@@ -31,6 +31,7 @@
 | Prompt 配置 | 按业务更新 `PROMPT_CONFIG_PATH` 和 Prompt/output schema 绑定 |
 | 价格配置 | 如果启用 billing，更新 `PRICING_CONFIG_PATH`，并保留 ledger 事实源 |
 | 对象存储 | 多副本或平台部署不能使用 `STORAGE_BACKEND=local`，应接外部对象存储 |
+| 业务输入 OSS 白名单 | 使用 `poster_title_image` 时，按 CPP 输入来源配置 `POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS` 和 `POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS` |
 | Callback 签名 | 设置业务级 `CALLBACK_SIGNING_SECRET`，不要复用模板本地值 |
 | 运行环境 | 设置 `APP_ENV`；`test/prd` 使用同一套发布模式校验 |
 

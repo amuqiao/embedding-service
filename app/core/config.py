@@ -68,6 +68,8 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "MAX_ACTIVE_JOBS": ("job", "max_active_jobs"),
     "OSS_INPUT_MAX_BYTES": ("job", "oss_input_max_bytes"),
     "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": ("job", "poster_title_image_max_draw_count"),
+    "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS": ("job", "poster_title_image_allowed_oss_buckets_raw"),
+    "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS": ("job", "poster_title_image_allowed_oss_regions_raw"),
     "CALLBACK_TIMEOUT_SECONDS": ("callback", "timeout_seconds"),
     "CALLBACK_MAX_DELIVERY_ATTEMPTS": ("callback", "max_delivery_attempts"),
     "CALLBACK_RETRY_DELAY_SECONDS": ("callback", "retry_delay_seconds"),
@@ -174,6 +176,13 @@ def _looks_like_placeholder_secret(value: str) -> bool:
     return not normalized or normalized in _PLACEHOLDER_SECRET_VALUES or (
         normalized.startswith("<") and normalized.endswith(">")
     )
+
+
+def _comma_separated_non_empty_values(value: str, *, env_name: str) -> tuple[str, ...]:
+    parts = [part.strip() for part in value.split(",")]
+    if not parts or any(not part for part in parts):
+        raise ValueError(f"{env_name} must be a comma-separated list of non-empty values")
+    return tuple(dict.fromkeys(parts))
 
 
 def _flat_env_settings_source() -> dict[str, Any]:
@@ -434,6 +443,8 @@ class JobSettings(ConfigSection):
     max_active_jobs: int = 5000
     oss_input_max_bytes: int = 5_242_880
     poster_title_image_max_draw_count: int = 4
+    poster_title_image_allowed_oss_buckets_raw: str = "local-dev"
+    poster_title_image_allowed_oss_regions_raw: str = "local"
     orphan_timeout_seconds: int = 300
     dispatch_max_publish_attempts: int = 12
     recovery_interval_seconds: int = 60
@@ -458,7 +469,29 @@ class JobSettings(ConfigSection):
             raise ValueError("MAX_ACTIVE_JOBS must be greater than or equal to 0")
         if self.poster_title_image_max_draw_count > 4:
             raise ValueError("POSTER_TITLE_IMAGE_MAX_DRAW_COUNT must be less than or equal to 4")
+        _comma_separated_non_empty_values(
+            self.poster_title_image_allowed_oss_buckets_raw,
+            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
+        )
+        _comma_separated_non_empty_values(
+            self.poster_title_image_allowed_oss_regions_raw,
+            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
+        )
         return self
+
+    @property
+    def poster_title_image_allowed_oss_buckets(self) -> tuple[str, ...]:
+        return _comma_separated_non_empty_values(
+            self.poster_title_image_allowed_oss_buckets_raw,
+            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
+        )
+
+    @property
+    def poster_title_image_allowed_oss_regions(self) -> tuple[str, ...]:
+        return _comma_separated_non_empty_values(
+            self.poster_title_image_allowed_oss_regions_raw,
+            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
+        )
 
 
 class ObservabilitySettings(ConfigSection):

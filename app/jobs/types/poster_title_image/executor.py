@@ -135,6 +135,8 @@ def _validate_reference_ref_payload(reference_image: Any) -> None:
     try:
         canonical_ref_from_cpp_oss_url_ref(
             reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image,
+            allowed_buckets=settings.job.poster_title_image_allowed_oss_buckets,
+            allowed_regions=settings.job.poster_title_image_allowed_oss_regions,
             allowed_content_types=TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
         )
     except AppError as exc:
@@ -146,6 +148,8 @@ def _load_reference_image_from_ref(reference_image: Any) -> ImageInput:
     try:
         ref = canonical_ref_from_cpp_oss_url_ref(
             reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image,
+            allowed_buckets=settings.job.poster_title_image_allowed_oss_buckets,
+            allowed_regions=settings.job.poster_title_image_allowed_oss_regions,
             allowed_content_types=TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
         )
     except AppError as exc:

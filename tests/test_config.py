@@ -125,6 +125,34 @@ def test_poster_title_image_max_draw_count_config_defaults_and_overrides():
         _build_settings(POSTER_TITLE_IMAGE_MAX_DRAW_COUNT=5)
 
 
+def test_poster_title_image_oss_allowlist_config_defaults_and_overrides():
+    default_settings = _build_settings()
+    assert default_settings.job.poster_title_image_allowed_oss_buckets == ("local-dev",)
+    assert default_settings.job.poster_title_image_allowed_oss_regions == ("local",)
+
+    custom_settings = _build_settings(
+        POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS="cpp-rs-dev, cpp-rs-prod,cpp-rs-dev",
+        POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS="ap-southeast-1,cn-shanghai",
+    )
+
+    assert custom_settings.job.poster_title_image_allowed_oss_buckets == ("cpp-rs-dev", "cpp-rs-prod")
+    assert custom_settings.job.poster_title_image_allowed_oss_regions == ("ap-southeast-1", "cn-shanghai")
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS", ""),
+        ("POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS", "cpp-rs-dev,,cpp-rs-prod"),
+        ("POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS", ""),
+        ("POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS", "ap-southeast-1,"),
+    ],
+)
+def test_poster_title_image_oss_allowlist_rejects_empty_values(key, value):
+    with pytest.raises(ValidationError, match=key):
+        _build_settings(**{key: value})
+
+
 def test_settings_rejects_unknown_poster_title_image_response_model():
     with pytest.raises(ValidationError, match="POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID"):
         _build_settings(POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID="missing-model")
