@@ -456,4 +456,3 @@ job_id   = child_job_id
 - `summary` 字段是否变化。
 - `--download-outputs` 的下载、sha256 校验和图片检测语义是否变化。
 - 常见失败是否仍是当前实现事实。
-
