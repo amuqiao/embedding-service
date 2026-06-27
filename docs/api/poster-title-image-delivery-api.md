@@ -829,8 +829,8 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         }
       },
       "job_error": {
-        "code": "ALL_ITEMS_FAILED",
-        "message": "all batch items failed",
+        "code": "POSTER_TITLE_IMAGE_ALL_ITEMS_FAILED",
+        "message": "all poster title image items failed",
         "details": {
           "failure_phase": "batch_execution"
         }
@@ -901,7 +901,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `error.code` | string | 稳定错误码，例如 `MODEL_CALL_FAILED`、`ALL_ITEMS_FAILED` |
+| `error.code` | string | 稳定错误码，例如 `MODEL_CALL_FAILED`、`POSTER_TITLE_IMAGE_ALL_ITEMS_FAILED` |
 | `error.message` | string | 可展示或记录的错误消息 |
 | `error.details` | object | 结构化错误详情，例如 `failure_phase` |
 

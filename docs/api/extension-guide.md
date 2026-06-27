@@ -51,7 +51,7 @@ workflow child node 应引用 `role="leaf"` 或 `role="root_or_leaf"` 的 execut
 2. 在 `app/api/operations.py` 注册稳定 operation id。
 3. 在 `app/schemas/` 中定义 request 和 response data schema。
 4. route 返回内层 data schema，不手工构造 `HttpEnvelope`。
-5. 错误码先进入 `app/core/error_registry.py`，再由 service 抛出稳定 `AppError`。
+5. 错误码先在所属模块声明并注册到 `app/core/error_registry.py` 的全局 registry；service 只抛出已注册的稳定 `AppError` reason。
 6. 补充 contract 测试，确保 OpenAPI 和 envelope 结构稳定。
 
 新增同步 AI 能力接口时，不要绕过 AI gateway，也不要在业务 response 里临时发明 `cost`、`usage` 或 `billing` 字段。需要公开计费信息时，应复用统一 billing read model。

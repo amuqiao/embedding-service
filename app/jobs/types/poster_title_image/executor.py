@@ -21,6 +21,11 @@ from app.integrations.storage import storage
 from app.jobs.adapters.cpp_oss_url_ref import canonical_ref_from_cpp_oss_url_ref, cpp_oss_url_ref_from_output_object
 from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
+from app.jobs.types.poster_title_image.errors import (
+    POSTER_TITLE_IMAGE_ALL_ITEMS_FAILED,
+    POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
+    POSTER_TITLE_IMAGE_REFERENCE_INVALID,
+)
 from app.models.job import Job
 from app.schemas.jobs import (
     PosterTitleImageBatchSummary,
@@ -58,6 +63,7 @@ POSTER_TITLE_IMAGE_PROVIDER_BACKGROUND = "auto"
 IMAGE_MODEL_GATE = ImageModelGate()
 RESPONSE_MODEL_GATE = ModelGate()
 _WORKFLOW_DEFINITION: WorkflowDefinition | None = None
+_REFERENCE_INVALID_SOURCE_ERROR_CODES = frozenset({"INVALID_INPUT", "INPUT_HASH_MISMATCH", "INPUT_TOO_LARGE"})
 
 PROMPT_TEMPLATE = """\
 Generate a high-resolution standalone title graphic. {bg_header}
@@ -109,17 +115,52 @@ def _validate_response_model(*, required_media_types: set[str]) -> None:
         raise AppError("MODEL_NOT_AVAILABLE", f"模型不支持 image_generation tool 调用: {model_id}")
 
 
-def _load_reference_image_from_ref(reference_image: Any) -> ImageInput:
-    ref = canonical_ref_from_cpp_oss_url_ref(
-        reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image,
-        allowed_content_types=TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
+def _reference_invalid_error(exc: AppError) -> AppError:
+    details = {"source_reason": exc.code}
+    if exc.details:
+        details.update(exc.details)
+    return AppError(
+        POSTER_TITLE_IMAGE_REFERENCE_INVALID,
+        "poster_title_image reference image is invalid",
+        details=details,
     )
+
+
+def _raise_reference_invalid_if_applicable(exc: AppError) -> None:
+    if exc.code in _REFERENCE_INVALID_SOURCE_ERROR_CODES:
+        raise _reference_invalid_error(exc) from exc
+
+
+def _validate_reference_ref_payload(reference_image: Any) -> None:
+    try:
+        canonical_ref_from_cpp_oss_url_ref(
+            reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image,
+            allowed_content_types=TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
+        )
+    except AppError as exc:
+        _raise_reference_invalid_if_applicable(exc)
+        raise
+
+
+def _load_reference_image_from_ref(reference_image: Any) -> ImageInput:
+    try:
+        ref = canonical_ref_from_cpp_oss_url_ref(
+            reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image,
+            allowed_content_types=TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
+        )
+    except AppError as exc:
+        _raise_reference_invalid_if_applicable(exc)
+        raise
     data = storage.read_bytes(bucket=ref.bucket, key=ref.key, region=ref.region)
-    if sha256_digest(data) != ref.content_hash:
-        raise AppError("INPUT_HASH_MISMATCH", "reference image sha256 mismatch")
-    if ref.content_type is None:
-        raise AppError("INVALID_INPUT", "reference image content_type is required")
-    validate_transparent_reference_image(data, content_type=ref.content_type)
+    try:
+        if sha256_digest(data) != ref.content_hash:
+            raise AppError("INPUT_HASH_MISMATCH", "reference image sha256 mismatch")
+        if ref.content_type is None:
+            raise AppError("INVALID_INPUT", "reference image content_type is required")
+        validate_transparent_reference_image(data, content_type=ref.content_type)
+    except AppError as exc:
+        _raise_reference_invalid_if_applicable(exc)
+        raise
     return ImageInput(data=data, content_type=ref.content_type, detail="high")
 
 
@@ -285,12 +326,15 @@ class PosterTitleImageJob(JobExecutor):
     timeout_seconds = 600
     allowed_error_codes = JobExecutor.allowed_error_codes | frozenset(
         {
-            "ALL_ITEMS_FAILED",
             "INPUT_HASH_MISMATCH",
             "INPUT_TOO_LARGE",
+            "MODEL_NOT_AVAILABLE",
             "OSS_FETCH_FAILED",
             "OSS_OBJECT_NOT_FOUND",
             "OSS_WRITE_FAILED",
+            POSTER_TITLE_IMAGE_ALL_ITEMS_FAILED,
+            POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
+            POSTER_TITLE_IMAGE_REFERENCE_INVALID,
             "RUNTIME_CONFIG_MISSING",
             "RUNTIME_REF_INVALID",
             "RUNTIME_REF_MISSING",
@@ -323,17 +367,14 @@ class PosterTitleImageJob(JobExecutor):
             require_supported_language(item.language)
             if item.model_options.draw_count > settings.job.poster_title_image_max_draw_count:
                 raise AppError(
-                    "INVALID_INPUT",
+                    POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
                     "draw_count exceeds configured poster_title_image limit",
                     details={
                         "max_draw_count": settings.job.poster_title_image_max_draw_count,
                         "draw_count": item.model_options.draw_count,
                     },
                 )
-            canonical_ref_from_cpp_oss_url_ref(
-                item.reference_image.model_dump(),
-                allowed_content_types=TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
-            )
+            _validate_reference_ref_payload(item.reference_image)
             _validate_response_model(required_media_types={item.reference_image.content_type})
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:

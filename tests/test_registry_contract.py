@@ -5,13 +5,23 @@ from fastapi.routing import APIRoute
 import pytest
 
 from app.api.operations import all_operation_ids, all_operation_specs
-from app.core.error_registry import all_error_reasons
+from app.core.error_registry import (
+    ErrorSpec,
+    all_error_reasons,
+    all_error_specs,
+    error_registry_is_frozen,
+    register_error_specs,
+)
 from app.core import prompt_templates
 from app.core.registry_checks import validate_all_registries, validate_job_type_registry
 from app.main import app
 from app.jobs.base import JobExecutor, JobTypeSpec, PromptSpec
 from app.jobs.types.register import register_all_job_types
 from app.jobs import registry as job_registry
+from app.jobs.types.poster_title_image.errors import (
+    POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
+    POSTER_TITLE_IMAGE_REFERENCE_INVALID,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +75,28 @@ def test_operation_registry_references_registered_errors():
         assert set(spec.error_codes) <= known_errors
         assert spec.operation_id
         assert spec.response_data_schema
+
+
+def test_error_registry_supports_frozen_idempotent_business_registration():
+    specs = all_error_specs()
+    poster_spec = specs[POSTER_TITLE_IMAGE_REFERENCE_INVALID]
+
+    assert poster_spec.code == "110001"
+    assert poster_spec.owner == "poster_title_image"
+    assert error_registry_is_frozen() is True
+
+    register_error_specs({POSTER_TITLE_IMAGE_REFERENCE_INVALID: poster_spec})
+    with pytest.raises(RuntimeError, match="frozen"):
+        register_error_specs(
+            {
+                "TEST_DYNAMIC_ERROR": ErrorSpec(
+                    "199999",
+                    "TEST_DYNAMIC_ERROR",
+                    "test dynamic error",
+                    400,
+                )
+            }
+        )
 
 
 def test_error_registry_covers_produced_error_reasons():
@@ -213,6 +245,8 @@ def test_job_type_registry_exposes_required_metadata():
     assert poster_spec.platform_retry_policy == "no_platform_retry"
     assert poster_spec.side_effect_policy == "none"
     assert poster_spec.error_codes <= all_error_reasons()
+    assert POSTER_TITLE_IMAGE_REFERENCE_INVALID in poster_spec.error_codes
+    assert POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT in poster_spec.error_codes
     assert poster_spec.prompt_specs == ()
     assert poster_spec.prompt_template_required_blocks == frozenset(
         {"style_probe", "additional_prompt", "layout_rules"}
@@ -487,12 +521,13 @@ def test_worker_registration_validates_job_type_registry(monkeypatch):
     calls = {}
 
     monkeypatch.setattr("app.jobs.types.register.register_all_job_types", lambda: calls.setdefault("jobs", True))
+    monkeypatch.setattr("app.core.error_registry.freeze_error_registry", lambda: calls.setdefault("errors", True))
     monkeypatch.setattr("app.core.registry_checks.validate_job_type_registry", lambda: calls.setdefault("registry", True))
     monkeypatch.setattr("app.core.model_registry.validate_model_catalog", lambda: calls.setdefault("models", True))
 
     task_jobs._ensure_workflows_registered()
 
-    assert calls == {"jobs": True, "registry": True, "models": True}
+    assert calls == {"jobs": True, "errors": True, "registry": True, "models": True}
 
 
 def test_register_all_job_types_reregisters_after_clear():

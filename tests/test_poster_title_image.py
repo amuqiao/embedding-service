@@ -21,6 +21,10 @@ from app.integrations.image import (
 from app.integrations.object_storage import bare_sha256, sha256_digest
 from app.integrations.storage import LocalObjectStorage
 from app.jobs.types.poster_title_image import PosterTitleImageJob
+from app.jobs.types.poster_title_image.errors import (
+    POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
+    POSTER_TITLE_IMAGE_REFERENCE_INVALID,
+)
 from app.models.job import Job
 from app.schemas.billing import BillingEnvelope
 from app.schemas.jobs import CreateJobRequest, JobEnvelope, PosterTitleImageParams
@@ -140,7 +144,7 @@ def test_poster_title_image_rejects_draw_count_above_config(monkeypatch):
     with pytest.raises(AppError) as exc:
         PosterTitleImageJob().validate_normalized_job_params(params)
 
-    assert exc.value.code == "INVALID_INPUT"
+    assert exc.value.code == POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT
     assert exc.value.details == {"max_draw_count": 1, "draw_count": 2}
 
 
@@ -281,6 +285,27 @@ def test_validate_transparent_reference_image_accepts_palette_png_and_rejects_we
     assert palette_png.content_type == "image/png"
     with pytest.raises(AppError, match="image/png"):
         validate_transparent_reference_image(_transparent_reference_png_bytes(), content_type="image/webp")
+
+
+def test_poster_title_image_reference_validation_uses_business_error(monkeypatch, tmp_path):
+    from app.jobs.types.poster_title_image.executor import _load_reference_image_from_ref
+
+    data = _png_bytes()
+    local_storage = LocalObjectStorage(tmp_path)
+    local_storage.write_bytes(
+        bucket="local-dev",
+        region="local",
+        key="reference/title.png",
+        data=data,
+        content_type="image/png",
+    )
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
+
+    with pytest.raises(AppError) as exc:
+        _load_reference_image_from_ref(_url_ref("reference/title.png", data))
+
+    assert exc.value.code == POSTER_TITLE_IMAGE_REFERENCE_INVALID
+    assert exc.value.details["source_reason"] == "INVALID_INPUT"
 
 
 def test_validate_transparent_reference_image_rejects_oversized_dimensions(monkeypatch):

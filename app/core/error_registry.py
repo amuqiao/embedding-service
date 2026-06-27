@@ -16,7 +16,7 @@ class ErrorSpec:
     details_schema: str | None = None
 
 
-_SPECS: dict[str, ErrorSpec] = {
+_CORE_ERROR_SPECS: dict[str, ErrorSpec] = {
     "INVALID_INPUT": ErrorSpec("100001", "INVALID_INPUT", "invalid input", 400, scope="http"),
     "REQUEST_ID_INVALID": ErrorSpec("100002", "REQUEST_ID_INVALID", "invalid request id", 400, scope="http"),
     "MALFORMED_JSON": ErrorSpec("100003", "MALFORMED_JSON", "malformed json", 400, scope="http"),
@@ -258,6 +258,44 @@ _SPECS: dict[str, ErrorSpec] = {
     "CALLBACK_URL_INVALID": ErrorSpec("900551", "CALLBACK_URL_INVALID", "callback url invalid", 500, scope="callback", owner="callbacks"),
     "CALLBACK_BODY_INVALID": ErrorSpec("900552", "CALLBACK_BODY_INVALID", "callback body invalid", 500, scope="callback", owner="callbacks"),
 }
+
+_SPECS: dict[str, ErrorSpec] = {}
+_FROZEN = False
+
+
+def register_error_specs(specs: dict[str, ErrorSpec]) -> None:
+    if not specs:
+        return
+    if _FROZEN:
+        mismatched = [reason for reason, spec in specs.items() if _SPECS.get(reason) != spec]
+        if mismatched:
+            raise RuntimeError(f"error registry is frozen; cannot register: {sorted(mismatched)}")
+        return
+    for reason, spec in specs.items():
+        if reason != spec.reason:
+            raise ValueError(f"error registry key mismatch: {reason} != {spec.reason}")
+        existing = _SPECS.get(reason)
+        if existing is not None:
+            if existing == spec:
+                continue
+            raise ValueError(f"duplicate error reason {reason}")
+        for registered_reason, registered_spec in _SPECS.items():
+            if registered_spec.code == spec.code:
+                raise ValueError(f"duplicate error code {spec.code}: {registered_reason}, {reason}")
+        _SPECS[reason] = spec
+
+
+def freeze_error_registry() -> None:
+    global _FROZEN
+
+    _FROZEN = True
+
+
+def error_registry_is_frozen() -> bool:
+    return _FROZEN
+
+
+register_error_specs(_CORE_ERROR_SPECS)
 
 def get_error_spec(reason: str) -> ErrorSpec:
     spec = _SPECS.get(reason)

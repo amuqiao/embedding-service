@@ -19,7 +19,7 @@ route 函数只返回内层 data schema；外层 envelope 由应用统一包装�
 
 `request_id` 是请求追踪 ID。调用方可以通过 `X-Request-ID` 传入 1 到 128 个字符的 ASCII 字母、数字、点号、下划线、冒号或连字符；服务会在响应 envelope 和 `X-Request-ID` 响应头中返回同一个值。调用方不传时，服务端为本次请求生成 32 位小写 UUID hex。传入非法值时返回 `REQUEST_ID_INVALID` 错误 envelope，并使用服务端生成的 `request_id` 标记该错误响应。
 
-错误响应使用 `ErrorEnvelope`，错误码事实源是 `app/core/error_registry.py`。
+错误响应使用 `ErrorEnvelope`。错误码运行时查询入口是 `app/core/error_registry.py`；通用错误由 core 维护，业务错误由所属模块声明后注册到同一个全局 registry。
 
 ## 认证
 

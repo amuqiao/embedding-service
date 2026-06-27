@@ -29,10 +29,14 @@ def _required_metadata_str(value: object, *, field_name: str, owner: str) -> str
 
 
 def validate_error_registry() -> None:
-    seen_codes: dict[int, str] = {}
+    seen_codes: dict[str, str] = {}
     for reason, spec in all_error_specs().items():
         if reason != spec.reason:
             raise ValueError(f"error registry key mismatch: {reason} != {spec.reason}")
+        if not spec.code:
+            raise ValueError(f"error {reason} requires non-empty code")
+        if not spec.msg:
+            raise ValueError(f"error {reason} requires non-empty msg")
         previous = seen_codes.get(spec.code)
         if previous is not None:
             raise ValueError(f"duplicate error code {spec.code}: {previous}, {reason}")
@@ -59,13 +63,15 @@ def validate_operation_registry() -> None:
 
 
 def validate_job_type_registry() -> None:
-    known_errors = all_error_reasons()
+    error_specs = all_error_specs()
+    known_errors = set(error_specs)
     known_events = all_log_events()
     known_schemas = all_schema_names()
     prompt_templates.validate_prompt_config_shape(known_output_schemas=known_schemas)
     known_prompt_refs = prompt_templates.all_prompt_refs()
     prompt_output_schemas = prompt_templates.prompt_output_schema_refs()
     specs = job_registry.all_job_type_specs()
+    known_error_owners = {"core", "jobs", "storage", "ai", "billing", "broker", "callbacks"} | set(specs)
     prompt_template_job_types = prompt_templates.prompt_template_job_types()
     unknown_template_job_types = _missing(prompt_template_job_types, set(specs))
     if unknown_template_job_types:
@@ -85,6 +91,13 @@ def validate_job_type_registry() -> None:
         missing_errors = _missing(set(spec.error_codes), known_errors)
         if missing_errors:
             raise ValueError(f"job_type {spec.job_type} references unknown errors: {missing_errors}")
+        unknown_error_owners = sorted(
+            f"{reason}:{error_specs[reason].owner}"
+            for reason in spec.error_codes
+            if error_specs[reason].owner not in known_error_owners
+        )
+        if unknown_error_owners:
+            raise ValueError(f"job_type {spec.job_type} references errors with unknown owners: {unknown_error_owners}")
         missing_events = _missing(set(spec.log_events), known_events)
         if missing_events:
             raise ValueError(f"job_type {spec.job_type} references unknown log events: {missing_events}")

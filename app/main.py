@@ -17,6 +17,7 @@ from app.api.routes import health, jobs, meta
 from app.core.exceptions import AppError
 from app.core.logging import configure_logging, set_request_id
 from app.core.config import settings
+from app.core.error_registry import freeze_error_registry
 from app.core.registry_checks import validate_all_registries
 from app.schemas.errors import build_error_envelope
 from app.schemas.envelope import success_resp
@@ -259,6 +260,7 @@ def _request_id(request: Request) -> str:
 
 def bootstrap_runtime() -> None:
     register_all_job_types()
+    freeze_error_registry()
     from app.core.model_registry import validate_model_catalog
 
     validate_model_catalog()

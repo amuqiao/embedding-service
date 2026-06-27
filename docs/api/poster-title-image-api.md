@@ -670,8 +670,8 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         }
       },
       "job_error": {
-        "code": "ALL_ITEMS_FAILED",
-        "message": "all batch items failed",
+        "code": "POSTER_TITLE_IMAGE_ALL_ITEMS_FAILED",
+        "message": "all poster title image items failed",
         "details": {
           "failure_phase": "batch_execution"
         }
@@ -802,4 +802,12 @@ Rules:
 
 ## 8. Error Codes
 
-错误 envelope、通用错误码和计费错误语义沿用 [`service-contract.md`](service-contract.md)。本文不新增 `poster_title_image` 专属错误码。
+错误 envelope 和计费错误语义沿用 [`service-contract.md`](service-contract.md)。`poster_title_image` 专属错误码由 `app/jobs/types/poster_title_image/errors.py` 声明，并注册到全局 error registry。
+
+| reason | HTTP | 说明 |
+|---|---:|---|
+| `POSTER_TITLE_IMAGE_REFERENCE_INVALID` | 400 | `reference_image` 不符合业务要求，例如引用格式、内容类型、hash、尺寸、透明背景或图片可解码性无效 |
+| `POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT` | 400 | `draw_count` 超过服务端 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` |
+| `POSTER_TITLE_IMAGE_ALL_ITEMS_FAILED` | 502 | 批量生成没有任何 item 成功 |
+
+模型、OSS、worker、callback 和计费类失败继续使用服务级通用错误码，例如 `MODEL_CALL_FAILED`、`MODEL_OUTPUT_INVALID`、`OSS_FETCH_FAILED`、`OSS_WRITE_FAILED` 和 `JOB_TIMEOUT`。
