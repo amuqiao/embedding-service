@@ -77,6 +77,34 @@ class _FakeDB:
         self.added.append(obj)
 
 
+class _DefaultOffResultSnapshotHandler:
+    result_snapshot_statuses = frozenset()
+
+    def supports_result_snapshot(self, status):
+        return status in self.result_snapshot_statuses
+
+    def validate_result_snapshot(self, status, result):
+        if result is not None:
+            raise ValueError(f"{status} result must be null")
+        return None
+
+
+class _FailedResultSnapshotHandler:
+    result_snapshot_statuses = frozenset({"failed"})
+
+    def __init__(self, snapshot):
+        self.snapshot = snapshot
+
+    def supports_result_snapshot(self, status):
+        return status in self.result_snapshot_statuses
+
+    async def build_result_snapshot(self, status, job, db):
+        return self.snapshot
+
+    def validate_result_snapshot(self, status, result):
+        return result
+
+
 def _compile(statement) -> str:
     return str(statement.compile(dialect=postgresql.dialect()))
 
@@ -693,7 +721,7 @@ async def test_mark_failed_rejects_stale_execution_token():
 
 
 @pytest.mark.asyncio
-async def test_mark_failed_creates_skipped_callback_outbox_for_unsubscribed_event():
+async def test_mark_failed_creates_skipped_callback_outbox_for_unsubscribed_event(monkeypatch):
     job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
@@ -710,6 +738,10 @@ async def test_mark_failed_creates_skipped_callback_outbox_for_unsubscribed_even
     )
     db = _FakeDB()
     db.results.extend([_ScalarResult(job), _ScalarResult(None), _ScalarListResult([])])
+    monkeypatch.setattr(
+        "app.jobs.factory.get_job_executor",
+        lambda _job_type: _DefaultOffResultSnapshotHandler(),
+    )
 
     updated = await JobRepo.mark_failed(
         db,
@@ -734,6 +766,71 @@ async def test_mark_failed_creates_skipped_callback_outbox_for_unsubscribed_even
         "retryable": False,
     }
     assert outboxes[0].payload["job"]["cost"]["final"] is True
+
+
+@pytest.mark.asyncio
+async def test_failed_callback_outbox_drops_result_when_job_type_does_not_support_snapshot(monkeypatch):
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="client-1",
+        job_type="test.echo",
+        status="failed",
+        progress_percent=60,
+        result={"unexpected": "stored"},
+        error={"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {}},
+        metadata_={},
+        callback_url="https://example.com/callback",
+        callback_events=["job.failed"],
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
+    )
+    db = _FakeDB()
+    db.results.extend([_ScalarResult(None), _ScalarListResult([])])
+    monkeypatch.setattr(
+        "app.jobs.factory.get_job_executor",
+        lambda _job_type: _DefaultOffResultSnapshotHandler(),
+    )
+
+    outbox = await JobRepo.ensure_terminal_callback_outbox(db, job, now=datetime.now(UTC))
+
+    assert outbox is not None
+    assert outbox.payload["job"]["job_status"] == "failed"
+    assert outbox.payload["job"]["job_result"] is None
+
+
+@pytest.mark.asyncio
+async def test_failed_callback_outbox_uses_job_type_result_snapshot(monkeypatch):
+    snapshot = {"items": [{"item_id": "es"}]}
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="client-1",
+        job_type="test.snapshot",
+        status="failed",
+        progress_percent=60,
+        result={"unexpected": "stored"},
+        error={"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {}},
+        metadata_={},
+        callback_url="https://example.com/callback",
+        callback_events=["job.failed"],
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
+    )
+    db = _FakeDB()
+    db.results.extend([_ScalarResult(None), _ScalarListResult([])])
+    monkeypatch.setattr(
+        "app.jobs.factory.get_job_executor",
+        lambda _job_type: _FailedResultSnapshotHandler(snapshot),
+    )
+
+    outbox = await JobRepo.ensure_terminal_callback_outbox(db, job, now=datetime.now(UTC))
+
+    assert outbox is not None
+    assert outbox.payload["job"]["job_status"] == "failed"
+    assert outbox.payload["job"]["job_result"] == snapshot
 
 
 @pytest.mark.asyncio
@@ -1037,7 +1134,7 @@ async def test_mark_workflow_root_succeeded_finalizes_waiting_root_and_callback(
 
 
 @pytest.mark.asyncio
-async def test_mark_workflow_root_failed_finalizes_waiting_root_and_callback():
+async def test_mark_workflow_root_failed_finalizes_waiting_root_and_callback(monkeypatch):
     root = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
@@ -1056,6 +1153,10 @@ async def test_mark_workflow_root_failed_finalizes_waiting_root_and_callback():
     error = {"code": "WORKFLOW_CHILD_FAILED", "message": "workflow child job failed", "details": {}}
     db = _FakeDB()
     db.results.extend([_ScalarResult(root), _ScalarResult(None), _ScalarListResult([])])
+    monkeypatch.setattr(
+        "app.jobs.factory.get_job_executor",
+        lambda _job_type: _DefaultOffResultSnapshotHandler(),
+    )
 
     updated = await JobRepo.mark_workflow_root_failed(db, root.id, error=error)
 

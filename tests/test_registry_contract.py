@@ -241,6 +241,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert poster_spec.visibility == "public"
     assert poster_spec.role == "root"
     assert poster_spec.allow_callback is True
+    assert poster_spec.result_snapshot_statuses == frozenset({"running", "failed"})
     assert poster_spec.execution_mode == "custom_executor"
     assert poster_spec.platform_retry_policy == "no_platform_retry"
     assert poster_spec.side_effect_policy == "none"
@@ -267,6 +268,7 @@ def _job_type_spec(**overrides) -> JobTypeSpec:
         "public_result_schema": "JobTestAddResult",
         "callback_envelope_schema": "CallbackEnvelope[JobEnvelope]",
         "allow_callback": True,
+        "result_snapshot_statuses": frozenset(),
         "large_artifact_keys": frozenset(),
         "error_codes": frozenset({"INVALID_INPUT"}),
         "log_events": (),
@@ -316,6 +318,7 @@ def test_job_executor_requires_explicit_visibility_and_role():
         ({"platform_retry_policy": "retry_everything"}, "platform_retry_policy"),
         ({"visibility": "private"}, "visibility"),
         ({"role": "worker"}, "role"),
+        ({"result_snapshot_statuses": frozenset({"queued"})}, "result_snapshot_statuses"),
         ({"max_attempts": 0}, "max_attempts"),
         ({"timeout_seconds": 0}, "timeout_seconds"),
         ({"max_attempts": 2, "platform_retry_policy": "no_platform_retry"}, "platform_retry_policy"),

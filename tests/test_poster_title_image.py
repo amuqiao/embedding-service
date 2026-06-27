@@ -582,6 +582,335 @@ async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_poster_title_image_running_result_contains_only_succeeded_items(monkeypatch):
+    from app.jobs.types.poster_title_image import PosterTitleImageJob
+    from app.jobs.types.poster_title_image.executor import _item_node_key
+
+    ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
+    params = _params(ref)
+    params["items"].append(
+        {
+            **params["items"][0],
+            "item_id": "fr",
+            "language": "fr",
+            "title_text": "Quand l'amour s'eloigne",
+        }
+    )
+    succeeded_item = {
+        "item_id": "es",
+        "language": "es",
+        "status": "succeeded",
+        "images": [{"object": _url_ref("out/es.png", b"es")}],
+        "error": None,
+    }
+    root_id = uuid.uuid4()
+    children = [
+        SimpleNamespace(
+            workflow_node_key="probe.0",
+            job_type="poster_title_image_style_probe",
+            status="succeeded",
+            result={"duration_ms": {"ai_model": 3, "total": 4}},
+        ),
+        SimpleNamespace(
+            workflow_node_key=_item_node_key("es"),
+            job_type="poster_title_image_generate_item",
+            status="succeeded",
+            result={"item": succeeded_item, "duration_ms": {"ai_model": 5, "total": 6}},
+        ),
+        SimpleNamespace(
+            workflow_node_key=_item_node_key("fr"),
+            job_type="poster_title_image_generate_item",
+            status="running",
+            result=None,
+        ),
+    ]
+
+    async def fake_list_internal_children(_db, *, root_job_id, statuses=None):
+        assert root_job_id == root_id
+        assert statuses is None
+        return children
+
+    monkeypatch.setattr("app.repositories.job_repo.JobRepo.list_internal_children", fake_list_internal_children)
+    job = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="poster-1",
+        job_type="poster_title_image",
+        status="running",
+        progress_percent=55,
+        job_params=params,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    result = await PosterTitleImageJob().build_result_snapshot("running", job, object())
+
+    assert result is not None
+    assert result["batch_summary"] == {"total": 1, "succeeded": 1, "failed": 0, "running": 0, "pending": 0}
+    assert [item["item_id"] for item in result["items"]] == ["es"]
+    assert result["items"][0]["images"] == succeeded_item["images"]
+    assert result["duration_ms"] == {"ai_model": 8, "total": 10}
+
+
+@pytest.mark.asyncio
+async def test_poster_title_image_running_result_is_null_before_first_succeeded_item(monkeypatch):
+    from app.jobs.types.poster_title_image import PosterTitleImageJob
+
+    ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
+    root_id = uuid.uuid4()
+
+    async def fake_list_internal_children(_db, *, root_job_id, statuses=None):
+        assert root_job_id == root_id
+        return [
+            SimpleNamespace(
+                workflow_node_key="probe.0",
+                job_type="poster_title_image_style_probe",
+                status="succeeded",
+                result={"duration_ms": {"ai_model": 3, "total": 4}},
+            )
+        ]
+
+    monkeypatch.setattr("app.repositories.job_repo.JobRepo.list_internal_children", fake_list_internal_children)
+    job = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="poster-1",
+        job_type="poster_title_image",
+        status="running",
+        progress_percent=30,
+        job_params=_params(ref),
+        created_at=datetime.now(timezone.utc),
+    )
+
+    assert await PosterTitleImageJob().build_result_snapshot("running", job, object()) is None
+
+
+@pytest.mark.asyncio
+async def test_poster_title_image_failed_result_reuses_succeeded_item_subset(monkeypatch):
+    from app.jobs.types.poster_title_image import PosterTitleImageJob
+    from app.jobs.types.poster_title_image.executor import _item_node_key
+
+    ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
+    params = _params(ref)
+    params["items"].append(
+        {
+            **params["items"][0],
+            "item_id": "fr",
+            "language": "fr",
+            "title_text": "Quand l'amour s'eloigne",
+        }
+    )
+    succeeded_item = {
+        "item_id": "es",
+        "language": "es",
+        "status": "succeeded",
+        "images": [{"object": _url_ref("out/es.png", b"es")}],
+        "error": None,
+    }
+    root_id = uuid.uuid4()
+
+    async def fake_list_internal_children(_db, *, root_job_id, statuses=None):
+        assert root_job_id == root_id
+        return [
+            SimpleNamespace(
+                workflow_node_key=_item_node_key("es"),
+                job_type="poster_title_image_generate_item",
+                status="succeeded",
+                result={"item": succeeded_item, "duration_ms": {"ai_model": 5, "total": 6}},
+            ),
+            SimpleNamespace(
+                workflow_node_key=_item_node_key("fr"),
+                job_type="poster_title_image_generate_item",
+                status="failed",
+                result=None,
+            ),
+        ]
+
+    monkeypatch.setattr("app.repositories.job_repo.JobRepo.list_internal_children", fake_list_internal_children)
+    job = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="poster-1",
+        job_type="poster_title_image",
+        status="failed",
+        progress_percent=100,
+        progress_stage="failed",
+        job_params=params,
+        error={"code": "WORKFLOW_CHILD_FAILED", "message": "workflow child job failed"},
+        created_at=datetime.now(timezone.utc),
+    )
+
+    result = await PosterTitleImageJob().build_result_snapshot("failed", job, object())
+
+    assert result is not None
+    assert result["batch_summary"] == {"total": 1, "succeeded": 1, "failed": 0, "running": 0, "pending": 0}
+    assert [item["item_id"] for item in result["items"]] == ["es"]
+
+
+@pytest.mark.asyncio
+async def test_get_job_response_projects_poster_title_image_running_result(monkeypatch):
+    from app.jobs.types.poster_title_image import PosterTitleImageJob
+    from app.jobs.types.poster_title_image.executor import _item_node_key
+    from app.services.jobs import get_job_response
+
+    ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
+    params = _params(ref)
+    root_id = uuid.uuid4()
+    succeeded_item = {
+        "item_id": "es",
+        "language": "es",
+        "status": "succeeded",
+        "images": [{"object": _url_ref("out/es.png", b"es")}],
+        "error": None,
+    }
+    job = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="poster-1",
+        job_type="poster_title_image",
+        status="running",
+        progress_percent=55,
+        progress_text="正在生成标题图",
+        progress_stage="calling_model",
+        callback_status="pending",
+        callback_attempts=0,
+        job_params=params,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    async def fake_get_for_caller(_db, job_id, caller_id):
+        assert job_id == root_id
+        assert caller_id == "caller-1"
+        return job
+
+    async def fake_list_internal_children(_db, *, root_job_id, statuses=None):
+        assert root_job_id == root_id
+        return [
+            SimpleNamespace(
+                workflow_node_key=_item_node_key("es"),
+                job_type="poster_title_image_generate_item",
+                status="succeeded",
+                result={"item": succeeded_item, "duration_ms": {"ai_model": 5, "total": 6}},
+            )
+        ]
+
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_for_caller", fake_get_for_caller)
+    monkeypatch.setattr("app.repositories.job_repo.JobRepo.list_internal_children", fake_list_internal_children)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: PosterTitleImageJob())
+
+    response = await get_job_response(object(), root_id, "caller-1")
+
+    assert response.job_status == "running"
+    assert response.cost is None
+    assert response.job_result is not None
+    assert response.job_result["batch_summary"] == {
+        "total": 1,
+        "succeeded": 1,
+        "failed": 0,
+        "running": 0,
+        "pending": 0,
+    }
+    assert [item["item_id"] for item in response.job_result["items"]] == ["es"]
+
+
+@pytest.mark.asyncio
+async def test_get_job_response_preserves_succeeded_items_when_poster_title_image_failed(monkeypatch):
+    from app.jobs.types.poster_title_image import PosterTitleImageJob
+    from app.jobs.types.poster_title_image.executor import _item_node_key
+    from app.services.jobs import get_job_response
+
+    ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
+    params = _params(ref)
+    params["items"].append(
+        {
+            **params["items"][0],
+            "item_id": "fr",
+            "language": "fr",
+            "title_text": "Quand l'amour s'eloigne",
+        }
+    )
+    root_id = uuid.uuid4()
+    succeeded_item = {
+        "item_id": "es",
+        "language": "es",
+        "status": "succeeded",
+        "images": [{"object": _url_ref("out/es.png", b"es")}],
+        "error": None,
+    }
+    job = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="poster-1",
+        job_type="poster_title_image",
+        status="failed",
+        progress_percent=100,
+        progress_text="failed",
+        progress_stage="failed",
+        callback_status="pending",
+        callback_attempts=0,
+        job_params=params,
+        error={"code": "WORKFLOW_CHILD_FAILED", "message": "workflow child job failed"},
+        created_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+    )
+
+    async def fake_get_for_caller(_db, job_id, caller_id):
+        assert job_id == root_id
+        assert caller_id == "caller-1"
+        return job
+
+    async def fake_list_internal_children(_db, *, root_job_id, statuses=None):
+        assert root_job_id == root_id
+        return [
+            SimpleNamespace(
+                workflow_node_key=_item_node_key("es"),
+                job_type="poster_title_image_generate_item",
+                status="succeeded",
+                result={"item": succeeded_item, "duration_ms": {"ai_model": 5, "total": 6}},
+            ),
+            SimpleNamespace(
+                workflow_node_key=_item_node_key("fr"),
+                job_type="poster_title_image_generate_item",
+                status="failed",
+                result=None,
+            ),
+        ]
+
+    async def fake_get_scope_billing(*_args, **_kwargs):
+        return BillingEnvelope(
+            scope_type="job",
+            scope_id=str(root_id),
+            status="incomplete",
+            currency="USD",
+            total_cost_amount="0",
+            usage_units={},
+            pricing_refs=[],
+            ai_call_count=0,
+            billable_call_count=0,
+            unbillable_call_count=0,
+            failed_call_count=0,
+        )
+
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_for_caller", fake_get_for_caller)
+    monkeypatch.setattr("app.repositories.job_repo.JobRepo.list_internal_children", fake_list_internal_children)
+    monkeypatch.setattr("app.services.jobs.get_scope_billing", fake_get_scope_billing)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: PosterTitleImageJob())
+
+    response = await get_job_response(object(), root_id, "caller-1")
+
+    assert response.job_status == "failed"
+    assert response.job_error is not None
+    assert response.job_result is not None
+    assert response.job_result["batch_summary"] == {
+        "total": 1,
+        "succeeded": 1,
+        "failed": 0,
+        "running": 0,
+        "pending": 0,
+    }
+    assert [item["item_id"] for item in response.job_result["items"]] == ["es"]
+
+
+@pytest.mark.asyncio
 async def test_style_probe_uses_ai_ledger(monkeypatch):
     from app.jobs.types.poster_title_image.executor import _probe_style
 

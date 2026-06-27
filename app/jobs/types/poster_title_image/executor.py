@@ -311,6 +311,62 @@ def _item_node_key(item_id: str) -> str:
     return f"item.{suffix}.{digest}"
 
 
+def _duration_totals_from_child(child: Job) -> tuple[int, int]:
+    result = child.result if isinstance(child.result, dict) else {}
+    duration = result.get("duration_ms")
+    if not isinstance(duration, dict):
+        return 0, 0
+    return int(duration.get("ai_model") or 0), int(duration.get("total") or 0)
+
+
+async def _build_result_snapshot(job: Job, db: AsyncSession) -> dict[str, Any] | None:
+    params = PosterTitleImageParams.model_validate(job.job_params)
+    from app.repositories.job_repo import JobRepo
+
+    children = await JobRepo.list_internal_children(db, root_job_id=job.id)
+    children_by_key = {child.workflow_node_key: child for child in children}
+    result_items: list[PosterTitleImageResultItem] = []
+    ai_model_ms = 0
+    total_ms = 0
+    for child in children:
+        if child.job_type == POSTER_TITLE_IMAGE_STYLE_PROBE_JOB_TYPE and child.status == "succeeded":
+            child_ai_ms, child_total_ms = _duration_totals_from_child(child)
+            ai_model_ms += child_ai_ms
+            total_ms += child_total_ms
+
+    for item in params.items:
+        node_key = _item_node_key(item.item_id)
+        child = children_by_key.get(node_key)
+        if child is None or child.status != "succeeded":
+            continue
+        if not isinstance(child.result, dict):
+            raise AppError("RUNTIME_REF_INVALID", f"item child result is not available: {node_key}")
+        result_item = PosterTitleImageResultItem.model_validate(child.result.get("item"))
+        if result_item.item_id != item.item_id or result_item.language != item.language:
+            raise AppError("MODEL_OUTPUT_INVALID", "item child returned mismatched item identity")
+        if len(result_item.images) != item.model_options.draw_count:
+            raise AppError("MODEL_OUTPUT_INVALID", "item child returned unexpected image count")
+        result_items.append(result_item)
+        child_ai_ms, child_total_ms = _duration_totals_from_child(child)
+        ai_model_ms += child_ai_ms
+        total_ms += child_total_ms
+
+    if not result_items:
+        return None
+    result = PosterTitleImageResult(
+        batch_summary=PosterTitleImageBatchSummary(
+            total=len(result_items),
+            succeeded=len(result_items),
+            failed=0,
+            running=0,
+            pending=0,
+        ),
+        items=result_items,
+        duration_ms=PosterTitleImageDurationMs(ai_model=ai_model_ms, total=total_ms),
+    )
+    return result.model_dump()
+
+
 @register_job_type
 class PosterTitleImageJob(JobExecutor):
     name = "poster_title_image"
@@ -320,6 +376,7 @@ class PosterTitleImageJob(JobExecutor):
     runtime_fields_schema_name = "PosterTitleImageRuntimeFields"
     canonical_result_schema = PosterTitleImageResult
     public_result_schema = PosterTitleImageResult
+    result_snapshot_statuses = frozenset({"running", "failed"})
     prompt_template_required_blocks = frozenset(POSTER_TITLE_IMAGE_PROMPT_BLOCKS)
     allow_callback = True
     max_attempts = 1
@@ -359,6 +416,9 @@ class PosterTitleImageJob(JobExecutor):
         params = PosterTitleImageParams.model_validate(job_params)
         model_id = params.items[0].model_id if params.items else "gpt-image-2"
         return PosterTitleImageRuntimeFields(model_id=model_id).model_dump()
+
+    async def build_result_snapshot(self, status: str, job: Job, db: AsyncSession) -> dict[str, Any] | None:
+        return await _build_result_snapshot(job, db)
 
     def validate_normalized_job_params(self, job_params: dict[str, Any]) -> None:
         params = PosterTitleImageParams.model_validate(job_params)

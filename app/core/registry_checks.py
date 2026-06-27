@@ -9,6 +9,7 @@ from app.core.error_registry import all_error_reasons, all_error_specs
 from app.core.logging import all_log_events
 from app.jobs.base import (
     EXECUTION_MODES,
+    JOB_RESULT_SNAPSHOT_STATUSES,
     JOB_TYPE_ROLES,
     JOB_TYPE_VISIBILITIES,
     PLATFORM_RETRY_POLICIES,
@@ -130,6 +131,12 @@ def validate_job_type_registry() -> None:
             raise ValueError(f"job_type {spec.job_type} declares invalid visibility: {spec.visibility}")
         if spec.role not in JOB_TYPE_ROLES:
             raise ValueError(f"job_type {spec.job_type} declares invalid role: {spec.role}")
+        invalid_snapshot_statuses = set(spec.result_snapshot_statuses) - JOB_RESULT_SNAPSHOT_STATUSES
+        if invalid_snapshot_statuses:
+            raise ValueError(
+                f"job_type {spec.job_type} declares invalid result_snapshot_statuses: "
+                f"{sorted(invalid_snapshot_statuses)}"
+            )
         if spec.max_attempts < 1:
             raise ValueError(f"job_type {spec.job_type} must declare max_attempts >= 1")
         if spec.timeout_seconds < 1:

@@ -95,7 +95,7 @@ def _assert_standard_job_fields(job: dict) -> None:
         "updated_at",
         "finished_at",
     }
-    assert set(job["job_progress"]) == {"stage", "percent", "message"}
+    assert "percent" in job["job_progress"]
     assert set(job["callback"]) == {"status", "attempt", "last_error", "next_retry_at"}
 
 

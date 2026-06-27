@@ -19,6 +19,7 @@ PLATFORM_RETRY_POLICIES = frozenset({"no_platform_retry", "retry_transient_platf
 SIDE_EFFECT_POLICIES = frozenset({"none", "success_side_effect"})
 JOB_TYPE_VISIBILITIES = frozenset({"public", "internal", "demo"})
 JOB_TYPE_ROLES = frozenset({"root", "leaf", "root_or_leaf"})
+JOB_RESULT_SNAPSHOT_STATUSES = frozenset({"running", "failed"})
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ class JobTypeSpec:
     public_result_schema: str
     callback_envelope_schema: str
     allow_callback: bool
+    result_snapshot_statuses: frozenset[str]
     large_artifact_keys: frozenset[str]
     error_codes: frozenset[str]
     log_events: tuple[str, ...]
@@ -63,6 +65,7 @@ class JobExecutor(ABC):
     visibility: str = ""
     role: str = ""
     allow_callback: bool = True
+    result_snapshot_statuses: frozenset[str] = frozenset()
     max_attempts: int = 1
     timeout_seconds: int = 300
     platform_retry_policy: str | None = None
@@ -154,6 +157,23 @@ class JobExecutor(ABC):
             raise ValueError(f"{self.name} public result must be null")
         return self.public_result_schema.model_validate(result).model_dump(exclude_none=True)
 
+    def supports_result_snapshot(self, status: str) -> bool:
+        return status in self.result_snapshot_statuses
+
+    def validate_result_snapshot(self, status: str, result: dict[str, Any] | None) -> dict[str, Any] | None:
+        if status not in JOB_RESULT_SNAPSHOT_STATUSES:
+            raise ValueError(f"{self.name} does not support {status} result snapshots")
+        if result is None:
+            return None
+        if not self.supports_result_snapshot(status):
+            raise ValueError(f"{self.name} {status} result must be null")
+        return self.validate_public_result(result)
+
+    async def build_result_snapshot(self, status: str, job: Job, db: AsyncSession) -> dict[str, Any] | None:
+        if status not in JOB_RESULT_SNAPSHOT_STATUSES:
+            raise ValueError(f"{self.name} does not support {status} result snapshots")
+        return job.result
+
     def _execution_mode(self) -> str:
         if type(self)._execute is JobExecutor._execute:
             return "builtin_llm_text_runtime"
@@ -173,6 +193,11 @@ class JobExecutor(ABC):
             raise ValueError(f"{self.name} declares invalid visibility: {self.visibility}")
         if self.role not in JOB_TYPE_ROLES:
             raise ValueError(f"{self.name} declares invalid role: {self.role}")
+        invalid_snapshot_statuses = self.result_snapshot_statuses - JOB_RESULT_SNAPSHOT_STATUSES
+        if invalid_snapshot_statuses:
+            raise ValueError(
+                f"{self.name} declares invalid result snapshot statuses: {sorted(invalid_snapshot_statuses)}"
+            )
         return JobTypeSpec(
             job_type=self.name,
             visibility=self.visibility,
@@ -188,6 +213,7 @@ class JobExecutor(ABC):
             public_result_schema=_schema_name(self.public_result_schema),
             callback_envelope_schema="CallbackEnvelope[JobEnvelope]",
             allow_callback=self.allow_callback,
+            result_snapshot_statuses=self.result_snapshot_statuses,
             large_artifact_keys=self.large_artifact_keys,
             error_codes=self.allowed_error_codes,
             log_events=self.log_events,

@@ -32,6 +32,7 @@ from app.services.job_runtime import (
 from app.workflows.registry import compile_registered_workflow, has_workflow
 
 logger = logging.getLogger(__name__)
+_JOB_RESULT_UNSET = object()
 
 
 def _status_url(job_id: uuid.UUID) -> str:
@@ -149,7 +150,13 @@ def _progress_stage(job: Job) -> str:
     return "calling_model"
 
 
-def _job_payload(job: Job, *, cost: dict[str, Any] | None = None) -> dict[str, Any]:
+def _job_payload(
+    job: Job,
+    *,
+    cost: dict[str, Any] | None = None,
+    job_result: dict[str, Any] | None | object = _JOB_RESULT_UNSET,
+) -> dict[str, Any]:
+    result = job.result if job_result is _JOB_RESULT_UNSET else job_result
     try:
         return validate_job_status_payload(
             {
@@ -162,7 +169,7 @@ def _job_payload(job: Job, *, cost: dict[str, Any] | None = None) -> dict[str, A
                     "message": job.progress_text or _progress_stage(job),
                     "stage": _progress_stage(job),
                 },
-                "job_result": job.result,
+                "job_result": result,
                 "job_error": _job_error_detail(job.error),
                 "cost": cost,
                 "callback": _callback_state(job),
@@ -180,8 +187,14 @@ def _job_payload(job: Job, *, cost: dict[str, Any] | None = None) -> dict[str, A
         ) from exc
 
 
-def _job_to_response(job: Job, request_id: str = "-", *, cost: dict[str, Any] | None = None) -> JobStatusResponse:
-    return JobStatusResponse.model_validate(_job_payload(job, cost=cost))
+def _job_to_response(
+    job: Job,
+    request_id: str = "-",
+    *,
+    cost: dict[str, Any] | None = None,
+    job_result: dict[str, Any] | None | object = _JOB_RESULT_UNSET,
+) -> JobStatusResponse:
+    return JobStatusResponse.model_validate(_job_payload(job, cost=cost, job_result=job_result))
 
 
 def _validate_prompt(job_type: str, prompt_payload: dict[str, Any]) -> None:
@@ -438,11 +451,26 @@ async def get_job_response(
     if not job:
         raise NotFoundAppError("JOB_NOT_FOUND", f"job_id 不存在: {job_id}")
     cost = None
+    projected_result: dict[str, Any] | None | object = _JOB_RESULT_UNSET
     if job.status in {"succeeded", "failed"}:
         billing = await get_scope_billing(db, scope_type="job", scope_id=str(job.id), caller_id=caller_id)
         mapped = job_cost_from_billing(billing)
         cost = mapped.model_dump() if mapped is not None else None
-    return _job_to_response(job, request_id, cost=cost)
+        if job.status == "failed":
+            from app.jobs.factory import get_job_executor
+
+            projected_result = None
+            handler = get_job_executor(job.job_type)
+            if handler.supports_result_snapshot(job.status):
+                projected_result = await handler.build_result_snapshot(job.status, job, db)
+    elif job.status == "running":
+        from app.jobs.factory import get_job_executor
+
+        projected_result = None
+        handler = get_job_executor(job.job_type)
+        if handler.supports_result_snapshot(job.status):
+            projected_result = await handler.build_result_snapshot(job.status, job, db)
+    return _job_to_response(job, request_id, cost=cost, job_result=projected_result)
 
 
 def create_job_response(job: Job, request_id: str = "-") -> CreateJobResponse:

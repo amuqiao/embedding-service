@@ -94,7 +94,18 @@ HttpEnvelope[JobResponseData]
 - `succeeded`
 - `failed`
 
-非终态 Job 的 `job_result` 和 `job_error` 必须为 `null`。成功终态 Job 不允许携带 `job_error`；失败终态 Job 必须携带 `job_error`，且不允许携带 `job_result`。
+`JobEnvelope` 状态字段规则：
+
+| `job_status` | `job_result` | `job_error` | `cost` |
+|---|---|---|---|
+| `queued` | 必须为 `null` | 必须为 `null` | 必须为 `null` |
+| `running` | 默认必须为 `null`；只有 `running` 属于具体 `job_type` 的 `result_snapshot_statuses` 时才允许非空 | 必须为 `null` | 必须为 `null` |
+| `succeeded` | 按具体 `job_type` 的公开结果 schema 返回 | 必须为 `null` | 可返回 Job 级费用快照 |
+| `failed` | 默认必须为 `null`；只有 `failed` 属于具体 `job_type` 的 `result_snapshot_statuses` 时才允许非空 | 必须非空 | 可返回 Job 级费用快照 |
+
+`result_snapshot_statuses` 是 `job_type` 的能力声明，默认是空集合；当前只允许声明 `running` 和 `failed`。支持运行中或失败结果快照的 `job_type` 必须复用同一个公开 `job_result` schema，不暴露 internal child Job、workflow node、attempt 或 worker 细节。快照只表示当前已经可公开展示的业务结果；调用方仍必须以 `job_status` 判断 Job 是否终态。
+
+`job_progress.percent` 是当前唯一保证返回的进度字段，取值为 `0` 到 `100`。服务当前可能同时返回 `stage` 和 `message`，但调用方不能依赖这两个字段一定存在，也不能用它们判断 Job 是否成功或失败。
 
 ## 查询 Job Billing
 

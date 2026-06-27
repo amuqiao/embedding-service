@@ -82,8 +82,8 @@ class CreateJobRequest(StrictBaseModel):
 
 
 class JobProgress(StrictBaseModel):
-    stage: ProgressStage
     percent: int = Field(ge=0, le=100)
+    stage: str | None = None
     message: str | None = None
 
 
@@ -117,9 +117,14 @@ class JobEnvelope(StrictBaseModel):
 
     @model_validator(mode="after")
     def validate_terminal_payload(self) -> "JobEnvelope":
-        if self.job_status in {"queued", "running"}:
+        if self.job_status == "queued":
             if self.job_result is not None:
                 raise ValueError("job_result must be null while job is not terminal")
+            if self.job_error is not None:
+                raise ValueError("job_error must be null while job is not terminal")
+            if self.cost is not None:
+                raise ValueError("cost must be null while job is not terminal")
+        elif self.job_status == "running":
             if self.job_error is not None:
                 raise ValueError("job_error must be null while job is not terminal")
             if self.cost is not None:
@@ -128,8 +133,6 @@ class JobEnvelope(StrictBaseModel):
             if self.job_error is not None:
                 raise ValueError("job_error must be null when job succeeded")
         elif self.job_status == "failed":
-            if self.job_result is not None:
-                raise ValueError("job_result must be null when job failed")
             if self.job_error is None:
                 raise ValueError("job_error is required when job failed")
         return self

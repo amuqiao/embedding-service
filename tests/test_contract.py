@@ -1,5 +1,6 @@
 import pytest
 import re
+import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from fastapi.security import HTTPAuthorizationCredentials
@@ -407,7 +408,7 @@ def test_job_result_rejects_legacy_artifact_target():
 
 
 def _job_view_payload(*, job_type: str, status: str, result=None, error=None) -> dict:
-    progress_stage = {"queued": "accepted", "succeeded": "completed"}.get(status, status)
+    progress_stage = {"queued": "accepted", "running": "calling_model", "succeeded": "completed"}.get(status, status)
     return {
         "job_id": "0a9be3fb-f01b-4f5d-90b5-4148c4a61df1",
         "client_request_id": "contract-test",
@@ -435,10 +436,22 @@ def test_job_view_status_and_result_contracts():
                 raise ValueError("public result must be null")
             return None
 
+        def validate_result_snapshot(self, status, result):
+            if result is not None:
+                raise ValueError(f"{status} result must be null")
+            return None
+
     class RequiredResultHandler:
         def validate_public_result(self, result):
             if result is None:
                 raise ValueError("succeeded result is required")
+            return result
+
+        def validate_result_snapshot(self, status, result):
+            if result is None:
+                return None
+            if "value" not in result:
+                raise ValueError("value is required")
             return result
 
     def get_handler(job_type):
@@ -458,14 +471,97 @@ def test_job_view_status_and_result_contracts():
 
         with pytest.raises(Exception, match="result must be null"):
             validate_job_status_payload(_job_view_payload(job_type="test.null_result", status="queued", result={}))
+        with pytest.raises(Exception, match="running result must be null"):
+            validate_job_status_payload(_job_view_payload(job_type="test.null_result", status="running", result={}))
+        validate_job_status_payload(
+            _job_view_payload(job_type="test.required_result", status="running", result={"value": {"ok": True}})
+        )
+        with pytest.raises(Exception, match="value is required"):
+            validate_job_status_payload(_job_view_payload(job_type="test.required_result", status="running", result={}))
         with pytest.raises(Exception, match="error is required"):
             validate_job_status_payload(_job_view_payload(job_type="test.null_result", status="failed"))
+        with pytest.raises(Exception, match="failed result must be null"):
+            validate_job_status_payload(
+                _job_view_payload(
+                    job_type="test.null_result",
+                    status="failed",
+                    result={},
+                    error={"reason": "JOB_EXECUTION_FAILED", "details": {}, "retryable": False},
+                )
+            )
+        validate_job_status_payload(
+            _job_view_payload(
+                job_type="test.required_result",
+                status="failed",
+                result={"value": {"ok": True}},
+                error={"reason": "JOB_EXECUTION_FAILED", "details": {}, "retryable": False},
+            )
+        )
         with pytest.raises(Exception, match="public result must be null"):
             validate_job_status_payload(_job_view_payload(job_type="test.null_result", status="succeeded", result={}))
         with pytest.raises(Exception, match="succeeded result is required"):
             validate_job_status_payload(_job_view_payload(job_type="test.required_result", status="succeeded"))
     finally:
         monkeypatch.undo()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["running", "failed"])
+async def test_job_response_drops_stored_result_when_job_type_does_not_allow_snapshot(monkeypatch, status):
+    from app.models.job import Job
+    from app.services.jobs import get_job_response
+
+    job_id = uuid.UUID("0a9be3fb-f01b-4f5d-90b5-4148c4a61df1")
+    job = Job(
+        id=job_id,
+        caller_id="caller-1",
+        client_request_id="contract-test",
+        job_type="job_test_add",
+        status=status,
+        progress_percent=50,
+        progress_stage="calling_model",
+        result={"unexpected": "stored"},
+        error={"code": "JOB_EXECUTION_FAILED", "message": "failed"} if status == "failed" else None,
+        finished_at=datetime(2026, 6, 15, 10, 1, 0, tzinfo=UTC) if status == "failed" else None,
+        created_at=datetime(2026, 6, 15, 10, 0, 0, tzinfo=UTC),
+    )
+
+    async def fake_get_for_caller(_db, received_job_id, caller_id):
+        assert received_job_id == job_id
+        assert caller_id == "caller-1"
+        return job
+
+    async def fake_get_scope_billing(*_args, **_kwargs):
+        from app.schemas.billing import BillingEnvelope
+
+        return BillingEnvelope(
+            scope_type="job",
+            scope_id=str(job_id),
+            status="incomplete",
+            currency="USD",
+            total_cost_amount="0",
+            usage_units={},
+            pricing_refs=[],
+            ai_call_count=0,
+            billable_call_count=0,
+            unbillable_call_count=0,
+            failed_call_count=0,
+        )
+
+    class DefaultOffHandler:
+        result_snapshot_statuses = frozenset()
+
+        def supports_result_snapshot(self, status):
+            return status in self.result_snapshot_statuses
+
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_for_caller", fake_get_for_caller)
+    monkeypatch.setattr("app.services.jobs.get_scope_billing", fake_get_scope_billing)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: DefaultOffHandler())
+
+    response = await get_job_response(object(), job.id, "caller-1")
+
+    assert response.job_status == status
+    assert response.job_result is None
 
 
 def test_arithmetic_job_view_result_uses_registered_result_schema(monkeypatch):

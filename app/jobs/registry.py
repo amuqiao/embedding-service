@@ -49,6 +49,8 @@ def validate_job_view_payload(payload: dict):
     data = job_view.model_dump()
     if job_view.job_status == "succeeded":
         data["job_result"] = executor.validate_public_result(data["job_result"])
+    elif job_view.job_status in {"running", "failed"}:
+        data["job_result"] = executor.validate_result_snapshot(job_view.job_status, data["job_result"])
     return JobEnvelope.model_validate(data)
 
 

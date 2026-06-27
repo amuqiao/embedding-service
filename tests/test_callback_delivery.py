@@ -14,6 +14,7 @@ from app.schemas.jobs import CallbackResponseEnvelope
 from app.services.callbacks import (
     CallbackDeliveryResult,
     build_callback_body,
+    build_callback_body_for_job,
     deliver_callback,
     _sign,
 )
@@ -48,6 +49,8 @@ def _patch_callback_settings(monkeypatch, **overrides) -> None:
 @pytest.fixture(autouse=True)
 def _callback_test_handler(monkeypatch):
     class Handler:
+        result_snapshot_statuses = frozenset()
+
         def build_callback_data(self, job):
             return job.result if isinstance(job.result, dict) else {}
 
@@ -56,6 +59,15 @@ def _callback_test_handler(monkeypatch):
 
         def validate_public_result(self, result):
             return result
+
+        def supports_result_snapshot(self, status):
+            return status in self.result_snapshot_statuses
+
+        def validate_result_snapshot(self, status, result):
+            return None if result is None else result
+
+        async def build_result_snapshot(self, status, job, db):
+            return job.result
 
     monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: Handler())
     monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: Handler())
@@ -148,6 +160,97 @@ def test_build_callback_body_uses_public_fields():
         "updated_at": job.updated_at.isoformat().replace("+00:00", "Z"),
         "finished_at": job.finished_at.isoformat().replace("+00:00", "Z"),
     }
+
+
+def test_build_callback_body_drops_failed_result_without_snapshot_support(monkeypatch):
+    class Handler:
+        result_snapshot_statuses = frozenset()
+
+        def validate_public_result(self, result):
+            return result
+
+        def supports_result_snapshot(self, status):
+            return status in self.result_snapshot_statuses
+
+        def validate_result_snapshot(self, status, result):
+            if result is not None:
+                raise ValueError(f"{status} result must be null")
+            return None
+
+    monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: Handler())
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: Handler())
+    job = _job()
+    job.status = "failed"
+    job.progress_percent = 80
+    job.progress_stage = "failed"
+    job.result = {"unexpected": "stored"}
+    job.error = {"code": "JOB_EXECUTION_FAILED", "message": "failed"}
+
+    body = build_callback_body(job)
+
+    assert body["event"] == "job.failed"
+    assert body["job"]["job_result"] is None
+    assert body["job"]["job_error"]["reason"] == "JOB_EXECUTION_FAILED"
+
+
+def test_build_callback_body_requires_projected_failed_snapshot_when_supported(monkeypatch):
+    class Handler:
+        result_snapshot_statuses = frozenset({"failed"})
+
+        def validate_public_result(self, result):
+            return result
+
+        def supports_result_snapshot(self, status):
+            return status in self.result_snapshot_statuses
+
+        def validate_result_snapshot(self, status, result):
+            return result
+
+    monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: Handler())
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: Handler())
+    job = _job()
+    job.status = "failed"
+    job.progress_percent = 80
+    job.progress_stage = "failed"
+    job.result = None
+    job.error = {"code": "JOB_EXECUTION_FAILED", "message": "failed"}
+
+    with pytest.raises(ValueError, match="must be projected"):
+        build_callback_body(job)
+
+
+@pytest.mark.asyncio
+async def test_build_callback_body_for_job_projects_failed_snapshot(monkeypatch):
+    snapshot = {"items": [{"item_id": "es"}]}
+
+    class Handler:
+        result_snapshot_statuses = frozenset({"failed"})
+
+        def validate_public_result(self, result):
+            return result
+
+        def supports_result_snapshot(self, status):
+            return status in self.result_snapshot_statuses
+
+        def validate_result_snapshot(self, status, result):
+            return result
+
+        async def build_result_snapshot(self, status, job, db):
+            return snapshot
+
+    monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: Handler())
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: Handler())
+    job = _job()
+    job.status = "failed"
+    job.progress_percent = 80
+    job.progress_stage = "failed"
+    job.result = None
+    job.error = {"code": "JOB_EXECUTION_FAILED", "message": "failed"}
+
+    body = await build_callback_body_for_job(job, object())
+
+    assert body["event"] == "job.failed"
+    assert body["job"]["job_result"] == snapshot
 
 
 def test_build_callback_body_uses_arithmetic_public_result_schema(monkeypatch):

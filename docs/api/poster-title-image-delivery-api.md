@@ -1,27 +1,27 @@
 # AI 标题图生成接口文档
 
-本文档面向调用方，定义 AI 标题图生成能力的 vNext 交付评审接口合同。本文档为自包含文档，不依赖服务端项目内部文档。
+本文档面向调用方，定义 AI 标题图生成能力的交付评审接口合同；已实现能力和仍属 vNext 的能力在“合同状态说明”中区分。本文档为自包含文档，不依赖服务端项目内部文档。
 
 > **版本信息**
 >
 > | 项目 | 内容 |
 > |---|---|
-> | 文档版本 | `vNext draft` |
+> | 文档版本 | `current + vNext review` |
 > | 发布日期 | `2026-06-24` |
-> | 文档状态 | 交付评审草案，非当前已上线合同 |
+> | 文档状态 | 部分当前实现，部分 vNext 交付评审草案 |
 > | 适用范围 | 模型获取、语种获取、模板获取、任务创建、任务查询、费用查询、终态 Callback |
 >
 > **修改记录**
 >
 > | 版本 | 日期 | 修改内容 |
 > |---|---|---|
-> | `vNext draft` | `2026-06-24` | 初版交付评审草案，定义 AI 标题图生成对接入口、Job 查询结果、费用查询和终态 Callback 合同。 |
+> | `current + vNext review` | `2026-06-24` | 初版交付评审草案，定义 AI 标题图生成对接入口、Job 查询结果、费用查询和终态 Callback 合同。 |
 
 ### 合同状态说明
 
-本文定义目标交付合同，用于双方评审接口形态；不表示所有字段、状态和路由已经在当前服务实现中上线。
+本文定义交付评审合同，用于双方评审接口形态；不表示所有字段、状态和路由都已经在当前服务实现中上线。
 
-正式对外发布前，必须完成服务端 route、schema、contract tests、Job 状态枚举、Callback event schema 和共享服务合同同步升级。发布前，非终态 `job_result` 增量快照、`GET /jobs/{job_id}/cost` 和 `job_progress` envelope 都只作为 vNext 目标合同。
+当前服务已支持 `poster_title_image` 声明 `result_snapshot_statuses={"running","failed"}`，在 `running` 和 `failed` 状态返回已成功 item 的 `job_result` 增量快照。`GET /jobs/{job_id}/cost` 仍只作为 vNext 目标合同。
 
 ## 1. 接入约定
 
@@ -145,9 +145,9 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 | `queued` | 已接单，尚未开始执行 |
 | `running` | 执行中，或图片已完成但费用仍在聚合 |
 | `succeeded` | 全部 item 成功 |
-| `failed` | 没有任何 item 成功 |
+| `failed` | 整体任务失败；如果失败前已有 item 成功，仍可返回成功 item 结果子集 |
 
-`job_status` 是唯一程序状态。`job_progress.percent` 只用于 UI 展示，不能用于判断成功、失败或是否可取结果。
+`job_status` 是唯一程序状态。`job_progress.percent` 是唯一保证返回的进度字段，只用于 UI 展示，不能用于判断成功、失败或是否可取结果。服务当前可能同时返回 `stage` 和 `message`，但调用方不能依赖这两个字段一定存在。
 
 ## 2. 模型获取接口
 
@@ -555,7 +555,7 @@ Callback payload 不套 HTTP success envelope：
 规则：
 
 - `event` 允许 `job.succeeded`、`job.failed`。
-- Callback payload 顶层 `job` 与任务查询接口返回的 `data.job` 结构一致。
+- Callback payload 顶层 `job` 使用同一套 `JobEnvelope` 字段结构；调用方需要最新增量结果时，应以 `job.status_url` 再查询任务状态。
 - 终态 Callback payload 的 `job.cost` 必须存在，且 `job.cost.final=true`。
 - 调用方接收 Callback 时应返回 HTTP `2xx` 和 JSON body：`{"accepted": true}`。
 - Callback 失败不改变 Job 终态；调用方仍可通过任务查询接口获取最终结果。
@@ -597,7 +597,7 @@ Callback payload 不套 HTTP success envelope：
 
 ## 6. 任务查询接口
 
-查询任务当前状态、增量结果和终态费用。任务未完成时，已完成 item 的标题图片可以先返回给调用方展示。
+查询任务当前状态、增量结果和终态费用。任务未完成时，已成功生成的 item 标题图片可以先返回给调用方展示；未开始、运行中或失败的 internal leaf job 不进入 `job_result.items[]`。
 
 ### Method / Path
 
@@ -624,10 +624,10 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         "schema_version": "default",
         "job_type": "poster_title_image",
         "batch_summary": {
-          "total": 2,
+          "total": 1,
           "succeeded": 1,
           "failed": 0,
-          "running": 1,
+          "running": 0,
           "pending": 0
         },
         "items": [
@@ -645,13 +645,6 @@ GET /api/v1/ai-jobs/jobs/{job_id}
                 }
               }
             ],
-            "error": null
-          },
-          {
-            "item_id": "pt",
-            "language": "pt",
-            "status": "running",
-            "images": [],
             "error": null
           }
         ],
@@ -770,7 +763,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 
 ### Failed Response
 
-没有任何 item 成功时，`job_status=failed`。
+以下示例表示没有任何 item 成功，因此 `job_result=null`。如果失败前已经有 item 成功，`job_result` 会继续返回这些成功 item 的结果子集。
 
 ```json
 {
@@ -785,49 +778,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
       "job_progress": {
         "percent": 100
       },
-      "job_result": {
-        "schema_version": "default",
-        "job_type": "poster_title_image",
-        "batch_summary": {
-          "total": 2,
-          "succeeded": 0,
-          "failed": 2,
-          "running": 0,
-          "pending": 0
-        },
-        "items": [
-          {
-            "item_id": "es",
-            "language": "es",
-            "status": "failed",
-            "images": [],
-            "error": {
-              "code": "MODEL_CALL_FAILED",
-              "message": "image provider failed",
-              "details": {
-                "failure_phase": "image_generation"
-              }
-            }
-          },
-          {
-            "item_id": "pt",
-            "language": "pt",
-            "status": "failed",
-            "images": [],
-            "error": {
-              "code": "MODEL_CALL_FAILED",
-              "message": "image provider failed",
-              "details": {
-                "failure_phase": "image_generation"
-              }
-            }
-          }
-        ],
-        "duration_ms": {
-          "ai_model": 12450,
-          "total": 13020
-        }
-      },
+      "job_result": null,
       "job_error": {
         "code": "POSTER_TITLE_IMAGE_ALL_ITEMS_FAILED",
         "message": "all poster title image items failed",
@@ -881,14 +832,14 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 |---|---|---|
 | `job_result.schema_version` | string | 固定为 `default` |
 | `job_result.job_type` | string | 固定为 `poster_title_image` |
-| `job_result.batch_summary.total` | integer | 请求 item 总数 |
+| `job_result.batch_summary.total` | integer | 当前 `job_result.items[]` 中的 item 总数；成功终态时等于请求 item 总数 |
 | `job_result.batch_summary.succeeded` | integer | 成功 item 数 |
-| `job_result.batch_summary.failed` | integer | 失败 item 数 |
-| `job_result.batch_summary.running` | integer | 正在执行 item 数 |
-| `job_result.batch_summary.pending` | integer | 尚未开始 item 数 |
+| `job_result.batch_summary.failed` | integer | 当前公开结果中的失败 item 数；当前实现固定为 `0` |
+| `job_result.batch_summary.running` | integer | 当前公开结果中的运行中 item 数；当前实现固定为 `0` |
+| `job_result.batch_summary.pending` | integer | 当前公开结果中的未开始 item 数；当前实现固定为 `0` |
 | `job_result.items[].item_id` | string | 结果 item 主关联键，对应请求中的唯一 `items[].item_id` |
 | `job_result.items[].language` | string | 结果 item 语言，必须与请求中同一 `item_id` 的 `language` 一致 |
-| `job_result.items[].status` | string | `pending`、`running`、`succeeded`、`failed` |
+| `job_result.items[].status` | string | 当前实现对外返回 `succeeded` |
 | `job_result.items[].images[]` | array | 生成的标题图片列表 |
 | `job_result.items[].images[].object` | object | 标题图片 OSS URL Ref；`content_type` 必须等于请求 item `model_options.output_format` 映射后的 MIME |
 | `job_result.items[].error` | object 或 null | item 失败原因 |
@@ -897,7 +848,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 
 ### Error Object Fields
 
-`job.job_error` 和 `job_result.items[].error` 使用相同结构。
+`job.job_error` 使用以下结构。当前实现不在 `job_result` 中返回失败 item。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -907,28 +858,24 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 
 规则：
 
-- `failed` 时，如果已经形成 item 快照，`job_result.items[].error` 返回每个失败 item 的原因，`job_error` 返回 Job 级汇总原因。
+- `failed` 时，`job_error` 返回 Job 级汇总原因；如果失败前已有 item 成功，`job_result` 会继续返回这些成功 item 的结果子集。
 - `succeeded` item 的 `error` 必须为 `null`。
 
 ### Query Rules
 
 - HTTP `200` 只表示成功查到 Job，不表示 Job 执行成功。
+- `poster_title_image` 声明 `result_snapshot_statuses={"running","failed"}`；其它 `job_type` 是否支持非终态或失败态结果快照，以各自合同为准。
 - `queued` 时 `job_result=null`、`cost=null`。
-- `running` 时可以返回非空 `job_result`，用于展示已完成 item 的图片产物和未完成 item 的状态；如果尚未生成首个 item 快照，也可以返回 `job_result=null`。
-- `running` 且全部 item 已经完成时，表示费用仍在聚合；此时 `cost=null`。
+- `running` 或 `failed` 时可以返回非空 `job_result`，用于展示已经成功生成的 item 图片产物；如果尚未生成首个成功 item，也可以返回 `job_result=null`。
+- `running` 或 `failed` 的非空 `job_result.items[]` 只包含 `status=succeeded` 的 item，不返回未开始、运行中或失败的 internal leaf job 状态。
 - `succeeded`、`failed` 为终态，`cost` 必须存在且 `cost.final=true`。
-- `job_result` 一旦非空，必须包含本次请求的全部 item，不允许只返回已完成 item 子集。
-- `job_result.items[]` 必须按请求 `items[]` 顺序返回，且每个结果 item 的 `item_id` 必须与请求 item 一一对应。
-- item 对外状态只允许按 `pending -> running -> succeeded|failed` 推进；`succeeded` 和 `failed` 是 item 级终态。
-- 服务端仍可能内部重试的 item，不应提前对外标记为 `failed`，应继续保持 `pending` 或 `running`。
+- `running` 或 `failed` 的非空 `job_result.items[]` 必须按请求 `items[]` 顺序返回已成功 item 子集。
 - 已经公开为 `succeeded` 的 item，后续响应必须继续返回该 item 及其已产出的 `images`。
 - `batch_summary` 必须与 `items[].status` 一致。
-- `batch_summary.succeeded` 必须等于 `status=succeeded` 的 item 数，`failed`、`running`、`pending` 同理。
+- `batch_summary.succeeded` 必须等于 `status=succeeded` 的 item 数。当前实现中 `failed=0`、`running=0`、`pending=0`。
 - `job_status=succeeded` 时，所有 item 的 `status` 必须为 `succeeded`，且 `running=0`、`pending=0`、`failed=0`。
-- `job_status=failed` 表示没有任何 item 成功；如果已经形成 item 快照，应返回非空 `job_result`，且所有 item 的 `status` 必须为 `failed`，`succeeded=0`、`running=0`、`pending=0`。
-- Job 在形成首个 item 快照前失败时，`job_status=failed` 可以返回 `job_result=null`，失败原因在 `job.job_error`。
-- `status=pending` 或 `status=running` 的 item 必须返回空 `images`、`error=null`。
+- `job_status=failed` 时，失败原因在 `job.job_error`；已经成功生成的 item 仍可继续通过 `job_result` 返回。
 - `status=succeeded` 的 item 必须返回该请求 item `model_options.draw_count` 个标题图片对象；每个图片对象的 `object` 字段承载 `OSS URL Ref`，`images[]` 顺序稳定。
 - 如果某个 item 无法产出请求 item `model_options.draw_count` 个标题图片，该 item 不能标记为 `succeeded`；首版不对外暴露部分成功候选图。
-- `status=failed` 的 item 必须返回空 `images` 和非空 `error`。
+- 当前实现不在 `job_result` 中返回失败 item；失败终态的 Job 级错误见 `job.job_error`。
 - 首版不返回图片 `width`、`height`、文件大小、海报底图、合成海报或贴图坐标。

@@ -179,6 +179,7 @@ class JobRepo:
         event_id: uuid.UUID,
         event_type: str,
         now: datetime,
+        job_result: dict[str, Any] | None,
         cost: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         progress_stage = "completed" if job.status == "succeeded" else "failed"
@@ -200,7 +201,7 @@ class JobRepo:
                     "message": job.progress_text or progress_stage,
                     "stage": progress_stage,
                 },
-                "job_result": job.result,
+                "job_result": job_result,
                 "job_error": JobRepo._job_error_detail(job.error),
                 "cost": cost,
                 "callback": {
@@ -247,6 +248,15 @@ class JobRepo:
         billing = await get_scope_billing(db, scope_type="job", scope_id=str(job.id), caller_id=job.caller_id)
         mapped_cost = job_cost_from_billing(billing)
         cost = mapped_cost.model_dump() if mapped_cost is not None else None
+        projected_result = job.result
+        if job.status == "failed":
+            from app.jobs.factory import get_job_executor
+
+            handler = get_job_executor(job.job_type)
+            projected_result = None
+            if handler.supports_result_snapshot(job.status):
+                projected_result = await handler.build_result_snapshot(job.status, job, db)
+            projected_result = handler.validate_result_snapshot(job.status, projected_result)
         outbox = CallbackOutbox(
             job_id=job.id,
             event_id=event_id,
@@ -259,6 +269,7 @@ class JobRepo:
                 event_id=event_id,
                 event_type=event_type,
                 now=now,
+                job_result=projected_result,
                 cost=cost,
             ),
             next_attempt_at=now if subscribed else None,

@@ -17,6 +17,7 @@ from app.services.jobs import _job_payload, trigger_request_id_from_job
 
 logger = logging.getLogger(__name__)
 CALLBACK_EVENT_NAMESPACE = "ai-job-callback"
+_CALLBACK_JOB_RESULT_UNSET = object()
 
 
 class CallbackDeliveryResult(BaseModel):
@@ -52,7 +53,29 @@ def validate_callback_response_payload(payload: dict[str, Any], *, job_type: str
     return envelope
 
 
-def build_callback_body(job: Job) -> dict:
+def _callback_job_result(
+    job: Job,
+    *,
+    job_result: dict[str, Any] | None | object = _CALLBACK_JOB_RESULT_UNSET,
+) -> dict[str, Any] | None:
+    result = job.result if job_result is _CALLBACK_JOB_RESULT_UNSET else job_result
+    if job.status != "failed":
+        return result
+    from app.jobs.factory import get_job_executor
+
+    handler = get_job_executor(job.job_type)
+    if not handler.supports_result_snapshot(job.status):
+        result = None
+    elif job_result is _CALLBACK_JOB_RESULT_UNSET:
+        raise ValueError("failed result snapshot must be projected before building callback body")
+    return handler.validate_result_snapshot(job.status, result)
+
+
+def build_callback_body(
+    job: Job,
+    *,
+    job_result: dict[str, Any] | None | object = _CALLBACK_JOB_RESULT_UNSET,
+) -> dict:
     event = "job.succeeded" if job.status == "succeeded" else "job.failed"
     sent_at = datetime.now(timezone.utc)
     event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{CALLBACK_EVENT_NAMESPACE}:{job.id}:{event}")
@@ -64,10 +87,22 @@ def build_callback_body(job: Job) -> dict:
             "sent_at": sent_at.isoformat(),
             "trigger_request_id": trigger_request_id_from_job(job),
             "caller_id": job.caller_id,
-            "job": _job_payload(job),
+            "job": _job_payload(job, job_result=_callback_job_result(job, job_result=job_result)),
         }
     )
     return envelope.model_dump(mode="json")
+
+
+async def build_callback_body_for_job(job: Job, db: Any) -> dict:
+    if job.status != "failed":
+        return build_callback_body(job)
+    from app.jobs.factory import get_job_executor
+
+    handler = get_job_executor(job.job_type)
+    projected_result = None
+    if handler.supports_result_snapshot(job.status):
+        projected_result = await handler.build_result_snapshot(job.status, job, db)
+    return build_callback_body(job, job_result=projected_result)
 
 
 def _header_value(headers: Any, name: str) -> str | None:
