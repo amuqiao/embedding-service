@@ -19,6 +19,7 @@ from app.workflows import (
 )
 from app.workflows import registry as workflow_registry
 from app.jobs.types.register import register_all_job_types
+from app.jobs.types.poster_title_image.executor import _item_node_key
 
 
 def _nodes_by_key(plan):
@@ -77,6 +78,112 @@ def test_chord_compiles_reducer_after_header_group():
 
     nodes = _nodes_by_key(plan)
     assert nodes["join"]["depends_on"] == ["a", "b"]
+
+
+def test_poster_title_image_workflow_dedupes_style_probe_by_reference_and_prompt():
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+    register_all_job_types()
+    ref_a = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/a.png",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/a.png",
+        "content_type": "image/png",
+        "sha256": "a" * 64,
+    }
+    ref_b = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/b.png",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/b.png",
+        "content_type": "image/png",
+        "sha256": "b" * 64,
+    }
+    base_item = {
+        "title_text": "Title",
+        "model_id": "gpt-image-2",
+        "model_options": {
+            "size": "auto",
+            "quality": "high",
+            "draw_count": 1,
+            "background": "transparent",
+            "output_format": "png",
+        },
+    }
+    plan = compile_registered_workflow(
+        "poster_title_image",
+        {
+            "items": [
+                {**base_item, "item_id": "es", "language": "es", "reference_image": ref_a},
+                {**base_item, "item_id": "fr", "language": "fr", "reference_image": ref_a},
+                {**base_item, "item_id": "de", "language": "de", "reference_image": ref_b},
+                {
+                    **base_item,
+                    "item_id": "pt",
+                    "language": "pt",
+                    "reference_image": ref_a,
+                    "prompt_overrides": {"style_probe": "custom style probe"},
+                },
+            ]
+        },
+    )
+
+    nodes = _nodes_by_key(plan)
+    probe_keys = [key for key in nodes if key.startswith("probe.")]
+    item_keys = {
+        item_id: _item_node_key(item_id)
+        for item_id in ("es", "fr", "de", "pt")
+    }
+    assert probe_keys == ["probe.0", "probe.1", "probe.2"]
+    assert nodes[item_keys["es"]]["depends_on"] == ["probe.0"]
+    assert nodes[item_keys["fr"]]["depends_on"] == ["probe.0"]
+    assert nodes[item_keys["de"]]["depends_on"] == ["probe.1"]
+    assert nodes[item_keys["pt"]]["depends_on"] == ["probe.2"]
+    assert nodes["join"]["depends_on"] == [
+        item_keys["de"],
+        item_keys["es"],
+        item_keys["fr"],
+        item_keys["pt"],
+        "probe.0",
+        "probe.1",
+        "probe.2",
+    ]
+
+
+def test_poster_title_image_workflow_node_keys_do_not_collide_for_sanitized_item_ids():
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+    register_all_job_types()
+    ref = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/a.png",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/a.png",
+        "content_type": "image/png",
+        "sha256": "a" * 64,
+    }
+    base_item = {
+        "title_text": "Title",
+        "model_id": "gpt-image-2",
+        "model_options": {
+            "size": "auto",
+            "quality": "high",
+            "draw_count": 1,
+            "background": "transparent",
+            "output_format": "png",
+        },
+        "reference_image": ref,
+    }
+
+    plan = compile_registered_workflow(
+        "poster_title_image",
+        {
+            "items": [
+                {**base_item, "item_id": "a/b", "language": "es"},
+                {**base_item, "item_id": "a?b", "language": "fr"},
+            ]
+        },
+    )
+
+    nodes = _nodes_by_key(plan)
+    assert _item_node_key("a/b") in nodes
+    assert _item_node_key("a?b") in nodes
+    assert _item_node_key("a/b") != _item_node_key("a?b")
 
 
 def test_map_starmap_and_chunks_expand_to_stable_node_inputs():

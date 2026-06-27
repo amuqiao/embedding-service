@@ -1,6 +1,8 @@
 import json
+import io
 
 import pytest
+from PIL import Image
 from typer.testing import CliRunner
 
 from scripts.real_flow.cli import app
@@ -22,6 +24,16 @@ STORAGE_ENV_KEYS = [
     "OSS_PUBLIC_ENDPOINT",
     "OSS_ENDPOINT",
 ]
+
+
+def _transparent_png_bytes() -> bytes:
+    image = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    for x in range(16, 24):
+        for y in range(16, 24):
+            image.putpixel((x, y), (255, 0, 0, 255))
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def clear_storage_env(monkeypatch):
@@ -74,19 +86,23 @@ def test_real_flow_builds_poster_title_image_payload():
         "content_type": "image/png",
         "sha256": "a" * 64,
     }
+    item = {
+        "item_id": "es",
+        "language": "es",
+        "title_text": "Cuando el amor se alejo",
+        "model_id": "gpt-image-2",
+        "model_options": {
+            "size": "auto",
+            "quality": "high",
+            "draw_count": 1,
+            "background": "transparent",
+            "output_format": "png",
+        },
+        "reference_image": reference,
+    }
 
     payload = poster_title_image.build_job_payload(
-        item_id="es",
-        language="es",
-        title_text="Cuando el amor se alejo",
-        model_id="gpt-image-2",
-        reference_image=reference,
-        size="auto",
-        quality="high",
-        draw_count=1,
-        style_probe=None,
-        additional_prompt="extra",
-        layout_rules=None,
+        items=[item],
         client_request_id="poster-client-1",
     )
 
@@ -102,7 +118,7 @@ def test_real_flow_builds_poster_title_image_payload():
         "output_format": "png",
     }
     assert item["reference_image"] == reference
-    assert item["prompt_overrides"] == {"additional_prompt": "extra"}
+    assert "prompt_overrides" not in item
 
 
 def test_real_flow_builds_poster_title_image_payload_with_custom_image_model():
@@ -112,23 +128,215 @@ def test_real_flow_builds_poster_title_image_payload_with_custom_image_model():
         "content_type": "image/png",
         "sha256": "a" * 64,
     }
+    item = {
+        "item_id": "es",
+        "language": "es",
+        "title_text": "Cuando el amor se alejo",
+        "model_id": "gpt-image-custom",
+        "model_options": {
+            "size": "auto",
+            "quality": "high",
+            "draw_count": 1,
+            "background": "transparent",
+            "output_format": "png",
+        },
+        "reference_image": reference,
+    }
 
     payload = poster_title_image.build_job_payload(
-        item_id="es",
-        language="es",
-        title_text="Cuando el amor se alejo",
-        model_id="gpt-image-custom",
-        reference_image=reference,
-        size="auto",
-        quality="high",
-        draw_count=1,
-        style_probe=None,
-        additional_prompt=None,
-        layout_rules=None,
+        items=[item],
         client_request_id="poster-client-2",
     )
 
     assert payload["job_params"]["items"][0]["model_id"] == "gpt-image-custom"
+
+
+def test_poster_title_image_run_supports_items_json_with_multiple_references(tmp_path, monkeypatch, capsys):
+    clear_storage_env(monkeypatch)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+    monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "DISABLE_HTTP_AUTH_HEADER=true",
+                "DISABLE_CALLER_ID_HEADER=true",
+                "STORAGE_BACKEND=aliyun_oss",
+                "OSS_BUCKET=bucket-a",
+                "OSS_REGION=cn-hangzhou",
+                "OSS_ACCESS_KEY_ID=id",
+                "OSS_ACCESS_KEY_SECRET=secret",
+                "OSS_PROJECT_ROOT=project-a",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
+    reference_path = tmp_path / "title-fr.png"
+    reference_path.write_bytes(_transparent_png_bytes())
+    items_path = tmp_path / "poster-items.json"
+    existing_ref = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/title-es.png",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/title-es.png",
+        "content_type": "image/png",
+        "sha256": "a" * 64,
+    }
+    uploaded_ref = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/title-fr.png",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/title-fr.png",
+        "content_type": "image/png",
+        "sha256": "b" * 64,
+    }
+    uploaded_image = {
+        "provider": "aliyun_oss",
+        "bucket": "bucket-a",
+        "region": "cn-hangzhou",
+        "key": "project-a/reference/title-fr.png",
+        "url_ref": uploaded_ref,
+    }
+    items_path.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "item_id": "es",
+                        "language": "es",
+                        "title_text": "Cuando el amor se alejo",
+                        "reference": existing_ref,
+                    },
+                    {
+                        "item_id": "fr",
+                        "language": "fr",
+                        "title_text": "Quand l'amour s'eloigne",
+                        "draw_count": 2,
+                        "reference": {"image": str(reference_path), "content_type": "image/png"},
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    upload_calls = []
+    cleanup_calls = []
+    http_calls = []
+
+    def fake_upload_image(**kwargs):
+        upload_calls.append(kwargs)
+        return uploaded_image
+
+    def fake_request_json(url, *, method, headers, payload=None):
+        http_calls.append({"url": url, "method": method, "headers": headers, "payload": payload})
+        if method == "POST":
+            return {"code": "0", "data": {"job": {"job_id": "poster-job-items"}}}
+        return {
+            "code": "0",
+            "data": {
+                "billing": {
+                    "status": "succeeded",
+                    "currency": "USD",
+                    "total_cost_amount": "0.00",
+                    "usage_units": [],
+                    "pricing_refs": [],
+                    "ai_call_count": 0,
+                    "billable_call_count": 0,
+                    "failed_call_count": 0,
+                }
+            },
+        }
+
+    monkeypatch.setattr(oss_image_upload, "upload_image", fake_upload_image)
+    monkeypatch.setattr(oss_image_upload, "delete_uploaded_image", lambda **kwargs: cleanup_calls.append(kwargs))
+    monkeypatch.setattr(llm_job_billing, "request_json", fake_request_json)
+    monkeypatch.setattr(
+        llm_job_billing,
+        "poll_job_envelope",
+        lambda **_kwargs: {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "poster-job-items",
+                    "job_status": "succeeded",
+                    "job_type": "poster_title_image",
+                    "job_result": {"items": []},
+                }
+            },
+        },
+    )
+
+    poster_title_image.run(
+        confirm_cost=True,
+        confirm_upload=True,
+        api_url=None,
+        items_json=str(items_path),
+        reference_image=poster_title_image.DEFAULT_REFERENCE_IMAGE,
+        reference_public_url=None,
+        reference_internal_url=None,
+        reference_sha256=None,
+        reference_content_type="image/png",
+        model_id="gpt-image-2",
+        item_id="ignored",
+        language="es",
+        title_text="ignored",
+        size="auto",
+        quality="high",
+        draw_count=1,
+        caller_id="caller-1",
+        timeout_seconds=1,
+        poll_interval_seconds=0.1,
+        client_request_id="poster-client-items",
+        json_output=True,
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary"]["job_id"] == "poster-job-items"
+    assert upload_calls[0]["image"] == str(reference_path)
+    assert cleanup_calls == [{"upload_result": uploaded_image, "app_env": upload_calls[0]["app_env"]}]
+    request_items = http_calls[0]["payload"]["job_params"]["items"]
+    assert [item["item_id"] for item in request_items] == ["es", "fr"]
+    assert [item["language"] for item in request_items] == ["es", "fr"]
+    assert request_items[0]["reference_image"] == existing_ref
+    assert request_items[1]["reference_image"] == uploaded_ref
+    assert request_items[1]["model_options"]["draw_count"] == 2
+
+
+def test_poster_title_image_items_json_rejects_explicit_invalid_values(monkeypatch):
+    clear_storage_env(monkeypatch)
+    reference = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/title.png",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/title.png",
+        "content_type": "image/png",
+        "sha256": "a" * 64,
+    }
+    base_item = {
+        "item_id": "es",
+        "language": "es",
+        "title_text": "Cuando el amor se alejo",
+        "reference": reference,
+    }
+
+    with pytest.raises(poster_title_image.FlowError, match="draw_count must be between 1 and 4"):
+        poster_title_image.build_items_from_json(
+            [{**base_item, "draw_count": 0}],
+            app_env={"STORAGE_BACKEND": "local"},
+            confirm_upload=False,
+            model_id="gpt-image-2",
+            size="auto",
+            quality="high",
+            draw_count=1,
+        )
+
+    with pytest.raises(poster_title_image.FlowError, match="model_id is required"):
+        poster_title_image.build_items_from_json(
+            [{**base_item, "model_id": ""}],
+            app_env={"STORAGE_BACKEND": "local"},
+            confirm_upload=False,
+            model_id="gpt-image-2",
+            size="auto",
+            quality="high",
+            draw_count=1,
+        )
 
 
 def test_oss_image_upload_builds_url_ref_with_fake_client(tmp_path, monkeypatch):
@@ -423,8 +631,9 @@ def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, c
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
     (tmp_path / ".data/title").mkdir(parents=True)
+    reference_data = _transparent_png_bytes()
     reference_path = tmp_path / ".data/title/英语.png"
-    reference_path.write_bytes(b"png-reference")
+    reference_path.write_bytes(reference_data)
     calls = []
 
     def fake_request_json(url, *, method, headers, payload=None, timeout_seconds=10):
@@ -489,6 +698,7 @@ def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, c
         confirm_cost=True,
         confirm_upload=False,
         api_url=None,
+        items_json=None,
         reference_image=poster_title_image.DEFAULT_REFERENCE_IMAGE,
         reference_public_url=None,
         reference_internal_url=None,
@@ -501,9 +711,6 @@ def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, c
         size="auto",
         quality="high",
         draw_count=1,
-        style_probe=None,
-        additional_prompt=None,
-        layout_rules=None,
         caller_id="caller-1",
         timeout_seconds=1,
         poll_interval_seconds=0.1,
@@ -518,7 +725,7 @@ def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, c
     assert calls[0]["payload"]["job_type"] == "poster_title_image"
     item = calls[0]["payload"]["job_params"]["items"][0]
     assert item["model_id"] == "gpt-image-2"
-    assert item["reference_image"]["sha256"] == poster_title_image._bare_sha256(b"png-reference")
+    assert item["reference_image"]["sha256"] == poster_title_image._bare_sha256(reference_data)
     assert calls[1]["url"] == "http://127.0.0.1:18200/api/v1/ai-jobs/jobs/poster-job-1/billing"
     staged = list((tmp_path / "storage/objects/local-dev/real-flow/poster-title-image/reference").glob("**/英语.png"))
     assert len(staged) == 1
@@ -544,7 +751,7 @@ def test_poster_title_image_downloads_all_output_artifacts(tmp_path, monkeypatch
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
     (tmp_path / ".data/title").mkdir(parents=True)
-    (tmp_path / ".data/title/英语.png").write_bytes(b"png-reference")
+    (tmp_path / ".data/title/英语.png").write_bytes(_transparent_png_bytes())
 
     objects = [
         ("es", "es", "outputs/poster-job-1/es/title-layer.png", b"es-image-1"),
@@ -627,6 +834,7 @@ def test_poster_title_image_downloads_all_output_artifacts(tmp_path, monkeypatch
         confirm_cost=True,
         confirm_upload=False,
         api_url=None,
+        items_json=None,
         reference_image=poster_title_image.DEFAULT_REFERENCE_IMAGE,
         reference_public_url=None,
         reference_internal_url=None,
@@ -639,9 +847,6 @@ def test_poster_title_image_downloads_all_output_artifacts(tmp_path, monkeypatch
         size="auto",
         quality="high",
         draw_count=1,
-        style_probe=None,
-        additional_prompt=None,
-        layout_rules=None,
         caller_id="caller-1",
         timeout_seconds=1,
         poll_interval_seconds=0.1,
@@ -758,7 +963,7 @@ def test_real_flow_run_uploads_poster_reference_when_aliyun_oss_enabled(tmp_path
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
     reference_path = tmp_path / "reference.png"
-    reference_path.write_bytes(b"png-reference")
+    reference_path.write_bytes(_transparent_png_bytes())
     uploaded_ref = {
         "public_url": "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.png",
         "internal_url": "https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.png",
@@ -827,6 +1032,7 @@ def test_real_flow_run_uploads_poster_reference_when_aliyun_oss_enabled(tmp_path
         confirm_cost=True,
         confirm_upload=True,
         api_url=None,
+        items_json=None,
         reference_image=str(reference_path),
         reference_public_url=None,
         reference_internal_url=None,
@@ -839,9 +1045,6 @@ def test_real_flow_run_uploads_poster_reference_when_aliyun_oss_enabled(tmp_path
         size="auto",
         quality="high",
         draw_count=1,
-        style_probe=None,
-        additional_prompt=None,
-        layout_rules=None,
         caller_id="caller-1",
         timeout_seconds=1,
         poll_interval_seconds=0.1,
@@ -901,6 +1104,21 @@ def test_poster_title_image_explicit_url_ref_does_not_upload(monkeypatch):
 
     assert resolution.ref == uploaded_ref
     assert resolution.uploaded_image is None
+
+
+def test_poster_title_image_explicit_url_ref_rejects_jpeg_content_type(monkeypatch):
+    clear_storage_env(monkeypatch)
+
+    with pytest.raises(poster_title_image.FlowError, match="image/png"):
+        poster_title_image.resolve_reference_image(
+            reference_image="reference.png",
+            reference_public_url="https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.jpg",
+            reference_internal_url="https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.jpg",
+            reference_sha256="c" * 64,
+            reference_content_type="image/jpeg",
+            app_env={"STORAGE_BACKEND": "aliyun_oss"},
+            confirm_upload=False,
+        )
 
 
 def test_real_flow_run_uses_script_env_reference_url_ref_by_default(tmp_path, monkeypatch, capsys):
@@ -991,6 +1209,7 @@ def test_real_flow_run_uses_script_env_reference_url_ref_by_default(tmp_path, mo
         confirm_cost=True,
         confirm_upload=False,
         api_url=None,
+        items_json=None,
         reference_image=poster_title_image.DEFAULT_REFERENCE_IMAGE,
         reference_public_url=None,
         reference_internal_url=None,
@@ -1003,9 +1222,6 @@ def test_real_flow_run_uses_script_env_reference_url_ref_by_default(tmp_path, mo
         size="auto",
         quality="high",
         draw_count=1,
-        style_probe=None,
-        additional_prompt=None,
-        layout_rules=None,
         caller_id="caller-1",
         timeout_seconds=1,
         poll_interval_seconds=0.1,
@@ -1042,7 +1258,7 @@ def test_poster_title_image_keeps_uploaded_reference_when_create_response_is_unk
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
     reference_path = tmp_path / "reference.png"
-    reference_path.write_bytes(b"png-reference")
+    reference_path.write_bytes(_transparent_png_bytes())
     uploaded_image = {
         "provider": "aliyun_oss",
         "bucket": "bucket-a",
@@ -1070,6 +1286,7 @@ def test_poster_title_image_keeps_uploaded_reference_when_create_response_is_unk
             confirm_cost=True,
             confirm_upload=True,
             api_url=None,
+            items_json=None,
             reference_image=str(reference_path),
             reference_public_url=None,
             reference_internal_url=None,
@@ -1082,9 +1299,6 @@ def test_poster_title_image_keeps_uploaded_reference_when_create_response_is_unk
             size="auto",
             quality="high",
             draw_count=1,
-            style_probe=None,
-            additional_prompt=None,
-            layout_rules=None,
             caller_id="caller-1",
             timeout_seconds=1,
             poll_interval_seconds=0.1,
@@ -1119,7 +1333,7 @@ def test_poster_title_image_cleans_uploaded_reference_when_failure_happens_befor
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
     reference_path = tmp_path / "reference.png"
-    reference_path.write_bytes(b"png-reference")
+    reference_path.write_bytes(_transparent_png_bytes())
     uploaded_image = {
         "provider": "aliyun_oss",
         "bucket": "bucket-a",
@@ -1156,6 +1370,7 @@ def test_poster_title_image_cleans_uploaded_reference_when_failure_happens_befor
             confirm_cost=True,
             confirm_upload=True,
             api_url=None,
+            items_json=None,
             reference_image=str(reference_path),
             reference_public_url=None,
             reference_internal_url=None,
@@ -1168,9 +1383,6 @@ def test_poster_title_image_cleans_uploaded_reference_when_failure_happens_befor
             size="auto",
             quality="high",
             draw_count=1,
-            style_probe=None,
-            additional_prompt=None,
-            layout_rules=None,
             caller_id="caller-1",
             timeout_seconds=1,
             poll_interval_seconds=0.1,
@@ -1186,7 +1398,7 @@ def test_poster_title_image_local_staging_rejects_bucket_traversal(tmp_path, mon
     clear_storage_env(monkeypatch)
     monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
     source = tmp_path / "reference.png"
-    source.write_bytes(b"png")
+    source.write_bytes(_transparent_png_bytes())
 
     with pytest.raises(poster_title_image.FlowError, match="OSS_BUCKET resolves outside"):
         poster_title_image.stage_local_reference_image(
@@ -1200,19 +1412,33 @@ def test_poster_title_image_local_staging_rejects_bucket_traversal(tmp_path, mon
         )
 
 
-def test_poster_title_image_local_staging_infers_reference_content_type(tmp_path, monkeypatch):
+def test_poster_title_image_local_staging_infers_png_reference_content_type(tmp_path, monkeypatch):
+    clear_storage_env(monkeypatch)
+    monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
+    source = tmp_path / "reference.png"
+    source.write_bytes(_transparent_png_bytes())
+
+    ref = poster_title_image.stage_local_reference_image(
+        reference_image="reference.png",
+        content_type=None,
+        app_env={"STORAGE_BACKEND": "local", "LOCAL_OBJECT_STORAGE_PATH": "storage/objects"},
+    )
+
+    assert ref["content_type"] == "image/png"
+
+
+def test_poster_title_image_rejects_jpeg_reference_content_type(tmp_path, monkeypatch):
     clear_storage_env(monkeypatch)
     monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
     source = tmp_path / "reference.jpg"
     source.write_bytes(b"jpeg")
 
-    ref = poster_title_image.stage_local_reference_image(
-        reference_image="reference.jpg",
-        content_type=None,
-        app_env={"STORAGE_BACKEND": "local", "LOCAL_OBJECT_STORAGE_PATH": "storage/objects"},
-    )
-
-    assert ref["content_type"] == "image/jpeg"
+    with pytest.raises(poster_title_image.FlowError, match="image/png"):
+        poster_title_image.stage_local_reference_image(
+            reference_image="reference.jpg",
+            content_type=None,
+            app_env={"STORAGE_BACKEND": "local", "LOCAL_OBJECT_STORAGE_PATH": "storage/objects"},
+        )
 
 
 def test_real_flow_json_output_is_machine_readable(tmp_path, monkeypatch, capsys):

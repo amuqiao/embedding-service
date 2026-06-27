@@ -10,10 +10,13 @@ from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput,
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.integrations.image import (
+    TRANSPARENT_REFERENCE_MAX_BYTES,
+    TRANSPARENT_REFERENCE_MAX_WIDTH,
     remove_green_background,
     transparent_title_layer_from_green_screen_bytes,
     transparent_title_layer_from_green_screen_file,
     transparent_title_layer_from_green_screen_oss_url,
+    validate_transparent_reference_image,
 )
 from app.integrations.object_storage import bare_sha256, sha256_digest
 from app.integrations.storage import LocalObjectStorage
@@ -30,6 +33,30 @@ def _png_bytes(color=(0, 255, 0, 255), accent=(255, 0, 0, 255)) -> bytes:
     for x in range(16, 24):
         for y in range(16, 24):
             image.putpixel((x, y), accent)
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _transparent_reference_png_bytes(size=(40, 40), accent=(255, 0, 0, 255)) -> bytes:
+    image = Image.new("RGBA", size, (0, 0, 0, 0))
+    width, height = size
+    for x in range(width // 2 - 4, width // 2 + 4):
+        for y in range(height // 2 - 4, height // 2 + 4):
+            image.putpixel((x, y), accent)
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _transparent_palette_png_bytes() -> bytes:
+    image = Image.new("P", (40, 40), 0)
+    palette = [0, 0, 0, 255, 0, 0] + [0, 0, 0] * 254
+    image.putpalette(palette)
+    image.info["transparency"] = 0
+    for x in range(16, 24):
+        for y in range(16, 24):
+            image.putpixel((x, y), 1)
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     return buf.getvalue()
@@ -56,7 +83,7 @@ def _params(ref: dict, *, model_id: str | None = None) -> dict:
             "background": "transparent",
             "output_format": "png",
         },
-        "reference_image": ref,
+        "reference_image": dict(ref),
     }
     if model_id is not None:
         item["model_id"] = model_id
@@ -71,6 +98,11 @@ def test_poster_title_image_params_apply_delivery_contract_constraints():
 
     assert params.items[0].model_id == "gpt-image-2"
     assert params.items[0].model_options.background == "transparent"
+
+    invalid = _params(ref)
+    invalid["items"][0]["reference_image"]["content_type"] = "image/jpeg"
+    with pytest.raises(ValueError, match="image/png"):
+        PosterTitleImageParams.model_validate(invalid)
 
     invalid = _params(ref)
     invalid["items"][0]["model_options"]["output_format"] = "jpeg"
@@ -92,6 +124,24 @@ def test_poster_title_image_params_apply_delivery_contract_constraints():
     invalid["items"].append(second)
     with pytest.raises(ValueError, match="model_id"):
         PosterTitleImageParams.model_validate(invalid)
+
+
+def test_poster_title_image_rejects_draw_count_above_config(monkeypatch):
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.settings",
+        SimpleNamespace(
+            job=SimpleNamespace(poster_title_image_max_draw_count=1),
+            registry=SimpleNamespace(poster_title_image_response_model_id="gpt-5.5"),
+        ),
+    )
+    params = _params(_url_ref("reference/title.png", b"x"))
+    params["items"][0]["model_options"]["draw_count"] = 2
+
+    with pytest.raises(AppError) as exc:
+        PosterTitleImageJob().validate_normalized_job_params(params)
+
+    assert exc.value.code == "INVALID_INPUT"
+    assert exc.value.details == {"max_draw_count": 1, "draw_count": 2}
 
 
 def test_poster_title_image_create_request_does_not_require_runtime_prompt_payload():
@@ -206,6 +256,61 @@ def test_transparent_title_layer_postprocess_supports_bytes_file_and_oss_url(tmp
         assert result.getpixel((20, 20))[3] == 255
 
 
+def test_validate_transparent_reference_image_requires_real_format_and_transparent_background():
+    data = _transparent_reference_png_bytes()
+
+    result = validate_transparent_reference_image(data, content_type="image/png")
+
+    assert result.width == 40
+    assert result.height == 40
+    assert result.content_type == "image/png"
+
+    with pytest.raises(AppError, match="content_type"):
+        validate_transparent_reference_image(data, content_type="image/webp")
+
+    with pytest.raises(AppError, match="transparent"):
+        validate_transparent_reference_image(_png_bytes(), content_type="image/png")
+
+
+def test_validate_transparent_reference_image_accepts_palette_png_and_rejects_webp_content_type():
+    palette_png = validate_transparent_reference_image(
+        _transparent_palette_png_bytes(),
+        content_type="image/png",
+    )
+
+    assert palette_png.content_type == "image/png"
+    with pytest.raises(AppError, match="image/png"):
+        validate_transparent_reference_image(_transparent_reference_png_bytes(), content_type="image/webp")
+
+
+def test_validate_transparent_reference_image_rejects_oversized_dimensions(monkeypatch):
+    monkeypatch.setattr(
+        "app.integrations.image.reference_validation.TRANSPARENT_REFERENCE_MAX_WIDTH",
+        32,
+    )
+
+    with pytest.raises(AppError) as exc:
+        validate_transparent_reference_image(_transparent_reference_png_bytes(), content_type="image/png")
+
+    assert exc.value.code == "INPUT_TOO_LARGE"
+    assert exc.value.details["max_width"] == 32
+
+
+def test_validate_transparent_reference_image_rejects_oversized_bytes(monkeypatch):
+    monkeypatch.setattr(
+        "app.integrations.image.reference_validation.TRANSPARENT_REFERENCE_MAX_BYTES",
+        1,
+    )
+
+    with pytest.raises(AppError) as exc:
+        validate_transparent_reference_image(_transparent_reference_png_bytes(), content_type="image/png")
+
+    assert exc.value.code == "INPUT_TOO_LARGE"
+    assert exc.value.details["max_bytes"] == 1
+    assert TRANSPARENT_REFERENCE_MAX_BYTES == 20 * 1024 * 1024
+    assert TRANSPARENT_REFERENCE_MAX_WIDTH == 4096
+
+
 def test_poster_title_image_missing_default_prompt_is_runtime_config_error(monkeypatch):
     from app.jobs.types.poster_title_image.executor import _default_prompt_blocks
 
@@ -224,9 +329,11 @@ def test_poster_title_image_missing_default_prompt_is_runtime_config_error(monke
 
 
 @pytest.mark.asyncio
-async def test_poster_title_image_executor_generates_transparent_title_layer(monkeypatch, tmp_path):
+async def test_poster_title_image_generate_item_leaf_generates_transparent_title_layer(monkeypatch, tmp_path):
+    from app.jobs.types.poster_title_image import PosterTitleImageGenerateItemJob
+
     local_storage = LocalObjectStorage(tmp_path)
-    reference = _png_bytes(accent=(0, 0, 255, 255))
+    reference = _transparent_reference_png_bytes(accent=(0, 0, 255, 255))
     local_storage.write_bytes(
         bucket="local-dev",
         region="local",
@@ -247,42 +354,50 @@ async def test_poster_title_image_executor_generates_transparent_title_layer(mon
         recorded.append(kwargs)
         return ImageGenerationResult(images=[generated_green], usage={"image_count": 1})
 
-    async def fake_probe_style(reference_image, prompt, **kwargs):
-        assert reference_image.content_type == "image/png"
-        assert "LETTERFORMS ONLY" in prompt
-        assert kwargs["caller_id"] == "caller-1"
-        return "heavy cracked stone letterforms"
+    probe_child = SimpleNamespace(
+        workflow_node_key="probe.0",
+        status="succeeded",
+        result={"style_desc": "heavy cracked stone letterforms"},
+    )
+
+    async def fake_workflow_children(_job, _db):
+        return [probe_child]
 
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.output_target_from_job", lambda _job: output_target)
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._response_provider_model", lambda: "gpt-5.5")
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._probe_style", fake_probe_style)
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.generate_image_with_ledger",
         fake_generate_image_with_ledger,
     )
 
+    root_id = uuid.uuid4()
     job_id = uuid.uuid4()
     job = Job(
         id=job_id,
         caller_id="caller-1",
-        client_request_id="poster-1",
-        job_type="poster_title_image",
+        client_request_id=None,
+        job_type="poster_title_image_generate_item",
         status="running",
         active_attempt_id=uuid.uuid4(),
-        job_params=_params(_url_ref("reference/title.png", reference)),
+        root_job_id=root_id,
+        parent_job_id=root_id,
+        workflow_node_key="item.es",
+        is_internal=True,
+        job_params={
+            "item": _params(_url_ref("reference/title.png", reference))["items"][0],
+            "probe_node_key": "probe.0",
+        },
         created_at=datetime.now(timezone.utc),
     )
 
-    result = await PosterTitleImageJob()._execute(job, object())
+    result = await PosterTitleImageGenerateItemJob()._execute(job, object())
 
-    assert result["job_type"] == "poster_title_image"
-    assert result["batch_summary"] == {"total": 1, "succeeded": 1, "failed": 0, "running": 0, "pending": 0}
-    item = result["items"][0]
+    item = result["item"]
     assert item["status"] == "succeeded"
     obj = item["images"][0]["object"]
     assert obj["public_url"].startswith("https://local-dev.oss-local.aliyuncs.com/")
-    assert obj["internal_url"].startswith("https://local-dev.oss-local-internal.aliyuncs.com/")
     assert obj["content_type"] == "image/png"
     assert len(recorded) == 1
     assert recorded[0]["model_id"] == "gpt-image-2"
@@ -293,11 +408,150 @@ async def test_poster_title_image_executor_generates_transparent_title_layer(mon
     assert "poster-title layer" in recorded[0]["prompt"]
     assert "poster title text only" in recorded[0]["prompt"]
 
-    output_key = "ai-jobs/job-1/poster-title/{}/es/title-layer.png".format(job_id)
+    output_key = "ai-jobs/job-1/poster-title/{}/es/title-layer.png".format(root_id)
     written = local_storage.read_bytes(bucket="local-dev", region="local", key=output_key)
     output_image = Image.open(io.BytesIO(written)).convert("RGBA")
     assert output_image.getpixel((0, 0))[3] == 0
     assert output_image.getpixel((20, 20))[3] == 255
+
+
+@pytest.mark.asyncio
+async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeypatch, tmp_path):
+    from app.jobs.types.poster_title_image import PosterTitleImageGenerateItemJob
+
+    local_storage = LocalObjectStorage(tmp_path)
+    reference = _transparent_reference_png_bytes(accent=(0, 0, 255, 255))
+    local_storage.write_bytes(
+        bucket="local-dev",
+        region="local",
+        key="reference/title.png",
+        data=reference,
+        content_type="image/png",
+    )
+    output_target = {
+        "type": "oss_prefix",
+        "oss_bucket": "local-dev",
+        "oss_region": "local",
+        "oss_prefix": "ai-jobs/job-1/",
+    }
+    generated_green = _png_bytes()
+    recorded = []
+
+    async def fake_generate_image_with_ledger(**kwargs):
+        recorded.append(kwargs)
+        return ImageGenerationResult(images=[generated_green], usage={"image_count": 1})
+
+    async def fake_workflow_children(_job, _db):
+        return [
+            SimpleNamespace(
+                workflow_node_key="probe.0",
+                status="succeeded",
+                result={"style_desc": "heavy cracked stone letterforms"},
+            )
+        ]
+
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor.output_target_from_job", lambda _job: output_target)
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._response_provider_model", lambda: "gpt-5.5")
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.generate_image_with_ledger",
+        fake_generate_image_with_ledger,
+    )
+
+    params = _params(_url_ref("reference/title.png", reference))
+    params["items"][0]["model_options"]["draw_count"] = 2
+    root_id = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id=None,
+        job_type="poster_title_image_generate_item",
+        status="running",
+        active_attempt_id=uuid.uuid4(),
+        root_job_id=root_id,
+        parent_job_id=root_id,
+        workflow_node_key="item.es",
+        is_internal=True,
+        job_params={"item": params["items"][0], "probe_node_key": "probe.0"},
+        created_at=datetime.now(timezone.utc),
+    )
+
+    result = await PosterTitleImageGenerateItemJob()._execute(job, object())
+
+    assert len(recorded) == 2
+    assert len(result["item"]["images"]) == 2
+    keys = [
+        "ai-jobs/job-1/poster-title/{}/es/title-layer.png".format(root_id),
+        "ai-jobs/job-1/poster-title/{}/es/title-layer-2.png".format(root_id),
+    ]
+    for key in keys:
+        written = local_storage.read_bytes(bucket="local-dev", region="local", key=key)
+        output_image = Image.open(io.BytesIO(written)).convert("RGBA")
+        assert output_image.getpixel((0, 0))[3] == 0
+
+
+@pytest.mark.asyncio
+async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeypatch):
+    from app.jobs.types.poster_title_image import PosterTitleImageJoinJob
+    from app.jobs.types.poster_title_image.executor import _item_node_key
+
+    ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
+    params = _params(ref)
+    second = {**params["items"][0], "item_id": "fr", "language": "fr", "title_text": "Quand l'amour s'eloigne"}
+    params["items"].append(second)
+    first_result = {
+        "item_id": "es",
+        "language": "es",
+        "status": "succeeded",
+        "images": [{"object": _url_ref("out/es.png", b"es")}],
+    }
+    second_result = {
+        "item_id": "fr",
+        "language": "fr",
+        "status": "succeeded",
+        "images": [{"object": _url_ref("out/fr.png", b"fr")}],
+    }
+
+    async def fake_workflow_children(_job, _db):
+        return [
+            SimpleNamespace(
+                workflow_node_key=_item_node_key("fr"),
+                job_type="poster_title_image_generate_item",
+                status="succeeded",
+                result={"item": second_result, "duration_ms": {"ai_model": 7, "total": 7}},
+            ),
+            SimpleNamespace(
+                workflow_node_key=_item_node_key("es"),
+                job_type="poster_title_image_generate_item",
+                status="succeeded",
+                result={"item": first_result, "duration_ms": {"ai_model": 5, "total": 5}},
+            ),
+        ]
+
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
+    root_id = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id=None,
+        job_type="poster_title_image_join",
+        status="running",
+        active_attempt_id=uuid.uuid4(),
+        root_job_id=root_id,
+        parent_job_id=root_id,
+        workflow_node_key="join",
+        is_internal=True,
+        job_params={"items": params["items"]},
+        created_at=datetime.now(timezone.utc),
+    )
+
+    result = await PosterTitleImageJoinJob()._execute(job, object())
+
+    assert result["batch_summary"] == {"total": 2, "succeeded": 2, "failed": 0, "running": 0, "pending": 0}
+    assert [item["item_id"] for item in result["items"]] == ["es", "fr"]
+    assert result["duration_ms"]["ai_model"] == 12
+    assert result["duration_ms"]["total"] == 12
 
 
 @pytest.mark.asyncio

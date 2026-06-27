@@ -351,29 +351,32 @@ Job constraints:
 | `job_params.items[].model_id` | 首版固定为 `gpt-image-2` |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
 | `job_params.items[].model_options.quality` | `low`、`medium`、`high`、`auto` |
-| `job_params.items[].model_options.draw_count` | 1 到 4 |
-| `job_params.items[].model_options.background` | `transparent`、`auto` |
-| `job_params.items[].model_options.output_format` | `png`、`webp`、`jpeg`；`background=transparent` 时首版只允许 `png` |
+| `job_params.items[].model_options.draw_count` | 1 到 4，且不能超过服务端 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` |
+| `job_params.items[].model_options.background` | `transparent` |
+| `job_params.items[].model_options.output_format` | `png` |
 | `job_params.items[].reference_image.public_url` | 必须，HTTPS OSS URL |
 | `job_params.items[].reference_image.internal_url` | 必须，HTTPS OSS internal URL |
-| `job_params.items[].reference_image.content_type` | 必须，`image/png`、`image/jpeg` 或 `image/webp` |
+| `job_params.items[].reference_image.content_type` | 必须，`image/png` |
 | `job_params.items[].reference_image.sha256` | 必须，同一个 OSS object 原始内容的小写 64 位 hex SHA-256 |
-| 输入图片 MIME | `image/png`、`image/jpeg`、`image/webp` |
+| 参考图透明背景 | 必须，服务端会解码图片并检查透明边界 |
+| 输入图片 MIME | `image/png` |
 | 单个输入图片大小 | 最大 20 MB |
+| 单个输入图片尺寸 | 最大 4096 x 4096，且总像素不超过 16777216 |
 
 Batch rules:
 
 - 单语种调用也使用 `items`，只传 1 个 item。
-- 每个 item 是独立业务单元，包含自己的模型、模型参数、参考图和提示词覆盖。
+- 每个 item 是独立业务单元，显式声明自己的模型、模型参数、参考图和提示词覆盖；不同 item 可以传入相同 `reference_image`。
 - 同一 Job 内 `items[].item_id` 必须唯一，并作为请求 item 与结果 item 的主关联键。
 - 首版同一 Job 内 `items[].language` 也必须唯一；如果未来允许同一语言多版本，仍以 `item_id` 关联结果。
 - 不提供 `batch_options`。首版批量策略固定为 item 独立执行、root Job 最后 join/finalize。
-- item 之间不共享 `reference_image`、`model_options` 或 `prompt_overrides`。
+- 服务端按 `reference_image.sha256 + effective style_probe prompt` 复用风格探针结果；这只影响内部执行节点数量，不改变每个 item 的独立结果。
 - 所有 item 失败时，Job 进入 `failed`。
-- `draw_count` 表示该 item 成功时需要返回的标题图片候选数量。
+- `draw_count` 表示该 item 成功时需要返回的标题图片候选数量。服务端按候选数量多次独立生成，每次只接受 provider 返回 1 张图；`draw_count` 不是 provider raw 参数 `n`。
+- 任意一次候选图生成失败，或 provider 单次返回的图片数量不是 1，该 item 都不能标记为 `succeeded`。
 - `background` 和 `output_format` 是业务输出要求。服务端可以通过 provider 参数、后处理或对象存储转码实现，但这些内部实现不属于外部合同。
 - `background=transparent` 且 `output_format!=png` 时，服务端必须 fail-fast 返回 `INVALID_INPUT`；首版不定义透明 JPEG 或透明 WebP 输出。
-- `output_format` 到输出 OSS `content_type` 的映射固定为：`png -> image/png`、`webp -> image/webp`、`jpeg -> image/jpeg`。
+- 首版 `output_format` 固定为 `png`，输出 OSS `content_type` 固定为 `image/png`。
 Option rules:
 
 - 未传 `callback` 时不发送 Callback。
@@ -712,8 +715,8 @@ Result fields:
 | `job_result.items[].images[]` | item 输出标题图片列表 |
 | `job_result.items[].images[].object` | 标题图片 OSS URL ref；`content_type` 必须等于请求 item `model_options.output_format` 映射后的 MIME |
 | `job_result.items[].error` | item 失败原因；成功时为 `null` |
-| `job_result.duration_ms.ai_model` | AI provider 调用耗时 |
-| `job_result.duration_ms.total` | Job 总耗时 |
+| `job_result.duration_ms.ai_model` | 已完成内部 AI 节点的 provider 调用耗时累计 |
+| `job_result.duration_ms.total` | 已完成内部 AI 节点的服务端执行耗时累计，不包含排队等待时间 |
 | `job.cost` | Job 级总费用；非终态为 `null`，终态必须为 `Cost` |
 
 Result rules:
@@ -737,10 +740,10 @@ Result rules:
 - `status=pending` 或 `status=running` 的 item 必须返回空 `images`、`error=null`。
 - `status=succeeded` 的 item 必须返回该请求 item `model_options.draw_count` 个标题图片 OSS object。
 - `images[]` 数组顺序是稳定候选顺序；同一 Job 的后续轮询和终态响应不得重排已经公开的图片。
-- 如果某个 item 无法产出请求 item `model_options.draw_count` 个标题图片，该 item 不能标记为 `succeeded`。
+- 如果某个 item 无法产出请求 item `model_options.draw_count` 个标题图片，该 item 不能标记为 `succeeded`；首版不对外暴露部分成功候选图。
 - 首版不返回海报底图、合成海报、贴图坐标或图片尺寸元数据。
 - `status=failed` 的 item 必须返回空 `images` 和非空 `error`。
-- `duration_ms.ai_model` 只统计 AI provider 调用耗时；`duration_ms.total` 统计 Job 总耗时。
+- `duration_ms.ai_model` 统计已完成内部 AI 节点的 provider 调用耗时累计；`duration_ms.total` 统计已完成内部 AI 节点的服务端执行耗时累计，不包含排队等待时间。
 - token、图片、视频、音频和调用次数等计费明细不在 `job_result` 中返回。
 - `job_status=queued` 或 `job_status=running` 时，`job.cost` 必须为 `null`。
 - `job_status=succeeded` 或 `job_status=failed` 时，`job.cost` 必须为 `Cost`，且 `cost.final=true`。

@@ -58,6 +58,7 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "PRICING_CONFIG_PATH": ("billing", "pricing_config_path_raw"),
     "MAX_ACTIVE_JOBS": ("job", "max_active_jobs"),
     "OSS_INPUT_MAX_BYTES": ("job", "oss_input_max_bytes"),
+    "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": ("job", "poster_title_image_max_draw_count"),
     "CALLBACK_TIMEOUT_SECONDS": ("callback", "timeout_seconds"),
     "CALLBACK_MAX_DELIVERY_ATTEMPTS": ("callback", "max_delivery_attempts"),
     "CALLBACK_RETRY_DELAY_SECONDS": ("callback", "retry_delay_seconds"),
@@ -382,6 +383,7 @@ class BillingSettings(ConfigSection):
 class JobSettings(ConfigSection):
     max_active_jobs: int = 5000
     oss_input_max_bytes: int = 5_242_880
+    poster_title_image_max_draw_count: int = 4
     orphan_timeout_seconds: int = 300
     dispatch_max_publish_attempts: int = 12
     recovery_interval_seconds: int = 60
@@ -392,6 +394,7 @@ class JobSettings(ConfigSection):
     def validate_job(self) -> "JobSettings":
         positive_fields = {
             "OSS_INPUT_MAX_BYTES": self.oss_input_max_bytes,
+            "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": self.poster_title_image_max_draw_count,
             "JOB_ORPHAN_TIMEOUT_SECONDS": self.orphan_timeout_seconds,
             "JOB_DISPATCH_MAX_PUBLISH_ATTEMPTS": self.dispatch_max_publish_attempts,
             "JOB_RECOVERY_INTERVAL_SECONDS": self.recovery_interval_seconds,
@@ -403,6 +406,8 @@ class JobSettings(ConfigSection):
                 raise ValueError(f"{name} must be greater than 0")
         if self.max_active_jobs < 0:
             raise ValueError("MAX_ACTIVE_JOBS must be greater than or equal to 0")
+        if self.poster_title_image_max_draw_count > 4:
+            raise ValueError("POSTER_TITLE_IMAGE_MAX_DRAW_COUNT must be less than or equal to 4")
         return self
 
 

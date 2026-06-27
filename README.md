@@ -93,6 +93,8 @@ Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts
 
 `poster_title_image` 的 Responses 宿主模型由服务端 `POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID` 配置，默认 `gpt-5.5`；该模型用于风格探针和 `image_generation` tool 调用，调用方不能通过 Job 参数覆盖。
 
+`poster_title_image` 的单 item 候选图上限由 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` 配置，默认 4；该值只能在接口硬上限 `1..4` 内收紧，不能把业务能力放大到 4 以上。
+
 除 `/health` 和 `/healthz` 外，请求必须携带：
 
 ```http

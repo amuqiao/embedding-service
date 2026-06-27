@@ -1089,6 +1089,169 @@ async def test_advance_workflow_after_last_child_success_finalizes_root(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_poster_title_image_workflow_root_public_result_uses_join_result(monkeypatch):
+    root_job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="poster_title_image",
+        status="running",
+        progress_percent=80,
+        active_attempt_id=None,
+        is_internal=False,
+        priority="normal",
+        timeout_seconds=600,
+        job_params_hash=payload_hash({"items": []}),
+        runtime_ref={
+            "storage": "db_inline",
+            "type": "json",
+            "name": "runtime",
+            "payload": {
+                "schema_version": 1,
+                "job_type": "poster_title_image",
+                "job_params_hash": payload_hash({"items": []}),
+                "runtime_fields": {},
+                "output_target": {
+                    "type": "oss_prefix",
+                    "oss_bucket": "bucket",
+                    "oss_prefix": "root/",
+                    "oss_region": "region",
+                },
+                "workflow_plan": {
+                    "schema_version": 1,
+                    "kind": "dag_lite",
+                    "workflow_type": "poster_title_image",
+                    "workflow_version": 1,
+                    "failure_policy": "fail_fast",
+                    "max_nodes": 60,
+                    "node_count": 3,
+                    "nodes": [
+                        {
+                            "key": "probe.0",
+                            "job_type": "poster_title_image_style_probe",
+                            "job_params": {},
+                            "depends_on": [],
+                            "required": True,
+                            "weight": 1,
+                        },
+                        {
+                            "key": "item.es",
+                            "job_type": "poster_title_image_generate_item",
+                            "job_params": {},
+                            "depends_on": ["probe.0"],
+                            "required": True,
+                            "weight": 1,
+                        },
+                        {
+                            "key": "join",
+                            "job_type": "poster_title_image_join",
+                            "job_params": {},
+                            "depends_on": ["item.es", "probe.0"],
+                            "required": True,
+                            "weight": 1,
+                        },
+                    ],
+                }
+            },
+        },
+    )
+    poster_result = {
+        "schema_version": "default",
+        "job_type": "poster_title_image",
+        "batch_summary": {"total": 1, "succeeded": 1, "failed": 0, "running": 0, "pending": 0},
+        "items": [
+            {
+                "item_id": "es",
+                "language": "es",
+                "status": "succeeded",
+                "images": [
+                    {
+                        "object": {
+                            "public_url": "https://local-dev.oss-local.aliyuncs.com/output/title.png",
+                            "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/output/title.png",
+                            "content_type": "image/png",
+                            "sha256": "c" * 64,
+                        }
+                    }
+                ],
+                "error": None,
+            }
+        ],
+        "duration_ms": {"ai_model": 9, "total": 9},
+    }
+    children = [
+        Job(
+            id=uuid.uuid4(),
+            caller_id="caller-1",
+            job_type="poster_title_image_style_probe",
+            status="succeeded",
+            result={"style_key": "a", "style_desc": "heavy"},
+            progress_percent=100,
+            is_internal=True,
+            root_job_id=root_job.id,
+            parent_job_id=root_job.id,
+            workflow_node_key="probe.0",
+            priority="normal",
+            timeout_seconds=300,
+        ),
+        Job(
+            id=uuid.uuid4(),
+            caller_id="caller-1",
+            job_type="poster_title_image_generate_item",
+            status="succeeded",
+            result={"item": poster_result["items"][0], "duration_ms": {"ai_model": 9, "total": 9}},
+            progress_percent=100,
+            is_internal=True,
+            root_job_id=root_job.id,
+            parent_job_id=root_job.id,
+            workflow_node_key="item.es",
+            priority="normal",
+            timeout_seconds=600,
+        ),
+        Job(
+            id=uuid.uuid4(),
+            caller_id="caller-1",
+            job_type="poster_title_image_join",
+            status="succeeded",
+            result=poster_result,
+            progress_percent=100,
+            is_internal=True,
+            root_job_id=root_job.id,
+            parent_job_id=root_job.id,
+            workflow_node_key="join",
+            priority="normal",
+            timeout_seconds=120,
+        ),
+    ]
+    finalized = {}
+
+    async def fake_get_workflow_root_for_update(_db, root_job_id):
+        assert root_job_id == root_job.id
+        return root_job
+
+    async def fake_list_internal_children(_db, *, root_job_id, statuses=None):
+        assert root_job_id == root_job.id
+        assert statuses is None
+        return children
+
+    async def fake_mark_workflow_root_succeeded(_db, root_job_id, *, result, canonical_result):
+        finalized["root_job_id"] = root_job_id
+        finalized["result"] = result
+        finalized["canonical_result"] = canonical_result
+        return True
+
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.get_workflow_root_for_update", fake_get_workflow_root_for_update)
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.list_internal_children", fake_list_internal_children)
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.mark_workflow_root_succeeded", fake_mark_workflow_root_succeeded)
+
+    result = await reconcile_workflow_root(_FakeDB(), root_job_id=root_job.id)
+
+    assert result.finalized_root_job_id == root_job.id
+    assert finalized["result"] == poster_result
+    assert finalized["canonical_result"]["workflow"]["outcome"] == "success"
+    assert finalized["canonical_result"]["workflow"]["nodes"][2]["node_key"] == "join"
+
+
+@pytest.mark.asyncio
 async def test_advance_workflow_after_required_child_failed_finalizes_root_failed(monkeypatch):
     root_job = Job(
         id=uuid.uuid4(),

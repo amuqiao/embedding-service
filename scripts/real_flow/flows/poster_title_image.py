@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import time
 import uuid
 from pathlib import Path
@@ -11,6 +12,10 @@ from urllib.parse import quote, urlsplit
 
 from app.core.exceptions import AppError
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSError
+from app.integrations.image import (
+    TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
+    validate_transparent_reference_image,
+)
 from app.integrations.object_storage.aliyun_url import parse_aliyun_oss_url
 from scripts.jobs import formatters
 from scripts.real_flow.flows import llm_job_billing, oss_image_upload
@@ -23,7 +28,7 @@ DEFAULT_JOB_TYPE = "poster_title_image"
 DEFAULT_IMAGE_MODEL_ID = "gpt-image-2"
 DEFAULT_BUCKET = "local-dev"
 DEFAULT_REGION = "local"
-ALLOWED_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
+ALLOWED_CONTENT_TYPES = TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES
 SCRIPT_ENV_REFERENCE_PUBLIC_URL = "POSTER_TITLE_IMAGE_REFERENCE_PUBLIC_URL"
 SCRIPT_ENV_REFERENCE_INTERNAL_URL = "POSTER_TITLE_IMAGE_REFERENCE_INTERNAL_URL"
 SCRIPT_ENV_REFERENCE_CONTENT_TYPE = "POSTER_TITLE_IMAGE_REFERENCE_CONTENT_TYPE"
@@ -49,6 +54,36 @@ def _content_type(path: Path, explicit: str | None) -> str:
 
 def _bare_sha256(data: bytes) -> str:
     return oss_image_upload.bare_sha256(data)
+
+
+def _required_str(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise FlowError(f"items_json item.{field} is required", exit_code=2)
+    return value
+
+
+def _optional_str(raw_item: dict[str, Any], field: str, default: str) -> str:
+    if field not in raw_item:
+        return default
+    return _required_str(raw_item[field], field=field)
+
+
+def _optional_draw_count(raw_item: dict[str, Any], default: int) -> int:
+    if "draw_count" not in raw_item:
+        return default
+    value = raw_item["draw_count"]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise FlowError("items_json item.draw_count must be an integer", exit_code=2)
+    if value < 1 or value > 4:
+        raise FlowError("items_json item.draw_count must be between 1 and 4", exit_code=2)
+    return value
+
+
+def _validate_reference_input_bytes(data: bytes, *, content_type: str) -> None:
+    try:
+        validate_transparent_reference_image(data, content_type=content_type)
+    except AppError as exc:
+        raise FlowError(f"poster_title_image reference image invalid: {exc.message}", exit_code=2) from exc
 
 
 def _aliyun_oss_url_ref(
@@ -115,6 +150,7 @@ def stage_local_reference_image(
         raise FlowError(f"reference image not found: {source}", exit_code=2)
     data = source.read_bytes()
     resolved_content_type = _content_type(source, content_type)
+    _validate_reference_input_bytes(data, content_type=resolved_content_type)
     bucket = llm_job_billing.env_value("OSS_BUCKET", app_env) or DEFAULT_BUCKET
     region = llm_job_billing.env_value("OSS_REGION", app_env) or DEFAULT_REGION
     storage_root = _resolve_repo_path(
@@ -161,8 +197,13 @@ def resolve_reference_image(
     if storage_backend == "aliyun_oss":
         if not confirm_upload:
             raise FlowError("poster title image Aliyun OSS reference upload requires --confirm-upload", exit_code=2)
+        source = _resolve_repo_path(reference_image)
+        if not source.is_file():
+            raise FlowError(f"reference image not found: {source}", exit_code=2)
+        resolved_content_type = _content_type(source, reference_content_type)
+        _validate_reference_input_bytes(source.read_bytes(), content_type=resolved_content_type)
         upload = oss_image_upload.upload_image(
-            image=str(_resolve_repo_path(reference_image)),
+            image=str(source),
             content_type=reference_content_type,
             app_env=app_env,
             key_prefix="real-flow/poster-title-image/reference",
@@ -236,50 +277,109 @@ def _cleanup_failure_message(original: BaseException, cleanup_exc: BaseException
     )
 
 
-def build_job_payload(
+def load_items_json(path: str) -> list[dict[str, Any]]:
+    source = _resolve_repo_path(path)
+    if not source.is_file():
+        raise FlowError(f"items json not found: {source}", exit_code=2)
+    try:
+        raw = json.loads(source.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise FlowError(f"items json is invalid JSON: {exc}", exit_code=2) from exc
+    if isinstance(raw, dict):
+        raw_items = raw.get("items")
+    else:
+        raw_items = raw
+    if not isinstance(raw_items, list) or not raw_items:
+        raise FlowError("items json must be a non-empty array or an object with items[]", exit_code=2)
+    return raw_items
+
+
+def _item_reference_input(raw_item: dict[str, Any]) -> dict[str, Any]:
+    reference = raw_item.get("reference")
+    if reference is None:
+        reference = raw_item.get("reference_image")
+    if not isinstance(reference, dict):
+        raise FlowError("items_json item.reference is required", exit_code=2)
+    return reference
+
+
+def _resolve_item_reference(
+    reference: dict[str, Any],
     *,
-    item_id: str,
-    language: str,
-    title_text: str,
+    app_env: dict[str, str],
+    confirm_upload: bool,
+) -> ReferenceImageResolution:
+    if {"public_url", "internal_url", "sha256"}.issubset(reference):
+        explicit = explicit_reference_image(
+            public_url=str(reference.get("public_url")),
+            internal_url=str(reference.get("internal_url")),
+            sha256=str(reference.get("sha256")),
+            content_type=str(reference.get("content_type")) if reference.get("content_type") is not None else None,
+        )
+        assert explicit is not None
+        return ReferenceImageResolution(ref=explicit)
+    image = _required_str(reference.get("image"), field="reference.image")
+    content_type = reference.get("content_type")
+    return resolve_reference_image(
+        reference_image=image,
+        reference_public_url=None,
+        reference_internal_url=None,
+        reference_sha256=None,
+        reference_content_type=str(content_type) if content_type is not None else None,
+        app_env=app_env,
+        confirm_upload=confirm_upload,
+    )
+
+
+def build_items_from_json(
+    raw_items: list[dict[str, Any]],
+    *,
+    app_env: dict[str, str],
+    confirm_upload: bool,
     model_id: str,
-    reference_image: dict[str, str],
     size: str,
     quality: str,
     draw_count: int,
-    style_probe: str | None,
-    additional_prompt: str | None,
-    layout_rules: str | None,
+) -> tuple[list[dict[str, Any]], list[ReferenceImageResolution]]:
+    items: list[dict[str, Any]] = []
+    resolutions: list[ReferenceImageResolution] = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            raise FlowError("items json entries must be objects", exit_code=2)
+        resolution = _resolve_item_reference(
+            _item_reference_input(raw),
+            app_env=app_env,
+            confirm_upload=confirm_upload,
+        )
+        resolutions.append(resolution)
+        item_model_id = _optional_str(raw, "model_id", model_id)
+        item = {
+            "item_id": _required_str(raw.get("item_id"), field="item_id"),
+            "language": _required_str(raw.get("language"), field="language"),
+            "title_text": _required_str(raw.get("title_text"), field="title_text"),
+            "model_id": item_model_id,
+            "model_options": {
+                "size": _optional_str(raw, "size", size),
+                "quality": _optional_str(raw, "quality", quality),
+                "draw_count": _optional_draw_count(raw, draw_count),
+                "background": "transparent",
+                "output_format": "png",
+            },
+            "reference_image": resolution.ref,
+        }
+        items.append(item)
+    return items, resolutions
+
+
+def build_job_payload(
+    *,
+    items: list[dict[str, Any]],
     client_request_id: str | None,
 ) -> dict[str, Any]:
-    item: dict[str, Any] = {
-        "item_id": item_id,
-        "language": language,
-        "title_text": title_text,
-        "model_id": model_id,
-        "model_options": {
-            "size": size,
-            "quality": quality,
-            "draw_count": draw_count,
-            "background": "transparent",
-            "output_format": "png",
-        },
-        "reference_image": reference_image,
-    }
-    prompt_overrides = {
-        key: value
-        for key, value in (
-            ("style_probe", style_probe),
-            ("additional_prompt", additional_prompt),
-            ("layout_rules", layout_rules),
-        )
-        if value is not None
-    }
-    if prompt_overrides:
-        item["prompt_overrides"] = prompt_overrides
     return {
         "client_request_id": client_request_id or f"real-flow-poster-title-image-{uuid.uuid4()}",
         "job_type": DEFAULT_JOB_TYPE,
-        "job_params": {"items": [item]},
+        "job_params": {"items": items},
         "metadata": {"source": "scripts/real-flow.sh poster-title-image"},
         "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
     }
@@ -537,6 +637,7 @@ def run(
     confirm_cost: bool,
     confirm_upload: bool,
     api_url: str | None,
+    items_json: str | None,
     reference_image: str,
     reference_public_url: str | None,
     reference_internal_url: str | None,
@@ -549,9 +650,6 @@ def run(
     size: str,
     quality: str,
     draw_count: int,
-    style_probe: str | None,
-    additional_prompt: str | None,
-    layout_rules: str | None,
     caller_id: str,
     timeout_seconds: int,
     poll_interval_seconds: float,
@@ -581,34 +679,49 @@ def run(
         reference_content_type=reference_content_type,
         script_env=script_env,
     )
-    resolution: ReferenceImageResolution | None = None
+    resolutions: list[ReferenceImageResolution] = []
     create_attempted = False
     job_id: str | None = None
     terminal_job: dict[str, Any] | None = None
     try:
-        resolution = resolve_reference_image(
-            reference_image=reference_image,
-            reference_public_url=resolved_reference_public_url,
-            reference_internal_url=resolved_reference_internal_url,
-            reference_sha256=resolved_reference_sha256,
-            reference_content_type=resolved_reference_content_type,
-            app_env=app_env,
-            confirm_upload=confirm_upload,
-        )
-        payload = build_job_payload(
-            item_id=item_id,
-            language=language,
-            title_text=title_text,
-            model_id=model_id,
-            reference_image=resolution.ref,
-            size=size,
-            quality=quality,
-            draw_count=draw_count,
-            style_probe=style_probe,
-            additional_prompt=additional_prompt,
-            layout_rules=layout_rules,
-            client_request_id=client_request_id,
-        )
+        if items_json:
+            items, resolutions = build_items_from_json(
+                load_items_json(items_json),
+                app_env=app_env,
+                confirm_upload=confirm_upload,
+                model_id=model_id,
+                size=size,
+                quality=quality,
+                draw_count=draw_count,
+            )
+        else:
+            resolution = resolve_reference_image(
+                reference_image=reference_image,
+                reference_public_url=resolved_reference_public_url,
+                reference_internal_url=resolved_reference_internal_url,
+                reference_sha256=resolved_reference_sha256,
+                reference_content_type=resolved_reference_content_type,
+                app_env=app_env,
+                confirm_upload=confirm_upload,
+            )
+            resolutions = [resolution]
+            items = [
+                {
+                    "item_id": item_id,
+                    "language": language,
+                    "title_text": title_text,
+                    "model_id": model_id,
+                    "model_options": {
+                        "size": size,
+                        "quality": quality,
+                        "draw_count": draw_count,
+                        "background": "transparent",
+                        "output_format": "png",
+                    },
+                    "reference_image": resolution.ref,
+                }
+            ]
+        payload = build_job_payload(items=items, client_request_id=client_request_id)
         create_attempted = True
         create_envelope = llm_job_billing.request_json(jobs_url, method="POST", headers=headers, payload=payload)
         created = llm_job_billing.data_object(create_envelope, "job")
@@ -624,19 +737,21 @@ def run(
         billing_envelope = llm_job_billing.request_json(f"{jobs_url}/{job_id}/billing", method="GET", headers=headers)
         billing = llm_job_billing.data_object(billing_envelope, "billing")
     except Exception as exc:
-        uploaded_image = resolution.uploaded_image if resolution is not None else None
-        if uploaded_image is not None and _should_cleanup_uploaded_reference(
-            create_attempted=create_attempted,
-            terminal_job=terminal_job,
-        ):
-            try:
-                _cleanup_uploaded_reference(uploaded_image, app_env)
-            except Exception as cleanup_exc:
-                exit_code = exc.exit_code if isinstance(exc, FlowError) else 4
-                raise FlowError(_cleanup_failure_message(exc, cleanup_exc), exit_code=exit_code) from exc
+        for resolution in resolutions:
+            uploaded_image = resolution.uploaded_image
+            if uploaded_image is not None and _should_cleanup_uploaded_reference(
+                create_attempted=create_attempted,
+                terminal_job=terminal_job,
+            ):
+                try:
+                    _cleanup_uploaded_reference(uploaded_image, app_env)
+                except Exception as cleanup_exc:
+                    exit_code = exc.exit_code if isinstance(exc, FlowError) else 4
+                    raise FlowError(_cleanup_failure_message(exc, cleanup_exc), exit_code=exit_code) from exc
         raise
-    if resolution is not None and resolution.uploaded_image is not None:
-        _cleanup_uploaded_reference(resolution.uploaded_image, app_env)
+    for resolution in resolutions:
+        if resolution.uploaded_image is not None:
+            _cleanup_uploaded_reference(resolution.uploaded_image, app_env)
     artifacts = (
         download_output_artifacts(
             job=terminal_job,

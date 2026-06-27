@@ -372,6 +372,20 @@ class OssUrlRef(StrictBaseModel):
         return value
 
 
+class PosterTitleImageReferenceImage(StrictBaseModel):
+    public_url: str = Field(min_length=1)
+    internal_url: str = Field(min_length=1)
+    content_type: Literal["image/png"]
+    sha256: str
+
+    @field_validator("sha256")
+    @classmethod
+    def validate_bare_sha256(cls, value: str) -> str:
+        if not BARE_HASH_RE.fullmatch(value):
+            raise ValueError("sha256 must be 64 lowercase hex characters")
+        return value
+
+
 class PosterTitleImageModelOptions(StrictBaseModel):
     size: Literal["1024x1024", "1536x1024", "1024x1536", "auto"] = "auto"
     quality: Literal["low", "medium", "high", "auto"] = "high"
@@ -401,7 +415,7 @@ class PosterTitleImageItemParams(StrictBaseModel):
     title_text: str = Field(min_length=1, max_length=200)
     model_id: str = Field(default="gpt-image-2", min_length=1, max_length=128)
     model_options: PosterTitleImageModelOptions = Field(default_factory=PosterTitleImageModelOptions)
-    reference_image: OssUrlRef
+    reference_image: PosterTitleImageReferenceImage
     prompt_overrides: PosterTitleImagePromptOverrides | None = None
 
     @field_validator("language")
@@ -432,6 +446,38 @@ class PosterTitleImageParams(StrictBaseModel):
 class PosterTitleImageRuntimeFields(StrictBaseModel):
     model_id: str = Field(default="gpt-image-2", min_length=1, max_length=128)
     operation: Literal["poster_title_image"] = "poster_title_image"
+
+
+class PosterTitleImageStyleProbeParams(StrictBaseModel):
+    style_key: str = Field(min_length=1)
+    reference_image: PosterTitleImageReferenceImage
+    style_prompt: str = Field(min_length=1, max_length=8000)
+
+
+class PosterTitleImageStyleProbeRuntimeFields(StrictBaseModel):
+    operation: Literal["poster_title_image_style_probe"] = "poster_title_image_style_probe"
+    model_id: str = Field(min_length=1, max_length=128)
+
+
+class PosterTitleImageDurationMs(StrictBaseModel):
+    ai_model: int = Field(ge=0)
+    total: int = Field(ge=0)
+
+
+class PosterTitleImageStyleProbeResult(StrictBaseModel):
+    style_key: str = Field(min_length=1)
+    style_desc: str = Field(min_length=1)
+    duration_ms: PosterTitleImageDurationMs
+
+
+class PosterTitleImageGenerateItemParams(StrictBaseModel):
+    item: PosterTitleImageItemParams
+    probe_node_key: str = Field(min_length=1, max_length=128)
+
+
+class PosterTitleImageGenerateItemRuntimeFields(StrictBaseModel):
+    operation: Literal["poster_title_image_generate_item"] = "poster_title_image_generate_item"
+    model_id: str = Field(min_length=1, max_length=128)
 
 
 PosterTitleImageItemStatus = Literal["pending", "running", "succeeded", "failed"]
@@ -477,9 +523,22 @@ class PosterTitleImageBatchSummary(StrictBaseModel):
     pending: int = Field(ge=0)
 
 
-class PosterTitleImageDurationMs(StrictBaseModel):
-    ai_model: int = Field(ge=0)
-    total: int = Field(ge=0)
+class PosterTitleImageGenerateItemResult(StrictBaseModel):
+    item: PosterTitleImageResultItem
+    duration_ms: PosterTitleImageDurationMs
+
+
+class PosterTitleImageJoinParams(StrictBaseModel):
+    items: list[PosterTitleImageItemParams] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_items_contract(self) -> "PosterTitleImageJoinParams":
+        PosterTitleImageParams.model_validate({"items": [item.model_dump() for item in self.items]})
+        return self
+
+
+class PosterTitleImageJoinRuntimeFields(StrictBaseModel):
+    operation: Literal["poster_title_image_join"] = "poster_title_image_join"
 
 
 class PosterTitleImageResult(StrictBaseModel):

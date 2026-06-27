@@ -140,10 +140,11 @@ async def reconcile_workflow_root(
     if not created_attempt_ids and all_required_succeeded:
         outcome = "partial_success" if first_failed_child is not None else "success"
         result = _root_success_result(root_job, workflow_plan, nodes, children, outcome=outcome)
+        public_result = _root_public_result(root_job, result)
         finalized = await JobRepo.mark_workflow_root_succeeded(
             db,
             root_job.id,
-            result=result,
+            result=public_result,
             canonical_result=result,
         )
         return WorkflowAdvanceResult(
@@ -161,10 +162,11 @@ async def reconcile_workflow_root(
     ):
         if workflow_plan["failure_policy"] == "allow_partial" and _any_required_child_succeeded(nodes, children):
             result = _root_success_result(root_job, workflow_plan, nodes, children, outcome="partial_success")
+            public_result = _root_public_result(root_job, result)
             finalized = await JobRepo.mark_workflow_root_succeeded(
                 db,
                 root_job.id,
-                result=result,
+                result=public_result,
                 canonical_result=result,
             )
             return WorkflowAdvanceResult(
@@ -374,6 +376,14 @@ def _root_success_result(
             "nodes": node_results,
         },
     }
+
+
+def _root_public_result(root_job: Job, canonical_result: dict[str, Any]) -> dict[str, Any]:
+    if root_job.job_type != "poster_title_image":
+        return canonical_result
+    from app.jobs.types.poster_title_image.executor import _extract_join_result
+
+    return _extract_join_result(canonical_result)
 
 
 def _root_failure_error(child: Job) -> dict[str, Any]:

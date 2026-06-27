@@ -97,6 +97,20 @@ def test_poster_title_image_response_model_config_defaults_and_overrides():
     assert custom_settings.registry.poster_title_image_response_model_id == "gpt-4o"
 
 
+def test_poster_title_image_max_draw_count_config_defaults_and_overrides():
+    default_settings = _build_settings()
+    assert default_settings.job.poster_title_image_max_draw_count == 4
+
+    custom_settings = _build_settings(POSTER_TITLE_IMAGE_MAX_DRAW_COUNT=2)
+    assert custom_settings.job.poster_title_image_max_draw_count == 2
+
+    with pytest.raises(ValidationError, match="POSTER_TITLE_IMAGE_MAX_DRAW_COUNT"):
+        _build_settings(POSTER_TITLE_IMAGE_MAX_DRAW_COUNT=0)
+
+    with pytest.raises(ValidationError, match="POSTER_TITLE_IMAGE_MAX_DRAW_COUNT"):
+        _build_settings(POSTER_TITLE_IMAGE_MAX_DRAW_COUNT=5)
+
+
 def test_settings_rejects_unknown_poster_title_image_response_model():
     with pytest.raises(ValidationError, match="POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID"):
         _build_settings(POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID="missing-model")

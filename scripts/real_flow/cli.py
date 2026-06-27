@@ -31,6 +31,7 @@ HELP_EPILOG = """\b
   ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini --json
   ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png --signed-url-expires-seconds 3600 --json
   ./scripts/real-flow.sh poster-title-image --confirm-cost --model-id gpt-image-2 --language es --title-text "Cuando el amor se alejo" --json
+  ./scripts/real-flow.sh poster-title-image --confirm-cost --items-json .data/title/poster-items.json --json
   ./scripts/real-flow.sh poster-title-image --confirm-cost --language es --title-text "Cuando el amor se alejo" --download-outputs --json
 
 \b
@@ -268,6 +269,10 @@ def poster_title_image_command(
         str,
         typer.Option("--reference-image", help="本地参考标题图；STORAGE_BACKEND=local 写入本地对象存储，aliyun_oss 上传到阿里云 OSS。"),
     ] = poster_title_image.DEFAULT_REFERENCE_IMAGE,
+    items_json: Annotated[
+        str | None,
+        typer.Option("--items-json", help="多 item JSON 文件；支持每个 item 指定 language/title_text/reference。传入后忽略单 item 参考图与文案参数。"),
+    ] = None,
     reference_public_url: Annotated[
         str | None,
         typer.Option("--reference-public-url", help="已有 OSS URL Ref 的 public_url；传入后不会 stage 本地文件。"),
@@ -312,18 +317,6 @@ def poster_title_image_command(
         int,
         typer.Option("--draw-count", min=1, max=4, help="生成张数。"),
     ] = 1,
-    style_probe: Annotated[
-        str | None,
-        typer.Option("--style-probe", help="覆盖 style_probe prompt。"),
-    ] = None,
-    additional_prompt: Annotated[
-        str | None,
-        typer.Option("--additional-prompt", help="覆盖 additional_prompt。"),
-    ] = None,
-    layout_rules: Annotated[
-        str | None,
-        typer.Option("--layout-rules", help="覆盖 layout_rules。"),
-    ] = None,
     caller_id: Annotated[
         str,
         typer.Option("--caller-id", help="X-AI-Service-Caller-ID。"),
@@ -362,6 +355,7 @@ def poster_title_image_command(
             confirm_cost=confirm_cost,
             confirm_upload=confirm_upload,
             api_url=api_url,
+            items_json=items_json,
             reference_image=reference_image,
             reference_public_url=reference_public_url,
             reference_internal_url=reference_internal_url,
@@ -374,9 +368,6 @@ def poster_title_image_command(
             size=size,
             quality=quality,
             draw_count=draw_count,
-            style_probe=style_probe,
-            additional_prompt=additional_prompt,
-            layout_rules=layout_rules,
             caller_id=caller_id,
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
