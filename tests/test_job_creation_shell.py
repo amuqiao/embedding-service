@@ -388,7 +388,6 @@ async def test_create_job_rejects_poster_title_image_reference_outside_allowlist
                         "item_id": "es",
                         "language": "es",
                         "title_text": "Cuando el amor se alejo",
-                        "model_id": "gpt-image-2",
                         "reference_image": {
                             "public_url": "https://not-allowed.oss-local.aliyuncs.com/reference/title.png",
                             "internal_url": "https://not-allowed.oss-local-internal.aliyuncs.com/reference/title.png",

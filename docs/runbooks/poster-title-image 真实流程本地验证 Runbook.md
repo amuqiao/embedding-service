@@ -88,7 +88,7 @@
 
 可选字段：
 
-- `model_id`：默认使用命令行 `--model-id`。
+- `model_id`：默认不传，由服务端 `poster_title_image` 默认生图模型决定。
 - `size`：默认使用命令行 `--size`。
 - `quality`：默认使用命令行 `--quality`。
 - `draw_count`：默认使用命令行 `--draw-count`，范围是 `1` 到 `4`。

@@ -117,7 +117,6 @@ def test_real_flow_builds_poster_title_image_payload():
         "item_id": "es",
         "language": "es",
         "title_text": "Cuando el amor se alejo",
-        "model_id": "gpt-image-2",
         "model_options": {
             "size": "auto",
             "quality": "high",
@@ -136,7 +135,7 @@ def test_real_flow_builds_poster_title_image_payload():
     assert payload["client_request_id"] == "poster-client-1"
     assert payload["job_type"] == "poster_title_image"
     item = payload["job_params"]["items"][0]
-    assert item["model_id"] == "gpt-image-2"
+    assert "model_id" not in item
     assert item["model_options"] == {
         "size": "auto",
         "quality": "high",
@@ -148,7 +147,7 @@ def test_real_flow_builds_poster_title_image_payload():
     assert "prompt_overrides" not in item
 
 
-def test_real_flow_builds_poster_title_image_payload_with_custom_image_model():
+def test_real_flow_builds_poster_title_image_payload_with_caller_model_id():
     reference = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/title.png",
         "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/title.png",
@@ -302,7 +301,6 @@ def test_poster_title_image_run_supports_items_json_with_multiple_references(tmp
         reference_internal_url=None,
         reference_sha256=None,
         reference_content_type="image/png",
-        model_id="gpt-image-2",
         item_id="ignored",
         language="es",
         title_text="ignored",
@@ -348,18 +346,16 @@ def test_poster_title_image_items_json_rejects_explicit_invalid_values(monkeypat
             [{**base_item, "draw_count": 0}],
             app_env={"STORAGE_BACKEND": "local"},
             confirm_upload=False,
-            model_id="gpt-image-2",
             size="auto",
             quality="high",
             draw_count=1,
         )
 
-    with pytest.raises(poster_title_image.FlowError, match="model_id is required"):
+    with pytest.raises(poster_title_image.FlowError, match="model_id"):
         poster_title_image.build_items_from_json(
             [{**base_item, "model_id": ""}],
             app_env={"STORAGE_BACKEND": "local"},
             confirm_upload=False,
-            model_id="gpt-image-2",
             size="auto",
             quality="high",
             draw_count=1,
@@ -731,7 +727,6 @@ def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, c
         reference_internal_url=None,
         reference_sha256=None,
         reference_content_type="image/png",
-        model_id="gpt-image-2",
         item_id="es",
         language="es",
         title_text="Cuando el amor se alejo",
@@ -751,7 +746,7 @@ def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, c
     assert calls[0]["method"] == "POST"
     assert calls[0]["payload"]["job_type"] == "poster_title_image"
     item = calls[0]["payload"]["job_params"]["items"][0]
-    assert item["model_id"] == "gpt-image-2"
+    assert "model_id" not in item
     assert item["reference_image"]["sha256"] == poster_title_image._bare_sha256(reference_data)
     assert calls[1]["url"] == "http://127.0.0.1:18200/api/v1/ai-jobs/jobs/poster-job-1/billing"
     staged = list((tmp_path / "storage/objects/local-dev/real-flow/poster-title-image/reference").glob("**/英语.png"))
@@ -868,7 +863,6 @@ def test_poster_title_image_downloads_all_output_artifacts(tmp_path, monkeypatch
         reference_internal_url=None,
         reference_sha256=None,
         reference_content_type="image/png",
-        model_id="gpt-image-2",
         item_id="es",
         language="es",
         title_text="Cuando el amor se alejo",
@@ -1115,7 +1109,6 @@ def test_real_flow_run_uploads_poster_reference_when_aliyun_oss_enabled(tmp_path
         reference_internal_url=None,
         reference_sha256=None,
         reference_content_type="image/png",
-        model_id="gpt-image-2",
         item_id="es",
         language="es",
         title_text="Cuando el amor se alejo",
@@ -1292,7 +1285,6 @@ def test_real_flow_run_uses_script_env_reference_url_ref_by_default(tmp_path, mo
         reference_internal_url=None,
         reference_sha256=None,
         reference_content_type=None,
-        model_id="gpt-image-2",
         item_id="es",
         language="es",
         title_text="Cuando el amor se alejo",
@@ -1369,7 +1361,6 @@ def test_poster_title_image_keeps_uploaded_reference_when_create_response_is_unk
             reference_internal_url=None,
             reference_sha256=None,
             reference_content_type="image/png",
-            model_id="gpt-image-2",
             item_id="es",
             language="es",
             title_text="Cuando el amor se alejo",
@@ -1453,7 +1444,6 @@ def test_poster_title_image_cleans_uploaded_reference_when_failure_happens_befor
             reference_internal_url=None,
             reference_sha256=None,
             reference_content_type="image/png",
-            model_id="gpt-image-2",
             item_id="es",
             language="es",
             title_text="Cuando el amor se alejo",

@@ -98,7 +98,6 @@ def test_poster_title_image_workflow_dedupes_style_probe_by_reference_and_prompt
     }
     base_item = {
         "title_text": "Title",
-        "model_id": "gpt-image-2",
         "model_options": {
             "size": "auto",
             "quality": "high",
@@ -159,7 +158,6 @@ def test_poster_title_image_workflow_node_keys_do_not_collide_for_sanitized_item
     }
     base_item = {
         "title_text": "Title",
-        "model_id": "gpt-image-2",
         "model_options": {
             "size": "auto",
             "quality": "high",

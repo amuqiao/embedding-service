@@ -15,7 +15,6 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
   ./scripts/real-flow.sh poster-title-image \\
     --confirm-cost \\
     --reference .data/title/英语.png \\
-    --model-id gpt-image-2 \\
     --language es \\
     --title-text "Cuando el amor se alejo" \\
     --json
@@ -87,7 +86,7 @@ items-json 最小格式：
 \b
 语种与输出：
   poster_title_image 当前支持 ja / ko / ar / th / ru / fr / de / es / pt / pl。
-  同一 Job 内 item_id 和 language 都必须唯一；同一 Job 内所有 item 的 model_id 必须一致。
+  同一 Job 内 item_id 和 language 都必须唯一；不传 --model-id 时使用服务端 poster_title_image 默认生图模型。
   --download-outputs 默认保存到 .data/real-flow/poster-title-image/<job_id>/<item_id>-<language>/。
 """
 
@@ -377,9 +376,9 @@ def poster_title_image_command(
         typer.Option("--reference-content-type", help="参考图 MIME type；本地文件默认按扩展名推断。"),
     ] = None,
     model_id: Annotated[
-        str,
-        typer.Option("--model-id", help="图片生成模型 ID；默认 gpt-image-2。"),
-    ] = poster_title_image.DEFAULT_IMAGE_MODEL_ID,
+        str | None,
+        typer.Option("--model-id", help="图片生成模型 ID；不传时使用服务端 poster_title_image 默认模型。"),
+    ] = None,
     item_id: Annotated[
         str,
         typer.Option("--item-id", help="poster_title_image item_id。"),

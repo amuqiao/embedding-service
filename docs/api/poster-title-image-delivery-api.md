@@ -153,7 +153,7 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 
 获取 AI 服务当前可用的基础模型列表。该接口不接收 `job_type`，不返回 `poster_title_image` 业务参数。
 
-本节只给出调用方需要读取的最小字段示例；共享模型目录的完整响应字段以双方最终发布的共享目录合同为准。`poster_title_image` 是否允许使用某个 `model_id`，只由任务创建接口的约束和服务端校验决定。
+本节只给出调用方需要读取的最小字段示例；共享模型目录的完整响应字段以双方最终发布的共享目录合同为准。`poster_title_image` 首版允许调用方传入 `items[].model_id`，但必须命中服务端配置的 `poster_title_image` 生图模型 allowlist。
 
 ### Method / Path
 
@@ -183,7 +183,7 @@ GET /api/v1/ai-jobs/models
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `models[].model_id` | string | 提交任务时使用的模型 ID |
+| `models[].model_id` | string | 服务级模型 ID；`poster_title_image` 只接受任务创建接口约束允许的子集 |
 | `models[].display_name` | string | 展示名称 |
 | `models[].provider` | string | 模型供应方标识 |
 
@@ -249,7 +249,7 @@ GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
 |---|---:|---|
 | `job_type` | 否 | 当前默认值为 `poster_title_image`；显式传入时也必须为 `poster_title_image` |
 
-当前实现不接收 `language`、`model_id` 或 `schema_version` 作为模板查询条件。语言、模型和 item 级差异由创建任务时的 `job_params.items[]` 与 `prompt_overrides` 表达。
+当前实现不接收 `language`、`model_id` 或 `schema_version` 作为模板查询条件。语言和 item 级提示词差异由创建任务时的 `job_params.items[]` 与 `prompt_overrides` 表达。
 
 ### Response
 
@@ -401,7 +401,7 @@ POST /api/v1/ai-jobs/jobs
 | `job_params.items[].item_id` | string | 是 | 调用方提供的稳定 item 关联键；同一任务内唯一 |
 | `job_params.items[].language` | string | 是 | 语种代码，必须来自共享语言列表并符合本接口约束；首版同一任务内必须唯一 |
 | `job_params.items[].title_text` | string | 是 | 目标语种标题文本 |
-| `job_params.items[].model_id` | string | 是 | 模型 ID，来自模型获取接口 |
+| `job_params.items[].model_id` | string | 否 | 标题图生图模型 ID；不传时使用服务端 `poster_title_image` 默认生图模型 |
 | `job_params.items[].model_options.size` | string | 是 | 目标输出尺寸 |
 | `job_params.items[].model_options.quality` | string | 是 | 目标输出质量 |
 | `job_params.items[].model_options.draw_count` | integer | 否 | 该 item 返回的标题图片候选数量，默认 1，范围 1 到 4，且不能超过服务端 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` |
@@ -427,7 +427,7 @@ POST /api/v1/ai-jobs/jobs
 | `job_params.items[].item_id` | 1 到 64 个字符；同一任务内唯一 |
 | `job_params.items[].language` | `ja`、`ko`、`ar`、`th`、`ru`、`fr`、`de`、`es`、`pt`、`pl`；首版同一任务内唯一 |
 | `job_params.items[].title_text` | 1 到 200 个字符 |
-| `job_params.items[].model_id` | 首版固定为 `gpt-image-2` |
+| `job_params.items[].model_id` | 可省略；首版默认和 allowlist 均为 `gpt-image-2`；同一任务内必须一致 |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
 | `job_params.items[].model_options.quality` | `low`、`medium`、`high`、`auto` |
 | `job_params.items[].model_options.draw_count` | 1 到 4，且不能超过服务端 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` |
@@ -446,7 +446,7 @@ POST /api/v1/ai-jobs/jobs
 
 - `model_options.background` 只表达业务输出目标，例如 `transparent`；本接口不暴露 `chroma_key_color`、抠图方式或后处理参数。
 - 首版不接收海报底图，不返回合成海报或贴图坐标，只返回生成的标题图片。
-- 每个 item 是独立业务单元，显式声明自己的模型、模型参数、参考图和提示词覆盖；不同 item 可以传入相同 `reference_image`。
+- 每个 item 是独立业务单元，显式声明自己的模型参数、参考图和提示词覆盖；不同 item 可以传入相同 `reference_image`。
 - 同一任务内 `items[].item_id` 必须唯一，并作为请求 item 与结果 item 的主关联键。
 - 首版同一任务内 `items[].language` 也必须唯一；如果未来允许同一语言多版本，仍以 `item_id` 关联结果。
 - 不提供 `batch_options`。首版批量策略固定为 item 独立执行、root Job 最后 join/finalize。

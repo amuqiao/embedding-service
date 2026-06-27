@@ -28,6 +28,7 @@
 | API 前缀 | 按业务服务确定 `SERVICE_API_PREFIX`，默认 `/api/v1/ai-jobs` 可保留 |
 | 数据库与 Redis | 为新服务使用独立 database 和独立 Redis URL/实例 |
 | 模型配置 | 按业务更新 `MODEL_CONFIG_PATH` 指向的模型目录和 required env |
+| `poster_title_image` 模型配置 | 使用 `poster_title_image` 时，确认 `POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID`、`POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID` 和 `POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS` 都存在于模型目录且能力匹配 |
 | Prompt 配置 | 按业务更新 `PROMPT_CONFIG_PATH` 和 Prompt/output schema 绑定 |
 | 价格配置 | 如果启用 billing，更新 `PRICING_CONFIG_PATH`，并保留 ledger 事实源 |
 | 对象存储 | 多副本或平台部署不能使用 `STORAGE_BACKEND=local`，应接外部对象存储 |

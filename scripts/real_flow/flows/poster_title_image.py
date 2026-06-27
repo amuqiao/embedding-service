@@ -337,10 +337,10 @@ def build_items_from_json(
     *,
     app_env: dict[str, str],
     confirm_upload: bool,
-    model_id: str,
     size: str,
     quality: str,
     draw_count: int,
+    model_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ReferenceImageResolution]]:
     items: list[dict[str, Any]] = []
     resolutions: list[ReferenceImageResolution] = []
@@ -353,12 +353,11 @@ def build_items_from_json(
             confirm_upload=confirm_upload,
         )
         resolutions.append(resolution)
-        item_model_id = _optional_str(raw, "model_id", model_id)
+        item_model_id = _optional_str(raw, "model_id", model_id) if model_id is not None or "model_id" in raw else None
         item = {
             "item_id": _required_str(raw.get("item_id"), field="item_id"),
             "language": _required_str(raw.get("language"), field="language"),
             "title_text": _required_str(raw.get("title_text"), field="title_text"),
-            "model_id": item_model_id,
             "model_options": {
                 "size": _optional_str(raw, "size", size),
                 "quality": _optional_str(raw, "quality", quality),
@@ -368,6 +367,8 @@ def build_items_from_json(
             },
             "reference_image": resolution.ref,
         }
+        if item_model_id is not None:
+            item["model_id"] = item_model_id
         items.append(item)
     return items, resolutions
 
@@ -684,7 +685,6 @@ def run(
     reference_internal_url: str | None,
     reference_sha256: str | None,
     reference_content_type: str | None,
-    model_id: str,
     item_id: str,
     language: str,
     title_text: str,
@@ -699,6 +699,7 @@ def run(
     download_outputs: bool = False,
     output_dir: str = DEFAULT_OUTPUT_DIR,
     signed_url_expires_seconds: int = 3600,
+    model_id: str | None = None,
 ) -> None:
     if not confirm_cost:
         raise FlowError("poster title image flow requires --confirm-cost", exit_code=2)
@@ -751,7 +752,6 @@ def run(
                     "item_id": item_id,
                     "language": language,
                     "title_text": title_text,
-                    "model_id": model_id,
                     "model_options": {
                         "size": size,
                         "quality": quality,
@@ -762,6 +762,8 @@ def run(
                     "reference_image": resolution.ref,
                 }
             ]
+            if model_id is not None:
+                items[0]["model_id"] = model_id
         payload = build_job_payload(items=items, client_request_id=client_request_id)
         create_attempted = True
         create_envelope = llm_job_billing.request_json(jobs_url, method="POST", headers=headers, payload=payload)

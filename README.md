@@ -97,7 +97,7 @@ Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts
 
 模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML，配置项包括对外 `model_id`、`model_type`、`adapter`、`provider_model`、`adapter_model`、所需环境变量、`limits` / `features` 类型化元信息、内部模型调用参数和可由 `/models` 展示的 `parameters.public`。
 
-`poster_title_image` 的 Responses 宿主模型由服务端 `POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID` 配置，默认 `gpt-5.5`；该模型用于风格探针和 `image_generation` tool 调用，调用方不能通过 Job 参数覆盖。
+`poster_title_image` 的风格探针模型由服务端 `POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID` 配置，默认 `gpt-5.5`；当前该模型也作为 OpenAI Responses 生图调用宿主模型。标题图默认生图模型由 `POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID` 配置，默认 `gpt-image-2`；调用方可传的生图模型范围由 `POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS` 配置，首版默认仅 `gpt-image-2`。这些模型都必须存在于 `MODEL_CONFIG_PATH` 指向的模型目录并满足对应能力约束。
 
 `poster_title_image` 的单 item 候选图上限由 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` 配置，默认 4；该值只能在接口硬上限 `1..4` 内收紧，不能把业务能力放大到 4 以上。
 

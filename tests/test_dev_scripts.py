@@ -682,7 +682,6 @@ def test_jobs_show_default_is_human_readable(monkeypatch):
                     {
                         "item_id": "es",
                         "language": "es",
-                        "model_id": "gpt-image-2",
                         "title_text": "Cuando el amor se alejo",
                     }
                 ]
@@ -1605,7 +1604,9 @@ def _release_env_file_content(*, storage_backend: str = "aliyun_oss") -> str:
         "ALLOW_INSECURE_CALLBACKS=false",
         f"STORAGE_BACKEND={storage_backend}",
         "DEFAULT_MODEL_ID=gpt-5.5",
-        "POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID=gpt-5.5",
+        "POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID=gpt-5.5",
+        "POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID=gpt-image-2",
+        "POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS=gpt-image-2",
     ]
     if storage_backend == "aliyun_oss":
         lines.extend(
@@ -1676,7 +1677,9 @@ def test_env_config_check_env_file_validation_ignores_root_dotenv(tmp_path):
                 "OSS_ACCESS_KEY_SECRET=access-key-secret",
                 "OSS_PROJECT_ROOT=project/root",
                 "DEFAULT_MODEL_ID=gpt-5.5",
-                "POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID=gpt-5.5",
+                "POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID=gpt-5.5",
+                "POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID=gpt-image-2",
+                "POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS=gpt-image-2",
             ]
         )
         + "\n",

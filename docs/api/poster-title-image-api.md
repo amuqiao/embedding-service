@@ -130,7 +130,7 @@ Rules:
 
 CPP 可以调用服务级基础模型目录 `GET /api/v1/ai-jobs/models` 渲染模型名称。该接口只返回模型基础信息，不接收 `job_type`，不返回 `poster_title_image` 业务字段。
 
-本文不定义 `/models` 的响应结构；该接口的权威合同以 [`service-contract.md`](service-contract.md) 为准。`poster_title_image` 是否允许使用某个 `model_id`，只由本文 `POST /jobs` 的 Job constraints 和服务端校验决定。
+本文不定义 `/models` 的响应结构；该接口的权威合同以 [`service-contract.md`](service-contract.md) 为准。`poster_title_image` 首版允许调用方传入 `items[].model_id`，但必须命中服务端配置的 `poster_title_image` 生图模型 allowlist。
 
 ## 2. Shared Language Catalog
 
@@ -140,12 +140,12 @@ CPP 可以调用服务级基础语言目录 `GET /api/v1/ai-jobs/languages` 渲�
 
 ## 3. Prompt Templates
 
-> vNext route contract：当前实现是否已支持按 `job_type`、`language`、`model_id` 和分组返回提示词，以 [`service-contract.md`](service-contract.md) 为准。
+> vNext route contract：当前实现是否已支持按 `job_type`、`language` 和分组返回提示词，以 [`service-contract.md`](service-contract.md) 为准。
 
 ### Method / Path
 
 ```http
-GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image&language=es&model_id=gpt-image-2
+GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image&language=es
 ```
 
 ### Purpose
@@ -158,7 +158,6 @@ CPP 用该接口获取指定 `job_type` 下的默认提示词。提示词按组�
 |---|---:|---|
 | `job_type` | 是 | 固定为 `poster_title_image` |
 | `language` | 否 | 语言特化提示词；不传时返回通用默认提示词 |
-| `model_id` | 否 | 模型特化提示词；不传时返回该 `job_type` 的默认模型提示词 |
 | `schema_version` | 否 | 提示词 schema 版本；不传时默认为 `default` |
 
 ### Response
@@ -171,7 +170,6 @@ CPP 用该接口获取指定 `job_type` 下的默认提示词。提示词按组�
     "schema_version": "default",
     "job_type": "poster_title_image",
     "language": "es",
-    "model_id": "gpt-image-2",
     "groups": [
       {
         "group_key": "style_probe",
@@ -220,7 +218,7 @@ Rules:
 
 - `job_type` 是主索引，必须传。
 - `schema_version` 默认值为 `default`；同一接口不再同时返回 `prompt_set_version`。
-- `language` 和 `model_id` 是可选过滤条件。只有确实存在语言或模型差异时，AI 服务才需要维护对应特化提示词。
+- `language` 是可选过滤条件。只有确实存在语言差异时，AI 服务才需要维护对应特化提示词。
 - `group_key` 和 `prompt_key` 是稳定合同，CPP 可按它们回填临时修改。
 - `prompt_ref` 是 AI 服务返回的引用，调用方不应拼接或推导。
 - 核心系统提示词、输出 schema、透明图处理约束和安全边界不在该接口暴露，也不允许 CPP 覆盖。
@@ -322,7 +320,7 @@ Field rules:
 | `job_params.items[].item_id` | 是 | 调用方提供的稳定 item 关联键；同一 Job 内唯一，不应由服务端推导 |
 | `job_params.items[].language` | 是 | 语种代码，必须来自共享语言列表并符合本接口 Job 约束 |
 | `job_params.items[].title_text` | 是 | 目标语言标题文本 |
-| `job_params.items[].model_id` | 是 | 来自模型列表接口，且必须符合本接口 Job 约束 |
+| `job_params.items[].model_id` | 否 | 标题图生图模型 ID；不传时使用服务端 `poster_title_image` 默认生图模型 |
 | `job_params.items[].model_options.size` | 是 | 目标输出尺寸 |
 | `job_params.items[].model_options.quality` | 是 | 目标输出质量 |
 | `job_params.items[].model_options.draw_count` | 否 | 默认 1，表示该 item 需要返回的标题图片候选数量 |
@@ -349,7 +347,7 @@ Job constraints:
 | `job_params.items[].item_id` | 1 到 64 个字符；同一 Job 内唯一 |
 | `job_params.items[].language` | `ja`、`ko`、`ar`、`th`、`ru`、`fr`、`de`、`es`、`pt`、`pl`；首版同一 Job 内唯一 |
 | `job_params.items[].title_text` | 1 到 200 个字符 |
-| `job_params.items[].model_id` | 首版固定为 `gpt-image-2` |
+| `job_params.items[].model_id` | 可省略；首版默认和 allowlist 均为 `gpt-image-2`；同一 Job 内必须一致 |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
 | `job_params.items[].model_options.quality` | `low`、`medium`、`high`、`auto` |
 | `job_params.items[].model_options.draw_count` | 1 到 4，且不能超过服务端 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` |

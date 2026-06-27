@@ -16,8 +16,12 @@ def _settings_kwargs(**overrides):
         "CALLBACK_RETRY_DELAY_SECONDS": 300,
     }
     values.update(overrides)
-    if "MODEL_CONFIG_PATH" in values and "POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID" not in values:
-        values["POSTER_TITLE_IMAGE_RESPONSE_MODEL_ID"] = values.get("DEFAULT_MODEL_ID", "custom-model")
+    if "MODEL_CONFIG_PATH" in values and "POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID" not in values:
+        values["POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID"] = "custom-style-probe-model"
+    if "MODEL_CONFIG_PATH" in values and "POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID" not in values:
+        values["POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID"] = "custom-image-model"
+    if "MODEL_CONFIG_PATH" in values and "POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS" not in values:
+        values["POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS"] = "custom-image-model"
     return values
 
 
@@ -46,6 +50,8 @@ class _SettingsProxy:
         self.observability = settings_obj.observability
 
     def application_env_value(self, name: str) -> str:
+        if name == "TEST_POSTER_MODEL_KEY":
+            return ""
         return self._settings.application_env_value(name)
 
     def __getattr__(self, name: str):
@@ -57,6 +63,81 @@ class _SettingsProxy:
         if name in legacy:
             return legacy[name]
         return getattr(self._settings, name)
+
+
+def _poster_hidden_model_config() -> str:
+    return """\
+
+  - id: custom-style-probe-model
+    name: Custom Style Probe Model
+    model_type: text
+    adapter: litellm
+    provider: openai
+    provider_model: custom-style-probe-model
+    adapter_model: openai/custom-style-probe-model
+    pricing_ref: openai:custom-style-probe-model@2026-06-23
+    enabled: true
+    capabilities:
+      - text_generation
+      - multimodal_text_generation
+    input_media_types:
+      - text/plain
+      - image/png
+    output_media_types:
+      - text/plain
+    limits:
+      context_window: 12345
+    features:
+      supports_json_output: true
+      supports_image_generation_tool: true
+    parameters:
+      public:
+        - name: poster_hidden
+          label: Poster hidden
+          type: boolean
+          required: false
+          default: true
+    notes: ""
+    requires_env:
+      - TEST_POSTER_MODEL_KEY
+    generation:
+      temperature: 0.2
+      num_retries: 1
+      drop_params: false
+
+  - id: custom-image-model
+    name: Custom Image Model
+    model_type: image
+    adapter: litellm
+    provider: openai
+    provider_model: custom-image-model
+    adapter_model: openai/custom-image-model
+    pricing_ref: openai:custom-image-model@2026-06-23
+    enabled: true
+    capabilities:
+      - image_generation
+      - image_edit
+    input_media_types:
+      - text/plain
+      - image/png
+    output_media_types:
+      - image/png
+    limits:
+      max_output_count: 4
+    features:
+      supports_edit: true
+      native_transparency: false
+    parameters:
+      public:
+        - name: poster_hidden
+          label: Poster hidden
+          type: boolean
+          required: false
+          default: true
+    notes: ""
+    requires_env:
+      - TEST_POSTER_MODEL_KEY
+"""
 
 
 def _write_model_config(path, requires_env: str = "OPENAI_API_KEY") -> None:
@@ -92,6 +173,8 @@ models:
       temperature: 0.2
       num_retries: 1
       drop_params: false
+
+{_poster_hidden_model_config()}
 """,
         encoding="utf-8",
     )
@@ -178,39 +261,13 @@ def test_model_registry_rejects_invalid_model_config(tmp_path, monkeypatch):
 
 def test_model_registry_validate_catalog_rejects_pricing_mismatch(tmp_path, monkeypatch):
     config_path = tmp_path / "models.yaml"
+    _write_model_config(config_path)
     config_path.write_text(
-        """\
-version: "1"
-models:
-  - id: custom-model
-    name: Custom Model
-    model_type: text
-    adapter: litellm
-    provider: openai
-    provider_model: custom-model
-    adapter_model: openai/custom-model
-    pricing_ref: openai:gpt-5.5@2026-06-23
-    enabled: true
-    capabilities:
-      - text_generation
-    input_media_types:
-      - text/plain
-    output_media_types:
-      - text/plain
-    limits:
-      context_window: 12345
-    features:
-      supports_json_output: true
-    parameters:
-      public: []
-    notes: ""
-    requires_env:
-      - OPENAI_API_KEY
-    generation:
-      temperature: 0.2
-      num_retries: 1
-      drop_params: false
-""",
+        config_path.read_text(encoding="utf-8").replace(
+            "pricing_ref: openai:custom-model@2026-06-23",
+            "pricing_ref: openai:gpt-5.5@2026-06-23",
+            1,
+        ),
         encoding="utf-8",
     )
     test_settings = _build_settings(
@@ -356,7 +413,7 @@ models:
     notes: ""
     requires_env:
       - OPENAI_API_KEY
-""",
+""" + _poster_hidden_model_config(),
         encoding="utf-8",
     )
     test_settings = _build_settings(
@@ -382,19 +439,22 @@ def test_model_registry_model_type_does_not_constrain_capabilities_or_output_med
     _write_model_config(config_path)
     config_text = (
         config_path.read_text(encoding="utf-8")
-        .replace("model_type: text", "model_type: audio")
-        .replace("output_media_types:\n      - text/plain", "output_media_types:\n      - text/plain")
+        .replace("model_type: text", "model_type: audio", 1)
+        .replace("output_media_types:\n      - text/plain", "output_media_types:\n      - text/plain", 1)
         .replace(
             "limits:\n      context_window: 12345",
             "limits:\n      max_input_seconds: 600",
+            1,
         )
         .replace(
             "features:\n      supports_json_output: true",
             "features:\n      supports_transcription: true",
+            1,
         )
         .replace(
             "    generation:\n      temperature: 0.2\n      num_retries: 1\n      drop_params: false\n",
             "",
+            1,
         )
     )
     config_path.write_text(config_text, encoding="utf-8")
@@ -559,7 +619,7 @@ def test_model_registry_rejects_invalid_public_parameters(tmp_path, monkeypatch,
 def test_model_registry_rejects_invalid_model_type_contract(tmp_path, monkeypatch, block, replacement, message):
     config_path = tmp_path / "models.yaml"
     _write_model_config(config_path)
-    config_text = config_path.read_text(encoding="utf-8").replace(block, replacement)
+    config_text = config_path.read_text(encoding="utf-8").replace(block, replacement, 1)
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
@@ -611,11 +671,11 @@ def test_model_registry_rejects_invalid_capability_or_media_contract(tmp_path, m
     _write_model_config(config_path)
     config_text = config_path.read_text(encoding="utf-8")
     if field == "capabilities":
-        config_text = config_text.replace("capabilities:\n      - text_generation", f"capabilities: {value}")
+        config_text = config_text.replace("capabilities:\n      - text_generation", f"capabilities: {value}", 1)
     elif field == "input_media_types":
-        config_text = config_text.replace("input_media_types:\n      - text/plain", f"input_media_types: {value}")
+        config_text = config_text.replace("input_media_types:\n      - text/plain", f"input_media_types: {value}", 1)
     else:
-        config_text = config_text.replace("output_media_types:\n      - text/plain", f"output_media_types: {value}")
+        config_text = config_text.replace("output_media_types:\n      - text/plain", f"output_media_types: {value}", 1)
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
@@ -646,7 +706,7 @@ def test_model_registry_rejects_invalid_capability_or_media_contract(tmp_path, m
 def test_model_registry_rejects_missing_capability_or_media_contract(tmp_path, monkeypatch, field, block, message):
     config_path = tmp_path / "models.yaml"
     _write_model_config(config_path)
-    config_text = config_path.read_text(encoding="utf-8").replace(block, "")
+    config_text = config_path.read_text(encoding="utf-8").replace(block, "", 1)
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",

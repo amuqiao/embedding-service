@@ -110,8 +110,17 @@ def test_poster_title_image_params_apply_delivery_contract_constraints():
     ref = _url_ref("reference/title.png", b"x")
     params = PosterTitleImageParams.model_validate(_params(ref))
 
-    assert params.items[0].model_id == "gpt-image-2"
     assert params.items[0].model_options.background == "transparent"
+
+    explicit = PosterTitleImageParams.model_validate(_params(ref, model_id="gpt-image-2"))
+    assert explicit.items[0].model_id == "gpt-image-2"
+
+    invalid = _params(ref)
+    second = {**invalid["items"][0], "item_id": "fr", "language": "fr", "model_id": "other-image-model"}
+    invalid["items"][0]["model_id"] = "gpt-image-2"
+    invalid["items"].append(second)
+    with pytest.raises(ValueError, match="model_id"):
+        PosterTitleImageParams.model_validate(invalid)
 
     invalid = _params(ref)
     invalid["items"][0]["reference_image"]["content_type"] = "image/jpeg"
@@ -133,12 +142,6 @@ def test_poster_title_image_params_apply_delivery_contract_constraints():
     with pytest.raises(ValueError, match="language"):
         PosterTitleImageParams.model_validate(invalid)
 
-    invalid = _params(ref)
-    second = {**invalid["items"][0], "item_id": "fr", "language": "fr", "model_id": "other-image-model"}
-    invalid["items"].append(second)
-    with pytest.raises(ValueError, match="model_id"):
-        PosterTitleImageParams.model_validate(invalid)
-
 
 def test_poster_title_image_rejects_draw_count_above_config(monkeypatch):
     monkeypatch.setattr(
@@ -149,14 +152,21 @@ def test_poster_title_image_rejects_draw_count_above_config(monkeypatch):
                 poster_title_image_allowed_oss_buckets=("local-dev",),
                 poster_title_image_allowed_oss_regions=("local",),
             ),
-            registry=SimpleNamespace(poster_title_image_response_model_id="gpt-5.5"),
+            registry=SimpleNamespace(
+                poster_title_image_style_probe_model_id="gpt-5.5",
+                poster_title_image_generation_default_model_id="gpt-image-2",
+                poster_title_image_generation_allowed_model_ids=("gpt-image-2",),
+            ),
         ),
     )
     params = _params(_url_ref("reference/title.png", b"x"))
     params["items"][0]["model_options"]["draw_count"] = 2
 
+    handler = PosterTitleImageJob()
+    normalized = handler.normalize_job_params(params)
+
     with pytest.raises(AppError) as exc:
-        PosterTitleImageJob().validate_normalized_job_params(params)
+        handler.validate_normalized_job_params(normalized)
 
     assert exc.value.code == POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT
     assert exc.value.details == {"max_draw_count": 1, "draw_count": 2}
@@ -171,7 +181,11 @@ def test_poster_title_image_accepts_configured_reference_oss_allowlist(monkeypat
                 poster_title_image_allowed_oss_buckets=("cpp-rs-dev",),
                 poster_title_image_allowed_oss_regions=("ap-southeast-1",),
             ),
-            registry=SimpleNamespace(poster_title_image_response_model_id="gpt-5.5"),
+            registry=SimpleNamespace(
+                poster_title_image_style_probe_model_id="gpt-5.5",
+                poster_title_image_generation_default_model_id="gpt-image-2",
+                poster_title_image_generation_allowed_model_ids=("gpt-image-2",),
+            ),
         ),
     )
     params = _params(
@@ -183,7 +197,8 @@ def test_poster_title_image_accepts_configured_reference_oss_allowlist(monkeypat
         )
     )
 
-    PosterTitleImageJob().validate_normalized_job_params(params)
+    handler = PosterTitleImageJob()
+    handler.validate_normalized_job_params(handler.normalize_job_params(params))
 
 
 @pytest.mark.parametrize(
@@ -199,8 +214,11 @@ def test_poster_title_image_rejects_reference_oss_outside_allowlist(ref):
 
     assert validated.items[0].reference_image.public_url == ref["public_url"]
 
+    handler = PosterTitleImageJob()
+    normalized = handler.normalize_job_params(params)
+
     with pytest.raises(AppError) as exc:
-        PosterTitleImageJob().validate_normalized_job_params(params)
+        handler.validate_normalized_job_params(normalized)
 
     assert exc.value.code == POSTER_TITLE_IMAGE_REFERENCE_INVALID
     assert exc.value.details["source_reason"] == "INVALID_INPUT"
@@ -221,67 +239,100 @@ def test_poster_title_image_create_request_does_not_require_runtime_prompt_paylo
 
     assert handler.name == "poster_title_image"
     assert job_params["items"][0]["model_id"] == "gpt-image-2"
-    assert runtime_fields == {"model_id": "gpt-image-2", "operation": "poster_title_image"}
+    assert runtime_fields == {
+        "operation": "poster_title_image",
+        "style_probe_model_id": "gpt-5.5",
+        "generation_model_id": "gpt-image-2",
+    }
 
 
-def test_poster_title_image_create_request_accepts_custom_image_model_id(monkeypatch):
+def test_poster_title_image_create_request_accepts_allowed_caller_model_id():
     from app.jobs.types.register import register_all_job_types
     from app.services.jobs import _validate_create_request
 
-    monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.IMAGE_MODEL_GATE.resolve",
-        lambda model_id, *, require_edit: object(),
-    )
     register_all_job_types()
     handler, job_params, runtime_fields = _validate_create_request(
         CreateJobRequest(
             client_request_id="poster-1",
             job_type="poster_title_image",
-            job_params=_params(_url_ref("reference/title.png", b"x"), model_id="gpt-image-custom"),
+            job_params=_params(_url_ref("reference/title.png", b"x"), model_id="gpt-image-2"),
         )
     )
 
     assert handler.name == "poster_title_image"
-    assert job_params["items"][0]["model_id"] == "gpt-image-custom"
-    assert runtime_fields == {"model_id": "gpt-image-custom", "operation": "poster_title_image"}
+    assert job_params["items"][0]["model_id"] == "gpt-image-2"
+    assert runtime_fields["generation_model_id"] == "gpt-image-2"
 
 
-def test_poster_title_image_create_request_rejects_unknown_image_model_id():
+def test_poster_title_image_create_request_rejects_model_outside_allowlist():
     from app.jobs.types.register import register_all_job_types
     from app.services.jobs import _validate_create_request
 
+    register_all_job_types()
+    with pytest.raises(AppError) as exc:
+        _validate_create_request(
+            CreateJobRequest(
+                client_request_id="poster-1",
+                job_type="poster_title_image",
+                job_params=_params(_url_ref("reference/title.png", b"x"), model_id="gpt-image-custom"),
+            )
+        )
+
+    assert exc.value.code == "INVALID_INPUT"
+    assert exc.value.details["allowed_model_ids"] == ["gpt-image-2"]
+
+
+def test_poster_title_image_create_request_rejects_unavailable_configured_generation_model(monkeypatch):
+    from app.jobs.types.register import register_all_job_types
+    from app.services.jobs import _validate_create_request
+
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.settings",
+        SimpleNamespace(
+            job=SimpleNamespace(
+                poster_title_image_max_draw_count=4,
+                poster_title_image_allowed_oss_buckets=("local-dev",),
+                poster_title_image_allowed_oss_regions=("local",),
+            ),
+            registry=SimpleNamespace(
+                poster_title_image_style_probe_model_id="gpt-5.5",
+                poster_title_image_generation_default_model_id="not-an-image-model",
+                poster_title_image_generation_allowed_model_ids=("not-an-image-model",),
+            ),
+        ),
+    )
     register_all_job_types()
     with pytest.raises(Exception, match="模型不可用"):
         _validate_create_request(
             CreateJobRequest(
                 client_request_id="poster-1",
                 job_type="poster_title_image",
-                job_params=_params(_url_ref("reference/title.png", b"x"), model_id="not-an-image-model"),
+                job_params=_params(_url_ref("reference/title.png", b"x")),
             )
         )
 
 
 def test_style_probe_response_model_supports_reference_image_input():
     result = ModelGate().resolve_multimodal_text(
-        settings.registry.poster_title_image_response_model_id,
+        settings.registry.poster_title_image_style_probe_model_id,
         required_media_types={"image/png"},
     )
 
-    assert result.resolved_model.model_id == settings.registry.poster_title_image_response_model_id
+    assert result.resolved_model.model_id == settings.registry.poster_title_image_style_probe_model_id
     assert result.resolved_model.provider_model == "gpt-5.5"
     assert result.model.features["supports_image_generation_tool"] is True
 
 
 def test_poster_title_image_response_model_requires_image_generation_tool(monkeypatch):
-    from app.jobs.types.poster_title_image.executor import _validate_response_model
+    from app.jobs.types.poster_title_image.executor import _validate_style_probe_model
 
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.settings",
-        SimpleNamespace(registry=SimpleNamespace(poster_title_image_response_model_id="gpt-4o")),
+        SimpleNamespace(registry=SimpleNamespace(poster_title_image_style_probe_model_id="gpt-4o")),
     )
 
     with pytest.raises(AppError, match="image_generation tool"):
-        _validate_response_model(required_media_types={"image/png"})
+        _validate_style_probe_model(required_media_types={"image/png"})
 
 
 def test_remove_green_background_matches_poc_chroma_key_strategy():
@@ -450,7 +501,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
 
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.output_target_from_job", lambda _job: output_target)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._response_provider_model", lambda: "gpt-5.5")
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_provider_model", lambda: "gpt-5.5")
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.generate_image_with_ledger",
@@ -541,7 +592,7 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
 
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.output_target_from_job", lambda _job: output_target)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._response_provider_model", lambda: "gpt-5.5")
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_provider_model", lambda: "gpt-5.5")
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.generate_image_with_ledger",

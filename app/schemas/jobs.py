@@ -416,7 +416,7 @@ class PosterTitleImageItemParams(StrictBaseModel):
     item_id: str = Field(min_length=1, max_length=64)
     language: str = Field(min_length=1, max_length=16)
     title_text: str = Field(min_length=1, max_length=200)
-    model_id: str = Field(default="gpt-image-2", min_length=1, max_length=128)
+    model_id: str | None = Field(default=None, min_length=1, max_length=128)
     model_options: PosterTitleImageModelOptions = Field(default_factory=PosterTitleImageModelOptions)
     reference_image: PosterTitleImageReferenceImage
     prompt_overrides: PosterTitleImagePromptOverrides | None = None
@@ -440,15 +440,16 @@ class PosterTitleImageParams(StrictBaseModel):
         languages = [item.language for item in self.items]
         if len(languages) != len(set(languages)):
             raise ValueError("items[].language must be unique")
-        model_ids = {item.model_id for item in self.items}
-        if len(model_ids) != 1:
+        model_ids = {item.model_id for item in self.items if item.model_id is not None}
+        if len(model_ids) > 1:
             raise ValueError("items[].model_id must be the same within one poster_title_image job")
         return self
 
 
 class PosterTitleImageRuntimeFields(StrictBaseModel):
-    model_id: str = Field(default="gpt-image-2", min_length=1, max_length=128)
     operation: Literal["poster_title_image"] = "poster_title_image"
+    style_probe_model_id: str = Field(min_length=1, max_length=128)
+    generation_model_id: str = Field(min_length=1, max_length=128)
 
 
 class PosterTitleImageStyleProbeParams(StrictBaseModel):
@@ -459,7 +460,7 @@ class PosterTitleImageStyleProbeParams(StrictBaseModel):
 
 class PosterTitleImageStyleProbeRuntimeFields(StrictBaseModel):
     operation: Literal["poster_title_image_style_probe"] = "poster_title_image_style_probe"
-    model_id: str = Field(min_length=1, max_length=128)
+    style_probe_model_id: str = Field(min_length=1, max_length=128)
 
 
 class PosterTitleImageDurationMs(StrictBaseModel):
@@ -480,7 +481,7 @@ class PosterTitleImageGenerateItemParams(StrictBaseModel):
 
 class PosterTitleImageGenerateItemRuntimeFields(StrictBaseModel):
     operation: Literal["poster_title_image_generate_item"] = "poster_title_image_generate_item"
-    model_id: str = Field(min_length=1, max_length=128)
+    generation_model_id: str = Field(min_length=1, max_length=128)
 
 
 PosterTitleImageItemStatus = Literal["pending", "running", "succeeded", "failed"]
