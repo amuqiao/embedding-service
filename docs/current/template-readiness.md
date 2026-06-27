@@ -29,7 +29,7 @@
 | 数据库与 Redis | 为新服务使用独立 database 和独立 Redis URL/实例 |
 | 模型配置 | 按业务更新 `MODEL_CONFIG_PATH` 指向的模型目录和 required env |
 | `poster_title_image` 模型配置 | 使用 `poster_title_image` 时，确认 `POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID`、`POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID` 和 `POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS` 都存在于模型目录且能力匹配 |
-| Prompt 配置 | 按业务更新 `PROMPT_CONFIG_PATH` 和 Prompt/output schema 绑定 |
+| Prompt 配置 | 按业务更新 `PROMPT_CONFIG_PATH` 指向的基础配置，或维护 `app/jobs/types/<job_type>/prompts.yaml`；同步检查 Prompt/output schema 绑定 |
 | 价格配置 | 如果启用 billing，更新 `PRICING_CONFIG_PATH`，并保留 ledger 事实源 |
 | 对象存储 | 多副本或平台部署不能使用 `STORAGE_BACKEND=local`，应接外部对象存储 |
 | 业务输入 OSS 白名单 | 使用 `poster_title_image` 时，按 CPP 输入来源配置 `POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS` 和 `POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS` |
@@ -69,7 +69,7 @@
 
 - `poster_title_image` 是当前模板内的真实业务示例 `job_type`，不属于通用模板 smoke；复制模板时应按业务需要保留、替换或移除。
 - 当前稳定 Job cost 查询是 `GET /api/v1/ai-jobs/jobs/{job_id}/billing`，不是 `/cost`。
-- 非终态 Job 不返回增量 `job_result`。
+- 通用模板不保证非终态 Job 返回增量 `job_result`；具体 `job_type` 只有显式声明 `result_snapshot_statuses` 后才可返回运行中或失败态结果快照。当前 `poster_title_image` 例外支持 `running/failed` 快照，用于返回已成功生成的 item 子集。
 - `scripts/verify.sh` 的稳定命令不覆盖真实模型 e2e 或外部对象存储 e2e。
 
 ## 生产前必须确认

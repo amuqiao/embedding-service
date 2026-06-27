@@ -5,7 +5,7 @@
 ## 新增 job_type
 
 1. 在 `app/schemas/jobs.py` 中定义 Params、Runtime fields 和 Result schema。
-2. 在 `app/jobs/types/<job_type>.py` 中实现 `JobExecutor`。
+2. 在 `app/jobs/types/<job_type>.py` 或 `app/jobs/types/<job_type>/` 中实现 `JobExecutor`。简单 job 可继续使用单文件；正式业务或带 prompt、errors、workflow 的复杂 job 使用包目录，至少保留 `executor.py` 和 `__init__.py`，按需增加 `errors.py`、`prompts.yaml` 等业务内聚文件。
 3. 在 executor 上声明稳定 `name`、`visibility`、`role`、`params_schema`、`runtime_fields_schema_name`、`canonical_result_schema`、`public_result_schema` 和 retry/side-effect 元数据。
 4. 在 `app/jobs/types/register.py` 显式导入并注册。
 5. 如需模型调用，通过 `app/services/ai_gateway_facade.py` 进入，不直接调用 provider adapter。
@@ -35,7 +35,7 @@
 需要 root/child 编排时，新增业务自己的 `job_type` 和 workflow definition，不开放任意 DAG 提交。
 
 1. 在 `app/schemas/jobs.py` 中定义 root `job_type` 的 Params、Runtime fields 和 Result schema。
-2. 在 `app/jobs/types/<job_type>.py` 中实现 root `JobExecutor`，root executor 使用 `role="root"`，只声明 schema 和运行时字段；实际执行由 workflow orchestration 推进 internal child Jobs。
+2. 在 `app/jobs/types/<job_type>.py` 或 `app/jobs/types/<job_type>/` 中实现 root `JobExecutor`，root executor 使用 `role="root"`，只声明 schema 和运行时字段；实际执行由 workflow orchestration 推进 internal child Jobs。正式业务 workflow 优先使用包目录，把 root、internal child executors、workflow definition、业务错误和 prompt 模板放在同一个 `job_type` 边界内。
 3. 使用 `app.workflows` 的 `task`、`chain`、`group`、`chord`、`map_items`、`starmap_items` 或 `chunks` 生成受控 `workflow_plan`。
 4. 在 `app/jobs/types/register.py` 中注册 executor 和 workflow definition。
 5. 按业务语义选择 `failure_policy`；默认 `fail_fast`，需要容忍部分 child 失败时才显式使用 `allow_partial`。
@@ -74,10 +74,11 @@ Provider 密钥来自环境变量，不写入 YAML 或文档示例。
 
 ## 新增 Prompt 模板
 
-1. 修改 `app/core/prompts.yaml`。
-2. 保持模板 ID 稳定。
-3. 在对应 `job_type` executor 中引用模板，不在 route 层拼 prompt。
-4. 补充 prompt registry 或 workflow 测试。
+1. 共享或模板级 Prompt 修改 `PROMPT_CONFIG_PATH` 指向的配置文件，默认是 `app/core/prompts.yaml`。
+2. 正式业务包内 Prompt 放在 `app/jobs/types/<job_type>/prompts.yaml`，由 Prompt registry 自动合并。
+3. 保持模板 ID 稳定；不同配置文件之间不得重复声明同一个 prompt ref。
+4. 在对应 `job_type` executor 中引用模板，不在 route 层拼 prompt。
+5. 补充 prompt registry 或 workflow 测试。
 
 ## 新增对象存储产物
 

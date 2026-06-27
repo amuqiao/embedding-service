@@ -55,7 +55,7 @@ Job executor / real LLM job_type
 
 `adapter` 指向模型调用 adapter，当前内置 `litellm` adapter 复用 LiteLLM 文本生成调用。`provider_model` 是 provider 原始模型名，用于 pricing 匹配和审计；`adapter_model` 是传给 adapter 的模型标识，LiteLLM adapter 当前使用 `openai/<provider_model>` 形式。缺少 required env 的模型不会出现在 `GET /models` 返回中。`GET /models` 只返回模型目录的公开投影，不暴露 `adapter`、`adapter_model`、`pricing_ref`、`requires_env`、`generation` 或 provider 内部参数。
 
-Prompt 目录由 `app/core/prompts.yaml` 和 `app/core/prompt_templates.py` 管理。当前 Prompt registry 会进入 registry consistency 校验；正式业务 `job_type` 需要按自身 schema 引用 prompt refs。
+Prompt 目录由 `PROMPT_CONFIG_PATH` 指向的基础配置和 `app/jobs/types/*/prompts.yaml` 的业务包内配置共同组成，加载逻辑在 `app/core/prompt_templates.py`。当前 Prompt registry 会进入 registry consistency 校验；正式业务 `job_type` 需要按自身 schema 引用 prompt refs，且不同配置文件之间不得重复声明同一个 prompt ref。
 
 价格目录由 `app/core/pricing.yaml` 和 `app/core/pricing_registry.py` 管理。`pricing_ref` 必须存在并与模型的 `model_id`、`provider`、`provider_model` 匹配。
 
