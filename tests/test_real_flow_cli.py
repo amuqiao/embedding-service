@@ -55,6 +55,33 @@ def test_poster_title_image_cli_requires_confirm_cost():
     assert "poster title image flow requires --confirm-cost" in result.stderr
 
 
+def test_poster_title_image_cli_accepts_reference_alias(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(poster_title_image, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "poster-title-image",
+            "--confirm-cost",
+            "--reference",
+            ".data/title/标题2.png",
+            "--language",
+            "es",
+            "--title-text",
+            "Cuando el amor se alejo",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["reference_image"] == ".data/title/标题2.png"
+    assert captured["confirm_cost"] is True
+
+
 def test_oss_upload_image_cli_requires_confirm_upload():
     result = runner.invoke(app, ["oss-upload-image"])
 
@@ -753,10 +780,11 @@ def test_poster_title_image_downloads_all_output_artifacts(tmp_path, monkeypatch
     (tmp_path / ".data/title").mkdir(parents=True)
     (tmp_path / ".data/title/英语.png").write_bytes(_transparent_png_bytes())
 
+    output_data = _transparent_png_bytes()
     objects = [
-        ("es", "es", "outputs/poster-job-1/es/title-layer.png", b"es-image-1"),
-        ("es", "es", "outputs/poster-job-1/es/title-layer-2.png", b"es-image-2"),
-        ("pt", "pt", "outputs/poster-job-1/pt/title-layer.png", b"pt-image-1"),
+        ("es", "es", "outputs/poster-job-1/es/title-layer.png", output_data),
+        ("es", "es", "outputs/poster-job-1/es/title-layer-2.png", output_data),
+        ("pt", "pt", "outputs/poster-job-1/pt/title-layer.png", output_data),
     ]
     for _item_id, _language, key, data in objects:
         path = tmp_path / "storage/objects/local-dev" / key
@@ -857,12 +885,22 @@ def test_poster_title_image_downloads_all_output_artifacts(tmp_path, monkeypatch
     )
 
     payload = json.loads(capsys.readouterr().out)
+    assert payload["summary"]["image_inspection"] == {
+        "enabled": True,
+        "require_transparent_background": True,
+        "checked_count": 3,
+        "passed_count": 3,
+        "failed_count": 0,
+    }
     artifacts = payload["summary"]["artifacts"]
     assert len(artifacts) == 3
     assert {(item["item_id"], item["image_index"]) for item in artifacts} == {("es", 1), ("es", 2), ("pt", 1)}
     for artifact in artifacts:
         assert artifact["download_method"] == "local_storage"
         assert artifact["sha256_verified"] is True
+        assert artifact["image_inspection"]["passed"] is True
+        assert artifact["image_inspection"]["require_transparent_background"] is True
+        assert artifact["image_inspection"]["result"]["alpha"]["transparent_background"] is True
         assert (tmp_path / artifact["local_path"]).is_file()
 
 
@@ -877,7 +915,7 @@ def test_poster_title_image_download_uses_signed_url_when_public_url_is_private(
         "OSS_ACCESS_KEY_SECRET": "secret",
         "OSS_PROJECT_ROOT": "project-a",
     }
-    data = b"private-output"
+    data = _transparent_png_bytes()
     calls = []
 
     def fake_download_url(url, *, timeout_seconds=30):
@@ -924,19 +962,58 @@ def test_poster_title_image_download_uses_signed_url_when_public_url_is_private(
     assert len(calls) == 2
     assert calls[0].endswith("/project-a/poster-job-private/es/title-layer.png")
     assert "Signature=" in calls[1]
-    assert artifacts == [
-        {
-            "item_id": "es",
-            "language": "es",
-            "image_index": 1,
-            "content_type": "image/png",
-            "sha256": poster_title_image._bare_sha256(data),
-            "sha256_verified": True,
-            "download_method": "signed_url",
-            "local_path": ".data/downloaded-poster-title/poster-job-private/es-es/01-title-layer.png",
-        }
-    ]
+    assert artifacts[0]["item_id"] == "es"
+    assert artifacts[0]["language"] == "es"
+    assert artifacts[0]["image_index"] == 1
+    assert artifacts[0]["content_type"] == "image/png"
+    assert artifacts[0]["sha256"] == poster_title_image._bare_sha256(data)
+    assert artifacts[0]["sha256_verified"] is True
+    assert artifacts[0]["download_method"] == "signed_url"
+    assert artifacts[0]["local_path"] == ".data/downloaded-poster-title/poster-job-private/es-es/01-title-layer.png"
+    assert artifacts[0]["image_inspection"]["passed"] is True
+    assert artifacts[0]["image_inspection"]["result"]["alpha"]["transparent_background"] is True
     assert (tmp_path / artifacts[0]["local_path"]).read_bytes() == data
+
+
+def test_poster_title_image_download_rejects_non_transparent_background(tmp_path, monkeypatch):
+    clear_storage_env(monkeypatch)
+    monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
+    image = Image.new("RGBA", (4, 4), (255, 255, 255, 255))
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    data = buf.getvalue()
+    key = "outputs/poster-job-opaque/es/title-layer.png"
+    path = tmp_path / "storage/objects/local-dev" / key
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+    with pytest.raises(poster_title_image.FlowError, match="image inspection failed"):
+        poster_title_image.download_output_artifacts(
+            job={
+                "job_id": "poster-job-opaque",
+                "job_result": {
+                    "items": [
+                        {
+                            "item_id": "es",
+                            "language": "es",
+                            "images": [
+                                {
+                                    "object": {
+                                        "public_url": f"https://local-dev.oss-local.aliyuncs.com/{key}",
+                                        "internal_url": f"https://local-dev.oss-local-internal.aliyuncs.com/{key}",
+                                        "content_type": "image/png",
+                                        "sha256": poster_title_image._bare_sha256(data),
+                                    }
+                                }
+                            ],
+                        }
+                    ]
+                },
+            },
+            app_env={"STORAGE_BACKEND": "local", "LOCAL_OBJECT_STORAGE_PATH": "storage/objects"},
+            output_dir=".data/downloaded-poster-title",
+            signed_url_expires_seconds=60,
+        )
 
 
 def test_real_flow_run_uploads_poster_reference_when_aliyun_oss_enabled(tmp_path, monkeypatch, capsys):

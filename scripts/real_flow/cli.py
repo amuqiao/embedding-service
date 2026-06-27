@@ -14,17 +14,17 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
   # 单 item：使用本地透明 PNG 参考图，脚本自动转成 API reference_image URL Ref。
   ./scripts/real-flow.sh poster-title-image \\
     --confirm-cost \\
-    --reference-image .data/title/英语.png \\
+    --reference .data/title/英语.png \\
     --model-id gpt-image-2 \\
     --language es \\
     --title-text "Cuando el amor se alejo" \\
     --json
 
 \b
-  # 单 item：生成后下载全部输出图，并校验 sha256。
+  # 单 item：生成后下载全部输出图，并校验 sha256 与透明背景。
   ./scripts/real-flow.sh poster-title-image \\
     --confirm-cost \\
-    --reference-image .data/title/英语.png \\
+    --reference .data/title/英语.png \\
     --language es \\
     --title-text "Cuando el amor se alejo" \\
     --download-outputs \\
@@ -55,7 +55,7 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
   ./scripts/real-flow.sh poster-title-image \\
     --confirm-cost \\
     --confirm-upload \\
-    --reference-image .data/title/英语.png \\
+    --reference .data/title/英语.png \\
     --language es \\
     --title-text "Cuando el amor se alejo" \\
     --download-outputs \\
@@ -350,7 +350,11 @@ def poster_title_image_command(
     ] = None,
     reference_image: Annotated[
         str,
-        typer.Option("--reference-image", help="本地参考标题图；STORAGE_BACKEND=local 写入本地对象存储，aliyun_oss 上传到阿里云 OSS。"),
+        typer.Option(
+            "--reference",
+            "--reference-image",
+            help="本地参考标题图；STORAGE_BACKEND=local 写入本地对象存储，aliyun_oss 上传到阿里云 OSS。",
+        ),
     ] = poster_title_image.DEFAULT_REFERENCE_IMAGE,
     items_json: Annotated[
         str | None,
@@ -418,7 +422,7 @@ def poster_title_image_command(
     ] = None,
     download_outputs: Annotated[
         bool,
-        typer.Option("--download-outputs", help="下载 Job 结果里的全部输出图片到本地目录，并校验 sha256。"),
+        typer.Option("--download-outputs", help="下载 Job 结果里的全部输出图片到本地目录，并校验 sha256 与透明背景。"),
     ] = False,
     output_dir: Annotated[
         str,

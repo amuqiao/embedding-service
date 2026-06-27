@@ -36,7 +36,9 @@ SHOW_HELP_EPILOG = """\b
 INSPECT_HELP_EPILOG = """\b
 示例：
   ./scripts/jobs.sh inspect <job_id>
+  ./scripts/jobs.sh inspect <job_id> --include-children
   ./scripts/jobs.sh inspect <job_id> --events-limit 50 --json
+  ./scripts/jobs.sh inspect <job_id> --include-children --json
 """
 
 TIMELINE_HELP_EPILOG = """\b
@@ -279,6 +281,24 @@ def _attempt_columns() -> list[tuple[str, str]]:
     ]
 
 
+def _child_job_columns() -> list[tuple[str, str]]:
+    return [
+        ("workflow_node_key", "node"),
+        ("job_id", "child_job_id"),
+        ("status", "status"),
+        ("job_type", "job_type"),
+        ("progress_percent", "%"),
+        ("progress_stage", "stage"),
+        ("attempt_status", "attempt"),
+        ("dispatch_status", "dispatch"),
+        ("publish_attempts", "publish_attempts"),
+        ("worker_id", "worker"),
+        ("lease_expires_at", "lease_expires_at"),
+        ("duration", "duration"),
+        ("updated_at", "updated_at"),
+    ]
+
+
 def _callback_columns() -> list[tuple[str, str]]:
     return [
         ("id", "callback_id"),
@@ -442,6 +462,108 @@ def _summary_by_job_type_columns() -> list[tuple[str, str]]:
     ]
 
 
+def _job_inspect_columns() -> list[tuple[str, str]]:
+    return [
+        ("job_id", "job_id"),
+        ("status", "status"),
+        ("job_type", "job_type"),
+        ("caller_id", "caller"),
+        ("progress_percent", "%"),
+        ("progress_stage", "stage"),
+        ("callback_status", "callback"),
+        ("created_at", "created_at"),
+        ("started_at", "started_at"),
+        ("finished_at", "finished_at"),
+    ]
+
+
+def _job_item_columns() -> list[tuple[str, str]]:
+    return [
+        ("item_id", "item"),
+        ("language", "lang"),
+        ("model_id", "model"),
+        ("title_text", "title_text"),
+        ("draw_count", "draws"),
+        ("reference_sha256", "reference_sha256"),
+    ]
+
+
+def _workflow_node_columns() -> list[tuple[str, str]]:
+    return [
+        ("key", "node"),
+        ("job_type", "job_type"),
+        ("depends_on", "depends_on"),
+        ("required", "required"),
+        ("weight", "weight"),
+    ]
+
+
+def _result_item_columns() -> list[tuple[str, str]]:
+    return [
+        ("item_id", "item"),
+        ("language", "lang"),
+        ("status", "status"),
+        ("image_count", "images"),
+        ("error", "error"),
+    ]
+
+
+def _batch_summary_columns() -> list[tuple[str, str]]:
+    return [
+        ("total", "total"),
+        ("succeeded", "succeeded"),
+        ("failed", "failed"),
+        ("running", "running"),
+        ("pending", "pending"),
+    ]
+
+
+def _capacity_current_columns() -> list[tuple[str, str]]:
+    return [
+        ("active_jobs", "active_jobs"),
+        ("queued", "queued"),
+        ("running_active", "running_active"),
+        ("max_active_jobs", "max_active_jobs"),
+        ("active_ratio", "active_ratio"),
+        ("headroom", "headroom"),
+    ]
+
+
+def _capacity_window_columns() -> list[tuple[str, str]]:
+    return [
+        ("accepted_jobs", "accepted_jobs"),
+        ("terminal_jobs", "terminal_jobs"),
+        ("lifecycle_p95_seconds", "lifecycle_p95_s"),
+        ("accepted_submit_rps", "accepted_rps"),
+        ("observed_span_seconds", "observed_span_s"),
+        ("effective_window_seconds", "effective_window_s"),
+    ]
+
+
+def _capacity_estimated_columns() -> list[tuple[str, str]]:
+    return [
+        ("active_jobs_needed_upper_bound", "active_needed_upper"),
+        ("active_ratio", "active_ratio"),
+        ("headroom", "headroom"),
+    ]
+
+
+def _capacity_recommendation_columns() -> list[tuple[str, str]]:
+    return [
+        ("max_active_jobs", "max_active_jobs"),
+        ("active_ratio", "active_ratio"),
+        ("message", "message"),
+    ]
+
+
+def _log_match_columns() -> list[tuple[str, str]]:
+    return [
+        ("name", "name"),
+        ("count", "count"),
+        ("sample", "sample"),
+    ]
+
+
 def _job_summary(job: dict) -> dict[str, Any]:
     return {
         "job_id": str(job.get("id")),
@@ -466,6 +588,330 @@ def _job_summary(job: dict) -> dict[str, Any]:
         "finished_at": job.get("finished_at"),
         "updated_at": job.get("updated_at"),
     }
+
+
+def _job_inspect_row(job: dict) -> dict[str, Any]:
+    return {
+        "job_id": str(job.get("id")),
+        "status": job.get("status"),
+        "job_type": job.get("job_type"),
+        "caller_id": job.get("caller_id"),
+        "progress_percent": job.get("progress_percent"),
+        "progress_stage": job.get("progress_stage"),
+        "callback_status": job.get("callback_status"),
+        "created_at": job.get("created_at"),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+    }
+
+
+def _runtime_payload(job: dict) -> dict[str, Any]:
+    runtime_ref = job.get("runtime_ref")
+    if isinstance(runtime_ref, dict) and isinstance(runtime_ref.get("payload"), dict):
+        return runtime_ref["payload"]
+    return {}
+
+
+def _workflow_plan(job: dict) -> dict[str, Any]:
+    plan = _runtime_payload(job).get("workflow_plan")
+    return plan if isinstance(plan, dict) else {}
+
+
+def _job_param_items(job: dict) -> list[dict[str, Any]]:
+    params = job.get("job_params")
+    if not isinstance(params, dict):
+        return []
+    items = params.get("items")
+    if not isinstance(items, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        model_options = item.get("model_options") if isinstance(item.get("model_options"), dict) else {}
+        reference = item.get("reference_image") if isinstance(item.get("reference_image"), dict) else {}
+        rows.append(
+            {
+                "item_id": item.get("item_id"),
+                "language": item.get("language"),
+                "model_id": item.get("model_id"),
+                "title_text": item.get("title_text"),
+                "draw_count": model_options.get("draw_count"),
+                "reference_sha256": reference.get("sha256"),
+            }
+        )
+    return rows
+
+
+def _workflow_node_rows(job: dict) -> list[dict[str, Any]]:
+    nodes = _workflow_plan(job).get("nodes")
+    if not isinstance(nodes, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        rows.append(
+            {
+                "key": node.get("key"),
+                "job_type": node.get("job_type"),
+                "depends_on": ",".join(node.get("depends_on") or []),
+                "required": node.get("required"),
+                "weight": node.get("weight"),
+            }
+        )
+    return rows
+
+
+def _result_items(job: dict) -> list[dict[str, Any]]:
+    result = job.get("result")
+    if not isinstance(result, dict):
+        return []
+    items = result.get("items")
+    if not isinstance(items, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        images = item.get("images")
+        rows.append(
+            {
+                "item_id": item.get("item_id"),
+                "language": item.get("language"),
+                "status": item.get("status"),
+                "image_count": len(images) if isinstance(images, list) else 0,
+                "error": item.get("error"),
+            }
+        )
+    return rows
+
+
+def _batch_summary(job: dict) -> dict[str, Any] | None:
+    result = job.get("result")
+    if not isinstance(result, dict):
+        return None
+    summary = result.get("batch_summary")
+    return summary if isinstance(summary, dict) else None
+
+
+def _workflow_outcome(job: dict) -> dict[str, Any] | None:
+    summary = _canonical_result_summary(job.get("canonical_result"))
+    workflow = summary.get("workflow") if isinstance(summary, dict) else None
+    return workflow if isinstance(workflow, dict) else None
+
+
+def _render_job_detail_sections(job: dict) -> None:
+    items = _job_param_items(job)
+    if items:
+        formatters.section("Job Items")
+        formatters.print_table(items, _job_item_columns())
+
+    plan = _workflow_plan(job)
+    workflow_nodes = _workflow_node_rows(job)
+    if workflow_nodes:
+        formatters.section("Workflow Plan")
+        formatters.event(
+            "OK",
+            "workflow",
+            "type=%s version=%s nodes=%s policy=%s"
+            % (
+                plan.get("workflow_type"),
+                plan.get("workflow_version"),
+                plan.get("node_count"),
+                plan.get("failure_policy"),
+            ),
+        )
+        formatters.print_table(workflow_nodes, _workflow_node_columns())
+
+    batch_summary = _batch_summary(job)
+    result_items = _result_items(job)
+    workflow_outcome = _workflow_outcome(job)
+    if batch_summary or result_items or workflow_outcome:
+        formatters.section("Result Summary")
+        if batch_summary:
+            formatters.print_table([batch_summary], _batch_summary_columns())
+        if workflow_outcome:
+            formatters.event(
+                "OK",
+                "workflow",
+                "outcome=%s succeeded=%s failed=%s nodes=%s"
+                % (
+                    workflow_outcome.get("outcome"),
+                    workflow_outcome.get("succeeded"),
+                    workflow_outcome.get("failed"),
+                    workflow_outcome.get("node_count"),
+                ),
+            )
+        if result_items:
+            formatters.print_table(result_items, _result_item_columns())
+
+
+def _render_capacity_human(payload: dict[str, Any], *, title: str = "Job Capacity") -> None:
+    current = payload.get("current") or {}
+    estimated = payload.get("estimated") or {}
+    current_row = {
+        **current,
+        "max_active_jobs": payload.get("max_active_jobs"),
+        "active_ratio": estimated.get("active_ratio"),
+        "headroom": estimated.get("headroom"),
+    }
+    formatters.section(title)
+    scope = payload.get("scope") or {}
+    window_scope = scope.get("window") if isinstance(scope.get("window"), dict) else {}
+    formatters.event(
+        "OK",
+        "capacity",
+        "since=%s job_type=%s caller_id=%s"
+        % (
+            window_scope.get("since") or "-",
+            window_scope.get("job_type") or "-",
+            window_scope.get("caller_id") or "-",
+        ),
+    )
+    formatters.section("Current")
+    formatters.print_table([current_row], _capacity_current_columns())
+    formatters.section("Window")
+    formatters.print_table([payload.get("window") or {}], _capacity_window_columns())
+    formatters.section("Estimated")
+    formatters.print_table([estimated], _capacity_estimated_columns())
+    recommendation = payload.get("recommendation")
+    if isinstance(recommendation, dict):
+        formatters.section("Recommendation")
+        formatters.print_table([recommendation], _capacity_recommendation_columns())
+
+
+def _log_match_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    matches = payload.get("matches") or {}
+    samples = payload.get("samples") or {}
+    rows = []
+    for name, count in matches.items():
+        sample_values = samples.get(name) if isinstance(samples, dict) else None
+        sample = sample_values[-1] if isinstance(sample_values, list) and sample_values else None
+        rows.append({"name": name, "count": count, "sample": sample})
+    return rows
+
+
+def _workflow_plan_summary(plan: Any) -> dict[str, Any] | None:
+    if not isinstance(plan, dict):
+        return None
+    nodes = plan.get("nodes")
+    node_summaries = []
+    if isinstance(nodes, list):
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            node_summaries.append(
+                {
+                    "key": node.get("key"),
+                    "job_type": node.get("job_type"),
+                    "depends_on": node.get("depends_on"),
+                    "required": node.get("required"),
+                    "weight": node.get("weight"),
+                }
+            )
+    return {
+        "kind": plan.get("kind"),
+        "workflow_type": plan.get("workflow_type"),
+        "workflow_version": plan.get("workflow_version"),
+        "failure_policy": plan.get("failure_policy"),
+        "node_count": plan.get("node_count"),
+        "max_nodes": plan.get("max_nodes"),
+        "nodes": node_summaries,
+    }
+
+
+def _runtime_ref_summary(runtime_ref: Any) -> dict[str, Any] | None:
+    if not isinstance(runtime_ref, dict):
+        return None
+    payload = runtime_ref.get("payload")
+    if not isinstance(payload, dict):
+        return formatters.trim_payload(runtime_ref, max_items=4, max_string_length=160)
+    return {
+        "name": runtime_ref.get("name"),
+        "type": runtime_ref.get("type"),
+        "storage": runtime_ref.get("storage"),
+        "content_hash": runtime_ref.get("content_hash"),
+        "content_size_bytes": runtime_ref.get("content_size_bytes"),
+        "job_type": payload.get("job_type"),
+        "output_target": formatters.trim_payload(payload.get("output_target"), max_items=8, max_string_length=160),
+        "workflow_plan": _workflow_plan_summary(payload.get("workflow_plan")),
+        "runtime_fields": formatters.trim_payload(payload.get("runtime_fields"), max_items=8, max_string_length=160),
+        "job_params_hash": payload.get("job_params_hash"),
+    }
+
+
+def _canonical_result_summary(canonical_result: Any) -> dict[str, Any] | None:
+    if not isinstance(canonical_result, dict):
+        return None
+    workflow = canonical_result.get("workflow")
+    if not isinstance(workflow, dict):
+        return formatters.trim_payload(canonical_result, max_items=4, max_string_length=160)
+    return {
+        "job_type": canonical_result.get("job_type"),
+        "workflow": {
+            "workflow_type": workflow.get("workflow_type"),
+            "workflow_version": workflow.get("workflow_version"),
+            "outcome": workflow.get("outcome"),
+            "failure_policy": workflow.get("failure_policy"),
+            "node_count": workflow.get("node_count"),
+            "succeeded": workflow.get("succeeded"),
+            "failed": workflow.get("failed"),
+        },
+    }
+
+
+def _inspect_payload_summary(job: dict) -> dict[str, Any]:
+    return {
+        "job_params": formatters.trim_payload(job.get("job_params"), max_items=4, max_string_length=160),
+        "metadata": formatters.trim_payload(job.get("metadata"), max_items=8, max_string_length=160),
+        "runtime_ref": _runtime_ref_summary(job.get("runtime_ref")),
+        "result": formatters.trim_payload(job.get("result"), max_items=4, max_string_length=160),
+        "result_ref": formatters.trim_payload(job.get("result_ref"), max_items=4, max_string_length=160),
+        "canonical_result": _canonical_result_summary(job.get("canonical_result")),
+        "canonical_result_ref": formatters.trim_payload(
+            job.get("canonical_result_ref"),
+            max_items=4,
+            max_string_length=160,
+        ),
+        "error": formatters.trim_payload(job.get("error"), max_items=4, max_string_length=160),
+        "callback_last_error": formatters.trim_payload(
+            job.get("callback_last_error"),
+            max_items=4,
+            max_string_length=160,
+        ),
+    }
+
+
+def _render_inspect_human(payload: dict[str, Any], *, include_children: bool) -> None:
+    job = payload["job"]
+    attempts = payload["attempts"]
+    callbacks = payload["callbacks"]
+    timeline = payload["timeline"]
+    formatters.section("Job Inspect")
+    formatters.event(
+        "OK",
+        "job",
+        "attempts=%s callbacks=%s timeline=%s"
+        % (len(attempts), len(callbacks), len(timeline)),
+    )
+    formatters.print_table([_job_inspect_row(job)], _job_inspect_columns())
+
+    _render_job_detail_sections(job)
+
+    formatters.section("Attempts")
+    formatters.print_table(attempts, _attempt_columns(), empty_message="no attempts")
+    if callbacks:
+        formatters.section("Callbacks")
+        formatters.print_table(callbacks, _callback_columns(), empty_message="no callbacks")
+    formatters.section("Timeline")
+    formatters.print_table(timeline, _timeline_columns(), empty_message="no events")
+
+    if include_children:
+        formatters.section("Workflow Children")
+        children = payload.get("children") or []
+        formatters.event("OK", "children", f"count={len(children)}")
+        formatters.print_table(children, _child_job_columns(), empty_message="no workflow children")
 
 
 def _registered_job_type_specs() -> list[dict[str, Any]]:
@@ -1323,14 +1769,38 @@ def _render_pressure(payload: dict[str, Any]) -> None:
         for item in payload["bottlenecks"]
     ]
     formatters.print_table(rows, _pressure_bottleneck_columns())
-    formatters.section("Capacity")
-    formatters.print_json(payload["capacity"])
+    _render_capacity_human(payload["capacity"], title="Capacity")
     if payload.get("http") is not None:
         formatters.section("HTTP")
-        formatters.print_json(payload["http"])
+        http_payload = payload["http"] or {}
+        if http_payload.get("available") is False:
+            formatters.event("MISSING", "http", f"prefix={http_payload.get('prefix') or '-'}")
+        else:
+            post_jobs = http_payload.get("post_jobs") if isinstance(http_payload.get("post_jobs"), dict) else {}
+            status_counts = http_payload.get("failure_status_counts") or {}
+            formatters.event(
+                "OK",
+                "http",
+                "requests=%s failures=%s statuses=%s"
+                % (
+                    post_jobs.get("request_count") or "-",
+                    post_jobs.get("failure_count") or 0,
+                    formatters.compact(status_counts),
+                ),
+            )
     if payload.get("api_log") is not None:
         formatters.section("API Log")
-        formatters.print_json(payload["api_log"])
+        api_log = payload["api_log"] or {}
+        if api_log.get("available") is False:
+            formatters.event("MISSING", "api_log", f"path={api_log.get('path') or '-'}")
+        else:
+            formatters.event(
+                "OK",
+                "api_log",
+                "path=%s scanned_lines=%s"
+                % (api_log.get("path") or "-", api_log.get("scanned_lines") or 0),
+            )
+            formatters.print_table(_log_match_rows(api_log), _log_match_columns(), empty_message="no log matches")
     formatters.section("Latency")
     formatters.print_table(payload["latency"], _latency_columns(), empty_message="no latency data")
     formatters.section("Failure Groups")
@@ -1399,7 +1869,8 @@ def show(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
         return
     formatters.section("Job")
     formatters.event("OK", "job", f"job_id={job_id}")
-    formatters.print_json(_job_summary(job) | {"payload_summary": formatters.summarize_job_payload(job)})
+    formatters.print_table([_job_inspect_row(job)], _job_inspect_columns())
+    _render_job_detail_sections(job)
 
 
 @app.command(help="聚合查看单个 Job。", epilog=INSPECT_HELP_EPILOG)
@@ -1409,18 +1880,25 @@ def inspect(
         int,
         typer.Option("--events-limit", min=1, max=1000, help="展示的最近事件条数。"),
     ] = 10,
+    include_children: Annotated[
+        bool,
+        typer.Option("--include-children", help="包含 workflow internal child jobs；默认只展示 root job 聚合证据。"),
+    ] = False,
     json_output: JsonOption = False,
 ) -> None:
     def action(conn):
         job = queries.get_job(conn, job_id)
         if job is None:
             return None
-        return {
+        payload = {
             "job": job,
             "attempts": queries.attempts(conn, job_id),
             "callbacks": queries.callbacks(conn, job_id),
             "timeline": queries.timeline(conn, job_id, limit=events_limit),
         }
+        if include_children:
+            payload["children"] = queries.child_jobs(conn, job_id)
+        return payload
 
     payload = _with_connection(action)
     if payload is None:
@@ -1429,22 +1907,7 @@ def inspect(
     if json_output:
         formatters.print_json(payload)
         return
-    formatters.section("Job Inspect")
-    formatters.event(
-        "OK",
-        "job",
-        "attempts=%s callbacks=%s timeline=%s"
-        % (len(payload["attempts"]), len(payload["callbacks"]), len(payload["timeline"])),
-    )
-    formatters.print_json(
-        {
-            "job": _job_summary(payload["job"]),
-            "payload_summary": formatters.summarize_job_payload(payload["job"]),
-            "attempts": payload["attempts"],
-            "callbacks": payload["callbacks"],
-            "timeline": payload["timeline"],
-        }
-    )
+    _render_inspect_human(payload, include_children=include_children)
 
 
 def _run_related_collection(
@@ -1888,9 +2351,7 @@ def capacity(
     if json_output:
         formatters.print_json(payload)
         return
-    formatters.section("Job Capacity")
-    formatters.event("OK", "capacity", f"since={since}")
-    formatters.print_json(payload)
+    _render_capacity_human(payload)
 
 
 @app.command(help="查看当前注册的 job_type。", epilog=TYPES_HELP_EPILOG)

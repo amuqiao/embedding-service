@@ -356,6 +356,38 @@ async def _call(session_factory: _FakeSessionFactory):
     )
 
 
+def test_job_scope_context_allows_explicit_root_scope():
+    child_job_id = uuid.UUID("00000000-0000-0000-0000-000000000011")
+    root_job_id = uuid.UUID("00000000-0000-0000-0000-000000000012")
+
+    ai_capability_kernel.validate_ai_call_context(
+        caller_id="caller-1",
+        scope_type="job",
+        scope_id=str(root_job_id),
+        operation="job_type.execute",
+        job_id=child_job_id,
+        scope_job_id=root_job_id,
+        attempt_id=uuid.UUID("00000000-0000-0000-0000-000000000013"),
+        job_type="job_type",
+    )
+
+
+def test_job_scope_context_rejects_unowned_scope_id():
+    child_job_id = uuid.UUID("00000000-0000-0000-0000-000000000011")
+    root_job_id = uuid.UUID("00000000-0000-0000-0000-000000000012")
+
+    with pytest.raises(AppError, match="job scope_id must equal scope_job_id"):
+        ai_capability_kernel.validate_ai_call_context(
+            caller_id="caller-1",
+            scope_type="job",
+            scope_id=str(root_job_id),
+            operation="job_type.execute",
+            job_id=child_job_id,
+            attempt_id=uuid.UUID("00000000-0000-0000-0000-000000000013"),
+            job_type="job_type",
+        )
+
+
 @pytest.mark.asyncio
 async def test_gateway_does_not_call_provider_when_pending_ledger_write_fails(monkeypatch):
     session_factory = _FakeSessionFactory()

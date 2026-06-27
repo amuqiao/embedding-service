@@ -79,6 +79,7 @@ run_python_syntax() {
   # py_compile 成功时汇总为脚本事件；失败时保留 Python 原始错误。
   "$PYTHON_BIN" -m py_compile \
     "$ROOT_DIR/scripts/dev/check_ports.py" \
+    "$ROOT_DIR/scripts/verify/alembic_revision_check.py" \
     "$ROOT_DIR/scripts/verify/env_config_check.py" \
     "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" \
     "$ROOT_DIR/scripts/verify/image_inspect.py" \
@@ -103,6 +104,12 @@ run_python_syntax() {
   event "OK" "load/*.py" "py_compile"
   event "OK" "jobs/*.py" "py_compile"
   event "OK" "real_flow/*.py" "py_compile"
+}
+
+run_alembic_revision_check() {
+  section "Alembic"
+  require_project_python
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/alembic_revision_check.py"
 }
 
 run_registry_check() {
@@ -143,6 +150,7 @@ run_check() {
   run_cli_smoke
   run_python_syntax
   run_env_config_check
+  run_alembic_revision_check
   run_registry_check
   run_tests
 }

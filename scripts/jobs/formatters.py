@@ -85,22 +85,28 @@ def print_table(rows: list[dict], columns: list[tuple[str, str]], *, empty_messa
         print("  ".join(value.ljust(widths[index]) for index, value in enumerate(rendered)))
 
 
-def trim_payload(value, *, max_items: int = 8):
+def trim_payload(value, *, max_items: int = 8, max_string_length: int = 240):
     if value is None:
         return None
+    if isinstance(value, str):
+        return compact(value, max_length=max_string_length)
     if isinstance(value, list):
         if len(value) <= max_items:
-            return [trim_payload(item, max_items=max_items) for item in value]
-        return [trim_payload(item, max_items=max_items) for item in value[:max_items]] + [
-            {"truncated_items": len(value) - max_items}
-        ]
+            return [
+                trim_payload(item, max_items=max_items, max_string_length=max_string_length)
+                for item in value
+            ]
+        return [
+            trim_payload(item, max_items=max_items, max_string_length=max_string_length)
+            for item in value[:max_items]
+        ] + [{"truncated_items": len(value) - max_items}]
     if isinstance(value, dict):
         result = {}
         for index, (key, item) in enumerate(value.items()):
             if index >= max_items:
                 result["truncated_keys"] = len(value) - max_items
                 break
-            result[key] = trim_payload(item, max_items=max_items)
+            result[key] = trim_payload(item, max_items=max_items, max_string_length=max_string_length)
         return result
     return value
 

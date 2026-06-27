@@ -104,6 +104,7 @@ def validate_ai_call_context(
     job_id: uuid.UUID | None,
     attempt_id: uuid.UUID | None,
     job_type: str | None,
+    scope_job_id: uuid.UUID | None = None,
 ) -> None:
     if not caller_id.strip():
         raise ValidationAppError("INVALID_INPUT", "caller_id is required")
@@ -116,8 +117,9 @@ def validate_ai_call_context(
     if scope_type == "job":
         if job_id is None or attempt_id is None or not job_type:
             raise ValidationAppError("INVALID_INPUT", "job scope requires job_id, attempt_id, and job_type")
-        if scope_id != str(job_id):
-            raise ValidationAppError("INVALID_INPUT", "job scope_id must equal job_id")
+        expected_scope_id = scope_job_id or job_id
+        if scope_id != str(expected_scope_id):
+            raise ValidationAppError("INVALID_INPUT", "job scope_id must equal scope_job_id")
 
 
 def require_enabled_text_model(model_id: str) -> TextModel:

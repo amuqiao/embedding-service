@@ -30,6 +30,7 @@ async def generate_text_with_ledger(
     request_id: str | None = None,
     trace_id: str | None = None,
     job_id: uuid.UUID | None = None,
+    scope_job_id: uuid.UUID | None = None,
     attempt_id: uuid.UUID | None = None,
     job_type: str | None = None,
     ledger_session_factory: Callable[[], Any] = AsyncSessionLocal,
@@ -40,6 +41,7 @@ async def generate_text_with_ledger(
         scope_id=scope_id,
         operation=operation,
         job_id=job_id,
+        scope_job_id=scope_job_id,
         attempt_id=attempt_id,
         job_type=job_type,
     )
@@ -148,6 +150,7 @@ async def generate_text_with_images_with_ledger(
     request_id: str | None = None,
     trace_id: str | None = None,
     job_id: uuid.UUID | None = None,
+    scope_job_id: uuid.UUID | None = None,
     attempt_id: uuid.UUID | None = None,
     job_type: str | None = None,
     ledger_session_factory: Callable[[], Any] = AsyncSessionLocal,
@@ -158,6 +161,7 @@ async def generate_text_with_images_with_ledger(
         scope_id=scope_id,
         operation=operation,
         job_id=job_id,
+        scope_job_id=scope_job_id,
         attempt_id=attempt_id,
         job_type=job_type,
     )
@@ -292,6 +296,7 @@ async def generate_image_with_ledger(
     request_id: str | None = None,
     trace_id: str | None = None,
     job_id: uuid.UUID | None = None,
+    scope_job_id: uuid.UUID | None = None,
     attempt_id: uuid.UUID | None = None,
     job_type: str | None = None,
     ledger_session_factory: Callable[[], Any] = AsyncSessionLocal,
@@ -302,6 +307,7 @@ async def generate_image_with_ledger(
         scope_id=scope_id,
         operation=operation,
         job_id=job_id,
+        scope_job_id=scope_job_id,
         attempt_id=attempt_id,
         job_type=job_type,
     )

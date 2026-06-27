@@ -76,6 +76,7 @@ async def run_ai_job(
         step_name="calling_model",
         request_id=request_id,
         job_id=job_id,
+        scope_job_id=ai_scope_id or job_id,
         attempt_id=attempt_id,
         job_type=job_type,
         model_id=model_id,

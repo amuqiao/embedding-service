@@ -132,6 +132,50 @@ def get_job(conn: connection, job_id: str) -> dict | None:
     return _fetch_one(conn, "SELECT * FROM job_aggregates WHERE id = %(job_id)s AND deleted_at IS NULL", {"job_id": job_id})
 
 
+def child_jobs(conn: connection, root_job_id: str) -> list[dict]:
+    return _fetch_all(
+        conn,
+        """
+        SELECT
+          j.workflow_node_key,
+          j.id::text AS job_id,
+          j.parent_job_id::text AS parent_job_id,
+          j.root_job_id::text AS root_job_id,
+          j.status,
+          j.job_type,
+          j.progress_percent,
+          j.progress_stage,
+          j.progress_text,
+          j.active_attempt_id::text AS active_attempt_id,
+          a.status AS attempt_status,
+          a.attempt_no,
+          a.worker_id,
+          a.lease_expires_at,
+          d.status AS dispatch_status,
+          d.publish_attempts,
+          d.next_attempt_at AS dispatch_next_attempt_at,
+          j.error,
+          j.result,
+          j.created_at,
+          j.updated_at,
+          j.finished_at,
+          CASE
+            WHEN j.started_at IS NULL THEN NULL
+            WHEN j.finished_at IS NULL THEN now() - j.started_at
+            ELSE j.finished_at - j.started_at
+          END AS duration
+        FROM job_aggregates j
+        LEFT JOIN job_execution_attempts a ON a.id = j.active_attempt_id
+        LEFT JOIN dispatch_outbox d ON d.attempt_id = a.id AND d.task_name = 'jobs.run_attempt'
+        WHERE j.deleted_at IS NULL
+          AND j.is_internal IS TRUE
+          AND j.root_job_id = %(root_job_id)s
+        ORDER BY j.created_at ASC
+        """,
+        {"root_job_id": root_job_id},
+    )
+
+
 def summary(
     conn: connection,
     *,

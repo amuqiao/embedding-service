@@ -35,11 +35,11 @@ usage() {
   env-config          校验 env 文件键名；默认检查 .env.example 和已存在的本地/测试 env，可传文件路径。
   oss-config          校验阿里云 OSS 配置；默认只检查本地配置，--remote 才访问 OSS，--upload-image 可上传图片。
   image-inspect       检测本地路径或 http(s) URL 图片类型、尺寸、alpha 通道和透明背景。
-  check               执行脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest。
+  check               执行脚本语法、入口 help、Python 语法、env 配置、Alembic revision、registry consistency 和 pytest。
   help                显示帮助。
 
 成功标准：
-  check 成功 = 脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest 均通过。
+  check 成功 = 脚本语法、入口 help、Python 语法、env 配置、Alembic revision、registry consistency 和 pytest 均通过。
 
 环境变量：
   API_HOST / API_PORT        可选，workflow-smoke 使用的本地 API 地址来源。

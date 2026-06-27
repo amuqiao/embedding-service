@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from scripts.jobs import queries
+from scripts.jobs import formatters as job_formatters
 from scripts.jobs.cli import app as jobs_cli_app
 from scripts.jobs.cli import (
     _api_log_payload,
@@ -448,6 +449,237 @@ def test_jobs_summary_json_uses_stable_scope(monkeypatch):
     assert payload["scope"]["since"] == "10m"
     assert payload["jobs"]["active_jobs"] == 0
     assert set(payload) >= {"scope", "jobs", "by_job_type", "attempts", "dispatch", "callbacks"}
+
+
+def test_jobs_inspect_include_children_human_output(monkeypatch):
+    calls: list[str] = []
+
+    def fake_with_connection(action):
+        monkeypatch.setattr(queries, "get_job", lambda _conn, _job_id: {"id": "root-job-1", "status": "running"})
+        monkeypatch.setattr(queries, "attempts", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
+
+        def fake_child_jobs(_conn, _root_job_id):
+            calls.append("child_jobs")
+            return [
+                {
+                    "workflow_node_key": "item.es",
+                    "job_id": "child-job-1",
+                    "status": "running",
+                    "job_type": "poster_title_image_generate_item",
+                    "progress_percent": 50,
+                    "progress_stage": "calling_model",
+                    "attempt_status": "running",
+                    "dispatch_status": "published",
+                }
+            ]
+
+        monkeypatch.setattr(queries, "child_jobs", fake_child_jobs)
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["inspect", "root-job-1", "--include-children"])
+
+    assert result.exit_code == 0
+    assert calls == ["child_jobs"]
+    assert "== Job Inspect ==" in result.stdout
+    assert "== Workflow Children ==" in result.stdout
+    assert "item.es" in result.stdout
+    assert "poster_title_image_generate_item" in result.stdout
+
+
+def test_jobs_inspect_json_includes_children_only_when_requested(monkeypatch):
+    def fake_with_connection(action):
+        monkeypatch.setattr(queries, "get_job", lambda _conn, _job_id: {"id": "root-job-1", "status": "running"})
+        monkeypatch.setattr(queries, "attempts", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
+        monkeypatch.setattr(
+            queries,
+            "child_jobs",
+            lambda _conn, _root_job_id: [{"workflow_node_key": "probe.0", "job_id": "child-job-1"}],
+        )
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    without_children = RUNNER.invoke(jobs_cli_app, ["inspect", "root-job-1", "--json"])
+    with_children = RUNNER.invoke(jobs_cli_app, ["inspect", "root-job-1", "--include-children", "--json"])
+
+    assert without_children.exit_code == 0
+    assert "children" not in json.loads(without_children.stdout)
+    assert with_children.exit_code == 0
+    payload = json.loads(with_children.stdout)
+    assert payload["children"] == [{"workflow_node_key": "probe.0", "job_id": "child-job-1"}]
+
+
+def test_jobs_inspect_human_summarizes_workflow_plan(monkeypatch):
+    long_prompt = "Analyze title image. " * 40
+
+    def fake_with_connection(action):
+        monkeypatch.setattr(
+            queries,
+            "get_job",
+            lambda _conn, _job_id: {
+                "id": "root-job-1",
+                "status": "running",
+                "runtime_ref": {
+                    "name": "runtime",
+                    "type": "json",
+                    "payload": {
+                        "job_type": "poster_title_image",
+                        "workflow_plan": {
+                            "kind": "dag_lite",
+                            "workflow_type": "poster_title_image",
+                            "workflow_version": 1,
+                            "failure_policy": "fail_fast",
+                            "node_count": 1,
+                            "max_nodes": 60,
+                            "nodes": [
+                                {
+                                    "key": "probe.0",
+                                    "job_type": "poster_title_image_style_probe",
+                                    "depends_on": [],
+                                    "required": True,
+                                    "weight": 1,
+                                    "job_params": {"style_prompt": long_prompt},
+                                }
+                            ],
+                        },
+                    },
+                },
+                "canonical_result": {
+                    "job_type": "poster_title_image",
+                    "workflow": {
+                        "workflow_type": "poster_title_image",
+                        "workflow_version": 1,
+                        "outcome": "success",
+                        "failure_policy": "fail_fast",
+                        "node_count": 1,
+                        "succeeded": 1,
+                        "failed": 0,
+                        "nodes": [{"result": {"style_desc": long_prompt}}],
+                    },
+                },
+            },
+        )
+        monkeypatch.setattr(queries, "attempts", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    human = RUNNER.invoke(jobs_cli_app, ["inspect", "root-job-1"])
+    json_result = RUNNER.invoke(jobs_cli_app, ["inspect", "root-job-1", "--json"])
+
+    assert human.exit_code == 0
+    assert "style_prompt" not in human.stdout
+    assert "style_desc" not in human.stdout
+    assert "== Workflow Plan ==" in human.stdout
+    assert "nodes=1" in human.stdout
+    assert "probe.0" in human.stdout
+    assert json_result.exit_code == 0
+    payload = json.loads(json_result.stdout)
+    assert payload["job"]["runtime_ref"]["payload"]["workflow_plan"]["nodes"][0]["job_params"]["style_prompt"] == long_prompt
+    assert payload["job"]["canonical_result"]["workflow"]["nodes"][0]["result"]["style_desc"] == long_prompt
+
+
+def test_jobs_show_default_is_human_readable(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.jobs.cli._with_connection",
+        lambda action: {
+            "id": "root-job-1",
+            "status": "succeeded",
+            "job_type": "poster_title_image",
+            "caller_id": "default",
+            "progress_percent": 100,
+            "progress_stage": "completed",
+            "callback_status": "not_configured",
+            "job_params": {
+                "items": [
+                    {
+                        "item_id": "es",
+                        "language": "es",
+                        "model_id": "gpt-image-2",
+                        "title_text": "Cuando el amor se alejo",
+                    }
+                ]
+            },
+            "result": {"batch_summary": {"total": 1, "succeeded": 1, "failed": 0, "running": 0, "pending": 0}},
+        },
+    )
+
+    human = RUNNER.invoke(jobs_cli_app, ["show", "root-job-1"])
+    json_result = RUNNER.invoke(jobs_cli_app, ["show", "root-job-1", "--json"])
+
+    assert human.exit_code == 0
+    assert "== Job ==" in human.stdout
+    assert "job_id" in human.stdout
+    assert "== Job Items ==" in human.stdout
+    assert "== Result Summary ==" in human.stdout
+    assert '"payload_summary"' not in human.stdout
+    assert json_result.exit_code == 0
+    assert json.loads(json_result.stdout)["job"]["job_params"]["items"][0]["title_text"] == "Cuando el amor se alejo"
+
+
+def test_jobs_capacity_default_is_human_readable(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.jobs.cli._with_connection",
+        lambda action: {
+            "current": {"active_jobs": 12, "queued": 10, "running_active": 2},
+            "window": {
+                "accepted_jobs": 20,
+                "terminal_jobs": 18,
+                "lifecycle_p95_seconds": 15.0,
+                "accepted_submit_rps": 0.2,
+                "observed_span_seconds": 100.0,
+                "effective_window_seconds": 100.0,
+            },
+            "estimated": {"active_jobs_needed_upper_bound": 5.0},
+        },
+    )
+
+    result = RUNNER.invoke(jobs_cli_app, ["capacity", "--since", "10m", "--max-active-jobs", "50"])
+
+    assert result.exit_code == 0
+    assert "== Job Capacity ==" in result.stdout
+    assert "== Current ==" in result.stdout
+    assert "== Window ==" in result.stdout
+    assert "== Estimated ==" in result.stdout
+    assert '"current"' not in result.stdout
+
+
+def test_jobs_pressure_default_is_human_readable(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.jobs.cli._with_connection",
+        lambda action: _pressure_input(
+            summary_payload=_summary_payload(total=10),
+            capacity_payload={
+                "current": {"active_jobs": 2, "queued": 1, "running_active": 1},
+                "window": {
+                    "accepted_jobs": 10,
+                    "terminal_jobs": 10,
+                    "lifecycle_p95_seconds": 10.0,
+                    "accepted_submit_rps": 0.5,
+                    "observed_span_seconds": 20.0,
+                    "effective_window_seconds": 20.0,
+                },
+                "estimated": {"active_jobs_needed_upper_bound": 5.0},
+            },
+        ),
+    )
+
+    result = RUNNER.invoke(jobs_cli_app, ["pressure", "--since", "20m", "--max-active-jobs", "50"])
+
+    assert result.exit_code == 0
+    assert "== Job Pressure Diagnosis ==" in result.stdout
+    assert "== Capacity ==" in result.stdout
+    assert "== Current ==" in result.stdout
+    assert "== Window ==" in result.stdout
+    assert '"capacity"' not in result.stdout
 
 
 def test_jobs_doctor_default_reports_empty_window_next_checks(monkeypatch):
@@ -1170,6 +1402,39 @@ def test_jobs_timeline_returns_recent_events_in_chronological_display_order(monk
     assert "ORDER BY created_at ASC" in sql
 
 
+def test_jobs_child_jobs_query_filters_internal_children(monkeypatch):
+    captured_sql: list[str] = []
+    captured_params: list[dict] = []
+
+    def fake_fetch_all(conn, sql, params):
+        captured_sql.append(sql)
+        captured_params.append(params)
+        return []
+
+    monkeypatch.setattr(queries, "_fetch_all", fake_fetch_all)
+
+    queries.child_jobs(None, "root-job-1")
+
+    sql = captured_sql[0]
+    assert "FROM job_aggregates j" in sql
+    assert "j.is_internal IS TRUE" in sql
+    assert "j.root_job_id = %(root_job_id)s" in sql
+    assert "ORDER BY j.created_at ASC" in sql
+    assert captured_params[0] == {"root_job_id": "root-job-1"}
+
+
+def test_jobs_human_payload_summary_truncates_long_strings():
+    payload = job_formatters.summarize_job_payload(
+        {
+            "job_params": {
+                "prompt": "x" * 400,
+            }
+        }
+    )
+
+    assert payload["job_params"]["prompt"] == ("x" * 239) + "..."
+
+
 def test_jobs_db_normalizes_async_database_url_for_psycopg2():
     normalized = normalize_database_url(
         "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/app",
@@ -1224,6 +1489,7 @@ def test_verify_check_uses_default_env_config_scan():
             run_script_syntax() { :; }
             run_cli_smoke() { :; }
             run_python_syntax() { :; }
+            run_alembic_revision_check() { printf 'alembic-revision-check\\n'; }
             run_registry_check() { :; }
             run_tests() { :; }
             run_env_config_check() {
@@ -1243,6 +1509,7 @@ def test_verify_check_uses_default_env_config_scan():
 
     assert "env-config-argc=0" in result.stdout
     assert "env-config-arg=" not in result.stdout
+    assert "alembic-revision-check" in result.stdout
 
 
 def test_env_config_default_scan_includes_env_variants():

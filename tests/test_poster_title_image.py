@@ -404,6 +404,8 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     assert recorded[0]["response_model"] == "gpt-5.5"
     assert recorded[0]["background"] == "auto"
     assert recorded[0]["output_format"] == "png"
+    assert recorded[0]["scope_id"] == str(root_id)
+    assert recorded[0]["scope_job_id"] == root_id
     assert GREEN_BACKGROUND_TEXT in recorded[0]["prompt"]
     assert "poster-title layer" in recorded[0]["prompt"]
     assert "poster title text only" in recorded[0]["prompt"]
@@ -590,6 +592,7 @@ async def test_style_probe_uses_ai_ledger(monkeypatch):
         "describe style",
         caller_id="caller-1",
         scope_id=str(job.id),
+        scope_job_id=job.id,
         request_id="request-1",
         job=job,
         attempt_id=job.active_attempt_id,
@@ -599,6 +602,7 @@ async def test_style_probe_uses_ai_ledger(monkeypatch):
     assert recorded["operation"] == "poster_title_image.probe_style"
     assert recorded["model_id"] == "gpt-5.5"
     assert recorded["reference_images"] == [reference_image]
+    assert recorded["scope_job_id"] == job.id
 
 
 def test_job_cost_maps_terminal_billing_projection():
