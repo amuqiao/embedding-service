@@ -38,7 +38,7 @@
 
 `docker-compose.yml environment` 只放容器网络地址、容器内端口和容器内路径等运行形态覆盖；业务配置、密钥、模型参数和限制参数来自 env 文件或运行时注入。
 
-本项目不维护生产部署、远程数据库、K8s、云平台 Secrets 或 CI/CD 发布流水线。
+本项目不维护生产部署、远程数据库重置、K8s 资源、云平台 Secrets 或 CI/CD 发布流水线。已部署 Pod 内的 PostgreSQL / Redis 连接检查和手动 Alembic 迁移入口是 `./scripts/k8s.sh`，只使用当前 Pod 注入的应用环境变量。
 
 ## 开发入口
 
@@ -58,6 +58,7 @@
 ./scripts/verify.sh workflow-smoke
 ./scripts/verify.sh check
 ./scripts/deploy.sh check
+./scripts/k8s.sh --help
 ```
 
 `start`、`stop`、`restart`、`status` 支持指定服务：
@@ -112,6 +113,8 @@
 - `.data/` 是本地验证输入，不提交。
 - 本地默认端口：API `8100`，PostgreSQL `25432`，Redis `26379`。
 - `scripts/dev.sh` 会拒绝明显非本地的 `DATABASE_URL` 和 `REDIS_URL`。
+- `scripts/k8s.sh check` 会在 Pod 内打印完整 `DATABASE_URL` / `REDIS_URL` 和解析出的密码，用于生产连接串排障。
+- `scripts/k8s.sh migrate --confirm` 是 Pod 内写库迁移动作，只应在一个已部署 Pod 内执行一次。
 - 不要在本仓库脚本中加入生产部署、远程数据库重置、密钥写入或跨仓库清理逻辑。
 
 ## 配置面规则

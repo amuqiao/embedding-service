@@ -16,7 +16,7 @@
 
 ## 运行形态
 
-本地开发入口是 `./scripts/dev.sh`，部署检查入口是 `./scripts/deploy.sh`。
+本地开发入口是 `./scripts/dev.sh`，compose 部署检查入口是 `./scripts/deploy.sh`。生产 K8s 资源和发布流水线不由本仓库管理；已部署 Pod 内的 PostgreSQL / Redis 连接检查和 Alembic 迁移入口是 `./scripts/k8s.sh`。
 
 ```text
 API Pod(s)
@@ -28,6 +28,13 @@ Worker Pod(s)
   -> Redis broker
   -> Object storage
   -> AI provider adapter
+
+Manual migration in one deployed Pod
+  -> PostgreSQL
+
+Manual connection check in one deployed Pod
+  -> PostgreSQL
+  -> Redis broker
 
 Recovery / publisher loop
   -> PostgreSQL

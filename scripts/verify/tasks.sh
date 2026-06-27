@@ -46,6 +46,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/lib/compose.sh" \
     "$ROOT_DIR/scripts/dev/services.sh" \
     "$ROOT_DIR/scripts/deploy.sh" \
+    "$ROOT_DIR/scripts/k8s.sh" \
     "$ROOT_DIR/scripts/jobs.sh" \
     "$ROOT_DIR/scripts/real-flow.sh" \
     "$ROOT_DIR/scripts/verify/tasks.sh"
@@ -64,6 +65,8 @@ run_cli_smoke() {
   event "OK" "verify.sh" "help"
   "$ROOT_DIR/scripts/deploy.sh" --help >/dev/null
   event "OK" "deploy.sh" "help"
+  "$ROOT_DIR/scripts/k8s.sh" --help >/dev/null
+  event "OK" "k8s.sh" "help"
   "$ROOT_DIR/scripts/jobs.sh" --help >/dev/null
   event "OK" "jobs.sh" "help"
   "$ROOT_DIR/scripts/real-flow.sh" --help >/dev/null

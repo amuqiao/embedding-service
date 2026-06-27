@@ -159,11 +159,29 @@ def test_real_flow_cli_help_is_available_without_api():
     assert "poster-title-image" in result.stdout
 
 
+def test_k8s_cli_help_is_available_without_db():
+    result = subprocess.run(
+        ["./scripts/k8s.sh", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "K8s Pod 内手动运维入口" in result.stdout
+    assert "check postgres" in result.stdout
+    assert "check redis" in result.stdout
+    assert "current" in result.stdout
+    assert "heads" in result.stdout
+    assert "migrate --confirm" in result.stdout
+
+
 def test_shell_entrypoints_require_command_without_help():
     for script in (
         "./scripts/dev.sh",
         "./scripts/deploy.sh",
         "./scripts/verify.sh",
+        "./scripts/k8s.sh",
         "./scripts/jobs.sh",
         "./scripts/real-flow.sh",
     ):

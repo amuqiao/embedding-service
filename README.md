@@ -22,6 +22,8 @@ FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默�
 - `compose-deps`：只启动 PostgreSQL / Redis 依赖服务，适合给宿主机上的应用进程提供依赖。
 - `compose-full`：API、worker、PostgreSQL、Redis 全部由 `docker compose` 管理，并在应用启动前执行 Alembic 迁移。
 
+生产 K8s 形态不由本仓库创建或管理资源。api / worker Pod 可继续使用 `start-api.sh` 和 `start-worker.sh` 作为启动入口；Pod 内连接检查和手动数据库迁移使用 `./scripts/k8s.sh`。
+
 `deploy.sh` 只管理 compose 部署入口：
 
 ```bash
@@ -33,6 +35,19 @@ FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默�
 ./scripts/deploy.sh status compose-full
 ./scripts/deploy.sh down compose-full
 ```
+
+K8s Pod 内运维入口只在已经部署的 Pod 中执行，不调用 `kubectl`，不创建 Job / Pod / Secret / ConfigMap。它使用当前 Pod 注入的 `DATABASE_URL` / `REDIS_URL` 检查外部 PostgreSQL / Redis，并使用 `DATABASE_URL` 执行 Alembic 迁移：
+
+```bash
+./scripts/k8s.sh check
+./scripts/k8s.sh check postgres
+./scripts/k8s.sh check redis
+./scripts/k8s.sh current
+./scripts/k8s.sh heads
+./scripts/k8s.sh migrate --confirm
+```
+
+`check` 是聚合命令，会依次执行 `check postgres` 和 `check redis`；单项检查便于只验证某一个外部连接。检查命令会打印完整连接串、编码密码和解码密码，便于核对生产连接串中特殊字符是否正确 URL 编码。`migrate` 是写库动作，必须显式传入 `--confirm`。生产多副本部署时，只应在一个 Pod 内执行一次迁移，并在执行前确认该 Pod 运行的是要发布的代码版本。
 
 配置加载优先级：
 
@@ -187,7 +202,7 @@ Job 只读排障由 `jobs.sh` 承接：
 
 `jobs.sh` 只执行只读查询，不创建 Job、不取消、不重试、不补偿、不重放 callback。默认输出面向人读，`--json` 输出纯 JSON，适合 AI、CI 或运维平台解析。`verify.sh check` 只校验 `jobs.sh --help` 和 Python 语法，不连接数据库。
 
-脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/jobs.sh` 调度 `scripts/jobs/` 中的只读 Job 排障能力，`scripts/deploy.sh` 只调度 compose 部署能力。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。脚本专用变量从 `scripts/.env` 或运行时环境读取，不从应用 `.env` 读取。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
+脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/jobs.sh` 调度 `scripts/jobs/` 中的只读 Job 排障能力，`scripts/deploy.sh` 只调度 compose 部署能力，`scripts/k8s.sh` 只提供 Pod 内连接检查和 Alembic 运维入口。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。脚本专用变量从 `scripts/.env` 或运行时环境读取，不从应用 `.env` 读取。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
 
 入口脚本约束：
 
@@ -196,9 +211,10 @@ Job 只读排障由 `jobs.sh` 承接：
 - `scripts/dev.sh` 只管理本地服务生命周期和本地开发端口探测；模板级一次性验证放在 `scripts/verify.sh`。
 - 业务/供应商扩展示例放在 `examples/business/`，不进入 `scripts/` 稳定命令面。
 - `scripts/deploy.sh` 只管理 `compose-deps` 和 `compose-full`，不管理 `local` 本地服务生命周期。
+- `scripts/k8s.sh` 只在 K8s Pod 内检查 PostgreSQL / Redis 连接、查询或执行 Alembic 迁移，不管理 K8s 资源，不替代发布编排。
 - 不新增 silent fallback、默认吞错或跨职责兼容别名；命令不满足前置条件时应直接报错。
 
-`deploy.sh` 只面向本项目已验收的 compose 部署形态，不负责本地服务生命周期、生产部署、远程数据库、K8s、云平台 Secrets 或 CI/CD 发布流水线。
+`deploy.sh` 只面向本项目已验收的 compose 部署形态，不负责本地服务生命周期、生产部署、远程数据库、K8s 资源、云平台 Secrets 或 CI/CD 发布流水线。
 
 模板内置 Job workflow 验证不依赖真实模型：
 
