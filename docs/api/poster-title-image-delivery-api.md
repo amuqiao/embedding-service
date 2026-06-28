@@ -1,6 +1,6 @@
 # AI 标题图生成接口文档
 
-本文档面向调用方，定义 AI 标题图生成能力的交付评审接口合同；已实现能力和仍属 vNext 的能力在“合同状态说明”中区分。本文档为自包含文档，不依赖服务端项目内部文档。
+本文档面向调用方，定义 AI 标题图生成能力的交付评审接口合同；已实现能力和仍属 vNext 的能力在“合同状态说明”中区分。服务前缀、HTTP envelope、通用 Job、Callback 和 billing 公共合同以 [`service-contract.md`](service-contract.md) 为准。
 
 > **版本信息**
 >
@@ -21,7 +21,7 @@
 
 本文定义交付评审合同，用于双方评审接口形态；不表示所有字段、状态和路由都已经在当前服务实现中上线。
 
-当前服务已支持 `poster_title_image` 声明 `result_snapshot_statuses={"running","failed"}`，在 `running` 和 `failed` 状态返回已成功 item 的 `job_result` 增量快照。`GET /jobs/{job_id}/cost` 仍只作为 vNext 目标合同。
+当前服务已支持 `poster_title_image` 声明 `result_snapshot_statuses={"running","failed"}`，在 `running` 和 `failed` 状态返回已成功 item 的 `job_result` 增量快照。当前稳定费用查询入口是 `GET /jobs/{job_id}/billing`；`job.cost` 是 Job snapshot 和 Callback 中的 Job 级总费用快照。
 
 ## 1. 接入约定
 
@@ -116,7 +116,7 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 
 ### Cost
 
-对外只返回 Job 级总费用，不返回 token、图片、视频、音频或 provider 调用明细。
+`job.cost` 只返回 Job 级总费用，不返回 token、图片、视频、音频或 provider 调用明细；需要费用状态和聚合明细时查询 Job billing。
 
 ```json
 {
@@ -135,15 +135,15 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 规则：
 
 - 非终态 Job 的 `cost` 为 `null`。
-- 终态 Job 的 `cost` 必须存在，且 `cost.final=true`。
-- 如果图片生成已完成但费用尚未聚合完成，Job 仍保持 `running`，`cost=null`。
+- 终态 Job 可返回 `cost`；如果返回，`cost.final=true`。
+- 如果费用尚不可用，`cost=null`；费用状态以 Job billing 的 `status` 为准。
 
 ### Job Status
 
 | 状态 | 说明 |
 |---|---|
 | `queued` | 已接单，尚未开始执行 |
-| `running` | 执行中，或图片已完成但费用仍在聚合 |
+| `running` | 执行中；可返回已成功生成的 item 增量快照 |
 | `succeeded` | 全部 item 成功 |
 | `failed` | 整体任务失败；如果失败前已有 item 成功，仍可返回成功 item 结果子集 |
 
@@ -556,7 +556,7 @@ Callback payload 不套 HTTP success envelope：
 
 - `event` 允许 `job.succeeded`、`job.failed`。
 - Callback payload 顶层 `job` 使用同一套 `JobEnvelope` 字段结构；调用方需要最新增量结果时，应以 `job.status_url` 再查询任务状态。
-- 终态 Callback payload 的 `job.cost` 必须存在，且 `job.cost.final=true`。
+- 终态 Callback payload 可返回 `job.cost`；如果返回，`job.cost.final=true`。
 - 调用方接收 Callback 时应返回 HTTP `2xx` 和 JSON body：`{"accepted": true}`。
 - Callback 失败不改变 Job 终态；调用方仍可通过任务查询接口获取最终结果。
 
@@ -819,7 +819,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | `job.job_progress.percent` | integer | 展示进度，非终态 0 到 99，终态 100 |
 | `job.job_result` | object 或 null | 任务结果快照 |
 | `job.job_error` | object 或 null | Job 级失败原因 |
-| `job.cost` | object 或 null | Job 级总费用；非终态为 `null`，终态为 `Cost` |
+| `job.cost` | object 或 null | Job 级总费用；非终态为 `null`，终态可返回 `Cost` |
 | `job.callback` | object | Callback 投递状态摘要 |
 | `job.status_url` | string | 任务查询路径 |
 | `job.created_at` | string | 创建时间 |
@@ -868,7 +868,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 - `queued` 时 `job_result=null`、`cost=null`。
 - `running` 或 `failed` 时可以返回非空 `job_result`，用于展示已经成功生成的 item 图片产物；如果尚未生成首个成功 item，也可以返回 `job_result=null`。
 - `running` 或 `failed` 的非空 `job_result.items[]` 只包含 `status=succeeded` 的 item，不返回未开始、运行中或失败的 internal leaf job 状态。
-- `succeeded`、`failed` 为终态，`cost` 必须存在且 `cost.final=true`。
+- `succeeded`、`failed` 为终态，可返回 `cost`；如果返回，`cost.final=true`。
 - `running` 或 `failed` 的非空 `job_result.items[]` 必须按请求 `items[]` 顺序返回已成功 item 子集。
 - 已经公开为 `succeeded` 的 item，后续响应必须继续返回该 item 及其已产出的 `images`。
 - `batch_summary` 必须与 `items[].status` 一致。

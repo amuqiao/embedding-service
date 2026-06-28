@@ -7,7 +7,7 @@
 - 合同状态：current implementation with remaining vNext proposals。
 - 当前优先级：服务前缀、认证、HTTP envelope、通用错误和共享 Job 状态语义以 [`service-contract.md`](service-contract.md) 为准。
 - 已实现：`poster_title_image` 声明 `result_snapshot_statuses={"running","failed"}`，在 `running` 和 `failed` 状态可以返回非空 `job_result`，用于展示已经成功生成的标题图 item。
-- vNext shared-contract 提案：本文中的 `/jobs/{job_id}/cost` 和 `Cost` 尚未覆盖当前实现合同。
+- 当前费用查询以 [`service-contract.md`](service-contract.md) 中的 `/jobs/{job_id}/billing` 为准；`job.cost` 是 Job snapshot 和 Callback 中的 Job 级总费用快照。
 
 ## Scope
 
@@ -15,9 +15,9 @@
 
 1. 模型列表：返回厂商和模型基础信息。
 2. 语言列表：返回基础语言目录。
-3. 默认提示词：按 `job_type`、语言、模型和分组返回默认提示词。
+3. 默认提示词：查看服务支持的提示词模板入口；当前支持的查询维度以 [`service-contract.md`](service-contract.md) 为准。
 4. 生成图片：通过异步 Job 创建批量标题图生成任务，并通过轮询获取增量结果和终态，通过 Callback 获取终态通知和总费用。
-5. 费用查询：额外查询 Job 级总费用 `Cost`，不返回 token、图片、视频或音频分项账单。
+5. 费用查询：通过 Job billing 查询 Job scope 的费用聚合结果，读取总费用、计费状态和诊断信息。
 
 本文不暴露 provider 密钥、内部价格矩阵、绿底抠图策略、透明背景兼容细节、OSS 转存实现、worker 编排细节或 provider raw response。
 
@@ -27,9 +27,9 @@
 - 输入参考图和输出图片都使用 OSS URL ref；不直接传 base64、本地路径或临时签名 URL。
 - CPP 临时修改的提示词只对本次 Job 生效，不写回默认提示词模板。
 - `client_request_id` 使用 CPP 的 `requestID`，作为同一 caller 下的提交幂等键。
-- 轮询是主链路，Callback 是终态通知。终态 Job 查询和 Callback 都返回 Job 级总费用 `Cost`；Callback 失败不改变 Job 终态。
+- 轮询是主链路，Callback 是终态通知。终态 Job 查询和 Callback 可返回 Job 级总费用 `Cost`；Callback 失败不改变 Job 终态。
 - 一个 `poster_title_image` Job 可以包含多个语言 item；每个 item 有独立参考图、模型参数和提示词覆盖。
-- 对外只返回 Job 级总费用 `Cost`：`currency`、`amount`、`final`。不返回 `tokens`、`images`、`videos`、`audio` 或其它分项账单。
+- `job.cost` 只返回 Job 级总费用 `Cost`：`currency`、`amount`、`final`。需要计费状态、调用次数、计费单位或诊断信息时查询 Job billing。
 - 内部可以在 `aigc_api_logs`、AI call ledger 或等价日志中保留每次调用的 `provider`、`model`、`operation`、`usage_detail` 和成本明细；这些明细不属于外部 API 合同。
 
 ## Shared Types
@@ -89,11 +89,10 @@ OSS 责任边界：
 Rules:
 
 - `amount` 是 Job 内所有可计费 provider 调用的总和。例如 LLM、图片生成、视频生成或查询调用都只折算进一个总费用。
-- API 不返回 token、图片、音频、视频、调用次数、provider、model、operation 或 pricing ref 明细。
-- `job.cost` 只在终态 Job snapshot 中返回，且必须是 `final=true`；非终态 Job snapshot 的 `job.cost` 必须为 `null`。
-- `final=false` 只允许出现在独立 `GET /jobs/{job_id}/cost` 查询中，表示 Job 尚未终态或内部日志尚未聚合完成。
-- 对外发布终态 Job snapshot 前，AI 服务必须先完成费用聚合。
-- 如果所有 item 已完成但费用尚未聚合完成，对外 `job_status` 仍保持 `running`，`job_result` 可以展示全部 item 终态结果，`job.cost` 必须为 `null`。
+- `job.cost` 不返回 token、图片、音频、视频、调用次数、provider、model、operation 或 pricing ref 明细。
+- `job.cost` 只在终态 Job snapshot 中返回；如果返回，必须是 `final=true`。非终态 Job snapshot 的 `job.cost` 必须为 `null`。
+- 独立费用查询使用 [`service-contract.md`](service-contract.md) 中的 `/jobs/{job_id}/billing`；费用是否可用由 `BillingEnvelope.status` 表达。
+- 如果费用尚不可用，`job.cost` 为 `null`；费用状态以 Job billing 的 `status` 为准。
 - 当费用计算失败且无法形成可信总数时，返回统一错误响应，不返回伪造的 0 成本成功。
 
 ### Job Progress
@@ -140,25 +139,21 @@ CPP 可以调用服务级基础语言目录 `GET /api/v1/ai-jobs/languages` 渲�
 
 ## 3. Prompt Templates
 
-> vNext route contract：当前实现是否已支持按 `job_type`、`language` 和分组返回提示词，以 [`service-contract.md`](service-contract.md) 为准。
-
 ### Method / Path
 
 ```http
-GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image&language=es
+GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
 ```
 
 ### Purpose
 
-CPP 用该接口获取指定 `job_type` 下的默认提示词。提示词按组返回，CPP 可以展示并允许用户临时编辑业务层提示词。
+CPP 用该接口获取指定 `job_type` 下的默认提示词模板。调用方可以展示提示词块，并在创建 Job 时按 `prompt_blocks[].key` 回填临时覆盖内容。
 
 ### Request Query
 
 | 参数 | 必填 | 说明 |
 |---|---:|---|
-| `job_type` | 是 | 固定为 `poster_title_image` |
-| `language` | 否 | 语言特化提示词；不传时返回通用默认提示词 |
-| `schema_version` | 否 | 提示词 schema 版本；不传时默认为 `default` |
+| `job_type` | 否 | 默认 `poster_title_image`；传入未知 `job_type` 返回 `INVALID_JOB_TYPE` |
 
 ### Response
 
@@ -167,45 +162,28 @@ CPP 用该接口获取指定 `job_type` 下的默认提示词。提示词按组�
   "code": "0",
   "msg": "success",
   "data": {
-    "schema_version": "default",
+    "version": "default",
     "job_type": "poster_title_image",
-    "language": "es",
-    "groups": [
+    "name": "Poster Title Image",
+    "description": "Default prompt blocks for poster title image generation",
+    "prompt_blocks": [
       {
-        "group_key": "style_probe",
-        "display_name": "风格探针",
-        "editable": true,
-        "prompts": [
-          {
-            "prompt_key": "style_probe",
-            "prompt_ref": "poster_title_image.style_probe.v1",
-            "content": "Analyze the reference title image and describe the visual design style of the letterforms only..."
-          }
-        ]
+        "key": "style_probe",
+        "role": "user",
+        "label": "风格探针",
+        "default_content": "Analyze the reference title image and describe the visual design style of the letterforms only..."
       },
       {
-        "group_key": "additional_prompt",
-        "display_name": "附加提示词",
-        "editable": true,
-        "prompts": [
-          {
-            "prompt_key": "additional_prompt",
-            "prompt_ref": "poster_title_image.additional_prompt.v1",
-            "content": "Keep the result suitable for a standalone poster title layer..."
-          }
-        ]
+        "key": "additional_prompt",
+        "role": "user",
+        "label": "附加提示词",
+        "default_content": "Keep the result suitable for a standalone poster title layer..."
       },
       {
-        "group_key": "layout_rules",
-        "display_name": "排版规则",
-        "editable": true,
-        "prompts": [
-          {
-            "prompt_key": "layout_rules",
-            "prompt_ref": "poster_title_image.layout_rules.es.v1",
-            "content": "标题为横向标题区。先评估该语言文案的视觉宽度..."
-          }
-        ]
+        "key": "layout_rules",
+        "role": "user",
+        "label": "排版规则",
+        "default_content": "标题为横向标题区。先评估该语言文案的视觉宽度..."
       }
     ]
   },
@@ -216,11 +194,9 @@ CPP 用该接口获取指定 `job_type` 下的默认提示词。提示词按组�
 
 Rules:
 
-- `job_type` 是主索引，必须传。
-- `schema_version` 默认值为 `default`；同一接口不再同时返回 `prompt_set_version`。
-- `language` 是可选过滤条件。只有确实存在语言差异时，AI 服务才需要维护对应特化提示词。
-- `group_key` 和 `prompt_key` 是稳定合同，CPP 可按它们回填临时修改。
-- `prompt_ref` 是 AI 服务返回的引用，调用方不应拼接或推导。
+- `job_type` 是唯一查询维度；当前接口不接收 `language`、`model_id`、`group_key` 或 `schema_version` query。
+- `prompt_blocks[].key` 是稳定提示词块标识，CPP 可按对应 `job_type` 的任务创建合同回填到 `prompt_overrides`。
+- `role`、`label` 和 `default_content` 只描述默认模板展示和覆盖入口；服务端仍会在执行时把模板块、任务参数和固定业务编排拼成最终模型请求。
 - 核心系统提示词、输出 schema、透明图处理约束和安全边界不在该接口暴露，也不允许 CPP 覆盖。
 
 ## 4. Create Poster Title Image Job
@@ -432,10 +408,9 @@ Forbidden request fields:
 Rules:
 
 - 接单响应中的 `cost` 固定为 `null`。
-- Job 进入终态后，`GET /jobs/{job_id}` 和终态 Callback 都必须返回 `cost.final=true` 的 Job 级总费用。
-- `GET /jobs/{job_id}/cost` 是额外查询接口，不是调用方获取终态费用的必经路径。当前实现仍可能只支持 [`service-contract.md`](service-contract.md) 中的 `/jobs/{job_id}/billing`。
-- CPP 接入 vNext 合同前，以 [`service-contract.md`](service-contract.md) 中的 `/billing` 为准；接入 vNext 合同后，以本文 `job.cost` 和 `/cost` 为准。
-- 同一个 CPP 集成环境不应同时混读旧 `/billing` 和新 `Cost` 合同；如果服务端迁移期同时暴露两套接口，新 `Cost` 是 CPP 的权威费用合同。
+- Job 进入终态后，`GET /jobs/{job_id}` 和终态 Callback 可返回 `cost.final=true` 的 Job 级总费用。
+- 需要独立查询费用时，以 [`service-contract.md`](service-contract.md) 中的 `/jobs/{job_id}/billing` 为准。
+- `job.cost` 是 Job snapshot 中的总费用快照；Job billing 是费用状态、调用统计和诊断信息的稳定查询入口。
 
 ## 5. Poll Poster Title Image Job
 
@@ -667,7 +642,7 @@ Result fields:
 | `job_result.items[].error` | item 失败原因；成功时为 `null` |
 | `job_result.duration_ms.ai_model` | 已完成内部 AI 节点的 provider 调用耗时累计 |
 | `job_result.duration_ms.total` | 已完成内部 AI 节点的服务端执行耗时累计，不包含排队等待时间 |
-| `job.cost` | Job 级总费用；非终态为 `null`，终态必须为 `Cost` |
+| `job.cost` | Job 级总费用；非终态为 `null`，终态可返回 `Cost` |
 
 Result rules:
 
@@ -689,21 +664,19 @@ Result rules:
 - `duration_ms.ai_model` 统计已完成内部 AI 节点的 provider 调用耗时累计；`duration_ms.total` 统计已完成内部 AI 节点的服务端执行耗时累计，不包含排队等待时间。
 - token、图片、视频、音频和调用次数等计费明细不在 `job_result` 中返回。
 - `job_status=queued` 或 `job_status=running` 时，`job.cost` 必须为 `null`。
-- `job_status=succeeded` 或 `job_status=failed` 时，`job.cost` 必须为 `Cost`，且 `cost.final=true`。
+- `job_status=succeeded` 或 `job_status=failed` 时，`job.cost` 可返回 `Cost`；如果返回，`cost.final=true`。
 
-## 6. Query Job Cost
-
-> vNext billing proposal：本节定义面向 CPP 的额外费用查询接口。正式发布前必须同步升级 [`service-contract.md`](service-contract.md)、schema、route 和 contract tests；在此之前，调用方不能把 `/jobs/{job_id}/cost` 视为当前已实现接口。
+## 6. Query Job Billing
 
 ### Method / Path
 
 ```http
-GET /api/v1/ai-jobs/jobs/{job_id}/cost
+GET /api/v1/ai-jobs/jobs/{job_id}/billing
 ```
 
 ### Purpose
 
-CPP 用该接口额外查询单个 Job 的总费用。终态 `GET /jobs/{job_id}` 和终态 Callback 已经返回 `job.cost`；该接口用于调用方需要独立刷新费用、补偿读取或排查费用状态时使用。
+CPP 用该接口查询单个 Job 的费用聚合结果。终态 `GET /jobs/{job_id}` 和终态 Callback 可以返回 `job.cost` 总费用快照；Job billing 用于独立刷新费用、补偿读取或排查费用状态。
 
 ### Response
 
@@ -712,10 +685,24 @@ CPP 用该接口额外查询单个 Job 的总费用。终态 `GET /jobs/{job_id}
   "code": "0",
   "msg": "success",
   "data": {
-    "cost": {
+    "billing": {
+      "schema_version": "1",
+      "scope_type": "job",
+      "scope_id": "018f9a7f-0183-4e4f-938d-1baf7411b4fd",
+      "status": "estimated",
+      "kind": "cost_estimate",
       "currency": "USD",
-      "amount": "0.755700",
-      "final": true
+      "total_cost_amount": "0.755700",
+      "usage_units": {
+        "image_count": 12
+      },
+      "pricing_refs": ["openai:gpt-image-2@2026-06-24"],
+      "ai_call_count": 12,
+      "billable_call_count": 12,
+      "unbillable_call_count": 0,
+      "failed_call_count": 0,
+      "diagnostic_reason": null,
+      "finalized_at": "2026-06-24T12:01:00+00:00"
     }
   },
   "request_id": "01J...",
@@ -725,13 +712,11 @@ CPP 用该接口额外查询单个 Job 的总费用。终态 `GET /jobs/{job_id}
 
 Rules:
 
-- `amount` 是该 Job 内所有可计费内部调用的总费用。
-- 对外不返回 `tokens`、`images`、`videos`、`audio`、`usage_units`、`pricing_refs`、`ai_call_count`、`provider`、`model` 或 `operation`。
-- `final=true` 表示内部调用日志已经聚合完毕，CPP 可以展示为最终费用。
-- `final=false` 表示 Job 或费用聚合还未完成，CPP 应继续轮询 Job 或 Cost。
-- Job 终态响应和终态 Callback 中的 `job.cost.final` 必须是 `true`。
+- `billing.total_cost_amount` 是该 Job scope 内所有可计费内部调用的总费用。
+- `billing.status` 表达费用聚合状态；`estimated` 和 `not_billable` 表示总费用可用，`incomplete` 和 `failed` 表示不能把 `total_cost_amount` 当作最终费用使用。
+- Job billing 只允许在 Job 进入 `succeeded` 或 `failed` 后查询。
+- Job 终态响应和终态 Callback 中如果返回 `job.cost`，其 `final` 必须是 `true`。
 - 已失败的 Job 也可以有最终费用；是否收费由内部调用日志聚合决定。
-- CPP 接入 vNext 合同后，应以 `job.cost` 和本接口返回的 `Cost` 为费用权威；旧 `/billing` 如果仍存在，只作为兼容旧调用方的接口，不作为 CPP 新接入面的读取来源。
 
 ## 7. Callback
 
@@ -740,8 +725,8 @@ Callback payload、签名和 delivery 语义沿用 [`service-contract.md`](servi
 Rules:
 
 - Callback payload 顶层 `job` 使用同一套 `JobEnvelope` 字段结构；调用方需要最新增量结果时，应以 `job.status_url` 再查询 `GET /jobs/{job_id}`。
-- 终态 Callback payload 的 `job.cost` 必须存在，且 `job.cost.final=true`。
-- CPP 收到终态 Callback 后，可以直接读取 payload 顶层 `job.cost`；`GET /jobs/{job_id}/cost` 只是额外查询接口。
+- 终态 Callback payload 可返回 `job.cost`；如果返回，`job.cost.final=true`。
+- CPP 收到终态 Callback 后，可以直接读取 payload 顶层 `job.cost`；需要费用状态、调用统计或诊断信息时查询 `GET /jobs/{job_id}/billing`。
 
 ## 8. Error Codes
 
