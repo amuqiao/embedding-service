@@ -88,6 +88,28 @@ Transactional Outbox 本体只要求业务事实和待发布消息意图在同�
 | `callback_outbox` | Job 终态 Callback 的投递账本和重试队列 | 是 | 不改变 Job 终态，不发布 worker 任务 |
 | `job_audit_events` | 内部审计事件和排障时间线 | 辅助 | 不作为恢复、幂等或状态推进依据 |
 
+## 当前字段收口事实
+
+当前 schema 已把 retry、执行权、publish 和 callback delivery 从 `job_aggregates` 中拆出，字段 owner 如下：
+
+| 表 | 当前负责的事实 | 明确不再保存的事实 |
+|---|---|---|
+| `job_aggregates` | Job 聚合状态、root/child lineage、提交参数 ref/hash、runtime snapshot、result/error、callback 配置、`active_attempt_id` | attempt 次数、retry policy、worker lease/CAS token、heartbeat、dispatch retry、callback delivery 摘要 |
+| `job_execution_attempts` | `purpose`、`purpose_attempt_no`、lease、heartbeat、timeout、policy snapshot、retry chain、retry decision | Taskiq publish 次数、callback HTTP 投递次数 |
+| `dispatch_outbox` | 发布同一个 `attempt_id` 给 Taskiq 的 publish retry、lease、dead-letter 和 policy snapshot | Job 业务终态、business execution retry、callback delivery |
+| `callback_outbox` | root Job 终态 callback payload 快照、delivery retry、HTTP 响应、dead-letter 和 policy snapshot | Job 业务终态、worker task publish、execution attempt |
+
+已经移出 `job_aggregates` 的旧字段包括：`max_attempts`、`attempt_count`、`execution_attempts`、`execution_token`、`execution_generation`、`last_execution_at`、`last_heartbeat_at`、`timeout_seconds`、`callback_*` delivery 摘要、`parent_job_id`、`is_internal`、`job_params`、`result_ref` 和 `canonical_result_ref`。
+
+当前关键 schema 约束：
+
+- public root 固定为 `root_job_id IS NULL + workflow_node_key IS NULL + client_request_id IS NOT NULL`；workflow child 固定为 `root_job_id IS NOT NULL + workflow_node_key IS NOT NULL + client_request_id IS NULL`。
+- `unique(root_job_id, workflow_node_key) where workflow_node_key is not null` 是 child node 幂等约束，不只是查询索引。
+- `job_params_ref` 和 `job_params_hash` 对每条 Job 必填；公开 result 和 canonical result 保存在 JSONB，外部大文件只通过 result 内部 artifact ref 表达。
+- terminal Job 必须清空 `active_attempt_id`；`active_attempt_id` 有 FK 约束，同 Job 归属当前由 repository 的 claim / terminal 写入条件保护，尚不是数据库复合约束。
+- `dispatch_outbox` 不保存 `job_id`，只通过 `attempt_id` 关联 execution attempt；它保留 `unique(event_id)`、`unique(attempt_id, task_name)`、`pending/leased/published/retrying/dead_letter` status 枚举、publish attempt 计数和 `publish_retry_policy_snapshot`。
+- `callback_outbox` 保留 `unique(job_id, event_type)`、`unique(event_id)`、`pending/leased/delivered/retrying/skipped/dead_letter` status 枚举、delivery attempt 计数和 `delivery_retry_policy_snapshot`；callback 投递失败不会回写或改变 Job 终态。
+
 ## 关键机制速查
 
 ### 容量门禁
@@ -313,7 +335,7 @@ Job 执行重试不是全局 `.env` 开关。当前重试事实由 `job_executio
 | `MAX_ACTIVE_JOBS` | active Job 接单上限；超出时创建请求返回繁忙 |
 | `CALLBACK_TIMEOUT_SECONDS` | Callback 单次 HTTP 请求超时 |
 
-这些派生项不作为生产配置暴露，也不接受 env 覆盖：
+这些派生项和内部 retry policy 不进入 `.env.example` / flat env 配置合同；代码在 `Settings` 或 job registry 内部持有默认值，并在创建 attempt / outbox 时固化到 policy snapshot：
 
 | 配置 | 不暴露原因 |
 |---|---|

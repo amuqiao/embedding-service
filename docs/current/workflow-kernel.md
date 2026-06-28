@@ -9,6 +9,7 @@
 - `job_aggregates` 通过 `root_job_id` 和 `workflow_node_key` 表达 root / child 关系；public root 的两者都为空，workflow child 的两者都非空。
 - `workflow_plan` 固化在 root Job runtime snapshot 中，当前 planner 支持 `task`、`chain`、`group`、`chord`、`map`、`starmap` 和 `chunks`；`job_test_workflow` 额外提供 `single` 示例模式，用一个 `task` 表达 one-child workflow。
 - child Job 终态后由 workflow orchestrator 推进 downstream node 或 root terminal projection。
+- root orchestration attempt 成功后，root Job 可以保持 `running` 且 `active_attempt_id=null`，表示编排权已释放、正在等待 child terminal projection。
 - root Job 只发送一次调用方 callback；child Job 不发送调用方 callback。
 - child Job 的 AI 调用使用 root Job billing scope，ledger 行仍保留实际 child `job_id`、`attempt_id` 和 `job_type` 作为诊断归因。
 - workflow child node 当前复用注册的 `job_type` executor；目录上应优先引用 `role="leaf"` 或 `role="root_or_leaf"` 的类型，但运行时 child 事实仍由 `root_job_id + workflow_node_key` 表达。

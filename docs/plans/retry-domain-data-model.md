@@ -2,16 +2,39 @@
 
 本文记录 Job kernel retry 语义和数据模型的重构计划。当前已实现事实仍以 [`../current/job-kernel.md`](../current/job-kernel.md) 和 [`../current/workflow-kernel.md`](../current/workflow-kernel.md) 为准；本文只写目标方案和验收标准。
 
-## Current Baseline
+## Implementation Status
+
+本计划的 retry domain 拆分已经落地到当前模型：execution attempt retry、dispatch publish retry 和 callback delivery retry 已分属不同事实源，workflow orchestration 与 business execution 已通过 `attempt.purpose` 区分。保留本文在 `docs/plans/`，是因为仍有少量 outbox / DB 级不变量 hardening 没有完成，不能把本文作为纯历史归档。
+
+已落地：
+
+- `job_execution_attempts` 已新增 `purpose`、`purpose_attempt_no`、retry chain、policy columns、`retry_policy_snapshot`、`retry_eligible` 和 `retry_decision*`。
+- 普通 non-workflow root Job 使用 `business_execution` attempt；workflow root 使用 `workflow_orchestration` attempt；workflow child 使用 `business_execution` attempt。
+- `business_execution` 默认 `max_attempts=1`；`workflow_orchestration` 默认 `max_attempts=3`。
+- dispatch publish retry 和 callback delivery retry 已落在各自 outbox，不创建新的 business execution attempt。
+- `.env.example` 不暴露全局业务执行 retry、orchestration retry、dispatch publish retry 或 callback delivery retry 旋钮。
+
+剩余 hardening：
+
+- outbox terminal timestamp、lease-state、terminal `next_attempt_at` 等状态不变量还需要进一步固化为数据库约束和 schema contract tests。
+- `active_attempt_id` 同 Job 归属仍主要由 repository 写入路径保护，尚未形成数据库复合约束。
+
+下方 Target / Planned Work / Acceptance 保留原始目标和仍未完全验收的约束项。当前实现事实不要从本文反推，以 `docs/current/`、代码和测试为准。
+
+## Original Baseline
+
+计划制定时的 baseline：
 
 - `job_execution_attempts` 是 worker 执行权、lease、heartbeat 和 attempt 状态事实源。
 - `dispatch_outbox` 是 Taskiq `jobs.run_attempt(attempt_id)` 发布意图和 publish retry 账本。
 - `callback_outbox` 是 root Job 终态 callback 投递账本。
-- workflow root orchestration 和 business execution 当前都复用 `job_execution_attempts`，但 attempt 没有显式 `purpose`。
-- `job_aggregates.max_attempts`、`attempt_count` 和 `execution_attempts` 当前把不同 retry 语义混在 Job 聚合根上。
-- 当前内置 `job_type` 的执行 retry 默认是 `max_attempts=1` 和 `no_platform_retry`，因此业务执行默认不会自动重跑。
+- workflow root orchestration 和 business execution 复用 `job_execution_attempts`，但 attempt 没有显式 `purpose`。
+- `job_aggregates.max_attempts`、`attempt_count` 和 `execution_attempts` 把不同 retry 语义混在 Job 聚合根上。
+- 内置 `job_type` 的执行 retry 默认是 `max_attempts=1` 和 `no_platform_retry`，因此业务执行默认不会自动重跑。
 
-## Remaining Gaps
+## Original Gaps
+
+计划制定时的主要缺口如下；当前剩余项以上方 Implementation Status 为准。
 
 - retry domain 没有被建模：dispatch publish、callback delivery、workflow orchestration 和 business execution 的失败语义混在文档、配置和代码路径里。
 - workflow root orchestration retry 和 leaf / model business execution retry 共享 `max_attempts` 语义，容易让开发者误以为 root terminal failed 会触发整单 workflow retry。

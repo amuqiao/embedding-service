@@ -25,8 +25,8 @@
 | [`plans/ai-capability-enhancement.md`](plans/ai-capability-enhancement.md) | 多模态 provider、正式业务 `job_type`、node/child attribution 和业务 e2e 后续计划 |
 | [`plans/ai-capability-cost-boundary-design.md`](plans/ai-capability-cost-boundary-design.md) | `job_cost_summary`、node/child cost attribution、多模态成本路径和持久化 usage 扩展后续计划 |
 | [`plans/workflow-kernel-design.md`](plans/workflow-kernel-design.md) | workflow 从模板能力走向正式业务编排前的剩余缺口 |
-| [`plans/job-kernel-data-model-hardening.md`](plans/job-kernel-data-model-hardening.md) | Job kernel 表职责、字段事实源、root/child lineage 和上线前数据模型收口计划 |
-| [`plans/retry-domain-data-model.md`](plans/retry-domain-data-model.md) | retry domain、attempt purpose、policy snapshot 和 Job retry 数据模型重构计划 |
+| [`plans/job-kernel-data-model-hardening.md`](plans/job-kernel-data-model-hardening.md) | Job kernel 数据模型已落地事实与剩余 DB 级不变量 hardening |
+| [`plans/retry-domain-data-model.md`](plans/retry-domain-data-model.md) | retry domain 数据模型已落地事实与剩余 retry/outbox hardening |
 | [`plans/implementation-terminal-acceptance.md`](plans/implementation-terminal-acceptance.md) | 模板阶段剩余验收门禁和业务接入前置条件 |
 
 ## 分层规则

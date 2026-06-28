@@ -4,11 +4,30 @@
 
 Retry domain 的字段改造以 [`retry-domain-data-model.md`](retry-domain-data-model.md) 为专项计划。本文不重复设计 retry policy，而是定义 Job kernel 数据模型的总边界，确保 retry 改造时不会继续把执行、投递、编排、审计和公开查询职责混在同一张表里。
 
-## Current Baseline
+## Implementation Status
 
-当前 Job kernel 主要表：
+本计划的大部分字段职责收口已经落地，并已同步进 [`../current/job-kernel.md`](../current/job-kernel.md)。保留本文在 `docs/plans/`，是因为仍有少量 DB 级不变量没有完全实现，不能把本文作为纯历史归档。
 
-| 表 | 当前主要职责 |
+已落地：
+
+- `job_aggregates` 已移除 attempt counter、执行 CAS token、callback delivery 摘要、`parent_job_id`、`is_internal`、inline `job_params` 和顶层 result ref 字段。
+- public root / workflow child 已统一为 `root_job_id + workflow_node_key` 的单一形态。
+- `dispatch_outbox` 已改为只通过 `attempt_id` 关联 execution attempt，不再保存 `job_id`。
+- `dispatch_outbox` 和 `callback_outbox` 已保存各自的 retry policy snapshot 和 attempt counter。
+- `job_execution_attempts` 已成为 execution attempt、lease、heartbeat、retry decision 的事实源。
+
+剩余 hardening：
+
+- `active_attempt_id` 必须属于同一 `job_id` 的 attempt 当前由 repository 写入路径保护，尚未升级为数据库复合约束或等价数据库不变量。
+- `dispatch_outbox` / `callback_outbox` 的 lease-state、terminal timestamp、terminal `next_attempt_at` 等状态不变量仍主要依赖代码路径，尚未全部固化为数据库 check constraint 或 schema contract test。
+
+下方 Target / Planned Work / Acceptance 保留原始目标和仍未完全验收的约束项。当前实现事实不要从本文反推，以 `docs/current/`、代码和测试为准。
+
+## Original Baseline
+
+计划制定时的 Job kernel 主要表：
+
+| 表 | 计划制定时主要职责 |
 |---|---|
 | `job_aggregates` | Job 聚合状态、root / child lineage、提交输入、运行时引用、进度、结果、错误、active attempt 指针、执行计数、callback 摘要、清理状态 |
 | `job_submission_keys` | 外部提交幂等键和 request fingerprint |
@@ -17,7 +36,7 @@ Retry domain 的字段改造以 [`retry-domain-data-model.md`](retry-domain-data
 | `callback_outbox` | root Job 终态 callback payload、delivery retry 和 dead-letter |
 | `job_audit_events` | Job / attempt / dispatch / callback 状态变化审计时间线 |
 
-主要问题不是表数量，而是若干字段跨表表达同一个事实：
+计划制定时的主要问题不是表数量，而是若干字段跨表表达同一个事实：
 
 - `job_aggregates.max_attempts`、`attempt_count`、`execution_attempts` 与 `job_execution_attempts` 的 attempt 事实重叠。
 - `job_aggregates.execution_token`、`execution_generation` 与 `job_execution_attempts.lease_token` / `active_attempt_id` 都参与执行 CAS。
