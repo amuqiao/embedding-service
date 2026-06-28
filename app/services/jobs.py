@@ -97,7 +97,7 @@ def _job_error_detail(error: dict[str, Any] | None) -> dict[str, Any] | None:
     return JobErrorDetail(reason=reason, details=details, retryable=get_error_spec(reason).retryable).model_dump()
 
 
-def _callback_state(job: Job) -> dict[str, Any]:
+def _callback_state(job: Job, callback_outbox: Any | None = None) -> dict[str, Any]:
     if not job.callback_url:
         return {
             "status": "not_configured",
@@ -105,16 +105,25 @@ def _callback_state(job: Job) -> dict[str, Any]:
             "last_error": None,
             "next_retry_at": None,
         }
-    status = job.callback_status
-    if status == "failed" and job.callback_next_retry_at is not None:
-        status = "retrying"
+    if callback_outbox is None:
+        return {
+            "status": "pending",
+            "attempt": 0,
+            "last_error": None,
+            "next_retry_at": None,
+        }
+    status = callback_outbox.status
+    if status == "leased":
+        status = "delivering"
+    if status == "dead_letter":
+        status = "failed"
     if status == "skipped":
-        status = "failed" if job.callback_last_error else "not_configured"
+        status = "failed" if callback_outbox.last_error else "not_configured"
     return {
         "status": status,
-        "attempt": job.callback_attempts or 0,
-        "last_error": _job_error_detail(job.callback_last_error),
-        "next_retry_at": job.callback_next_retry_at,
+        "attempt": callback_outbox.delivery_attempts or 0,
+        "last_error": _job_error_detail(callback_outbox.last_error),
+        "next_retry_at": callback_outbox.next_attempt_at,
     }
 
 
@@ -155,6 +164,7 @@ def _job_payload(
     *,
     cost: dict[str, Any] | None = None,
     job_result: dict[str, Any] | None | object = _JOB_RESULT_UNSET,
+    callback_outbox: Any | None = None,
 ) -> dict[str, Any]:
     result = job.result if job_result is _JOB_RESULT_UNSET else job_result
     try:
@@ -172,7 +182,7 @@ def _job_payload(
                 "job_result": result,
                 "job_error": _job_error_detail(job.error),
                 "cost": cost,
-                "callback": _callback_state(job),
+                "callback": _callback_state(job, callback_outbox),
                 "status_url": _status_url(job.id),
                 "created_at": job.created_at,
                 "updated_at": job.updated_at or job.created_at,
@@ -193,8 +203,11 @@ def _job_to_response(
     *,
     cost: dict[str, Any] | None = None,
     job_result: dict[str, Any] | None | object = _JOB_RESULT_UNSET,
+    callback_outbox: Any | None = None,
 ) -> JobStatusResponse:
-    return JobStatusResponse.model_validate(_job_payload(job, cost=cost, job_result=job_result))
+    return JobStatusResponse.model_validate(
+        _job_payload(job, cost=cost, job_result=job_result, callback_outbox=callback_outbox)
+    )
 
 
 def _validate_prompt(job_type: str, prompt_payload: dict[str, Any]) -> None:
@@ -392,17 +405,32 @@ async def create_job(
             )
 
     timeout_seconds = int(getattr(handler, "timeout_seconds", settings.ai_provider.model_call_timeout_seconds))
-    max_attempts = int(getattr(handler, "max_attempts", 1))
+    job_id = uuid.uuid4()
+    job_params_hash = payload_hash(job_params)
+    output_target = configured_output_target(job_id)
+    job_params_ref = write_runtime_json(None, "job_params", job_params)
+    runtime_ref = write_runtime_json(
+        None,
+        "runtime",
+        build_runtime_snapshot(
+            job_type=payload.job_type,
+            job_params_hash=job_params_hash,
+            runtime_fields=runtime_fields,
+            output_target=output_target,
+            workflow_plan=workflow_plan,
+        ),
+    )
     job = await JobRepo.create(
         db,
         caller_id=caller_id,
         client_request_id=payload.client_request_id,
         job_type=payload.job_type,
+        job_id=job_id,
+        job_params_ref=job_params_ref,
+        job_params_hash=job_params_hash,
+        runtime_ref=runtime_ref,
         metadata=payload.metadata,
         priority=payload.options.priority if payload.options else "normal",
-        timeout_seconds=timeout_seconds,
-        max_attempts=max_attempts,
-        job_params=job_params,
         callback_url=payload.callback.url if payload.callback else None,
         callback_events=payload.callback.events if payload.callback else None,
     )
@@ -413,22 +441,14 @@ async def create_job(
         request_fingerprint=request_fingerprint,
         job=job,
     )
-    job_params_hash = payload_hash(job_params)
-    output_target = configured_output_target(job.id)
-    job.job_params_hash = job_params_hash
-    job.job_params_ref = write_runtime_json(job, "job_params", job_params)
-    job.runtime_ref = write_runtime_json(
+    purpose = "workflow_orchestration" if workflow_plan is not None else "business_execution"
+    await JobRepo.create_initial_attempt(
+        db,
         job,
-        "runtime",
-        build_runtime_snapshot(
-            job_type=payload.job_type,
-            job_params_hash=job_params_hash,
-            runtime_fields=runtime_fields,
-            output_target=output_target,
-            workflow_plan=workflow_plan,
-        ),
+        timeout_seconds=timeout_seconds,
+        purpose=purpose,
+        retry_policy=handler.effective_retry_policy().for_purpose(purpose),
     )
-    await JobRepo.create_initial_attempt(db, job, timeout_seconds=timeout_seconds)
     await db.flush()
     return job, True
 
@@ -470,7 +490,14 @@ async def get_job_response(
         handler = get_job_executor(job.job_type)
         if handler.supports_result_snapshot(job.status):
             projected_result = await handler.build_result_snapshot(job.status, job, db)
-    return _job_to_response(job, request_id, cost=cost, job_result=projected_result)
+    callback_outbox = await JobRepo.get_terminal_callback_outbox(db, job) if job.callback_url else None
+    return _job_to_response(
+        job,
+        request_id,
+        cost=cost,
+        job_result=projected_result,
+        callback_outbox=callback_outbox,
+    )
 
 
 def create_job_response(job: Job, request_id: str = "-") -> CreateJobResponse:
@@ -587,7 +614,12 @@ def _persist_large_artifact_payload(
     return result_data
 
 
-def _persist_large_artifacts(job: Job, result: JobResult | dict[str, Any]) -> dict[str, Any]:
-    generation = int(getattr(job, "execution_generation", None) or 1)
+def _persist_large_artifacts(
+    job: Job,
+    result: JobResult | dict[str, Any],
+    *,
+    attempt_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
     result_data = result.model_dump() if isinstance(result, JobResult) else dict(result)
-    return _persist_large_artifact_payload(job, result_data, scope=f"results/g{generation}")
+    scope = f"attempts/{attempt_id}/results" if attempt_id is not None else "results"
+    return _persist_large_artifact_payload(job, result_data, scope=scope)

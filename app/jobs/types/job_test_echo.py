@@ -19,7 +19,6 @@ class JobTestEchoJob(JobExecutor):
     canonical_result_schema = JobTestEchoResult
     public_result_schema = JobTestEchoResult
     allow_callback = True
-    max_attempts = 1
     timeout_seconds = 60
     allowed_error_codes = frozenset(
         {

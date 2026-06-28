@@ -79,12 +79,13 @@ async def _run_recovery(db: AsyncSession) -> dict:
                 error=error,
                 error_kind="timeout",
                 failure_phase="lease",
-                retryable=True,
+                retryable="JOB_TIMEOUT" in (attempt.policy_retryable_error_codes or []),
                 next_attempt_at=now,
+                retry_created_reason="recovery_retry",
             )
             if claimed:
                 terminal_job = await JobRepo.get(db, attempt.job_id)
-                if terminal_job is not None and terminal_job.is_internal and terminal_job.status == "failed":
+                if terminal_job is not None and terminal_job.root_job_id is not None and terminal_job.status == "failed":
                     from app.workflows.orchestrator import advance_workflow_after_child_terminal
 
                     workflow_advances.append(
@@ -122,7 +123,7 @@ async def _run_recovery(db: AsyncSession) -> dict:
         for attempt in missing_dispatch_attempts:
             await JobRepo.create_dispatch_outbox(
                 db,
-                job_id=attempt.job_id,
+                event_job_id=attempt.job_id,
                 attempt_id=attempt.id,
                 next_attempt_at=now,
                 dispatch_reason="reconciler_missing_dispatch",

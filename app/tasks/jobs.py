@@ -12,16 +12,13 @@ from sqlalchemy.pool import NullPool
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.logging import set_request_id
-from app.jobs.registry import get_job_type_spec
+from app.models.job import JobAttempt
 from app.repositories.job_repo import JobRepo
 from app.services.callbacks import deliver_callback
 from app.services.jobs import get_job_or_404
 from app.tasks.taskiq_app import broker
 
 logger = logging.getLogger(__name__)
-
-TRANSIENT_PLATFORM_RETRY_ERROR_CODES = frozenset({"JOB_TIMEOUT"})
-
 
 class TaskiqPublishDeferredError(RuntimeError):
     def __init__(self, attempt_id: uuid.UUID, error: dict[str, Any]):
@@ -74,14 +71,28 @@ def _job_error_from_exception(exc: Exception) -> dict[str, Any]:
     }
 
 
-def _should_retry_attempt(job_type: str, error: dict[str, Any]) -> bool:
-    try:
-        policy = get_job_type_spec(job_type).platform_retry_policy
-    except KeyError:
-        return False
-    if policy != "retry_transient_platform_errors":
-        return False
-    return str(error.get("code") or "") in TRANSIENT_PLATFORM_RETRY_ERROR_CODES
+def _callback_delivery_payload(payload: dict[str, Any], outbox, *, next_retry_at: datetime) -> dict[str, Any]:
+    delivery_attempt = (outbox.delivery_attempts or 0) + 1
+    body = dict(payload)
+    body["attempt"] = delivery_attempt
+    job_payload = dict(body.get("job") or {})
+    callback_payload = dict(job_payload.get("callback") or {})
+    callback_payload.update(
+        {
+            "status": "delivering",
+            "attempt": delivery_attempt,
+            "last_error": outbox.last_error,
+            "next_retry_at": next_retry_at.isoformat(),
+        }
+    )
+    job_payload["callback"] = callback_payload
+    body["job"] = job_payload
+    return body
+
+
+def _should_retry_attempt(attempt: JobAttempt, error: dict[str, Any]) -> bool:
+    retryable_error_codes = attempt.policy_retryable_error_codes or []
+    return str(error.get("code") or "") in retryable_error_codes
 
 
 async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
@@ -99,34 +110,38 @@ async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
         return
     dispatch, lease_token = leased
 
-    async def mark_published(db):
-        await JobRepo.mark_dispatch_published(
-            db,
-            dispatch.id,
-            lease_token=lease_token,
-            next_attempt_at=datetime.now(timezone.utc) + timedelta(seconds=settings.job.orphan_timeout_seconds),
-        )
-        await db.commit()
-
-    try:
-        await _with_db(mark_published)
-    except Exception as exc:
-        error = {
-            "code": "TASKIQ_PUBLISH_FAILED",
-            "message": "Taskiq publish confirmation failed",
-            "details": {"type": type(exc).__name__, "message": str(exc)[:500]},
-        }
-        raise TaskiqPublishDeferredError(attempt_id, error) from exc
-
     try:
         await run_job_attempt.kiq(str(attempt_id))
     except Exception as exc:
         error = {
             "code": "TASKIQ_PUBLISH_FAILED",
-            "message": "Taskiq publish failed after dispatch was marked published",
+            "message": "Taskiq publish failed",
             "details": {"type": type(exc).__name__, "message": str(exc)[:500]},
         }
+        async def mark_publish_failed(db):
+            await JobRepo.mark_dispatch_publish_failed(
+                db,
+                dispatch.id,
+                lease_token=lease_token,
+                error=error,
+                next_attempt_at=datetime.now(timezone.utc) + timedelta(seconds=dispatch.publish_retry_delay_seconds),
+                max_publish_attempts=dispatch.max_publish_attempts,
+            )
+            await db.commit()
+
+        await _with_db(mark_publish_failed)
         raise TaskiqPublishDeferredError(attempt_id, error) from exc
+
+    async def mark_published(db):
+        await JobRepo.mark_dispatch_published(
+            db,
+            dispatch.id,
+            lease_token=lease_token,
+            next_attempt_at=datetime.now(timezone.utc) + timedelta(seconds=dispatch.orphan_timeout_seconds),
+        )
+        await db.commit()
+
+    await _with_db(mark_published)
 
 
 async def handle_workflow_advance_result(result: Any) -> None:
@@ -151,6 +166,8 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
     set_request_id(attempt_id)
     lease_token: uuid.UUID | None = None
     job_id: uuid.UUID | None = None
+    job = None
+    claimed_attempt: JobAttempt | None = None
     try:
         worker_id = f"{os.uname().nodename}:{os.getpid()}"
 
@@ -168,7 +185,7 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
         if claimed is None:
             logger.info("taskiq_attempt_skipped attempt_id=%s reason=claim_failed", attempt_id)
             return {"attempt_id": attempt_id, "status": "skipped"}
-        job, _attempt, lease_token = claimed
+        job, claimed_attempt, lease_token = claimed
         job_id = job.id
 
         async def heartbeat(phase: str) -> None:
@@ -196,7 +213,6 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
             return await execute_job(
                 db,
                 job.id,
-                execution_generation=job.execution_generation,
                 attempt_id=attempt_uuid,
                 lease_token=lease_token,
             )
@@ -216,13 +232,13 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
                     attempt_uuid,
                     lease_token=lease_token,
                     error=error,
-                    retryable=_should_retry_attempt(job.job_type, error),
+                    retryable=claimed_attempt is not None and _should_retry_attempt(claimed_attempt, error),
                     next_attempt_at=datetime.now(timezone.utc),
                 )
                 workflow_advance = None
-                if marked and job_id is not None and job.is_internal:
+                if marked and job_id is not None and job is not None and job.root_job_id is not None:
                     terminal_job = await JobRepo.get(db, job_id)
-                    if terminal_job is not None and terminal_job.is_internal and terminal_job.status == "failed":
+                    if terminal_job is not None and terminal_job.root_job_id is not None and terminal_job.status == "failed":
                         from app.workflows.orchestrator import advance_workflow_after_child_terminal
 
                         workflow_advance = await advance_workflow_after_child_terminal(db, child_job=terminal_job)
@@ -259,9 +275,11 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
             return False
         claimed_job, outbox = claimed
 
-        claimed_job.callback_status = "delivering"
-        claimed_job.callback_next_retry_at = delivery_deadline
-        result = await deliver_callback(claimed_job, payload=outbox.payload, callback_url=outbox.callback_url)
+        result = await deliver_callback(
+            claimed_job,
+            payload=_callback_delivery_payload(outbox.payload, outbox, next_retry_at=delivery_deadline),
+            callback_url=outbox.callback_url,
+        )
         next_retry_at = None
         attempted_after_result = (outbox.delivery_attempts or 0) + max(0, result.attempts)
         if result.status == "failed" and attempted_after_result < settings.callback.max_delivery_attempts:

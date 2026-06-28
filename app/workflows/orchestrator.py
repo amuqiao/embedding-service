@@ -87,7 +87,7 @@ async def advance_workflow_after_child_terminal(
     *,
     child_job: Job,
 ) -> WorkflowAdvanceResult:
-    if not child_job.is_internal or child_job.root_job_id is None:
+    if child_job.root_job_id is None:
         return WorkflowAdvanceResult(root_job_id=child_job.id)
     return await reconcile_workflow_root(db, root_job_id=child_job.root_job_id)
 
@@ -464,31 +464,13 @@ async def _create_child_job(
             raise ValidationAppError("INVALID_INPUT", "child job_type runtime fields must include prompt_payload")
         _validate_prompt(job_type, prompt_payload)
 
-    timeout_seconds = int(getattr(handler, "timeout_seconds", root_job.timeout_seconds or 300))
-    max_attempts = int(getattr(handler, "max_attempts", 1))
-    child = await JobRepo.create(
-        db,
-        caller_id=root_job.caller_id,
-        client_request_id=None,
-        job_type=job_type,
-        metadata={},
-        priority=root_job.priority,
-        timeout_seconds=timeout_seconds,
-        max_attempts=max_attempts,
-        job_params=job_params,
-        callback_url=None,
-        callback_events=None,
-        root_job_id=root_job.id,
-        parent_job_id=root_job.id,
-        is_internal=True,
-        workflow_node_key=node["key"],
-    )
+    timeout_seconds = int(getattr(handler, "timeout_seconds", 300))
+    child_id = uuid.uuid4()
     job_params_hash = payload_hash(job_params)
-    output_target = configured_output_target(child.id)
-    child.job_params_hash = job_params_hash
-    child.job_params_ref = write_runtime_json(child, "job_params", job_params)
-    child.runtime_ref = write_runtime_json(
-        child,
+    output_target = configured_output_target(child_id)
+    job_params_ref = write_runtime_json(None, "job_params", job_params)
+    runtime_ref = write_runtime_json(
+        None,
         "runtime",
         build_runtime_snapshot(
             job_type=job_type,
@@ -497,5 +479,27 @@ async def _create_child_job(
             output_target=output_target,
         ),
     )
-    attempt = await JobRepo.create_initial_attempt(db, child, timeout_seconds=timeout_seconds)
+    child = await JobRepo.create(
+        db,
+        caller_id=root_job.caller_id,
+        client_request_id=None,
+        job_type=job_type,
+        job_id=child_id,
+        job_params_ref=job_params_ref,
+        job_params_hash=job_params_hash,
+        runtime_ref=runtime_ref,
+        metadata={},
+        priority=root_job.priority,
+        callback_url=None,
+        callback_events=None,
+        root_job_id=root_job.id,
+        workflow_node_key=node["key"],
+    )
+    attempt = await JobRepo.create_initial_attempt(
+        db,
+        child,
+        timeout_seconds=timeout_seconds,
+        purpose="business_execution",
+        retry_policy=handler.effective_retry_policy().for_purpose("business_execution"),
+    )
     return child, attempt.id

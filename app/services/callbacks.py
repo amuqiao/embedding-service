@@ -83,7 +83,7 @@ def build_callback_body(
         {
             "event": event,
             "event_id": str(event_id),
-            "attempt": (job.callback_attempts or 0) + 1,
+            "attempt": 1,
             "sent_at": sent_at.isoformat(),
             "trigger_request_id": trigger_request_id_from_job(job),
             "caller_id": job.caller_id,

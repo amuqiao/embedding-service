@@ -25,10 +25,6 @@ from app.workflows.orchestrator import advance_workflow_after_child_terminal, cr
 logger = logging.getLogger(__name__)
 
 
-def _execution_generation(job: Job) -> int:
-    return int(getattr(job, "execution_generation", None) or 1)
-
-
 async def _update_current_progress(
     db: AsyncSession,
     job: Job,
@@ -36,6 +32,8 @@ async def _update_current_progress(
     progress_percent: int,
     progress_text: str,
     progress_stage: str | None = None,
+    attempt_id: uuid.UUID | None = None,
+    lease_token: uuid.UUID | None = None,
 ) -> bool:
     updated = await JobRepo.update_progress(
         db,
@@ -43,8 +41,8 @@ async def _update_current_progress(
         progress_percent=progress_percent,
         progress_text=progress_text,
         progress_stage=progress_stage,
-        execution_token=job.execution_token,
-        execution_generation=_execution_generation(job),
+        attempt_id=attempt_id,
+        lease_token=lease_token,
     )
     return updated is not False
 
@@ -63,32 +61,34 @@ async def execute_job(
     db: AsyncSession,
     job_id: uuid.UUID,
     *,
-    execution_generation: int | None = None,
     attempt_id: uuid.UUID | None = None,
     lease_token: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     job = await get_job_or_404(db, job_id)
-    if execution_generation is not None and _execution_generation(job) != execution_generation:
-        return {
-            "job_id": str(job_id),
-            "status": "skipped",
-            "reason": "stale_execution_generation",
-            "expected_execution_generation": execution_generation,
-            "current_execution_generation": _execution_generation(job),
-        }
     if job.status in ("succeeded", "failed"):
         return {"job_id": str(job_id), "status": "skipped", "job_status": job.status}
     if job.status != "running":
         return {"job_id": str(job_id), "status": "skipped", "job_status": job.status}
-    if not job.execution_token:
-        raise RuntimeError(f"job has no execution_token: {job_id}")
+    if attempt_id is None or lease_token is None:
+        raise AppError(
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "job execution requires an active attempt lease",
+            details={"job_id": str(job.id), "job_type": job.job_type},
+        )
+    attempt = await JobRepo.get_attempt(db, attempt_id)
+    if attempt is None or attempt.job_id != job.id:
+        raise AppError(
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "active attempt does not belong to job",
+            details={"job_id": str(job.id), "attempt_id": str(attempt_id)},
+        )
 
     workflow_plan = workflow_plan_from_job(job)
-    if workflow_plan is not None:
-        if attempt_id is None or lease_token is None:
+    if attempt.purpose == "workflow_orchestration":
+        if workflow_plan is None:
             raise AppError(
                 "JOB_RUNTIME_NOT_SUPPORTED",
-                "workflow root orchestration requires an active attempt lease",
+                "workflow orchestration attempt requires a frozen workflow_plan",
                 details={"job_id": str(job.id), "job_type": job.job_type},
             )
         claimed_orchestration = await _update_current_progress(
@@ -97,10 +97,12 @@ async def execute_job(
             progress_percent=max(job.progress_percent or 0, 15),
             progress_text="正在编排子任务",
             progress_stage="planning",
+            attempt_id=attempt_id,
+            lease_token=lease_token,
         )
         await db.commit()
         if not claimed_orchestration:
-            return {"job_id": str(job_id), "status": "skipped", "reason": "stale_execution_generation"}
+            return {"job_id": str(job_id), "status": "skipped", "reason": "stale_attempt_lease"}
         extended = await JobRepo.heartbeat_attempt(
             db,
             attempt_id,
@@ -143,6 +145,12 @@ async def execute_job(
             "workflow_status": "orchestrated",
             "created_child_jobs": len(orchestration.created_child_job_ids),
         }
+    if workflow_plan is not None and attempt.purpose != "business_execution":
+        raise AppError(
+            "JOB_RUNTIME_NOT_SUPPORTED",
+            "unsupported workflow attempt purpose",
+            details={"job_id": str(job.id), "attempt_id": str(attempt.id), "purpose": attempt.purpose},
+        )
 
     try:
         executor = get_job_executor(job.job_type)
@@ -158,10 +166,12 @@ async def execute_job(
         progress_percent=max(job.progress_percent or 0, 30),
         progress_text="正在执行 Job",
         progress_stage="calling_model",
+        attempt_id=attempt_id,
+        lease_token=lease_token,
     )
     await db.commit()
     if not claimed_execute:
-        return {"job_id": str(job_id), "status": "skipped", "reason": "stale_execution_generation"}
+        return {"job_id": str(job_id), "status": "skipped", "reason": "stale_attempt_lease"}
 
     custom_result = await executor.execute(job, db)
     if custom_result is None:
@@ -200,12 +210,14 @@ async def execute_job(
         progress_percent=max(job.progress_percent or 0, 85),
         progress_text="正在整理执行结果",
         progress_stage="writing_result",
+        attempt_id=attempt_id,
+        lease_token=lease_token,
     )
     await db.commit()
     if not claimed_result:
-        return {"job_id": str(job_id), "status": "skipped", "reason": "stale_execution_generation"}
+        return {"job_id": str(job_id), "status": "skipped", "reason": "stale_attempt_lease"}
 
-    canonical_result = executor.validate_canonical_result(_persist_large_artifacts(job, result_data))
+    canonical_result = executor.validate_canonical_result(_persist_large_artifacts(job, result_data, attempt_id=attempt_id))
     public_result = executor.public_result(canonical_result)
     if job.progress_stage != SUCCESS_SIDE_EFFECT_DONE_STAGE:
         claimed_side_effect = await _update_current_progress(
@@ -214,10 +226,12 @@ async def execute_job(
             progress_percent=90,
             progress_text="正在执行成功前副作用",
             progress_stage=SUCCESS_SIDE_EFFECT_STAGE,
+            attempt_id=attempt_id,
+            lease_token=lease_token,
         )
         await db.commit()
         if not claimed_side_effect:
-            return {"job_id": str(job_id), "status": "skipped", "reason": "stale_execution_generation"}
+            return {"job_id": str(job_id), "status": "skipped", "reason": "stale_attempt_lease"}
         try:
             await executor.run_success_side_effect(job, canonical_result, db)
         except Exception as exc:
@@ -225,7 +239,8 @@ async def execute_job(
                 db,
                 job_id,
                 _job_error_from_exception(exc),
-                execution_token=job.execution_token,
+                attempt_id=attempt_id,
+                lease_token=lease_token,
             )
             await db.commit()
             from app.tasks.jobs import deliver_callback_for_job
@@ -238,14 +253,17 @@ async def execute_job(
             progress_percent=95,
             progress_text="成功前副作用已完成",
             progress_stage=SUCCESS_SIDE_EFFECT_DONE_STAGE,
+            attempt_id=attempt_id,
+            lease_token=lease_token,
         )
         await db.commit()
         if not marked_side_effect_done:
-            return {"job_id": str(job_id), "status": "skipped", "reason": "stale_execution_generation"}
+            return {"job_id": str(job_id), "status": "skipped", "reason": "stale_attempt_lease"}
     succeeded = await JobRepo.mark_succeeded(
         db,
         job_id,
-        execution_token=job.execution_token,
+        attempt_id=attempt_id,
+        lease_token=lease_token,
         result=public_result,
         canonical_result=canonical_result,
     )
@@ -253,18 +271,10 @@ async def execute_job(
         raise AppError(
             "JOB_STATE_TRANSITION_CONFLICT",
             "job could not be marked succeeded after success side effect",
-            details={"job_id": str(job_id), "execution_token": job.execution_token},
+            details={"job_id": str(job_id), "attempt_id": str(attempt_id)},
         )
-    if attempt_id is not None and lease_token is not None:
-        attempt_succeeded = await JobRepo.mark_attempt_succeeded(db, attempt_id, lease_token=lease_token)
-        if not attempt_succeeded:
-            raise AppError(
-                "JOB_STATE_TRANSITION_CONFLICT",
-                "attempt could not be marked succeeded with job result",
-                details={"job_id": str(job_id), "attempt_id": str(attempt_id)},
-            )
     workflow_advance = None
-    if job.is_internal:
+    if job.root_job_id is not None:
         workflow_advance = await advance_workflow_after_child_terminal(db, child_job=job)
     await db.commit()
     await db.refresh(job)
@@ -290,7 +300,7 @@ async def fail_job(
             "fail_job cannot bypass an active attempt",
             details={"job_id": str(job.id), "active_attempt_id": str(job.active_attempt_id)},
         )
-    await JobRepo.mark_failed(db, job_id, error, execution_token=job.execution_token)
+    await JobRepo.mark_failed(db, job_id, error)
     await db.commit()
     from app.tasks.jobs import deliver_callback_for_job
 

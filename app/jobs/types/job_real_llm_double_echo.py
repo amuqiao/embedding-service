@@ -51,7 +51,6 @@ class JobRealLlmDoubleEchoJob(JobExecutor):
     canonical_result_schema = JobRealLlmDoubleEchoResult
     public_result_schema = JobRealLlmDoubleEchoResult
     allow_callback = False
-    max_attempts = 1
     timeout_seconds = 240
     requires_text_generation_model = True
     prompt_specs = (

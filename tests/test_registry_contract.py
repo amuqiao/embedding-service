@@ -103,6 +103,19 @@ def test_error_registry_covers_produced_error_reasons():
     assert _literal_error_reasons() <= all_error_reasons()
 
 
+def _assert_default_retry_policy(retry_policy: dict):
+    business = retry_policy["business_execution"]
+    orchestration = retry_policy["workflow_orchestration"]
+    assert business["domain"] == "business_execution"
+    assert business["max_attempts"] == 1
+    assert business["backoff_kind"] == "none"
+    assert business["retryable_error_codes"] == []
+    assert orchestration["domain"] == "workflow_orchestration"
+    assert orchestration["max_attempts"] == 3
+    assert orchestration["retry_delay_seconds"] == 5
+    assert orchestration["backoff_kind"] == "fixed"
+
+
 def test_job_type_registry_exposes_required_metadata():
     register_all_job_types()
     specs = job_registry.all_job_type_specs()
@@ -117,7 +130,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert spec.role == "root_or_leaf"
     assert spec.allow_callback is True
     assert spec.execution_mode == "custom_executor"
-    assert spec.platform_retry_policy == "no_platform_retry"
+    _assert_default_retry_policy(spec.retry_policy)
     assert spec.side_effect_policy == "none"
     assert spec.error_codes <= all_error_reasons()
     assert spec.prompt_specs == ()
@@ -132,7 +145,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert arithmetic_spec.role == "root"
     assert arithmetic_spec.allow_callback is True
     assert arithmetic_spec.execution_mode == "custom_executor"
-    assert arithmetic_spec.platform_retry_policy == "no_platform_retry"
+    _assert_default_retry_policy(arithmetic_spec.retry_policy)
     assert arithmetic_spec.side_effect_policy == "none"
     assert arithmetic_spec.error_codes <= all_error_reasons()
     assert arithmetic_spec.prompt_specs == ()
@@ -147,7 +160,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert echo_spec.role == "root_or_leaf"
     assert echo_spec.allow_callback is True
     assert echo_spec.execution_mode == "custom_executor"
-    assert echo_spec.platform_retry_policy == "no_platform_retry"
+    _assert_default_retry_policy(echo_spec.retry_policy)
     assert echo_spec.side_effect_policy == "none"
     assert echo_spec.error_codes <= all_error_reasons()
     assert echo_spec.prompt_specs == ()
@@ -162,7 +175,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert workflow_spec.role == "root"
     assert workflow_spec.allow_callback is True
     assert workflow_spec.execution_mode == "custom_executor"
-    assert workflow_spec.platform_retry_policy == "no_platform_retry"
+    _assert_default_retry_policy(workflow_spec.retry_policy)
     assert workflow_spec.side_effect_policy == "none"
     assert workflow_spec.error_codes <= all_error_reasons()
     assert workflow_spec.prompt_specs == ()
@@ -177,7 +190,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert collect_spec.role == "leaf"
     assert collect_spec.allow_callback is True
     assert collect_spec.execution_mode == "custom_executor"
-    assert collect_spec.platform_retry_policy == "no_platform_retry"
+    _assert_default_retry_policy(collect_spec.retry_policy)
     assert collect_spec.side_effect_policy == "none"
     assert collect_spec.error_codes <= all_error_reasons()
     assert collect_spec.prompt_specs == ()
@@ -192,7 +205,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert real_llm_spec.role == "root_or_leaf"
     assert real_llm_spec.allow_callback is False
     assert real_llm_spec.execution_mode == "builtin_llm_text_runtime"
-    assert real_llm_spec.platform_retry_policy == "no_platform_retry"
+    _assert_default_retry_policy(real_llm_spec.retry_policy)
     assert real_llm_spec.side_effect_policy == "none"
     assert real_llm_spec.error_codes <= all_error_reasons()
     assert real_llm_spec.prompt_specs == (
@@ -214,7 +227,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert double_llm_spec.role == "root_or_leaf"
     assert double_llm_spec.allow_callback is False
     assert double_llm_spec.execution_mode == "custom_executor"
-    assert double_llm_spec.platform_retry_policy == "no_platform_retry"
+    _assert_default_retry_policy(double_llm_spec.retry_policy)
     assert double_llm_spec.side_effect_policy == "none"
     assert double_llm_spec.error_codes <= all_error_reasons()
     assert double_llm_spec.prompt_specs == (
@@ -243,7 +256,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert poster_spec.allow_callback is True
     assert poster_spec.result_snapshot_statuses == frozenset({"running", "failed"})
     assert poster_spec.execution_mode == "custom_executor"
-    assert poster_spec.platform_retry_policy == "no_platform_retry"
+    _assert_default_retry_policy(poster_spec.retry_policy)
     assert poster_spec.side_effect_policy == "none"
     assert poster_spec.error_codes <= all_error_reasons()
     assert POSTER_TITLE_IMAGE_REFERENCE_INVALID in poster_spec.error_codes
@@ -260,7 +273,22 @@ def _job_type_spec(**overrides) -> JobTypeSpec:
         "visibility": "demo",
         "role": "root_or_leaf",
         "execution_mode": "custom_executor",
-        "platform_retry_policy": "no_platform_retry",
+        "retry_policy": {
+            "workflow_orchestration": {
+                "domain": "workflow_orchestration",
+                "max_attempts": 3,
+                "retry_delay_seconds": 5,
+                "backoff_kind": "fixed",
+                "retryable_error_codes": ["JOB_STATE_TRANSITION_CONFLICT"],
+            },
+            "business_execution": {
+                "domain": "business_execution",
+                "max_attempts": 1,
+                "retry_delay_seconds": None,
+                "backoff_kind": "none",
+                "retryable_error_codes": [],
+            },
+        },
         "side_effect_policy": "none",
         "params_schema": "JobTestAddParams",
         "runtime_fields_schema": "JobTestAddRuntimeFields",
@@ -272,7 +300,6 @@ def _job_type_spec(**overrides) -> JobTypeSpec:
         "large_artifact_keys": frozenset(),
         "error_codes": frozenset({"INVALID_INPUT"}),
         "log_events": (),
-        "max_attempts": 1,
         "timeout_seconds": 60,
         "prompt_template_required_blocks": frozenset(),
     }
@@ -314,14 +341,32 @@ def test_job_executor_requires_explicit_visibility_and_role():
     [
         ({"execution_mode": "sync"}, "execution_mode"),
         ({"side_effect_policy": "unknown"}, "side_effect_policy"),
-        ({"platform_retry_policy": ""}, "platform_retry_policy"),
-        ({"platform_retry_policy": "retry_everything"}, "platform_retry_policy"),
+        ({"retry_policy": {}}, "retry_policy"),
+        (
+            {
+                "retry_policy": {
+                    "workflow_orchestration": {
+                        "domain": "workflow_orchestration",
+                        "max_attempts": 0,
+                        "retry_delay_seconds": 5,
+                        "backoff_kind": "fixed",
+                        "retryable_error_codes": [],
+                    },
+                    "business_execution": {
+                        "domain": "business_execution",
+                        "max_attempts": 1,
+                        "retry_delay_seconds": None,
+                        "backoff_kind": "none",
+                        "retryable_error_codes": [],
+                    },
+                }
+            },
+            "max_attempts",
+        ),
         ({"visibility": "private"}, "visibility"),
         ({"role": "worker"}, "role"),
         ({"result_snapshot_statuses": frozenset({"queued"})}, "result_snapshot_statuses"),
-        ({"max_attempts": 0}, "max_attempts"),
         ({"timeout_seconds": 0}, "timeout_seconds"),
-        ({"max_attempts": 2, "platform_retry_policy": "no_platform_retry"}, "platform_retry_policy"),
     ],
 )
 def test_validate_job_type_registry_rejects_invalid_phase3_metadata(monkeypatch, overrides, message):

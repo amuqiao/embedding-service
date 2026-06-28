@@ -40,7 +40,6 @@ class JobTestWorkflowJob(JobExecutor):
     canonical_result_schema = JobTestWorkflowResult
     public_result_schema = JobTestWorkflowResult
     allow_callback = True
-    max_attempts = 1
     timeout_seconds = 120
     allowed_error_codes = frozenset(
         {
@@ -81,7 +80,6 @@ class JobTestCollectJob(JobExecutor):
     canonical_result_schema = JobTestCollectResult
     public_result_schema = JobTestCollectResult
     allow_callback = True
-    max_attempts = 1
     timeout_seconds = 60
     allowed_error_codes = frozenset(
         {

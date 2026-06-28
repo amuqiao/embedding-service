@@ -463,7 +463,7 @@ POST /api/v1/ai-jobs/jobs
 
 ### Callback Notification
 
-`callback` 是任务创建接口的可选通知配置，不是额外 HTTP 查询接口。服务只在 Job 进入终态后向 `callback.url` 投递通知。
+`callback` 是任务创建接口的可选通知配置，不是额外 HTTP 查询接口。服务只在 Job 进入终态后向 `callback.url` 投递通知。Callback 投递失败只影响 `job.callback` 投递摘要；`job.job_status` 不会因为 callback delivery retry 或 dead letter 回退或改写。
 
 Callback payload 不套 HTTP success envelope：
 
@@ -820,7 +820,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | `job.job_result` | object 或 null | 任务结果快照 |
 | `job.job_error` | object 或 null | Job 级失败原因 |
 | `job.cost` | object 或 null | Job 级总费用；非终态为 `null`，终态可返回 `Cost` |
-| `job.callback` | object | Callback 投递状态摘要 |
+| `job.callback` | object | Callback 投递状态摘要；来源是终态 callback 投递账本投影，不表示 Job 执行重试 |
 | `job.status_url` | string | 任务查询路径 |
 | `job.created_at` | string | 创建时间 |
 | `job.updated_at` | string | 更新时间 |

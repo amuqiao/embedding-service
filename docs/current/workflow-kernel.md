@@ -6,12 +6,12 @@
 
 - root Job 是公共提交、查询、callback 和 billing 入口。
 - internal child Job 是 workflow executable node，复用现有 Job attempt、dispatch outbox、lease、heartbeat、retry 和 worker 执行路径。
-- `job_aggregates` 通过 `root_job_id`、`parent_job_id`、`is_internal` 和 `workflow_node_key` 表达 root / child 关系。
+- `job_aggregates` 通过 `root_job_id` 和 `workflow_node_key` 表达 root / child 关系；public root 的两者都为空，workflow child 的两者都非空。
 - `workflow_plan` 固化在 root Job runtime snapshot 中，当前 planner 支持 `task`、`chain`、`group`、`chord`、`map`、`starmap` 和 `chunks`；`job_test_workflow` 额外提供 `single` 示例模式，用一个 `task` 表达 one-child workflow。
 - child Job 终态后由 workflow orchestrator 推进 downstream node 或 root terminal projection。
 - root Job 只发送一次调用方 callback；child Job 不发送调用方 callback。
 - child Job 的 AI 调用使用 root Job billing scope，ledger 行仍保留实际 child `job_id`、`attempt_id` 和 `job_type` 作为诊断归因。
-- workflow child node 当前复用注册的 `job_type` executor；目录上应优先引用 `role="leaf"` 或 `role="root_or_leaf"` 的类型，但运行时 child 事实仍由 Job 实例 lineage 字段表达。
+- workflow child node 当前复用注册的 `job_type` executor；目录上应优先引用 `role="leaf"` 或 `role="root_or_leaf"` 的类型，但运行时 child 事实仍由 `root_job_id + workflow_node_key` 表达。
 - 执行重试跟随失败 attempt 所属的 Job；child 最终 failed 后投影出的 root terminal failed 不触发整单 workflow 自动重试。
 
 ## 任务模型
@@ -29,7 +29,7 @@ Dependencies:
 a -> b -> c
 ```
 
-`root + children` 表示这些 child 都属于同一个 public root Job。`depends_on` 表示执行顺序，不表示 `parent_job_id` 层级。当前 `chain(a, b, c)` 编译后是 `b depends_on a`、`c depends_on b`；不会形成 `a` 的 child 是 `b`、`b` 的 child 是 `c` 的嵌套树。
+`root + children` 表示这些 child 都属于同一个 public root Job。`depends_on` 表示执行顺序，不表示数据库父子嵌套层级。当前 `chain(a, b, c)` 编译后是 `b depends_on a`、`c depends_on b`；不会形成 `a` 的 child 是 `b`、`b` 的 child 是 `c` 的嵌套树。
 
 | 模型 | 形态 | 示例用途 |
 |---|---|---|
@@ -61,13 +61,13 @@ workflow root 的 `failed` 有两类来源，retry 语义不同：
 ```text
 root orchestration attempt failed
   -> root 编排 attempt 自己失败
-  -> 如果 root job_type 允许执行重试，只重试编排 attempt
+  -> 如果 workflow_orchestration retry policy 允许重试，只重试编排 attempt
   -> 目标是补齐缺失的 ready child，不重跑所有 child
 
 child terminal failed -> root terminal failed
   -> child Job 已经走完自己的 attempt / retry 判断
   -> workflow reconciler 把 root 投影为 failed
-  -> 不触发 root max_attempts，也不自动重跑整个 workflow
+  -> 不触发整单 workflow retry，也不自动重跑全部 child
 ```
 
 当前没有“整单 workflow 自动重试”机制。需要整单重试时，应作为显式能力单独设计，例如新建 root、只重试 failed children 或重跑全部节点；不能把这类语义混入当前 attempt retry。

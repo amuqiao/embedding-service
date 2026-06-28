@@ -26,7 +26,7 @@ Transactional Outbox
 | Job 是对外资源 | 调用方提交、查询、callback 和 billing 都以 public root Job 为入口 |
 | Attempt 是执行权 | worker 不直接消费 Job，而是消费 `attempt_id`；只有领取当前 active attempt lease 的 worker 才能推进执行 |
 | Outbox 是副作用意图 | Taskiq publish 和 Callback delivery 都先落库，再由 publisher / recovery 投递 |
-| Retry 跟随 attempt 所属 Job | 谁的 attempt 失败，就只按那条 Job 的 `max_attempts` 和 retry policy 判断是否创建下一次 attempt |
+| Retry 跟随 attempt purpose | 谁的 attempt 失败，就只按该 attempt 的 `purpose` 和 retry policy snapshot 判断是否创建下一次 attempt |
 | Retry 分三类 | 执行 attempt retry、dispatch publish retry、callback delivery retry 是三套机制，互不等价 |
 | Recovery 是补偿扫描 | recovery 不重新定义业务状态，只根据数据库事实补发、补建、补终结或标记失活 |
 
@@ -81,7 +81,7 @@ Transactional Outbox 本体只要求业务事实和待发布消息意图在同�
 
 | 表 | 角色 | 是否核心 | 不承担 |
 |---|---|---|---|
-| `job_aggregates` | Job 聚合事实源，保存状态、进度、结果、错误、callback 汇总状态和 root/child lineage | 是 | 不保存每次执行尝试的 lease / heartbeat 细节 |
+| `job_aggregates` | Job 聚合事实源，保存状态、进度、结果、错误和 root/child lineage | 是 | 不保存每次执行尝试、dispatch publish 或 callback delivery 的 retry 状态 |
 | `job_submission_keys` | 提交幂等键，保证同一 caller 的 `client_request_id` 可拒重或返回已有 Job | 是 | 不表示执行状态，不发布消息 |
 | `job_execution_attempts` | 单次执行尝试，持有 lease、worker、heartbeat、attempt 状态和失败原因 | 是 | 不是审计历史表，不能从核心流程移除 |
 | `dispatch_outbox` | 从数据库事务可靠发布 Taskiq 任务的 outbox | 是 | 不发布 callback，不表达 Job 业务终态 |
@@ -114,7 +114,7 @@ active_jobs >= MAX_ACTIVE_JOBS
 attempt running for Job X
   -> 执行失败或 lease 超时
   -> mark current attempt failed
-  -> 如果 retryable 且 Job X attempt_count < Job X max_attempts
+  -> 如果 retry_eligible 且 attempt policy snapshot 未耗尽
        为 Job X 创建 next attempt
        Job X 回到 queued
        写新的 dispatch_outbox
@@ -123,18 +123,20 @@ attempt running for Job X
        如配置 callback，写 callback_outbox
 ```
 
-是否允许执行重试由两层共同决定：
+是否允许执行重试由 attempt 自己持有的 retry policy snapshot 决定：
 
 | 层 | 当前事实 |
 |---|---|
-| `job_type.max_attempts` | 控制最多有几次执行 attempt |
-| `job_type.platform_retry_policy` | 控制哪些平台错误可自动重试 |
+| `attempt.purpose` | 区分 `workflow_orchestration` 与 `business_execution` |
+| `attempt.policy_max_attempts` | 控制该 purpose chain 最多有几次 attempt |
+| `attempt.policy_retryable_error_codes` | 控制哪些错误可自动进入下一 attempt |
+| `attempt.retry_chain_id` / `previous_attempt_id` | 记录同一 purpose retry chain |
 
-当前内置 job_type 的 `max_attempts` 都是 `1`，`platform_retry_policy` 都是 `no_platform_retry`。也就是说执行重试机制存在，但当前内置类型默认不自动创建第二次执行 attempt。
+当前默认策略是：`business_execution` 不自动业务重跑，`policy_max_attempts=1`；`workflow_orchestration` 默认 `policy_max_attempts=3`，用于补偿编排自身的可靠性缺口。dispatch publish retry 和 callback delivery retry 不消耗 execution attempt policy。
 
 按运行形态展开后，当前语义是：
 
-| 失败位置 | 失败对象 | 是否进入 `max_attempts` 判断 | 可重试时重试谁 | 是否自动重跑整个 workflow |
+| 失败位置 | 失败对象 | 是否进入 execution attempt retry 判断 | 可重试时重试谁 | 是否自动重跑整个 workflow |
 |---|---|---|---|---|
 | 普通 non-workflow Job 执行失败 | public root Job 的业务 attempt | 是 | 这条 public root Job | 不适用 |
 | workflow root 编排失败 | public root Job 的 orchestration attempt | 是 | root orchestration attempt；用于补齐 ready child 创建和 dispatch 缺口 | 否 |
@@ -146,7 +148,7 @@ attempt running for Job X
 ```text
 Root orchestration attempt failed
   root 的 active attempt 仍在编排阶段失败
-  -> 如果该 root job_type 未来允许执行重试，只重试 root 编排 attempt
+  -> 如果该 root orchestration attempt 的 policy snapshot 未耗尽，只重试 root 编排 attempt
   -> 编排重试依赖 child lineage / workflow_node_key 幂等补齐缺口
   -> 不表示重建所有 child，也不表示重跑已成功 child
 
@@ -154,11 +156,11 @@ Workflow terminal failed
   root orchestration attempt 已成功，root 正在等待 child
   某个 required child 最终 failed
   -> workflow reconciler 把 root 投影为 failed
-  -> 这是聚合终态收敛，不触发 root max_attempts
+  -> 这是聚合终态收敛，不触发 root execution attempt retry
   -> 不自动重跑 root、全部 child 或已成功 child
 ```
 
-换句话说，`max_attempts` 属于具体 Job 实例；worker 处理的是 attempt；attempt 失败时只看 `attempt.job_id` 指向的那条 Job。workflow 的 root 终态失败不是一个新的 root 执行 attempt 失败信号。
+换句话说，retry budget 属于具体 attempt purpose chain；worker 处理的是 attempt；attempt 失败时只看该 attempt 的 `purpose` 和 policy snapshot。workflow 的 root 终态失败不是一个新的 root 执行 attempt 失败信号。
 
 ### 恢复机制
 
@@ -202,7 +204,7 @@ Attempt 执行权
 
 ### Callback 重试边界
 
-Callback retry 与 Job 执行 retry 是两套机制。Job 到达 `succeeded` 或 `failed` 后，业务终态已经确定；Callback 失败只更新 `callback_outbox` 和 `job_aggregates.callback_*` 摘要。
+Callback retry 与 Job 执行 retry 是两套机制。Job 到达 `succeeded` 或 `failed` 后，业务终态已经确定；Callback 失败只更新 `callback_outbox`，不会回写 Job 业务终态。
 
 ```text
 Job terminal
@@ -241,10 +243,8 @@ job_type role = 设计用途
   root_or_leaf  可直提，也可被 workflow 复用
 
 Job instance = 运行时身份
-  is_internal=false  public root Job
-  is_internal=true   internal child Job
-  root_job_id=null   不属于其他 root
-  root_job_id=R      属于 root R 的 child
+  root_job_id=null + workflow_node_key=null      public root Job
+  root_job_id=R    + workflow_node_key=node_key  internal child Job
 
 job_execution_attempts = 某条 Job 的一次执行尝试
   job_id 可能指向 public root Job
@@ -262,7 +262,7 @@ job_execution_attempts = 某条 Job 的一次执行尝试
 | `visibility` | `public` / `demo` / `internal` | `public` 是正式业务入口；`demo` 是模板示例、smoke 或压测入口；`internal` 预留给只供服务内部使用的 helper job_type |
 | `role` | `root` / `leaf` / `root_or_leaf` | `root` 是聚合根入口；`leaf` 是 workflow child executor；`root_or_leaf` 表示可直提也可被 workflow 复用 |
 
-这两个字段是 registry/catalog intent；当前外部提交准入由 `visibility` 决定，不由 `role` 决定。`APP_ENV=local/dev` 允许外部提交 `public` 和 `demo`；`APP_ENV=test/prd` 只允许外部提交 `public`。`internal` 只供服务内部 workflow child 使用，任何环境都不能被外部直接提交。运行时 root/child lineage 仍由 `job_aggregates.root_job_id`、`parent_job_id`、`is_internal` 和 `workflow_node_key` 表达。
+这两个字段是 registry/catalog intent；当前外部提交准入由 `visibility` 决定，不由 `role` 决定。`APP_ENV=local/dev` 允许外部提交 `public` 和 `demo`；`APP_ENV=test/prd` 只允许外部提交 `public`。`internal` 只供服务内部 workflow child 使用，任何环境都不能被外部直接提交。运行时 root/child lineage 只由 `job_aggregates.root_job_id` 和 `workflow_node_key` 表达。
 
 当前内置标记：
 
@@ -297,13 +297,13 @@ Taskiq message(attempt_id)
 
 - **执行互斥**：多个 worker 收到重复消息时，只有成功领取 lease 的 worker 可以推进 attempt。
 - **活性判断**：heartbeat 与 `lease_expires_at` 让 recovery 判断 running attempt 是否失活。
-- **重试事实**：每次尝试有独立 `attempt_no`、状态、错误、开始/结束时间和 retryable 判断。
+- **重试事实**：每次尝试有独立 `purpose_attempt_no`、状态、错误、开始/结束时间、policy snapshot 和 retry decision。
 
 所以它不只是历史记录。如果把它降级为审计表，worker 多副本、重复消息、超时恢复和按 attempt 重试都会缺少事实源。
 
 ## Retry / Timeout 配置边界
 
-Job 执行重试不是全局 `.env` 开关。当前重试事实由 `job_execution_attempts` 保存；是否创建下一次 attempt，由当前 `job_type` 的 `max_attempts` 和 `platform_retry_policy` 决定。当前内置 job_type 的 `max_attempts` 都是 `1`，`platform_retry_policy` 都是 `no_platform_retry`。
+Job 执行重试不是全局 `.env` 开关。当前重试事实由 `job_execution_attempts` 保存；是否创建下一次 attempt，由当前 attempt 的 `purpose` 和 retry policy snapshot 决定。默认 `business_execution` 不自动业务重跑；`workflow_orchestration` 有独立可靠性重试预算。
 
 当前 `.env.example` 暴露的是少量稳定控制意图：
 
@@ -311,11 +311,7 @@ Job 执行重试不是全局 `.env` 开关。当前重试事实由 `job_executio
 |---|---|
 | `MODEL_CALL_TIMEOUT_SECONDS` | AI 调用主 timeout；代码由它派生 worker timeout 链和 stale running 阈值 |
 | `MAX_ACTIVE_JOBS` | active Job 接单上限；超出时创建请求返回繁忙 |
-| `JOB_ORPHAN_TIMEOUT_SECONDS` | dispatch publish lease / published orphan 的恢复窗口 |
-| `JOB_DISPATCH_MAX_PUBLISH_ATTEMPTS` | dispatch outbox publish 最大尝试次数，耗尽后进入 dead letter |
 | `CALLBACK_TIMEOUT_SECONDS` | Callback 单次 HTTP 请求超时 |
-| `CALLBACK_MAX_DELIVERY_ATTEMPTS` | Callback 最大投递尝试次数 |
-| `CALLBACK_RETRY_DELAY_SECONDS` | Callback 失败后的补偿重试间隔 |
 
 这些派生项不作为生产配置暴露，也不接受 env 覆盖：
 
@@ -324,6 +320,8 @@ Job 执行重试不是全局 `.env` 开关。当前重试事实由 `job_executio
 | `WORKER_SOFT_TIME_LIMIT` | 由 `MODEL_CALL_TIMEOUT_SECONDS` 加内部 buffer 派生，避免调用 timeout 和 worker timeout 倒挂 |
 | `WORKER_HARD_TIME_LIMIT` | 由 soft timeout 加内部 buffer 派生 |
 | `JOB_STALE_RUNNING_SECONDS` | 由 hard timeout 加内部 buffer 派生，保证 recovery 晚于 worker 硬超时 |
+| dispatch publish retry 参数 | 存入 `dispatch_outbox` policy snapshot，不作为通用 env 旋钮 |
+| callback delivery retry 参数 | 存入 `callback_outbox` policy snapshot，不作为通用 env 旋钮 |
 
 这些旧键或不支持的通用旋钮不属于当前应用配置合同；出现在 `.env` 或 `ENV_FILE` 这类应用配置文件时会 fail-fast，而不是静默降级：
 
@@ -331,6 +329,8 @@ Job 执行重试不是全局 `.env` 开关。当前重试事实由 `job_executio
 |---|---|
 | `JOB_MAX_EXECUTION_ATTEMPTS` | 全局执行重试会绕过 job_type 幂等性、成本和副作用差异；当前按 job_type 声明 |
 | `MODEL_CALL_MAX_RETRIES` | provider 调用重试会影响成本、账本和幂等边界；当前不是通用配置合同 |
+| `JOB_ORPHAN_TIMEOUT_SECONDS` / `JOB_DISPATCH_MAX_PUBLISH_ATTEMPTS` | dispatch publish retry 是可靠性内部策略，落到 outbox policy snapshot，不进入通用 env 模板 |
+| `CALLBACK_MAX_DELIVERY_ATTEMPTS` / `CALLBACK_RETRY_DELAY_SECONDS` | callback delivery retry 是可靠性内部策略，落到 outbox policy snapshot，不进入通用 env 模板 |
 | `JOB_RECOVERY_INTERVAL_SECONDS` / `JOB_RECOVERY_BATCH_SIZE` / `JOB_RECOVERY_CALLBACK_BATCH_SIZE` | recovery 扫描节奏和批大小是代码默认内部参数，不进入通用 env 模板 |
 
 新增或调整 Job 配置时，应优先暴露业务可理解的主控变量；worker timeout、stale running、callback claim window 等联动值由 `Settings` 统一派生并做 fail-fast 校验。
@@ -363,8 +363,6 @@ callback_outbox
 job_aggregates
   id
   root_job_id
-  parent_job_id
-  is_internal
   workflow_node_key
   status
   result
@@ -375,22 +373,19 @@ job_aggregates
 
 | 字段 | 当前含义 |
 |---|---|
-| `root_job_id` | internal child 归属的 public root Job |
-| `parent_job_id` | 当前 workflow-created child 的 lineage / owner link；实际创建时直接指向 root |
-| `is_internal` | 是否为内部 child Job；公开查询不把 internal child 作为调用方资源 |
-| `workflow_node_key` | root 内 leaf node 的幂等身份 |
+| `root_job_id` | `NULL` 表示 public root；非 `NULL` 表示 child 归属的 public root Job |
+| `workflow_node_key` | child 在 root 内的 leaf node 幂等身份；public root 必须为 `NULL` |
 
-`parent_job_id` 不表达 DAG 执行依赖。当前 workflow child 都直接挂在 root 下；`chain`、`chord` 等顺序关系只存在 frozen `workflow_plan.nodes[].depends_on` 中。workflow 任务模型和依赖语义以 [`workflow-kernel.md`](workflow-kernel.md) 为准。
+`root_job_id` 不表达 DAG 执行依赖。当前 workflow child 都直接挂在 root 下；`chain`、`chord` 等顺序关系只存在 frozen `workflow_plan.nodes[].depends_on` 中。workflow 任务模型和依赖语义以 [`workflow-kernel.md`](workflow-kernel.md) 为准。
 
 ## 自索引聚合
 
-Workflow 使用自索引聚合，而不是新增 child Job 映射表。`job_aggregates` 仍然是 Job 状态事实源；`root_job_id`、`parent_job_id` 和 `workflow_node_key` 只是让同一张事实表可以表达 root -> child 查询。这样不会出现 `child_jobs.status` 和 `job_aggregates.status` 两套状态互相冲突。
+Workflow 使用自索引聚合，而不是新增 child Job 映射表。`job_aggregates` 仍然是 Job 状态事实源；`root_job_id` 和 `workflow_node_key` 只是让同一张事实表可以表达 root -> child 查询。这样不会出现 `child_jobs.status` 和 `job_aggregates.status` 两套状态互相冲突。
 
 关键索引：
 
 ```text
 index(root_job_id)
-index(parent_job_id)
 unique(root_job_id, workflow_node_key) where workflow_node_key is not null
 index(root_job_id, status)
 ```
@@ -411,7 +406,6 @@ select
   finished_at
 from job_aggregates
 where root_job_id = :root_job_id
-  and is_internal = true
 order by workflow_node_key;
 ```
 

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core import config as config_module
+from app.jobs.base import JobRetryPolicy
 from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest
 from app.core.exceptions import AppError, ValidationAppError
@@ -25,6 +26,7 @@ class _TestHandler:
     allow_callback = True
     timeout_seconds = 300
     max_attempts = 1
+    retry_policy = JobRetryPolicy()
 
     def normalize_job_params(self, job_params):
         return job_params
@@ -41,8 +43,11 @@ class _TestHandler:
             visibility=self.visibility,
             role=self.role,
             execution_mode="custom_executor",
-            platform_retry_policy="no_platform_retry",
+            retry_policy=self.retry_policy.snapshot(),
         )
+
+    def effective_retry_policy(self):
+        return self.retry_policy
 
 
 def _job_settings(**overrides):
@@ -114,7 +119,9 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
             callback_events=kwargs["callback_events"],
             metadata_=kwargs["metadata"],
             priority=kwargs["priority"],
-            timeout_seconds=kwargs["timeout_seconds"],
+            job_params_ref=kwargs["job_params_ref"],
+            job_params_hash=kwargs["job_params_hash"],
+            runtime_ref=kwargs["runtime_ref"],
             created_at=now,
             updated_at=now,
         )
@@ -128,15 +135,16 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     async def fake_create_submission_key(_db, **kwargs):
         captured["submission_key"] = kwargs
 
-    async def fake_create_initial_attempt(_db, created_job, *, timeout_seconds):
-        captured["initial_attempt"] = (created_job.id, timeout_seconds)
+    async def fake_create_initial_attempt(_db, created_job, *, timeout_seconds, purpose, retry_policy):
+        captured["initial_attempt"] = (created_job.id, timeout_seconds, purpose, retry_policy)
 
     def fake_write_runtime_json(job, name, payload):
+        owner_id = job.id if job is not None else "precreate"
         return {
             "storage": "oss_object",
             "type": "json",
             "oss_bucket": "bucket",
-            "oss_key": f"ai-jobs/{job.id}/runtime/{name}.json",
+            "oss_key": f"ai-jobs/{owner_id}/runtime/{name}.json",
             "oss_region": "region",
             "payload_snapshot": payload,
         }
@@ -174,8 +182,7 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     assert "options_payload" not in captured
     assert captured["metadata"] == {"caller_task_id": "task-1"}
     assert captured["priority"] == "normal"
-    assert captured["timeout_seconds"] == 300
-    assert captured["initial_attempt"] == (job.id, 300)
+    assert captured["initial_attempt"][0:3] == (job.id, 300, "business_execution")
     assert captured["callback_url"] == "https://example.com/callback"
     assert captured["callback_events"] == ["job.failed", "job.succeeded"]
     assert job.job_params_ref["payload_snapshot"] == {"value": {"hello": "world"}, "label": "Echo"}
@@ -207,7 +214,9 @@ async def test_create_job_writes_registered_workflow_plan_to_runtime_ref(monkeyp
             callback_events=kwargs["callback_events"],
             metadata_=kwargs["metadata"],
             priority=kwargs["priority"],
-            timeout_seconds=kwargs["timeout_seconds"],
+            job_params_ref=kwargs["job_params_ref"],
+            job_params_hash=kwargs["job_params_hash"],
+            runtime_ref=kwargs["runtime_ref"],
             created_at=now,
             updated_at=now,
         )
@@ -221,8 +230,8 @@ async def test_create_job_writes_registered_workflow_plan_to_runtime_ref(monkeyp
     async def fake_create_submission_key(_db, **kwargs):
         captured["submission_key"] = kwargs
 
-    async def fake_create_initial_attempt(_db, created_job, *, timeout_seconds):
-        captured["initial_attempt"] = (created_job.id, timeout_seconds)
+    async def fake_create_initial_attempt(_db, created_job, *, timeout_seconds, purpose, retry_policy):
+        captured["initial_attempt"] = (created_job.id, timeout_seconds, purpose, retry_policy)
 
     def fake_write_runtime_json(_job, _name, payload):
         return {"storage": "db_inline", "type": "json", "name": _name, "payload_snapshot": payload}
@@ -266,7 +275,7 @@ async def test_create_job_writes_registered_workflow_plan_to_runtime_ref(monkeyp
         workflow_registry.clear_for_tests()
 
     assert created is True
-    assert captured["initial_attempt"] == (job.id, 300)
+    assert captured["initial_attempt"][0:3] == (job.id, 300, "workflow_orchestration")
     assert job.job_params_ref["payload_snapshot"] == {"value": "hello"}
     assert job.runtime_ref["payload_snapshot"]["job_type"] == "test.workflow"
     plan = job.runtime_ref["payload_snapshot"]["workflow_plan"]

@@ -19,7 +19,6 @@ class JobRealLlmEchoJob(JobExecutor):
     canonical_result_schema = JobRealLlmEchoResult
     public_result_schema = JobRealLlmEchoResult
     allow_callback = False
-    max_attempts = 1
     timeout_seconds = 180
     prompt_specs = (
         PromptSpec(

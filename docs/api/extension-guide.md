@@ -6,7 +6,7 @@
 
 1. 在 `app/schemas/jobs.py` 中定义 Params、Runtime fields 和 Result schema。
 2. 在 `app/jobs/types/<job_type>.py` 或 `app/jobs/types/<job_type>/` 中实现 `JobExecutor`。简单 job 可继续使用单文件；正式业务或带 prompt、errors、workflow 的复杂 job 使用包目录，至少保留 `executor.py` 和 `__init__.py`，按需增加 `errors.py`、`prompts.yaml` 等业务内聚文件。
-3. 在 executor 上声明稳定 `name`、`visibility`、`role`、`params_schema`、`runtime_fields_schema_name`、`canonical_result_schema`、`public_result_schema` 和 retry/side-effect 元数据。
+3. 在 executor 上声明稳定 `name`、`visibility`、`role`、`params_schema`、`runtime_fields_schema_name`、`canonical_result_schema`、`public_result_schema`、`retry_policy` 和 side-effect 元数据。
 4. 在 `app/jobs/types/register.py` 显式导入并注册。
 5. 如需模型调用，通过 `app/services/ai_gateway_facade.py` 进入，不直接调用 provider adapter。
 6. 如需大输入或大结果，使用 runtime ref、result ref 和对象存储边界，不把大 payload 直接塞进 Job response。
@@ -41,7 +41,7 @@
 5. 按业务语义选择 `failure_policy`；默认 `fail_fast`，需要容忍部分 child 失败时才显式使用 `allow_partial`。
 6. 补充 compiler、orchestrator、registry、workflow smoke 或业务 e2e 测试。
 
-workflow child node 应引用 `role="leaf"` 或 `role="root_or_leaf"` 的 executor。`visibility="internal"` 或内部 child Job 的创建由服务内部 workflow orchestrator 完成，不经过外部 `POST /jobs` 提交准入；Job 实例是否为 child 仍由 `is_internal`、`root_job_id`、`parent_job_id` 和 `workflow_node_key` 表达。
+workflow child node 应引用 `role="leaf"` 或 `role="root_or_leaf"` 的 executor。`visibility="internal"` 或内部 child Job 的创建由服务内部 workflow orchestrator 完成，不经过外部 `POST /jobs` 提交准入；Job 实例是否为 child 由 `root_job_id` 和 `workflow_node_key` 共同表达：public root 的两者都为空，workflow child 的两者都非空。
 
 当前开发者示例是 `job_test_workflow`，标记为 `visibility="demo"`、`role="root"`。它覆盖 `single`、`chain`、`group`、`chord`、`map`、`starmap` 和 `chunks`，可作为本地理解 root/child 模式和压测 workflow 链路的参考，但不是正式业务 API 合同。
 

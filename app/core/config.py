@@ -80,10 +80,6 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS": ("job", "poster_title_image_allowed_oss_buckets_raw"),
     "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS": ("job", "poster_title_image_allowed_oss_regions_raw"),
     "CALLBACK_TIMEOUT_SECONDS": ("callback", "timeout_seconds"),
-    "CALLBACK_MAX_DELIVERY_ATTEMPTS": ("callback", "max_delivery_attempts"),
-    "CALLBACK_RETRY_DELAY_SECONDS": ("callback", "retry_delay_seconds"),
-    "JOB_ORPHAN_TIMEOUT_SECONDS": ("job", "orphan_timeout_seconds"),
-    "JOB_DISPATCH_MAX_PUBLISH_ATTEMPTS": ("job", "dispatch_max_publish_attempts"),
     "PROMPT_CONFIG_PATH": ("registry", "prompt_config_path_raw"),
     "LOG_LEVEL": ("observability", "log_level"),
 }
@@ -375,8 +371,8 @@ class CallbackSettings(ConfigSection):
     def validate_callback(self) -> "CallbackSettings":
         positive_fields = {
             "CALLBACK_TIMEOUT_SECONDS": self.timeout_seconds,
-            "CALLBACK_MAX_DELIVERY_ATTEMPTS": self.max_delivery_attempts,
-            "CALLBACK_RETRY_DELAY_SECONDS": self.retry_delay_seconds,
+            "callback.max_delivery_attempts": self.max_delivery_attempts,
+            "callback.retry_delay_seconds": self.retry_delay_seconds,
         }
         for name, value in positive_fields.items():
             if value <= 0:
@@ -486,8 +482,8 @@ class JobSettings(ConfigSection):
             "OSS_INPUT_MAX_BYTES": self.oss_input_max_bytes,
             "POSTER_TITLE_IMAGE_MAX_ITEMS": self.poster_title_image_max_items,
             "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": self.poster_title_image_max_draw_count,
-            "JOB_ORPHAN_TIMEOUT_SECONDS": self.orphan_timeout_seconds,
-            "JOB_DISPATCH_MAX_PUBLISH_ATTEMPTS": self.dispatch_max_publish_attempts,
+            "job.orphan_timeout_seconds": self.orphan_timeout_seconds,
+            "job.dispatch_max_publish_attempts": self.dispatch_max_publish_attempts,
             "JOB_RECOVERY_INTERVAL_SECONDS": self.recovery_interval_seconds,
             "JOB_RECOVERY_BATCH_SIZE": self.recovery_batch_size,
             "JOB_RECOVERY_CALLBACK_BATCH_SIZE": self.recovery_callback_batch_size,
@@ -601,7 +597,7 @@ class Settings(BaseSettings):
         if delivery_timeout >= self.callback.retry_delay_seconds:
             raise ValueError(
                 f"derived callback claim window({delivery_timeout}s) must be < "
-                f"CALLBACK_RETRY_DELAY_SECONDS({self.callback.retry_delay_seconds}s): "
+                f"callback.retry_delay_seconds({self.callback.retry_delay_seconds}s): "
                 "retry interval must start after the callback claim window."
             )
 

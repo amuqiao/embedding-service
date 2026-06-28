@@ -37,7 +37,8 @@ class JobRepo:
                 JobSubmissionKey.key_kind == SUBMISSION_KEY_KIND_CLIENT_REQUEST_ID,
                 JobSubmissionKey.key_value == client_request_id,
                 Job.deleted_at.is_(None),
-                Job.is_internal.is_(False),
+                Job.root_job_id.is_(None),
+                Job.workflow_node_key.is_(None),
             )
             .order_by(JobSubmissionKey.created_at.asc())
             .limit(1)
@@ -51,40 +52,35 @@ class JobRepo:
         caller_id: str,
         client_request_id: str | None,
         job_type: str,
+        job_params_ref: dict[str, Any],
+        job_params_hash: str,
         metadata: dict[str, Any] | None = None,
         priority: str = "normal",
-        timeout_seconds: int | None = None,
-        job_params: dict[str, Any] | None = None,
-        max_attempts: int = 1,
-        job_params_ref: dict[str, Any] | None = None,
-        job_params_hash: str | None = None,
+        job_id: uuid.UUID | None = None,
+        runtime_ref: dict[str, Any] | None = None,
         callback_url: str | None = None,
         callback_events: list[str] | None = None,
         root_job_id: uuid.UUID | None = None,
-        parent_job_id: uuid.UUID | None = None,
-        is_internal: bool = False,
         workflow_node_key: str | None = None,
     ) -> Job:
-        if is_internal and root_job_id is None:
-            raise ValueError("internal job must include root_job_id")
-        if is_internal and client_request_id is not None:
-            raise ValueError("internal job must not include client_request_id")
-        if is_internal and (callback_url is not None or callback_events is not None):
-            raise ValueError("internal job must not include callback")
-        if not is_internal and parent_job_id is not None:
-            raise ValueError("parent_job_id requires internal job")
-        if not is_internal and workflow_node_key is not None:
-            raise ValueError("workflow_node_key requires internal job")
-        if workflow_node_key is not None and root_job_id is None:
+        is_child = root_job_id is not None
+        if is_child and workflow_node_key is None:
+            raise ValueError("child job must include workflow_node_key")
+        if is_child and client_request_id is not None:
+            raise ValueError("child job must not include client_request_id")
+        if is_child and (callback_url is not None or callback_events is not None):
+            raise ValueError("child job must not include callback")
+        if not is_child and workflow_node_key is not None:
             raise ValueError("workflow_node_key requires root_job_id")
-        stored_callback_url = None if is_internal else callback_url
-        stored_callback_events = None if is_internal else callback_events
+        if not is_child and client_request_id is None:
+            raise ValueError("public root job must include client_request_id")
+        stored_callback_url = None if is_child else callback_url
+        stored_callback_events = None if is_child else callback_events
         job = Job(
+            id=job_id or uuid.uuid4(),
             caller_id=caller_id,
             client_request_id=client_request_id,
             root_job_id=root_job_id,
-            parent_job_id=parent_job_id,
-            is_internal=is_internal,
             workflow_node_key=workflow_node_key,
             job_type=job_type,
             status="queued",
@@ -92,15 +88,12 @@ class JobRepo:
             progress_text="已排队",
             queued_at=datetime.now(timezone.utc),
             priority=priority,
-            timeout_seconds=timeout_seconds,
-            job_params=job_params or {},
-            max_attempts=max_attempts,
             metadata_=metadata or {},
             job_params_ref=job_params_ref,
             job_params_hash=job_params_hash,
+            runtime_ref=runtime_ref,
             callback_url=stored_callback_url,
             callback_events=stored_callback_events,
-            callback_status="pending" if stored_callback_url else "not_configured",
         )
         db.add(job)
         await db.flush()
@@ -180,6 +173,9 @@ class JobRepo:
         event_type: str,
         now: datetime,
         job_result: dict[str, Any] | None,
+        delivery_attempts: int = 0,
+        next_retry_at: datetime | None = None,
+        last_error: dict[str, Any] | None = None,
         cost: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         progress_stage = "completed" if job.status == "succeeded" else "failed"
@@ -206,9 +202,9 @@ class JobRepo:
                 "cost": cost,
                 "callback": {
                     "status": callback_status,
-                    "attempt": 0,
-                    "last_error": None,
-                    "next_retry_at": now.isoformat() if callback_status == "pending" else None,
+                    "attempt": delivery_attempts,
+                    "last_error": last_error,
+                    "next_retry_at": (next_retry_at or now).isoformat() if callback_status == "pending" else None,
                 },
                 "status_url": f"{settings.service.api_prefix}/jobs/{job.id}",
                 "created_at": (job.created_at or now).isoformat(),
@@ -221,10 +217,6 @@ class JobRepo:
     async def ensure_terminal_callback_outbox(db: AsyncSession, job: Job, *, now: datetime) -> CallbackOutbox | None:
         event_type = JobRepo._terminal_callback_event_type(job)
         if not job.callback_url or event_type is None:
-            job.callback_status = "not_configured"
-            job.callback_attempts = 0
-            job.callback_next_retry_at = None
-            job.callback_last_error = None
             return None
 
         result = await db.execute(
@@ -234,10 +226,6 @@ class JobRepo:
         )
         existing = result.scalar_one_or_none()
         if existing is not None:
-            job.callback_status = "failed" if existing.status == "dead_letter" else existing.status
-            job.callback_attempts = existing.delivery_attempts or 0
-            job.callback_next_retry_at = existing.next_attempt_at
-            job.callback_last_error = existing.last_error
             return existing
 
         subscribed = event_type in set(JobRepo._callback_events(job))
@@ -272,14 +260,19 @@ class JobRepo:
                 job_result=projected_result,
                 cost=cost,
             ),
+            max_delivery_attempts=settings.callback.max_delivery_attempts,
+            request_timeout_seconds=settings.callback.delivery_timeout_seconds,
+            retry_delay_seconds=settings.callback.retry_delay_seconds,
+            delivery_retry_policy_snapshot={
+                "max_delivery_attempts": settings.callback.max_delivery_attempts,
+                "request_timeout_seconds": settings.callback.delivery_timeout_seconds,
+                "retry_delay_seconds": settings.callback.retry_delay_seconds,
+                "backoff_kind": "fixed",
+            },
             next_attempt_at=now if subscribed else None,
         )
         db.add(outbox)
         await db.flush()
-        job.callback_status = "pending" if subscribed else "skipped"
-        job.callback_attempts = 0
-        job.callback_next_retry_at = now if subscribed else None
-        job.callback_last_error = None
         db.add(
             JobEvent(
                 job_id=job.id,
@@ -293,50 +286,92 @@ class JobRepo:
         return outbox
 
     @staticmethod
+    async def get_terminal_callback_outbox(db: AsyncSession, job: Job) -> CallbackOutbox | None:
+        event_type = JobRepo._terminal_callback_event_type(job)
+        if event_type is None:
+            return None
+        result = await db.execute(
+            select(CallbackOutbox)
+            .where(CallbackOutbox.job_id == job.id, CallbackOutbox.event_type == event_type)
+            .order_by(CallbackOutbox.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def create_dispatch_outbox(
         db: AsyncSession,
         *,
-        job_id: uuid.UUID,
+        event_job_id: uuid.UUID,
         attempt_id: uuid.UUID,
         next_attempt_at: datetime | None,
         dispatch_reason: str,
     ) -> DispatchOutbox:
+        publish_retry_policy_snapshot = {
+            "max_publish_attempts": settings.job.dispatch_max_publish_attempts,
+            "orphan_timeout_seconds": settings.job.orphan_timeout_seconds,
+            "publish_retry_delay_seconds": 5,
+            "backoff_kind": "fixed",
+        }
         outbox = DispatchOutbox(
             event_id=f"job_attempt:{attempt_id}:dispatch",
-            job_id=job_id,
             attempt_id=attempt_id,
             task_name=DISPATCH_TASK_NAME,
             payload={"attempt_id": str(attempt_id)},
             status="pending",
+            max_publish_attempts=settings.job.dispatch_max_publish_attempts,
+            orphan_timeout_seconds=settings.job.orphan_timeout_seconds,
+            publish_retry_delay_seconds=5,
+            publish_backoff_kind="fixed",
+            publish_retry_policy_snapshot=publish_retry_policy_snapshot,
             next_attempt_at=next_attempt_at,
         )
         db.add(outbox)
         db.add(
             JobEvent(
-                job_id=job_id,
+                job_id=event_job_id,
                 attempt_id=attempt_id,
                 event_type="dispatch.created",
                 to_status="pending",
-                payload={"task_name": DISPATCH_TASK_NAME, "dispatch_reason": dispatch_reason},
+                payload={
+                    "task_name": DISPATCH_TASK_NAME,
+                    "dispatch_reason": dispatch_reason,
+                    "publish_retry_policy": publish_retry_policy_snapshot,
+                },
             )
         )
         await db.flush()
         return outbox
 
     @staticmethod
-    async def create_initial_attempt(db: AsyncSession, job: Job, *, timeout_seconds: int) -> JobAttempt:
+    async def create_initial_attempt(
+        db: AsyncSession,
+        job: Job,
+        *,
+        timeout_seconds: int,
+        purpose: str,
+        retry_policy: Any,
+        created_reason: str = "initial",
+    ) -> JobAttempt:
         attempt_id = uuid.uuid4()
+        retry_snapshot = retry_policy.snapshot() if hasattr(retry_policy, "snapshot") else dict(retry_policy)
         attempt = JobAttempt(
             id=attempt_id,
             job_id=job.id,
-            attempt_no=1,
+            purpose=purpose,
+            purpose_attempt_no=1,
+            retry_chain_id=attempt_id,
+            created_reason=created_reason,
             status="pending",
             timeout_seconds=timeout_seconds,
+            policy_max_attempts=int(retry_snapshot["max_attempts"]),
+            policy_retry_delay_seconds=retry_snapshot.get("retry_delay_seconds"),
+            policy_backoff_kind=str(retry_snapshot["backoff_kind"]),
+            policy_retryable_error_codes=list(retry_snapshot.get("retryable_error_codes") or []),
+            retry_policy_snapshot=retry_snapshot,
         )
         db.add(attempt)
         job.active_attempt_id = attempt_id
-        job.attempt_count = 1
-        job.timeout_seconds = timeout_seconds
         job.updated_at = datetime.now(timezone.utc)
         db.add(
             JobEvent(
@@ -344,12 +379,13 @@ class JobRepo:
                 attempt_id=attempt_id,
                 event_type="attempt.created",
                 to_status="pending",
+                payload={"purpose": purpose, "created_reason": created_reason, "retry_policy": retry_snapshot},
             )
         )
         await db.flush()
         await JobRepo.create_dispatch_outbox(
             db,
-            job_id=job.id,
+            event_job_id=job.id,
             attempt_id=attempt_id,
             next_attempt_at=datetime.now(timezone.utc),
             dispatch_reason="initial",
@@ -373,8 +409,8 @@ class JobRepo:
         now = now or datetime.now(timezone.utc)
         result = await db.execute(
             select(DispatchOutbox, Job, JobAttempt)
-            .join(Job, Job.id == DispatchOutbox.job_id)
             .join(JobAttempt, JobAttempt.id == DispatchOutbox.attempt_id)
+            .join(Job, Job.id == JobAttempt.job_id)
             .where(
                 DispatchOutbox.attempt_id == attempt_id,
                 DispatchOutbox.task_name == DISPATCH_TASK_NAME,
@@ -397,7 +433,7 @@ class JobRepo:
         row = result.one_or_none()
         if row is None:
             return None
-        dispatch, _job, _attempt = row
+        dispatch, _job, attempt = row
         previous = dispatch.status
         lease_token = uuid.uuid4()
         dispatch.status = "leased"
@@ -407,7 +443,7 @@ class JobRepo:
         dispatch.updated_at = now
         db.add(
             JobEvent(
-                job_id=dispatch.job_id,
+                job_id=attempt.job_id,
                 attempt_id=dispatch.attempt_id,
                 event_type="dispatch.leased",
                 from_status=previous,
@@ -428,7 +464,8 @@ class JobRepo:
     ) -> bool:
         now = datetime.now(timezone.utc)
         result = await db.execute(
-            select(DispatchOutbox)
+            select(DispatchOutbox, JobAttempt)
+            .join(JobAttempt, JobAttempt.id == DispatchOutbox.attempt_id)
             .where(
                 DispatchOutbox.id == dispatch_id,
                 DispatchOutbox.status == "leased",
@@ -436,9 +473,10 @@ class JobRepo:
             )
             .with_for_update(skip_locked=True)
         )
-        dispatch = result.scalar_one_or_none()
-        if dispatch is None:
+        row = result.one_or_none()
+        if row is None:
             return False
+        dispatch, attempt = row
         dispatch.status = "published"
         dispatch.publish_attempts = (dispatch.publish_attempts or 0) + 1
         dispatch.next_attempt_at = next_attempt_at
@@ -449,7 +487,7 @@ class JobRepo:
         dispatch.updated_at = now
         db.add(
             JobEvent(
-                job_id=dispatch.job_id,
+                job_id=attempt.job_id,
                 attempt_id=dispatch.attempt_id,
                 event_type="dispatch.published",
                 from_status="leased",
@@ -472,7 +510,8 @@ class JobRepo:
     ) -> bool:
         now = datetime.now(timezone.utc)
         result = await db.execute(
-            select(DispatchOutbox)
+            select(DispatchOutbox, JobAttempt)
+            .join(JobAttempt, JobAttempt.id == DispatchOutbox.attempt_id)
             .where(
                 DispatchOutbox.id == dispatch_id,
                 DispatchOutbox.status == "leased",
@@ -480,9 +519,10 @@ class JobRepo:
             )
             .with_for_update(skip_locked=True)
         )
-        dispatch = result.scalar_one_or_none()
-        if dispatch is None:
+        row = result.one_or_none()
+        if row is None:
             return False
+        dispatch, attempt = row
         previous = dispatch.status
         publish_attempts = (dispatch.publish_attempts or 0) + 1
         dispatch.publish_attempts = publish_attempts
@@ -490,7 +530,7 @@ class JobRepo:
         dispatch.lease_expires_at = None
         dispatch.last_error = error
         dispatch.updated_at = now
-        if publish_attempts >= max_publish_attempts:
+        if publish_attempts >= min(max_publish_attempts, dispatch.max_publish_attempts):
             dispatch.status = "dead_letter"
             dispatch.next_attempt_at = None
             dispatch.dead_lettered_at = now
@@ -499,7 +539,7 @@ class JobRepo:
             dispatch.next_attempt_at = next_attempt_at
         db.add(
             JobEvent(
-                job_id=dispatch.job_id,
+                job_id=attempt.job_id,
                 attempt_id=dispatch.attempt_id,
                 event_type="dispatch.dead_lettered"
                 if dispatch.status == "dead_letter"
@@ -552,12 +592,7 @@ class JobRepo:
         job.progress_text = "正在执行"
         job.progress_stage = "running"
         job.started_at = job.started_at or now
-        job.last_execution_at = now
-        job.last_heartbeat_at = now
-        job.execution_attempts = (job.execution_attempts or 0) + 1
         job.updated_at = now
-        # Shared runner CAS token for progress/result state transitions.
-        job.execution_token = str(attempt_id)
         db.add(
             JobEvent(
                 job_id=job.id,
@@ -600,7 +635,6 @@ class JobRepo:
         attempt.heartbeat_at = now
         attempt.lease_expires_at = now + timedelta(seconds=lease_seconds)
         attempt.updated_at = now
-        job.last_heartbeat_at = now
         job.updated_at = now
         await db.flush()
         return True
@@ -616,6 +650,7 @@ class JobRepo:
         failure_phase: str = "execute",
         retryable: bool = False,
         next_attempt_at: datetime | None = None,
+        retry_created_reason: str = "retry",
     ) -> bool:
         conditions = [JobAttempt.id == attempt_id, JobAttempt.status == "running"]
         if lease_token is not None:
@@ -636,26 +671,42 @@ class JobRepo:
         attempt.error = error
         attempt.error_kind = error_kind
         attempt.failure_phase = failure_phase
-        can_retry = retryable and job.status != "failed" and job.attempt_count < job.max_attempts
-        attempt.retryable = can_retry
+        can_retry = retryable and job.status != "failed" and attempt.purpose_attempt_no < attempt.policy_max_attempts
+        attempt.retry_eligible = retryable
+        attempt.retry_decision = "retry" if can_retry else "do_not_retry"
+        if not retryable:
+            attempt.retry_decision_reason = "not_retry_eligible"
+        elif attempt.purpose_attempt_no >= attempt.policy_max_attempts:
+            attempt.retry_decision_reason = "policy_exhausted"
+        else:
+            attempt.retry_decision_reason = "policy_allows_retry"
+        attempt.retry_decided_at = now
+        attempt.next_attempt_scheduled_at = (next_attempt_at or now) if can_retry else None
+        attempt.decision_source = "repository"
         attempt.lease_token = None
         attempt.lease_expires_at = None
         attempt.updated_at = now
         if can_retry:
             next_attempt_id = uuid.uuid4()
-            next_attempt_no = (job.attempt_count or 0) + 1
+            next_attempt_no = attempt.purpose_attempt_no + 1
             next_attempt = JobAttempt(
                 id=next_attempt_id,
                 job_id=job.id,
-                attempt_no=next_attempt_no,
+                purpose=attempt.purpose,
+                purpose_attempt_no=next_attempt_no,
+                retry_chain_id=attempt.retry_chain_id,
+                previous_attempt_id=attempt.id,
+                created_reason=retry_created_reason,
                 status="pending",
-                timeout_seconds=job.timeout_seconds or attempt.timeout_seconds,
+                timeout_seconds=attempt.timeout_seconds,
+                policy_max_attempts=attempt.policy_max_attempts,
+                policy_retry_delay_seconds=attempt.policy_retry_delay_seconds,
+                policy_backoff_kind=attempt.policy_backoff_kind,
+                policy_retryable_error_codes=attempt.policy_retryable_error_codes,
+                retry_policy_snapshot=attempt.retry_policy_snapshot,
             )
             db.add(next_attempt)
             job.active_attempt_id = next_attempt_id
-            job.attempt_count = next_attempt_no
-            job.execution_generation = (job.execution_generation or 1) + 1
-            job.execution_token = None
             job.status = "queued"
             job.progress_percent = 0
             job.progress_text = "已排队"
@@ -669,20 +720,23 @@ class JobRepo:
                     event_type="attempt.created",
                     to_status="pending",
                     payload={
-                        "reason": "retry",
+                        "purpose": attempt.purpose,
+                        "reason": retry_created_reason,
                         "previous_attempt_id": str(attempt.id),
                         "previous_error": error,
+                        "retry_policy": attempt.retry_policy_snapshot,
                     },
                 )
             )
             await JobRepo.create_dispatch_outbox(
                 db,
-                job_id=job.id,
+                event_job_id=job.id,
                 attempt_id=next_attempt_id,
                 next_attempt_at=next_attempt_at or now,
-                dispatch_reason="retry",
+                dispatch_reason=retry_created_reason,
             )
         elif job.status != "failed":
+            job.active_attempt_id = None
             job.status = "failed"
             job.progress_text = "处理失败"
             job.progress_stage = "failed"
@@ -690,7 +744,6 @@ class JobRepo:
             job.error = error
             job.finished_at = now
             await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
-        job.last_heartbeat_at = now
         job.updated_at = now
         db.add(
             JobEvent(
@@ -699,7 +752,12 @@ class JobRepo:
                 event_type="attempt.failed",
                 from_status="running",
                 to_status="failed",
-                payload={**error, "retryable": can_retry},
+                payload={
+                    **error,
+                    "retry_eligible": retryable,
+                    "retry_decision": attempt.retry_decision,
+                    "retry_decision_reason": attempt.retry_decision_reason,
+                },
             )
         )
         await db.flush()
@@ -778,11 +836,9 @@ class JobRepo:
         attempt.heartbeat_at = now
         attempt.updated_at = now
         job.active_attempt_id = None
-        job.execution_token = None
         job.progress_percent = max(job.progress_percent or 0, 20)
         job.progress_text = "等待子任务完成"
         job.progress_stage = "planning"
-        job.last_heartbeat_at = now
         job.updated_at = now
         db.add(
             JobEvent(
@@ -801,8 +857,8 @@ class JobRepo:
     async def find_due_dispatches(db: AsyncSession, now: datetime, *, limit: int) -> list[DispatchOutbox]:
         result = await db.execute(
             select(DispatchOutbox)
-            .join(Job, Job.id == DispatchOutbox.job_id)
             .join(JobAttempt, JobAttempt.id == DispatchOutbox.attempt_id)
+            .join(Job, Job.id == JobAttempt.job_id)
             .where(
                 Job.status == "queued",
                 Job.active_attempt_id == JobAttempt.id,
@@ -846,7 +902,8 @@ class JobRepo:
             .where(
                 Job.status == "running",
                 Job.active_attempt_id.is_(None),
-                Job.is_internal.is_(False),
+                Job.root_job_id.is_(None),
+                Job.workflow_node_key.is_(None),
                 Job.deleted_at.is_(None),
                 Job.runtime_ref["payload"].op("?")("workflow_plan"),
             )
@@ -903,7 +960,8 @@ class JobRepo:
             select(Job)
             .where(
                 Job.status.in_(["succeeded", "failed"]),
-                Job.is_internal.is_(False),
+                Job.root_job_id.is_(None),
+                Job.workflow_node_key.is_(None),
                 Job.callback_url.is_not(None),
                 Job.deleted_at.is_(None),
                 or_(
@@ -929,7 +987,8 @@ class JobRepo:
                 Job.id == job_id,
                 Job.caller_id == caller_id,
                 Job.deleted_at.is_(None),
-                Job.is_internal.is_(False),
+                Job.root_job_id.is_(None),
+                Job.workflow_node_key.is_(None),
             )
         )
         return result.scalar_one_or_none()
@@ -945,7 +1004,6 @@ class JobRepo:
             select(Job).where(
                 Job.root_job_id == root_job_id,
                 Job.workflow_node_key == workflow_node_key,
-                Job.is_internal.is_(True),
                 Job.deleted_at.is_(None),
             )
         )
@@ -960,7 +1018,7 @@ class JobRepo:
     ) -> list[Job]:
         conditions = [
             Job.root_job_id == root_job_id,
-            Job.is_internal.is_(True),
+            Job.workflow_node_key.is_not(None),
             Job.deleted_at.is_(None),
         ]
         if statuses is not None:
@@ -974,7 +1032,8 @@ class JobRepo:
             select(Job)
             .where(
                 Job.id == root_job_id,
-                Job.is_internal.is_(False),
+                Job.root_job_id.is_(None),
+                Job.workflow_node_key.is_(None),
                 Job.deleted_at.is_(None),
             )
             .with_for_update()
@@ -988,16 +1047,37 @@ class JobRepo:
         progress_percent: int,
         progress_text: str,
         progress_stage: str | None = None,
-        execution_token: str | None = None,
-        execution_generation: int | None = None,
+        attempt_id: uuid.UUID | None = None,
+        lease_token: uuid.UUID | None = None,
     ) -> bool:
         conditions = [Job.id == job_id, Job.deleted_at.is_(None)]
-        if execution_token is not None:
-            conditions.extend([Job.status == "running", Job.execution_token == execution_token])
-        if execution_generation is not None:
-            conditions.append(Job.execution_generation == execution_generation)
-        result = await db.execute(select(Job).where(*conditions).with_for_update(skip_locked=True))
-        job = result.scalar_one_or_none()
+        if attempt_id is not None:
+            conditions.extend(
+                [
+                    Job.status == "running",
+                    Job.active_attempt_id == JobAttempt.id,
+                    JobAttempt.id == attempt_id,
+                    JobAttempt.status == "running",
+                ]
+            )
+            if lease_token is not None:
+                conditions.append(JobAttempt.lease_token == lease_token)
+            result = await db.execute(
+                select(Job, JobAttempt)
+                .join(JobAttempt, JobAttempt.job_id == Job.id)
+                .where(*conditions)
+                .with_for_update(skip_locked=True)
+            )
+            row = result.one_or_none()
+            if row is None:
+                return False
+            job, attempt = row
+        else:
+            result = await db.execute(select(Job).where(*conditions).with_for_update(skip_locked=True))
+            job = result.scalar_one_or_none()
+            if not job:
+                return False
+            attempt = None
         if not job:
             return False
         now = datetime.now(timezone.utc)
@@ -1005,7 +1085,9 @@ class JobRepo:
         job.progress_text = progress_text
         if progress_stage is not None:
             job.progress_stage = progress_stage
-        job.last_heartbeat_at = now
+        if attempt is not None:
+            attempt.heartbeat_at = now
+            attempt.updated_at = now
         job.updated_at = now
         await db.flush()
         return True
@@ -1015,37 +1097,56 @@ class JobRepo:
         db: AsyncSession,
         job_id: uuid.UUID,
         *,
-        execution_token: str,
+        attempt_id: uuid.UUID,
+        lease_token: uuid.UUID,
         result: dict[str, Any] | None,
         canonical_result: dict[str, Any] | None = None,
-        canonical_result_ref: dict[str, Any] | None = None,
     ) -> bool:
         query_result = await db.execute(
-            select(Job)
+            select(Job, JobAttempt)
+            .join(JobAttempt, JobAttempt.job_id == Job.id)
             .where(
                 Job.id == job_id,
                 Job.status == "running",
-                Job.execution_token == execution_token,
+                Job.active_attempt_id == JobAttempt.id,
+                JobAttempt.id == attempt_id,
+                JobAttempt.status == "running",
+                JobAttempt.lease_token == lease_token,
                 Job.deleted_at.is_(None),
             )
             .with_for_update(skip_locked=True)
         )
-        job = query_result.scalar_one_or_none()
-        if not job:
+        row = query_result.one_or_none()
+        if row is None:
             return False
+        job, attempt = row
         now = datetime.now(timezone.utc)
         job.status = "succeeded"
+        job.active_attempt_id = None
         job.progress_percent = 100
         job.progress_text = "已完成"
         job.progress_stage = "succeeded"
         job.result = result
         job.canonical_result = canonical_result
-        job.canonical_result_ref = canonical_result_ref
         job.error = None
         job.finished_at = now
-        job.last_heartbeat_at = now
         job.updated_at = now
+        attempt.status = "succeeded"
+        attempt.finished_at = now
+        attempt.lease_token = None
+        attempt.lease_expires_at = None
+        attempt.heartbeat_at = now
+        attempt.updated_at = now
         await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
+        db.add(
+            JobEvent(
+                job_id=job.id,
+                attempt_id=attempt.id,
+                event_type="attempt.succeeded",
+                from_status="running",
+                to_status="succeeded",
+            )
+        )
         await db.flush()
         return True
 
@@ -1055,28 +1156,59 @@ class JobRepo:
         job_id: uuid.UUID,
         error: dict[str, Any],
         *,
-        execution_token: str | None = None,
+        attempt_id: uuid.UUID | None = None,
+        lease_token: uuid.UUID | None = None,
     ) -> bool:
         conditions = [Job.id == job_id, Job.status.in_(["queued", "running"]), Job.deleted_at.is_(None)]
-        if execution_token:
-            conditions.append(Job.execution_token == execution_token)
-        result = await db.execute(
-            select(Job)
-            .where(*conditions)
-            .with_for_update(skip_locked=True)
-        )
-        job = result.scalar_one_or_none()
+        if attempt_id is not None:
+            conditions.extend(
+                [
+                    Job.active_attempt_id == JobAttempt.id,
+                    JobAttempt.id == attempt_id,
+                    JobAttempt.status.in_(["pending", "running"]),
+                ]
+            )
+            if lease_token is not None:
+                conditions.append(JobAttempt.lease_token == lease_token)
+            result = await db.execute(
+                select(Job, JobAttempt)
+                .join(JobAttempt, JobAttempt.job_id == Job.id)
+                .where(*conditions)
+                .with_for_update(skip_locked=True)
+            )
+            row = result.one_or_none()
+            if row is None:
+                return False
+            job, attempt = row
+        else:
+            result = await db.execute(select(Job).where(*conditions).with_for_update(skip_locked=True))
+            job = result.scalar_one_or_none()
+            if not job:
+                return False
+            attempt = None
         if not job:
             return False
         now = datetime.now(timezone.utc)
         job.status = "failed"
+        job.active_attempt_id = None
         job.progress_text = "处理失败"
         job.progress_stage = "failed"
         job.result = None
         job.error = error
         job.finished_at = now
-        job.last_heartbeat_at = now
         job.updated_at = now
+        if attempt is not None:
+            attempt.status = "failed"
+            attempt.finished_at = now
+            attempt.error = error
+            attempt.retry_eligible = False
+            attempt.retry_decision = "do_not_retry"
+            attempt.retry_decision_reason = "force_mark_failed"
+            attempt.retry_decided_at = now
+            attempt.decision_source = "repository"
+            attempt.lease_token = None
+            attempt.lease_expires_at = None
+            attempt.updated_at = now
         await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
         await db.flush()
         return True
@@ -1095,7 +1227,8 @@ class JobRepo:
                 Job.id == root_job_id,
                 Job.status == "running",
                 Job.active_attempt_id.is_(None),
-                Job.is_internal.is_(False),
+                Job.root_job_id.is_(None),
+                Job.workflow_node_key.is_(None),
                 Job.deleted_at.is_(None),
             )
             .with_for_update(skip_locked=True)
@@ -1110,10 +1243,8 @@ class JobRepo:
         job.progress_stage = "succeeded"
         job.result = result
         job.canonical_result = canonical_result
-        job.canonical_result_ref = None
         job.error = None
         job.finished_at = now
-        job.last_heartbeat_at = now
         job.updated_at = now
         await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
         db.add(
@@ -1141,7 +1272,8 @@ class JobRepo:
                 Job.id == root_job_id,
                 Job.status == "running",
                 Job.active_attempt_id.is_(None),
-                Job.is_internal.is_(False),
+                Job.root_job_id.is_(None),
+                Job.workflow_node_key.is_(None),
                 Job.deleted_at.is_(None),
             )
             .with_for_update(skip_locked=True)
@@ -1155,10 +1287,8 @@ class JobRepo:
         job.progress_stage = "failed"
         job.result = None
         job.canonical_result = None
-        job.canonical_result_ref = None
         job.error = error
         job.finished_at = now
-        job.last_heartbeat_at = now
         job.updated_at = now
         await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
         db.add(
@@ -1190,6 +1320,7 @@ class JobRepo:
                 Job.status.in_(["succeeded", "failed"]),
                 Job.deleted_at.is_(None),
                 CallbackOutbox.status.in_(["pending", "retrying", "leased"]),
+                CallbackOutbox.delivery_attempts < CallbackOutbox.max_delivery_attempts,
                 CallbackOutbox.delivery_attempts < max_attempts,
                 or_(
                     CallbackOutbox.next_attempt_at.is_(None),
@@ -1213,9 +1344,6 @@ class JobRepo:
         outbox.lease_expires_at = next_retry_at
         outbox.leased_at = now
         outbox.updated_at = now
-        job.callback_status = "delivering"
-        job.callback_attempts = outbox.delivery_attempts or 0
-        job.callback_next_retry_at = next_retry_at
         job.updated_at = now
         db.add(
             JobEvent(
@@ -1269,40 +1397,24 @@ class JobRepo:
         outbox.last_error = last_error
         outbox.last_response = last_response
         outbox.updated_at = now
+        max_allowed_attempts = min(max_attempts, outbox.max_delivery_attempts)
         if status == "delivered":
             outbox.status = "delivered"
             outbox.next_attempt_at = None
             outbox.delivered_at = now
-            job.callback_status = "delivered"
-            job.callback_delivered_at = now
-            job.callback_next_retry_at = None
-            job.callback_last_error = None
         elif status == "skipped":
             outbox.status = "skipped"
             outbox.next_attempt_at = None
-            job.callback_status = "skipped"
-            job.callback_next_retry_at = None
-            job.callback_last_error = last_error
-        elif status == "failed" and (outbox.delivery_attempts or 0) >= max_attempts:
+        elif status == "failed" and (outbox.delivery_attempts or 0) >= max_allowed_attempts:
             outbox.status = "dead_letter"
             outbox.next_attempt_at = None
             outbox.dead_lettered_at = now
-            job.callback_status = "failed"
-            job.callback_failed_at = now
-            job.callback_next_retry_at = None
-            job.callback_last_error = last_error
         elif status == "failed":
             outbox.status = "retrying"
             outbox.next_attempt_at = next_retry_at
-            job.callback_status = "retrying"
-            job.callback_next_retry_at = next_retry_at
-            job.callback_last_error = last_error
         else:
             raise ValueError(f"unsupported callback result status: {status}")
 
-        job.callback_attempts = outbox.delivery_attempts or 0
-        job.callback_first_attempt_at = job.callback_first_attempt_at or outbox.first_attempt_at or now
-        job.callback_last_attempt_at = outbox.last_attempt_at or now
         job.updated_at = now
         db.add(
             JobEvent(
@@ -1335,6 +1447,7 @@ class JobRepo:
                 Job.status.in_(["succeeded", "failed"]),
                 Job.deleted_at.is_(None),
                 CallbackOutbox.status.in_(["pending", "retrying", "leased"]),
+                CallbackOutbox.delivery_attempts < CallbackOutbox.max_delivery_attempts,
                 CallbackOutbox.delivery_attempts < max_attempts,
                 or_(
                     CallbackOutbox.next_attempt_at.is_(None),
@@ -1364,11 +1477,20 @@ class JobRepo:
     @staticmethod
     async def cleanup_expired_jobs(db: AsyncSession) -> int:
         """软删除过期且生命周期已收敛的 Job 记录（expires_at <= now）。"""
+        settled_callback_exists = (
+            select(CallbackOutbox.id)
+            .where(
+                CallbackOutbox.job_id == Job.id,
+                CallbackOutbox.event_type.in_(["job.succeeded", "job.failed"]),
+                CallbackOutbox.status.in_(["delivered", "skipped", "dead_letter"]),
+            )
+            .exists()
+        )
         expired_settled_jobs = select(Job.id).where(
             Job.expires_at <= func.now(),
             Job.deleted_at.is_(None),
             Job.status.in_(["succeeded", "failed"]),
-            Job.callback_status.in_(["delivered", "skipped", "not_configured"]),
+            or_(Job.callback_url.is_(None), settled_callback_exists),
         ).subquery()
         await db.execute(
             delete(JobSubmissionKey).where(JobSubmissionKey.job_id.in_(select(expired_settled_jobs.c.id)))
@@ -1405,9 +1527,20 @@ class JobRepo:
         job_id: uuid.UUID,
     ) -> None:
         """标记 Callback 已成功发送（可选，用于高级重试控制）"""
-        job = await JobRepo.get(db, job_id)
-        if job:
-            now = datetime.now(timezone.utc)
-            job.callback_delivered_at = now
-            job.updated_at = now
-            await db.flush()
+        now = datetime.now(timezone.utc)
+        await db.execute(
+            update(CallbackOutbox)
+            .where(
+                CallbackOutbox.job_id == job_id,
+                CallbackOutbox.status.in_(["pending", "retrying", "leased"]),
+            )
+            .values(
+                status="delivered",
+                next_attempt_at=None,
+                lease_token=None,
+                lease_expires_at=None,
+                delivered_at=now,
+                updated_at=now,
+            )
+        )
+        await db.flush()

@@ -363,31 +363,18 @@ def test_settings_secrets_are_not_dumped_or_repr_exposed():
 def test_callback_delivery_window_is_anchored_to_http_timeout_not_retry_delay():
     fast_retry = _build_settings(
         CALLBACK_TIMEOUT_SECONDS=5,
-        CALLBACK_RETRY_DELAY_SECONDS=300,
     )
     slow_retry = _build_settings(
-        CALLBACK_TIMEOUT_SECONDS=5,
-        CALLBACK_RETRY_DELAY_SECONDS=600,
+        CALLBACK_TIMEOUT_SECONDS=10,
     )
 
     assert fast_retry.callback.delivery_timeout_seconds == 5 + _CALLBACK_DELIVERY_CLAIM_GRACE
-    assert slow_retry.callback.delivery_timeout_seconds == 5 + _CALLBACK_DELIVERY_CLAIM_GRACE
+    assert slow_retry.callback.delivery_timeout_seconds == 10 + _CALLBACK_DELIVERY_CLAIM_GRACE
 
 
-def test_settings_rejects_callback_retry_interval_overlapping_delivery_window():
-    # Violate: timeout(5) + internal grace(175) = 180 >= retry_delay(180)
-    with pytest.raises(ValidationError, match="retry interval must start after"):
-        _build_settings(
-            CALLBACK_TIMEOUT_SECONDS=5,
-            CALLBACK_RETRY_DELAY_SECONDS=180,
-        )
-
-    # Violate: timeout(130) + internal grace(175) = 305 >= retry_delay(300)
-    with pytest.raises(ValidationError, match="retry interval must start after"):
-        _build_settings(
-            CALLBACK_TIMEOUT_SECONDS=130,
-            CALLBACK_RETRY_DELAY_SECONDS=300,
-        )
+def test_callback_retry_interval_is_internal_not_flat_env_control():
+    with pytest.raises(KeyError, match="CALLBACK_RETRY_DELAY_SECONDS"):
+        _build_settings(CALLBACK_RETRY_DELAY_SECONDS=300)
 
 
 def test_settings_rejects_negative_or_zero_control_values():

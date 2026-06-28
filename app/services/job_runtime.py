@@ -54,7 +54,7 @@ def _validate_output_target(target: Any) -> dict[str, Any]:
     return target
 
 
-def write_runtime_json(job: Job, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+def write_runtime_json(job: Job | None, name: str, payload: dict[str, Any]) -> dict[str, Any]:
     content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     data = content.encode("utf-8")
     return {

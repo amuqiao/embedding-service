@@ -8,11 +8,12 @@ from app.core.config import settings
 from app.core.error_registry import all_error_reasons, all_error_specs
 from app.core.logging import all_log_events
 from app.jobs.base import (
+    ATTEMPT_PURPOSES,
     EXECUTION_MODES,
     JOB_RESULT_SNAPSHOT_STATUSES,
     JOB_TYPE_ROLES,
     JOB_TYPE_VISIBILITIES,
-    PLATFORM_RETRY_POLICIES,
+    RETRY_BACKOFF_KINDS,
     SIDE_EFFECT_POLICIES,
 )
 from app.jobs import registry as job_registry
@@ -27,6 +28,33 @@ def _required_metadata_str(value: object, *, field_name: str, owner: str) -> str
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{owner} requires non-empty string field: {field_name}")
     return value.strip()
+
+
+def _validate_retry_policy_snapshot(job_type: str, retry_policy: object) -> None:
+    if not isinstance(retry_policy, dict):
+        raise ValueError(f"job_type {job_type} retry_policy must be an object")
+    missing_domains = ATTEMPT_PURPOSES - set(retry_policy)
+    if missing_domains:
+        raise ValueError(f"job_type {job_type} retry_policy missing domains: {sorted(missing_domains)}")
+    for domain in ATTEMPT_PURPOSES:
+        policy = retry_policy.get(domain)
+        if not isinstance(policy, dict):
+            raise ValueError(f"job_type {job_type} retry_policy.{domain} must be an object")
+        if policy.get("domain") != domain:
+            raise ValueError(f"job_type {job_type} retry_policy.{domain}.domain mismatch")
+        max_attempts = policy.get("max_attempts")
+        if not isinstance(max_attempts, int) or max_attempts < 1:
+            raise ValueError(f"job_type {job_type} retry_policy.{domain}.max_attempts must be >= 1")
+        retry_delay = policy.get("retry_delay_seconds")
+        if retry_delay is not None and (not isinstance(retry_delay, int) or retry_delay < 0):
+            raise ValueError(f"job_type {job_type} retry_policy.{domain}.retry_delay_seconds must be >= 0")
+        if policy.get("backoff_kind") not in RETRY_BACKOFF_KINDS:
+            raise ValueError(f"job_type {job_type} retry_policy.{domain}.backoff_kind is invalid")
+        retryable_error_codes = policy.get("retryable_error_codes")
+        if not isinstance(retryable_error_codes, list) or not all(
+            isinstance(code, str) and code for code in retryable_error_codes
+        ):
+            raise ValueError(f"job_type {job_type} retry_policy.{domain}.retryable_error_codes must be strings")
 
 
 def validate_error_registry() -> None:
@@ -123,10 +151,7 @@ def validate_job_type_registry() -> None:
             raise ValueError(f"job_type {spec.job_type} declares invalid execution_mode: {spec.execution_mode}")
         if spec.side_effect_policy not in SIDE_EFFECT_POLICIES:
             raise ValueError(f"job_type {spec.job_type} declares invalid side_effect_policy: {spec.side_effect_policy}")
-        if spec.platform_retry_policy not in PLATFORM_RETRY_POLICIES:
-            raise ValueError(
-                f"job_type {spec.job_type} declares invalid platform_retry_policy: {spec.platform_retry_policy}"
-            )
+        _validate_retry_policy_snapshot(spec.job_type, spec.retry_policy)
         if spec.visibility not in JOB_TYPE_VISIBILITIES:
             raise ValueError(f"job_type {spec.job_type} declares invalid visibility: {spec.visibility}")
         if spec.role not in JOB_TYPE_ROLES:
@@ -137,14 +162,8 @@ def validate_job_type_registry() -> None:
                 f"job_type {spec.job_type} declares invalid result_snapshot_statuses: "
                 f"{sorted(invalid_snapshot_statuses)}"
             )
-        if spec.max_attempts < 1:
-            raise ValueError(f"job_type {spec.job_type} must declare max_attempts >= 1")
         if spec.timeout_seconds < 1:
             raise ValueError(f"job_type {spec.job_type} must declare timeout_seconds >= 1")
-        if spec.max_attempts > 1 and spec.platform_retry_policy == "no_platform_retry":
-            raise ValueError(
-                f"job_type {spec.job_type} must declare platform_retry_policy when max_attempts > 1"
-            )
         seen_prompt_steps: set[str] = set()
         for prompt_spec in spec.prompt_specs:
             owner = f"job_type {spec.job_type} prompt_spec"

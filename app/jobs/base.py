@@ -15,7 +15,8 @@ if TYPE_CHECKING:
 
 
 EXECUTION_MODES = frozenset({"custom_executor", "builtin_llm_text_runtime"})
-PLATFORM_RETRY_POLICIES = frozenset({"no_platform_retry", "retry_transient_platform_errors"})
+ATTEMPT_PURPOSES = frozenset({"workflow_orchestration", "business_execution"})
+RETRY_BACKOFF_KINDS = frozenset({"none", "fixed", "exponential"})
 SIDE_EFFECT_POLICIES = frozenset({"none", "success_side_effect"})
 JOB_TYPE_VISIBILITIES = frozenset({"public", "internal", "demo"})
 JOB_TYPE_ROLES = frozenset({"root", "leaf", "root_or_leaf"})
@@ -36,7 +37,7 @@ class JobTypeSpec:
     visibility: str
     role: str
     execution_mode: str
-    platform_retry_policy: str
+    retry_policy: dict[str, Any]
     side_effect_policy: str
     params_schema: str
     runtime_fields_schema: str
@@ -48,10 +49,68 @@ class JobTypeSpec:
     large_artifact_keys: frozenset[str]
     error_codes: frozenset[str]
     log_events: tuple[str, ...]
-    max_attempts: int
     timeout_seconds: int
     prompt_specs: tuple[PromptSpec, ...] = ()
     prompt_template_required_blocks: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class ExecutionRetryPolicy:
+    domain: str
+    max_attempts: int
+    retry_delay_seconds: int | None
+    backoff_kind: str
+    retryable_error_codes: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        if self.domain not in ATTEMPT_PURPOSES:
+            raise ValueError(f"invalid retry policy domain: {self.domain}")
+        if self.max_attempts < 1:
+            raise ValueError("retry policy max_attempts must be >= 1")
+        if self.retry_delay_seconds is not None and self.retry_delay_seconds < 0:
+            raise ValueError("retry policy retry_delay_seconds must be >= 0")
+        if self.backoff_kind not in RETRY_BACKOFF_KINDS:
+            raise ValueError(f"invalid retry policy backoff_kind: {self.backoff_kind}")
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "domain": self.domain,
+            "max_attempts": self.max_attempts,
+            "retry_delay_seconds": self.retry_delay_seconds,
+            "backoff_kind": self.backoff_kind,
+            "retryable_error_codes": sorted(self.retryable_error_codes),
+        }
+
+
+@dataclass(frozen=True)
+class JobRetryPolicy:
+    workflow_orchestration: ExecutionRetryPolicy = ExecutionRetryPolicy(
+        domain="workflow_orchestration",
+        max_attempts=3,
+        retry_delay_seconds=5,
+        backoff_kind="fixed",
+        retryable_error_codes=frozenset({"JOB_STATE_TRANSITION_CONFLICT", "TASKIQ_PUBLISH_FAILED"}),
+    )
+    business_execution: ExecutionRetryPolicy = ExecutionRetryPolicy(
+        domain="business_execution",
+        max_attempts=1,
+        retry_delay_seconds=None,
+        backoff_kind="none",
+        retryable_error_codes=frozenset(),
+    )
+
+    def for_purpose(self, purpose: str) -> ExecutionRetryPolicy:
+        if purpose == "workflow_orchestration":
+            return self.workflow_orchestration
+        if purpose == "business_execution":
+            return self.business_execution
+        raise ValueError(f"unknown attempt purpose: {purpose}")
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "workflow_orchestration": self.workflow_orchestration.snapshot(),
+            "business_execution": self.business_execution.snapshot(),
+        }
 
 
 def _schema_name(schema: type[BaseModel] | None) -> str:
@@ -66,9 +125,8 @@ class JobExecutor(ABC):
     role: str = ""
     allow_callback: bool = True
     result_snapshot_statuses: frozenset[str] = frozenset()
-    max_attempts: int = 1
     timeout_seconds: int = 300
-    platform_retry_policy: str | None = None
+    retry_policy: JobRetryPolicy | None = None
     params_schema: type[BaseModel] | None = None
     canonical_result_schema: type[BaseModel] | None = None
     public_result_schema: type[BaseModel] | None = None
@@ -184,6 +242,9 @@ class JobExecutor(ABC):
             return "none"
         return "success_side_effect"
 
+    def effective_retry_policy(self) -> JobRetryPolicy:
+        return self.retry_policy if self.retry_policy is not None else JobRetryPolicy()
+
     def job_type_spec(self) -> JobTypeSpec:
         if "visibility" not in type(self).__dict__:
             raise ValueError(f"{self.name} must declare visibility")
@@ -203,9 +264,7 @@ class JobExecutor(ABC):
             visibility=self.visibility,
             role=self.role,
             execution_mode=self._execution_mode(),
-            platform_retry_policy=(
-                self.platform_retry_policy if self.platform_retry_policy is not None else "no_platform_retry"
-            ),
+            retry_policy=self.effective_retry_policy().snapshot(),
             side_effect_policy=self._side_effect_policy(),
             params_schema=_schema_name(self.params_schema),
             runtime_fields_schema=self.runtime_fields_schema_name,
@@ -217,7 +276,6 @@ class JobExecutor(ABC):
             large_artifact_keys=self.large_artifact_keys,
             error_codes=self.allowed_error_codes,
             log_events=self.log_events,
-            max_attempts=self.max_attempts,
             timeout_seconds=self.timeout_seconds,
             prompt_specs=self.prompt_specs,
             prompt_template_required_blocks=self.prompt_template_required_blocks,

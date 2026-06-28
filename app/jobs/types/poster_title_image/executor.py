@@ -48,7 +48,7 @@ from app.schemas.jobs import (
 )
 from app.services.ai_capability_kernel import ImageModelGate, ModelGate
 from app.services.ai_gateway_facade import generate_image_with_ledger, generate_text_with_images_with_ledger
-from app.services.job_runtime import ai_billing_scope_id_from_job, output_target_from_job
+from app.services.job_runtime import ai_billing_scope_id_from_job, job_params_from_job, output_target_from_job
 from app.services.jobs import trigger_request_id_from_job
 from app.workflows import WorkflowDefinition, chord, group, register as register_workflow, task
 
@@ -352,7 +352,7 @@ def _duration_totals_from_child(child: Job) -> tuple[int, int]:
 
 
 async def _build_result_snapshot(job: Job, db: AsyncSession) -> dict[str, Any] | None:
-    params = PosterTitleImageParams.model_validate(job.job_params)
+    params = PosterTitleImageParams.model_validate(job_params_from_job(job))
     from app.repositories.job_repo import JobRepo
 
     children = await JobRepo.list_internal_children(db, root_job_id=job.id)
@@ -411,7 +411,6 @@ class PosterTitleImageJob(JobExecutor):
     result_snapshot_statuses = frozenset({"running", "failed"})
     prompt_template_required_blocks = frozenset(POSTER_TITLE_IMAGE_PROMPT_BLOCKS)
     allow_callback = True
-    max_attempts = 1
     timeout_seconds = 600
     allowed_error_codes = JobExecutor.allowed_error_codes | frozenset(
         {
@@ -515,7 +514,6 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
     canonical_result_schema = PosterTitleImageStyleProbeResult
     public_result_schema = PosterTitleImageStyleProbeResult
     allow_callback = False
-    max_attempts = 1
     timeout_seconds = 300
     allowed_error_codes = PosterTitleImageJob.allowed_error_codes
 
@@ -528,7 +526,7 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
         ).model_dump()
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:
-        params = PosterTitleImageStyleProbeParams.model_validate(job.job_params)
+        params = PosterTitleImageStyleProbeParams.model_validate(job_params_from_job(job))
         attempt_id = job.active_attempt_id
         if attempt_id is None:
             raise AppError("JOB_RUNTIME_NOT_SUPPORTED", "poster_title_image style probe requires active_attempt_id")
@@ -564,7 +562,6 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
     canonical_result_schema = PosterTitleImageGenerateItemResult
     public_result_schema = PosterTitleImageGenerateItemResult
     allow_callback = False
-    max_attempts = 1
     timeout_seconds = 600
     allowed_error_codes = PosterTitleImageJob.allowed_error_codes
 
@@ -578,7 +575,7 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
         ).model_dump()
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:
-        params = PosterTitleImageGenerateItemParams.model_validate(job.job_params)
+        params = PosterTitleImageGenerateItemParams.model_validate(job_params_from_job(job))
         item = params.item
         attempt_id = job.active_attempt_id
         if attempt_id is None:
@@ -670,7 +667,6 @@ class PosterTitleImageJoinJob(JobExecutor):
     canonical_result_schema = PosterTitleImageResult
     public_result_schema = PosterTitleImageResult
     allow_callback = False
-    max_attempts = 1
     timeout_seconds = 120
     allowed_error_codes = PosterTitleImageJob.allowed_error_codes
 
@@ -681,7 +677,7 @@ class PosterTitleImageJoinJob(JobExecutor):
         return PosterTitleImageJoinRuntimeFields().model_dump()
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:
-        params = PosterTitleImageJoinParams.model_validate(job.job_params)
+        params = PosterTitleImageJoinParams.model_validate(job_params_from_job(job))
         requested = PosterTitleImageParams.model_validate({"items": [item.model_dump() for item in params.items]})
         children = await _workflow_children(job, db)
         children_by_key = {child.workflow_node_key: child for child in children}
