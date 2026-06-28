@@ -132,6 +132,17 @@ def test_poster_title_image_max_draw_count_config_defaults_and_overrides():
         _build_settings(POSTER_TITLE_IMAGE_MAX_DRAW_COUNT=5)
 
 
+def test_poster_title_image_max_items_config_defaults_and_overrides():
+    default_settings = _build_settings()
+    assert default_settings.job.poster_title_image_max_items == 50
+
+    custom_settings = _build_settings(POSTER_TITLE_IMAGE_MAX_ITEMS=12)
+    assert custom_settings.job.poster_title_image_max_items == 12
+
+    with pytest.raises(ValidationError, match="POSTER_TITLE_IMAGE_MAX_ITEMS"):
+        _build_settings(POSTER_TITLE_IMAGE_MAX_ITEMS=0)
+
+
 def test_poster_title_image_oss_allowlist_config_defaults_and_overrides():
     default_settings = _build_settings()
     assert default_settings.job.poster_title_image_allowed_oss_buckets == ("local-dev",)

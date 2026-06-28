@@ -196,6 +196,10 @@ def _generation_allowed_model_ids() -> tuple[str, ...]:
     return settings.registry.poster_title_image_generation_allowed_model_ids
 
 
+def _max_workflow_nodes() -> int:
+    return settings.job.poster_title_image_max_items * 2 + 1
+
+
 def _generation_model_id_from_params(params: PosterTitleImageParams) -> str:
     return params.items[0].model_id or _generation_default_model_id()
 
@@ -455,6 +459,17 @@ class PosterTitleImageJob(JobExecutor):
 
     def validate_normalized_job_params(self, job_params: dict[str, Any]) -> None:
         params = PosterTitleImageParams.model_validate(job_params)
+        max_items = settings.job.poster_title_image_max_items
+        if len(params.items) > max_items:
+            raise AppError(
+                "INVALID_INPUT",
+                "poster_title_image items exceeds configured limit",
+                details={
+                    "field": "job_params.items",
+                    "max_items": max_items,
+                    "item_count": len(params.items),
+                },
+            )
         generation_model_id = _generation_model_id_from_params(params)
         allowed_model_ids = _generation_allowed_model_ids()
         if generation_model_id not in allowed_model_ids:
@@ -713,7 +728,7 @@ def _workflow_definition() -> WorkflowDefinition:
         _WORKFLOW_DEFINITION = WorkflowDefinition(
             workflow_type=POSTER_TITLE_IMAGE_JOB_TYPE,
             build=_workflow_expr,
-            max_nodes=60,
+            max_nodes=_max_workflow_nodes(),
         )
     return _WORKFLOW_DEFINITION
 

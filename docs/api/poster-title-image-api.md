@@ -135,7 +135,7 @@ CPP 可以调用服务级基础模型目录 `GET /api/v1/ai-jobs/models` 渲染�
 
 CPP 可以调用服务级基础语言目录 `GET /api/v1/ai-jobs/languages` 渲染语言名称。该接口只返回语言基础信息，不接收 `job_type`，不返回 `poster_title_image` 业务字段。
 
-本文不重复定义 `/languages` 的完整响应结构；该接口的权威合同以 [`service-contract.md`](service-contract.md) 为准，语种主表见 [`业务语种规范.md`](业务语种规范.md)。`poster_title_image` 可用语言是共享语种目录与本文 `POST /jobs` Job constraints 的交集，并以服务端校验为准。
+本文不重复定义 `/languages` 的完整响应结构；该接口的权威合同以 [`service-contract.md`](service-contract.md) 为准，语种主表见 [`业务语种规范.md`](业务语种规范.md)。`poster_title_image` 可提交语种来自共享语种目录，并以服务端校验为准。
 
 ## 3. Prompt Templates
 
@@ -319,9 +319,9 @@ Job constraints:
 
 | 约束 | 值 |
 |---|---:|
-| `job_params.items` | 1 到 20 个 item |
+| `job_params.items` | 至少 1 个 item；默认最多 50 个，受服务端 `POSTER_TITLE_IMAGE_MAX_ITEMS` 配置限制 |
 | `job_params.items[].item_id` | 1 到 64 个字符；同一 Job 内唯一 |
-| `job_params.items[].language` | `ja`、`ko`、`ar`、`th`、`ru`、`fr`、`de`、`es`、`pt`、`pl`；首版同一 Job 内唯一 |
+| `job_params.items[].language` | 语种代码必须来自 [`业务语种规范.md`](业务语种规范.md)；同一 Job 内允许重复 |
 | `job_params.items[].title_text` | 1 到 200 个字符 |
 | `job_params.items[].model_id` | 可省略；首版默认和 allowlist 均为 `gpt-image-2`；同一 Job 内必须一致 |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
@@ -343,7 +343,7 @@ Batch rules:
 - 单语种调用也使用 `items`，只传 1 个 item。
 - 每个 item 是独立业务单元，显式声明自己的模型、模型参数、参考图和提示词覆盖；不同 item 可以传入相同 `reference_image`。
 - 同一 Job 内 `items[].item_id` 必须唯一，并作为请求 item 与结果 item 的主关联键。
-- 首版同一 Job 内 `items[].language` 也必须唯一；如果未来允许同一语言多版本，仍以 `item_id` 关联结果。
+- 同一 Job 内 `items[].language` 允许重复；服务端始终以 `item_id` 关联请求 item 与结果 item。
 - 不提供 `batch_options`。首版批量策略固定为 item 独立执行、root Job 最后 join/finalize。
 - 服务端按 `reference_image.sha256 + effective style_probe prompt` 复用风格探针结果；这只影响内部执行节点数量，不改变每个 item 的独立结果。
 - 所有 item 失败时，Job 进入 `failed`。

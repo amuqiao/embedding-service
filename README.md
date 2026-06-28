@@ -99,7 +99,7 @@ Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts
 
 `poster_title_image` 的风格探针模型由服务端 `POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID` 配置，默认 `gpt-5.5`；当前该模型也作为 OpenAI Responses 生图调用宿主模型。标题图默认生图模型由 `POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID` 配置，默认 `gpt-image-2`；调用方可传的生图模型范围由 `POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS` 配置，首版默认仅 `gpt-image-2`。这些模型都必须存在于 `MODEL_CONFIG_PATH` 指向的模型目录并满足对应能力约束。
 
-`poster_title_image` 的单 item 候选图上限由 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` 配置，默认 4；该值只能在接口硬上限 `1..4` 内收紧，不能把业务能力放大到 4 以上。
+`poster_title_image` 的单 Job item 数量上限由 `POSTER_TITLE_IMAGE_MAX_ITEMS` 配置，默认 50。单 item 候选图上限由 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` 配置，默认 4；该值只能在接口硬上限 `1..4` 内收紧，不能把业务能力放大到 4 以上。
 
 除 `/health` 和 `/healthz` 外，请求必须携带：
 

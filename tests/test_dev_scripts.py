@@ -615,7 +615,7 @@ def test_jobs_inspect_human_summarizes_workflow_plan(monkeypatch):
                             "workflow_version": 1,
                             "failure_policy": "fail_fast",
                             "node_count": 1,
-                            "max_nodes": 60,
+                            "max_nodes": 101,
                             "nodes": [
                                 {
                                     "key": "probe.0",

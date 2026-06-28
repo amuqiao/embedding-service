@@ -85,8 +85,8 @@ items-json 最小格式：
 
 \b
 语种与输出：
-  poster_title_image 当前支持 ja / ko / ar / th / ru / fr / de / es / pt / pl。
-  同一 Job 内 item_id 和 language 都必须唯一；不传 --model-id 时使用服务端 poster_title_image 默认生图模型。
+  poster_title_image 语种必须来自 docs/api/业务语种规范.md 的共享业务语种列表。
+  同一 Job 内 item_id 必须唯一；language 允许重复；不传 --model-id 时使用服务端 poster_title_image 默认生图模型。
   --download-outputs 默认保存到 .data/real-flow/poster-title-image/<job_id>/<item_id>-<language>/。
 """
 

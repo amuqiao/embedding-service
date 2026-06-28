@@ -1122,7 +1122,7 @@ async def test_poster_title_image_workflow_root_public_result_uses_join_result(m
                     "workflow_type": "poster_title_image",
                     "workflow_version": 1,
                     "failure_policy": "fail_fast",
-                    "max_nodes": 60,
+                    "max_nodes": 101,
                     "node_count": 3,
                     "nodes": [
                         {

@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import ConfigDict, Field, StrictFloat, StrictInt, field_validator, model_validator
 
+from app.core.language_catalog import supported_language_codes
 from app.schemas.common import StrictBaseModel
 from app.schemas.errors import CallbackErrorDetail, JobErrorDetail
 
@@ -358,9 +359,6 @@ class ArithmeticResult(StrictBaseModel):
         return value
 
 
-POSTER_TITLE_IMAGE_LANGUAGES = frozenset({"ja", "ko", "ar", "th", "ru", "fr", "de", "es", "pt", "pl"})
-
-
 class OssUrlRef(StrictBaseModel):
     public_url: str = Field(min_length=1)
     internal_url: str = Field(min_length=1)
@@ -424,22 +422,19 @@ class PosterTitleImageItemParams(StrictBaseModel):
     @field_validator("language")
     @classmethod
     def validate_language_subset(cls, value: str) -> str:
-        if value not in POSTER_TITLE_IMAGE_LANGUAGES:
+        if value not in supported_language_codes():
             raise ValueError("language is not supported by poster_title_image")
         return value
 
 
 class PosterTitleImageParams(StrictBaseModel):
-    items: list[PosterTitleImageItemParams] = Field(min_length=1, max_length=20)
+    items: list[PosterTitleImageItemParams] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_unique_items(self) -> "PosterTitleImageParams":
         item_ids = [item.item_id for item in self.items]
         if len(item_ids) != len(set(item_ids)):
             raise ValueError("items[].item_id must be unique")
-        languages = [item.language for item in self.items]
-        if len(languages) != len(set(languages)):
-            raise ValueError("items[].language must be unique")
         model_ids = {item.model_id for item in self.items if item.model_id is not None}
         if len(model_ids) > 1:
             raise ValueError("items[].model_id must be the same within one poster_title_image job")
@@ -533,7 +528,7 @@ class PosterTitleImageGenerateItemResult(StrictBaseModel):
 
 
 class PosterTitleImageJoinParams(StrictBaseModel):
-    items: list[PosterTitleImageItemParams] = Field(min_length=1, max_length=20)
+    items: list[PosterTitleImageItemParams] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_items_contract(self) -> "PosterTitleImageJoinParams":

@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -144,6 +145,93 @@ def test_poster_title_image_workflow_dedupes_style_probe_by_reference_and_prompt
         "probe.1",
         "probe.2",
     ]
+
+
+def test_poster_title_image_workflow_allows_default_max_item_count():
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+    register_all_job_types()
+    base_item = {
+        "language": "en",
+        "title_text": "Title",
+        "model_options": {
+            "size": "auto",
+            "quality": "high",
+            "draw_count": 1,
+            "background": "transparent",
+            "output_format": "png",
+        },
+    }
+
+    plan = compile_registered_workflow(
+        "poster_title_image",
+        {
+            "items": [
+                {
+                    **base_item,
+                    "item_id": f"item-{index}",
+                    "reference_image": {
+                        "public_url": f"https://local-dev.oss-local.aliyuncs.com/reference/{index}.png",
+                        "internal_url": f"https://local-dev.oss-local-internal.aliyuncs.com/reference/{index}.png",
+                        "content_type": "image/png",
+                        "sha256": f"{index:064x}",
+                    },
+                }
+                for index in range(50)
+            ]
+        },
+    )
+
+    assert plan["node_count"] == 101
+    assert plan["max_nodes"] == 101
+
+
+def test_poster_title_image_workflow_max_nodes_follows_configured_item_count(monkeypatch):
+    from app.jobs.types.poster_title_image import executor as poster_executor
+
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+    monkeypatch.setattr(
+        poster_executor,
+        "settings",
+        SimpleNamespace(job=SimpleNamespace(poster_title_image_max_items=12)),
+    )
+    monkeypatch.setattr(poster_executor, "_WORKFLOW_DEFINITION", None)
+    register_all_job_types()
+    ref = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/a.png",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/a.png",
+        "content_type": "image/png",
+        "sha256": "a" * 64,
+    }
+    base_item = {
+        "language": "en",
+        "title_text": "Title",
+        "model_options": {
+            "size": "auto",
+            "quality": "high",
+            "draw_count": 1,
+            "background": "transparent",
+            "output_format": "png",
+        },
+        "reference_image": ref,
+    }
+
+    plan = compile_registered_workflow(
+        "poster_title_image",
+        {
+            "items": [
+                {
+                    **base_item,
+                    "item_id": f"item-{index}",
+                }
+                for index in range(12)
+            ]
+        },
+    )
+
+    assert plan["node_count"] == 14
+    assert plan["max_nodes"] == 25
 
 
 def test_poster_title_image_workflow_node_keys_do_not_collide_for_sanitized_item_ids():

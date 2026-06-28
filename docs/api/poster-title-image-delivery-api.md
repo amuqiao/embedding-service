@@ -191,7 +191,7 @@ GET /api/v1/ai-jobs/models
 
 获取 AI 服务当前可用的基础语种列表。该接口不接收 `job_type`，不返回 `poster_title_image` 业务参数。
 
-本节只给出调用方需要读取的最小字段示例；共享语种目录的完整响应字段以 [`service-contract.md`](service-contract.md) 为准，语种主表见 [`业务语种规范.md`](业务语种规范.md)。`poster_title_image` 可提交语种是共享语种目录与任务创建接口约束的交集，并以服务端校验为准。
+本节只给出调用方需要读取的最小字段示例；共享语种目录的完整响应字段以 [`service-contract.md`](service-contract.md) 为准，语种主表见 [`业务语种规范.md`](业务语种规范.md)。`poster_title_image` 可提交语种来自共享语种目录，并以服务端校验为准。
 
 ### Method / Path
 
@@ -397,9 +397,9 @@ POST /api/v1/ai-jobs/jobs
 |---|---|---:|---|
 | `client_request_id` | string | 是 | 调用方请求 ID；同一调用方下用于幂等 |
 | `job_type` | string | 是 | 固定为 `poster_title_image` |
-| `job_params.items` | array | 是 | 批量生成 item，1 到 20 个 |
+| `job_params.items` | array | 是 | 批量生成 item，至少 1 个；数量上限由服务端 `POSTER_TITLE_IMAGE_MAX_ITEMS` 配置，默认 50 |
 | `job_params.items[].item_id` | string | 是 | 调用方提供的稳定 item 关联键；同一任务内唯一 |
-| `job_params.items[].language` | string | 是 | 语种代码，必须来自共享语言列表并符合本接口约束；首版同一任务内必须唯一 |
+| `job_params.items[].language` | string | 是 | 语种代码，必须来自共享语种目录；同一任务内允许重复 |
 | `job_params.items[].title_text` | string | 是 | 目标语种标题文本 |
 | `job_params.items[].model_id` | string | 否 | 标题图生图模型 ID；不传时使用服务端 `poster_title_image` 默认生图模型 |
 | `job_params.items[].model_options.size` | string | 是 | 目标输出尺寸 |
@@ -419,13 +419,13 @@ POST /api/v1/ai-jobs/jobs
 
 ### Poster Title Image Constraints
 
-`GET /models` 和 `GET /languages` 是服务级基础目录。`poster_title_image` 当前可提交的子集由本接口约束决定。新增地区变体前，必须先进入共享语种目录，不能在本接口单独维护平行语种代码。
+`GET /models` 和 `GET /languages` 是服务级基础目录。`poster_title_image` 当前可提交语种来自共享语种目录。新增地区变体前，必须先进入共享语种目录，不能在本接口单独维护平行语种代码。
 
 | 约束 | 值 |
 |---|---|
-| `job_params.items` | 1 到 20 个 item |
+| `job_params.items` | 至少 1 个 item；默认最多 50 个，受服务端 `POSTER_TITLE_IMAGE_MAX_ITEMS` 配置限制 |
 | `job_params.items[].item_id` | 1 到 64 个字符；同一任务内唯一 |
-| `job_params.items[].language` | `ja`、`ko`、`ar`、`th`、`ru`、`fr`、`de`、`es`、`pt`、`pl`；首版同一任务内唯一 |
+| `job_params.items[].language` | 语种代码必须来自 [`业务语种规范.md`](业务语种规范.md)；同一任务内允许重复 |
 | `job_params.items[].title_text` | 1 到 200 个字符 |
 | `job_params.items[].model_id` | 可省略；首版默认和 allowlist 均为 `gpt-image-2`；同一任务内必须一致 |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
@@ -448,7 +448,7 @@ POST /api/v1/ai-jobs/jobs
 - 首版不接收海报底图，不返回合成海报或贴图坐标，只返回生成的标题图片。
 - 每个 item 是独立业务单元，显式声明自己的模型参数、参考图和提示词覆盖；不同 item 可以传入相同 `reference_image`。
 - 同一任务内 `items[].item_id` 必须唯一，并作为请求 item 与结果 item 的主关联键。
-- 首版同一任务内 `items[].language` 也必须唯一；如果未来允许同一语言多版本，仍以 `item_id` 关联结果。
+- 同一任务内 `items[].language` 允许重复；服务端始终以 `item_id` 关联请求 item 与结果 item。
 - 不提供 `batch_options`。首版批量策略固定为 item 独立执行、root Job 最后 join/finalize。
 - 服务端按 `reference_image.sha256 + effective style_probe prompt` 复用风格探针结果；这只影响内部执行节点数量，不改变每个 item 的独立结果。
 - 所有 item 失败时，Job 进入 `failed`。

@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
 from app.core.config import settings
 from app.core.exceptions import AppError
+from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
 from app.integrations.image import (
     TRANSPARENT_REFERENCE_MAX_BYTES,
     TRANSPARENT_REFERENCE_MAX_WIDTH,
@@ -106,6 +106,21 @@ def _params(ref: dict, *, model_id: str | None = None) -> dict:
     }
 
 
+def _params_for_item_count(ref: dict, count: int, *, language: str = "en") -> dict:
+    base = _params(ref)["items"][0]
+    return {
+        "items": [
+            {
+                **base,
+                "item_id": f"item-{index}",
+                "language": language,
+                "title_text": f"title {index}",
+            }
+            for index in range(count)
+        ]
+    }
+
+
 def test_poster_title_image_params_apply_delivery_contract_constraints():
     ref = _url_ref("reference/title.png", b"x")
     params = PosterTitleImageParams.model_validate(_params(ref))
@@ -137,10 +152,65 @@ def test_poster_title_image_params_apply_delivery_contract_constraints():
     with pytest.raises(ValueError, match="transparent"):
         PosterTitleImageParams.model_validate(invalid)
 
+    shared_language = _params(ref)
+    shared_language["items"][0]["language"] = "en"
+    PosterTitleImageParams.model_validate(shared_language)
+
     invalid = _params(ref)
-    invalid["items"][0]["language"] = "en"
+    invalid["items"][0]["language"] = "id"
     with pytest.raises(ValueError, match="language"):
         PosterTitleImageParams.model_validate(invalid)
+
+
+def test_poster_title_image_params_allow_duplicate_language_with_unique_item_id():
+    ref = _url_ref("reference/title.png", b"x")
+
+    params = PosterTitleImageParams.model_validate(_params_for_item_count(ref, 2, language="en"))
+
+    assert [item.item_id for item in params.items] == ["item-0", "item-1"]
+    assert [item.language for item in params.items] == ["en", "en"]
+
+
+def test_poster_title_image_params_still_reject_duplicate_item_id():
+    ref = _url_ref("reference/title.png", b"x")
+    params = _params_for_item_count(ref, 2, language="en")
+    params["items"][1]["item_id"] = "item-0"
+
+    with pytest.raises(ValueError, match="item_id"):
+        PosterTitleImageParams.model_validate(params)
+
+
+def test_poster_title_image_rejects_items_above_config(monkeypatch):
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.settings",
+        SimpleNamespace(
+            job=SimpleNamespace(
+                poster_title_image_max_items=1,
+                poster_title_image_max_draw_count=4,
+                poster_title_image_allowed_oss_buckets=("local-dev",),
+                poster_title_image_allowed_oss_regions=("local",),
+            ),
+            registry=SimpleNamespace(
+                poster_title_image_style_probe_model_id="gpt-5.5",
+                poster_title_image_generation_default_model_id="gpt-image-2",
+                poster_title_image_generation_allowed_model_ids=("gpt-image-2",),
+            ),
+        ),
+    )
+    params = _params_for_item_count(_url_ref("reference/title.png", b"x"), 2, language="en")
+
+    handler = PosterTitleImageJob()
+    normalized = handler.normalize_job_params(params)
+
+    with pytest.raises(AppError) as exc:
+        handler.validate_normalized_job_params(normalized)
+
+    assert exc.value.code == "INVALID_INPUT"
+    assert exc.value.details == {
+        "field": "job_params.items",
+        "max_items": 1,
+        "item_count": 2,
+    }
 
 
 def test_poster_title_image_rejects_draw_count_above_config(monkeypatch):
@@ -148,6 +218,7 @@ def test_poster_title_image_rejects_draw_count_above_config(monkeypatch):
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
             job=SimpleNamespace(
+                poster_title_image_max_items=50,
                 poster_title_image_max_draw_count=1,
                 poster_title_image_allowed_oss_buckets=("local-dev",),
                 poster_title_image_allowed_oss_regions=("local",),
@@ -177,6 +248,7 @@ def test_poster_title_image_accepts_configured_reference_oss_allowlist(monkeypat
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
             job=SimpleNamespace(
+                poster_title_image_max_items=50,
                 poster_title_image_max_draw_count=4,
                 poster_title_image_allowed_oss_buckets=("cpp-rs-dev",),
                 poster_title_image_allowed_oss_regions=("ap-southeast-1",),
@@ -246,6 +318,26 @@ def test_poster_title_image_create_request_does_not_require_runtime_prompt_paylo
     }
 
 
+def test_poster_title_image_create_request_accepts_shared_language_outside_legacy_subset():
+    from app.jobs.types.register import register_all_job_types
+    from app.services.jobs import _validate_create_request
+
+    register_all_job_types()
+    params = _params(_url_ref("reference/title.png", b"x"))
+    params["items"][0]["language"] = "en"
+    handler, job_params, runtime_fields = _validate_create_request(
+        CreateJobRequest(
+            client_request_id="poster-en-1",
+            job_type="poster_title_image",
+            job_params=params,
+        )
+    )
+
+    assert handler.name == "poster_title_image"
+    assert job_params["items"][0]["language"] == "en"
+    assert runtime_fields["operation"] == "poster_title_image"
+
+
 def test_poster_title_image_create_request_accepts_allowed_caller_model_id():
     from app.jobs.types.register import register_all_job_types
     from app.services.jobs import _validate_create_request
@@ -290,6 +382,7 @@ def test_poster_title_image_create_request_rejects_unavailable_configured_genera
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
             job=SimpleNamespace(
+                poster_title_image_max_items=50,
                 poster_title_image_max_draw_count=4,
                 poster_title_image_allowed_oss_buckets=("local-dev",),
                 poster_title_image_allowed_oss_regions=("local",),

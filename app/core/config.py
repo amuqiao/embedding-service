@@ -75,6 +75,7 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "PRICING_CONFIG_PATH": ("billing", "pricing_config_path_raw"),
     "MAX_ACTIVE_JOBS": ("job", "max_active_jobs"),
     "OSS_INPUT_MAX_BYTES": ("job", "oss_input_max_bytes"),
+    "POSTER_TITLE_IMAGE_MAX_ITEMS": ("job", "poster_title_image_max_items"),
     "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": ("job", "poster_title_image_max_draw_count"),
     "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS": ("job", "poster_title_image_allowed_oss_buckets_raw"),
     "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS": ("job", "poster_title_image_allowed_oss_regions_raw"),
@@ -469,6 +470,7 @@ class BillingSettings(ConfigSection):
 class JobSettings(ConfigSection):
     max_active_jobs: int = 5000
     oss_input_max_bytes: int = 5_242_880
+    poster_title_image_max_items: int = 50
     poster_title_image_max_draw_count: int = 4
     poster_title_image_allowed_oss_buckets_raw: str = "local-dev"
     poster_title_image_allowed_oss_regions_raw: str = "local"
@@ -482,6 +484,7 @@ class JobSettings(ConfigSection):
     def validate_job(self) -> "JobSettings":
         positive_fields = {
             "OSS_INPUT_MAX_BYTES": self.oss_input_max_bytes,
+            "POSTER_TITLE_IMAGE_MAX_ITEMS": self.poster_title_image_max_items,
             "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": self.poster_title_image_max_draw_count,
             "JOB_ORPHAN_TIMEOUT_SECONDS": self.orphan_timeout_seconds,
             "JOB_DISPATCH_MAX_PUBLISH_ATTEMPTS": self.dispatch_max_publish_attempts,

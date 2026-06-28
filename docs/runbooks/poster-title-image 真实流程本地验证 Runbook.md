@@ -82,7 +82,7 @@
 每个 item 至少需要：
 
 - `item_id`：同一个 Job 内唯一。
-- `language`：同一个 Job 内唯一。
+- `language`：必须来自共享业务语种目录；同一个 Job 内允许重复。
 - `title_text`：要渲染到标题图里的目标文案。
 - `reference`：参考标题图，可以是本地图片，也可以是完整 OSS URL Ref。
 
