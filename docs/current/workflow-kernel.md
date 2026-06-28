@@ -12,6 +12,7 @@
 - root Job 只发送一次调用方 callback；child Job 不发送调用方 callback。
 - child Job 的 AI 调用使用 root Job billing scope，ledger 行仍保留实际 child `job_id`、`attempt_id` 和 `job_type` 作为诊断归因。
 - workflow child node 当前复用注册的 `job_type` executor；目录上应优先引用 `role="leaf"` 或 `role="root_or_leaf"` 的类型，但运行时 child 事实仍由 Job 实例 lineage 字段表达。
+- 执行重试跟随失败 attempt 所属的 Job；child 最终 failed 后投影出的 root terminal failed 不触发整单 workflow 自动重试。
 
 ## 任务模型
 
@@ -52,6 +53,24 @@ POST /jobs
 ```
 
 Recovery 会扫描需要补偿的 workflow root，修复 missed child terminal advance、ready child 缺失和 root terminal projection 漏执行等情况。
+
+## 失败与重试边界
+
+workflow root 的 `failed` 有两类来源，retry 语义不同：
+
+```text
+root orchestration attempt failed
+  -> root 编排 attempt 自己失败
+  -> 如果 root job_type 允许执行重试，只重试编排 attempt
+  -> 目标是补齐缺失的 ready child，不重跑所有 child
+
+child terminal failed -> root terminal failed
+  -> child Job 已经走完自己的 attempt / retry 判断
+  -> workflow reconciler 把 root 投影为 failed
+  -> 不触发 root max_attempts，也不自动重跑整个 workflow
+```
+
+当前没有“整单 workflow 自动重试”机制。需要整单重试时，应作为显式能力单独设计，例如新建 root、只重试 failed children 或重跑全部节点；不能把这类语义混入当前 attempt retry。
 
 ## 当前边界
 
