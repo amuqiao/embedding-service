@@ -53,6 +53,8 @@ failure path
 
 `app/services/billing.py` 从 ledger 行构造 `BillingEnvelope`：
 
+已完成且可计费的 ledger 行使用 pending row 创建时记录的 `pricing_ref` / `pricing_version`，以及 terminal update 写入的 `cost_amount` / `currency`；billing projection 只聚合这些 ledger 事实，不会用当前 `pricing.yaml` 对历史成本重新查价或重算。没有 ledger 行或没有 billable 行时，0 成本 billing 的展示币种仍来自当前默认币种配置。
+
 ```text
 BillingEnvelope
   schema_version

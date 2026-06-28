@@ -5,6 +5,7 @@ import uuid
 
 import pytest
 
+from app.core import pricing_registry
 from app.services import billing as billing_service
 from app.services.billing import build_scope_billing_envelope
 
@@ -113,6 +114,48 @@ def test_scope_billing_sums_decimal_cost_usage_and_unique_pricing_refs():
     assert billing.failed_call_count == 0
     assert billing.diagnostic_reason is None
     assert billing.finalized_at == completed_second
+
+
+@pytest.mark.asyncio
+async def test_get_scope_billing_aggregates_frozen_ledger_cost_without_repricing(monkeypatch):
+    completed_at = datetime(2026, 6, 23, 10, 0, tzinfo=timezone.utc)
+
+    async def fake_list_for_scope(_db, *, scope_type, scope_id, caller_id):
+        assert scope_type == "job"
+        assert scope_id == "job-frozen"
+        assert caller_id == "caller-1"
+        return [
+            _row(
+                cost_amount=Decimal("0.12345678"),
+                currency="USD",
+                usage_units={"input_tokens": 100, "output_tokens": 20},
+                pricing_ref="openai:gpt-removed@2026-01-01",
+                completed_at=completed_at,
+            )
+        ]
+
+    def fail_default_currency():
+        raise AssertionError("billable ledger billing must use frozen row currency")
+
+    def fail_load_pricing_config():
+        raise AssertionError("billable ledger billing must not read current pricing config")
+
+    monkeypatch.setattr(pricing_registry, "_load_pricing_config", fail_load_pricing_config)
+    monkeypatch.setattr(billing_service.AiCallLogRepo, "list_for_scope", fake_list_for_scope)
+    monkeypatch.setattr(billing_service, "default_currency", fail_default_currency)
+
+    billing = await billing_service.get_scope_billing(
+        object(),
+        scope_type="job",
+        scope_id="job-frozen",
+        caller_id="caller-1",
+    )
+
+    assert billing.status == "estimated"
+    assert billing.currency == "USD"
+    assert billing.total_cost_amount == "0.12345678"
+    assert billing.usage_units == {"input_tokens": 100, "output_tokens": 20}
+    assert billing.pricing_refs == ["openai:gpt-removed@2026-01-01"]
 
 
 def test_scope_billing_with_pending_or_unknown_rows_is_incomplete():
