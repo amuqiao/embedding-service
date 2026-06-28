@@ -640,6 +640,20 @@ class JobRepo:
         return True
 
     @staticmethod
+    def _next_retry_scheduled_at(attempt: JobAttempt, now: datetime) -> datetime:
+        delay_seconds = attempt.policy_retry_delay_seconds
+        if attempt.policy_backoff_kind == "none":
+            return now
+        if delay_seconds is None:
+            raise ValueError(f"retry backoff kind {attempt.policy_backoff_kind} requires retry delay seconds")
+        if attempt.policy_backoff_kind == "fixed":
+            return now + timedelta(seconds=delay_seconds)
+        if attempt.policy_backoff_kind == "exponential":
+            multiplier = 2 ** max(attempt.purpose_attempt_no - 1, 0)
+            return now + timedelta(seconds=delay_seconds * multiplier)
+        raise ValueError(f"unsupported retry backoff kind: {attempt.policy_backoff_kind}")
+
+    @staticmethod
     async def mark_attempt_failed(
         db: AsyncSession,
         attempt_id: uuid.UUID,
@@ -681,7 +695,12 @@ class JobRepo:
         else:
             attempt.retry_decision_reason = "policy_allows_retry"
         attempt.retry_decided_at = now
-        attempt.next_attempt_scheduled_at = (next_attempt_at or now) if can_retry else None
+        scheduled_next_attempt_at = None
+        if can_retry:
+            scheduled_next_attempt_at = (
+                next_attempt_at if next_attempt_at is not None else JobRepo._next_retry_scheduled_at(attempt, now)
+            )
+        attempt.next_attempt_scheduled_at = scheduled_next_attempt_at
         attempt.decision_source = "repository"
         attempt.lease_token = None
         attempt.lease_expires_at = None
@@ -732,7 +751,7 @@ class JobRepo:
                 db,
                 event_job_id=job.id,
                 attempt_id=next_attempt_id,
-                next_attempt_at=next_attempt_at or now,
+                next_attempt_at=scheduled_next_attempt_at,
                 dispatch_reason=retry_created_reason,
             )
         elif job.status != "failed":

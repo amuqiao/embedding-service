@@ -109,7 +109,7 @@ def test_ai_billing_scope_uses_root_for_internal_child():
     assert ai_billing_scope_id_from_job(Job(id=root_id, job_type="test.echo")) == root_id
     assert (
         ai_billing_scope_id_from_job(
-            Job(id=child_id, job_type="test.echo", is_internal=True, root_job_id=root_id)
+            Job(id=child_id, job_type="test.echo", root_job_id=root_id, workflow_node_key="child.echo")
         )
         == root_id
     )

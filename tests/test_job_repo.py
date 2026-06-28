@@ -109,6 +109,70 @@ def _compile(statement) -> str:
     return str(statement.compile(dialect=postgresql.dialect()))
 
 
+def _job_params_ref(payload: dict | None = None) -> dict:
+    return {
+        "storage": "db_inline",
+        "type": "json",
+        "name": "job_params",
+        "payload": payload or {},
+    }
+
+
+def _job_params_hash() -> str:
+    return "sha256:test-job-params"
+
+
+def _create_kwargs(**overrides):
+    values = {
+        "job_params_ref": _job_params_ref(),
+        "job_params_hash": _job_params_hash(),
+    }
+    values.update(overrides)
+    return values
+
+
+def _attempt(
+    *,
+    id: uuid.UUID | None = None,
+    job_id: uuid.UUID | None = None,
+    purpose: str = "business_execution",
+    purpose_attempt_no: int = 1,
+    status: str = "pending",
+    lease_token: uuid.UUID | None = None,
+    timeout_seconds: int = 60,
+    policy_max_attempts: int = 1,
+    policy_retry_delay_seconds: int | None = None,
+    policy_backoff_kind: str | None = None,
+) -> JobAttempt:
+    attempt_id = id or uuid.uuid4()
+    retry_delay_seconds = policy_retry_delay_seconds
+    if retry_delay_seconds is None and policy_max_attempts > 1:
+        retry_delay_seconds = 5
+    backoff_kind = policy_backoff_kind or ("fixed" if policy_max_attempts > 1 else "none")
+    retryable_error_codes = ["JOB_TIMEOUT"] if policy_max_attempts > 1 else []
+    return JobAttempt(
+        id=attempt_id,
+        job_id=job_id or uuid.uuid4(),
+        purpose=purpose,
+        purpose_attempt_no=purpose_attempt_no,
+        retry_chain_id=attempt_id,
+        created_reason="initial",
+        status=status,
+        lease_token=lease_token,
+        timeout_seconds=timeout_seconds,
+        policy_max_attempts=policy_max_attempts,
+        policy_retry_delay_seconds=retry_delay_seconds,
+        policy_backoff_kind=backoff_kind,
+        policy_retryable_error_codes=retryable_error_codes,
+        retry_policy_snapshot={
+            "max_attempts": policy_max_attempts,
+            "retry_delay_seconds": retry_delay_seconds,
+            "backoff_kind": backoff_kind,
+            "retryable_error_codes": retryable_error_codes,
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_cleanup_expired_jobs_soft_deletes_only_settled_terminal_jobs():
     db = _FakeDB()
@@ -131,7 +195,7 @@ async def test_cleanup_expired_jobs_soft_deletes_only_settled_terminal_jobs():
     assert "UPDATE job_aggregates SET" in job_sql
     assert "deleted_at" in job_sql
     assert "job_aggregates.status IN" in job_sql
-    assert "job_aggregates.callback_status IN" in job_sql
+    assert "callback_outbox.status IN" in job_sql
     assert "job_aggregates.deleted_at IS NULL" in job_sql
 
 
@@ -151,7 +215,8 @@ async def test_get_submission_by_client_request_keeps_expired_key_visible_until_
     assert "job_submission_keys.expires_at >" not in sql
     assert "job_submission_keys.key_value" in sql
     assert "job_aggregates.deleted_at IS NULL" in sql
-    assert "job_aggregates.is_internal IS false" in sql
+    assert "job_aggregates.root_job_id IS NULL" in sql
+    assert "job_aggregates.workflow_node_key IS NULL" in sql
 
 
 @pytest.mark.asyncio
@@ -165,7 +230,8 @@ async def test_get_for_caller_hides_internal_jobs_from_public_reads():
     sql = _compile(db.statements[0])
     assert "job_aggregates.caller_id =" in sql
     assert "job_aggregates.deleted_at IS NULL" in sql
-    assert "job_aggregates.is_internal IS false" in sql
+    assert "job_aggregates.root_job_id IS NULL" in sql
+    assert "job_aggregates.workflow_node_key IS NULL" in sql
 
 
 @pytest.mark.asyncio
@@ -183,7 +249,7 @@ async def test_get_internal_child_by_node_key_reads_only_internal_child_for_root
     sql = _compile(db.statements[0])
     assert "job_aggregates.root_job_id =" in sql
     assert "job_aggregates.workflow_node_key =" in sql
-    assert "job_aggregates.is_internal IS true" in sql
+    assert "job_aggregates.root_job_id =" in sql
     assert "job_aggregates.deleted_at IS NULL" in sql
 
 
@@ -201,7 +267,7 @@ async def test_list_internal_children_can_filter_by_root_and_statuses():
     assert children == []
     sql = _compile(db.statements[0])
     assert "job_aggregates.root_job_id =" in sql
-    assert "job_aggregates.is_internal IS true" in sql
+    assert "job_aggregates.workflow_node_key IS NOT NULL" in sql
     assert "job_aggregates.deleted_at IS NULL" in sql
     assert "job_aggregates.status IN" in sql
 
@@ -217,7 +283,8 @@ async def test_find_workflow_roots_for_reconciliation_scans_only_waiting_public_
     sql = _compile(db.statements[0])
     assert "job_aggregates.status =" in sql
     assert "job_aggregates.active_attempt_id IS NULL" in sql
-    assert "job_aggregates.is_internal IS false" in sql
+    assert "job_aggregates.root_job_id IS NULL" in sql
+    assert "job_aggregates.workflow_node_key IS NULL" in sql
     assert "job_aggregates.deleted_at IS NULL" in sql
     assert "job_aggregates.runtime_ref" in sql
     assert "?" in sql
@@ -254,7 +321,8 @@ async def test_find_terminal_root_jobs_missing_callback_outbox_excludes_internal
     assert jobs == []
     sql = _compile(db.statements[0])
     assert "job_aggregates.status IN" in sql
-    assert "job_aggregates.is_internal IS false" in sql
+    assert "job_aggregates.root_job_id IS NULL" in sql
+    assert "job_aggregates.workflow_node_key IS NULL" in sql
     assert "job_aggregates.callback_url IS NOT NULL" in sql
     assert "job_aggregates.deleted_at IS NULL" in sql
     compiled = db.statements[0].compile(dialect=postgresql.dialect())
@@ -265,47 +333,50 @@ async def test_find_terminal_root_jobs_missing_callback_outbox_excludes_internal
 
 
 @pytest.mark.asyncio
-async def test_create_internal_job_requires_root_job_id():
+async def test_create_child_job_requires_workflow_node_key():
     db = _FakeDB()
 
-    with pytest.raises(ValueError, match="internal job must include root_job_id"):
+    with pytest.raises(ValueError, match="child job must include workflow_node_key"):
         await JobRepo.create(
             db,
             caller_id="caller-1",
             client_request_id=None,
             job_type="job_test_echo",
-            is_internal=True,
+            root_job_id=uuid.uuid4(),
+            **_create_kwargs(),
         )
 
 
 @pytest.mark.asyncio
-async def test_create_internal_job_rejects_public_submission_identity():
+async def test_create_child_job_rejects_public_submission_identity():
     db = _FakeDB()
 
-    with pytest.raises(ValueError, match="internal job must not include client_request_id"):
+    with pytest.raises(ValueError, match="child job must not include client_request_id"):
         await JobRepo.create(
             db,
             caller_id="caller-1",
             client_request_id="request-1",
             job_type="job_test_echo",
             root_job_id=uuid.uuid4(),
-            is_internal=True,
+            workflow_node_key="node.echo",
+            **_create_kwargs(),
         )
 
 
 @pytest.mark.asyncio
-async def test_create_internal_job_rejects_callback_intent():
+async def test_create_child_job_rejects_callback_intent():
     db = _FakeDB()
 
-    with pytest.raises(ValueError, match="internal job must not include callback"):
+    with pytest.raises(ValueError, match="child job must not include callback"):
         await JobRepo.create(
             db,
             caller_id="caller-1",
             client_request_id=None,
             job_type="job_test_echo",
             root_job_id=uuid.uuid4(),
-            is_internal=True,
+            workflow_node_key="node.echo",
             callback_url="https://callback.example/jobs",
+            **_create_kwargs(),
         )
 
 
@@ -314,17 +385,7 @@ async def test_create_public_job_rejects_child_lineage_fields():
     root_job_id = uuid.uuid4()
     db = _FakeDB()
 
-    with pytest.raises(ValueError, match="parent_job_id requires internal job"):
-        await JobRepo.create(
-            db,
-            caller_id="caller-1",
-            client_request_id="request-1",
-            job_type="job_test_echo",
-            root_job_id=root_job_id,
-            parent_job_id=root_job_id,
-        )
-
-    with pytest.raises(ValueError, match="workflow_node_key requires internal job"):
+    with pytest.raises(ValueError, match="child job must not include client_request_id"):
         await JobRepo.create(
             db,
             caller_id="caller-1",
@@ -332,6 +393,17 @@ async def test_create_public_job_rejects_child_lineage_fields():
             job_type="job_test_echo",
             root_job_id=root_job_id,
             workflow_node_key="node.generate-title",
+            **_create_kwargs(),
+        )
+
+    with pytest.raises(ValueError, match="workflow_node_key requires root_job_id"):
+        await JobRepo.create(
+            db,
+            caller_id="caller-1",
+            client_request_id="request-1",
+            job_type="job_test_echo",
+            workflow_node_key="node.generate-title",
+            **_create_kwargs(),
         )
 
 
@@ -346,15 +418,13 @@ async def test_create_assigns_workflow_lineage_fields():
         client_request_id=None,
         job_type="job_test_echo",
         root_job_id=root_job_id,
-        parent_job_id=root_job_id,
-        is_internal=True,
         workflow_node_key="node.generate-title",
+        **_create_kwargs(),
     )
 
     assert job.root_job_id == root_job_id
-    assert job.parent_job_id == root_job_id
-    assert job.is_internal is True
     assert job.workflow_node_key == "node.generate-title"
+    assert job.client_request_id is None
     assert job in db.added
     assert db.flushed is True
 
@@ -370,14 +440,12 @@ async def test_create_internal_job_keeps_callback_columns_null():
         client_request_id=None,
         job_type="job_test_echo",
         root_job_id=root_job_id,
-        parent_job_id=root_job_id,
-        is_internal=True,
         workflow_node_key="node.echo",
+        **_create_kwargs(),
     )
 
     assert job.callback_url is None
     assert job.callback_events is None
-    assert job.callback_status == "not_configured"
 
 
 @pytest.mark.asyncio
@@ -409,16 +477,12 @@ async def test_claim_attempt_for_execution_accepts_queued_attempt_after_uncertai
         status="queued",
         active_attempt_id=attempt_id,
         progress_percent=0,
-        execution_attempts=0,
-        execution_generation=1,
         metadata_={},
     )
-    attempt = JobAttempt(
+    attempt = _attempt(
         id=attempt_id,
         job_id=job.id,
-        attempt_no=1,
         status="pending",
-        timeout_seconds=60,
     )
     db = _FakeDB()
     db.results.append(_OneRowResult((job, attempt)))
@@ -440,8 +504,6 @@ async def test_claim_attempt_for_execution_accepts_queued_attempt_after_uncertai
     assert attempt.lease_expires_at is not None
     assert attempt.heartbeat_at is not None
     assert job.status == "running"
-    assert job.execution_token == str(attempt_id)
-    assert job.execution_attempts == 1
     assert db.flushed is True
     events = [obj for obj in db.added if isinstance(obj, JobEvent)]
     assert len(events) == 1
@@ -463,17 +525,14 @@ async def test_lease_dispatch_for_publish_claims_due_dispatch_intent():
         progress_percent=0,
         metadata_={},
     )
-    attempt = JobAttempt(
+    attempt = _attempt(
         id=attempt_id,
         job_id=job.id,
-        attempt_no=1,
         status="pending",
-        timeout_seconds=60,
     )
     dispatch = DispatchOutbox(
         id=uuid.uuid4(),
         event_id=f"job_attempt:{attempt_id}:dispatch",
-        job_id=job.id,
         attempt_id=attempt_id,
         task_name="jobs.run_attempt",
         payload={"attempt_id": str(attempt_id)},
@@ -498,10 +557,10 @@ async def test_lease_dispatch_for_publish_claims_due_dispatch_intent():
 @pytest.mark.asyncio
 async def test_mark_dispatch_published_sets_recovery_deadline():
     lease_token = uuid.uuid4()
+    attempt = _attempt(job_id=uuid.uuid4())
     dispatch = DispatchOutbox(
         id=uuid.uuid4(),
-        job_id=uuid.uuid4(),
-        attempt_id=uuid.uuid4(),
+        attempt_id=attempt.id,
         event_id="job_attempt:test:dispatch",
         task_name="jobs.run_attempt",
         payload={},
@@ -512,7 +571,7 @@ async def test_mark_dispatch_published_sets_recovery_deadline():
     )
     deadline = datetime.now(UTC) + timedelta(seconds=30)
     db = _FakeDB()
-    db.results.append(_ScalarResult(dispatch))
+    db.results.append(_OneRowResult((dispatch, attempt)))
 
     updated = await JobRepo.mark_dispatch_published(db, dispatch.id, lease_token=lease_token, next_attempt_at=deadline)
 
@@ -529,20 +588,21 @@ async def test_mark_dispatch_published_sets_recovery_deadline():
 async def test_mark_dispatch_publish_failed_records_retry_for_leased_dispatch():
     error = {"code": "TASKIQ_PUBLISH_FAILED", "message": "publish failed"}
     lease_token = uuid.uuid4()
+    attempt = _attempt(job_id=uuid.uuid4())
     dispatch = DispatchOutbox(
         id=uuid.uuid4(),
-        job_id=uuid.uuid4(),
-        attempt_id=uuid.uuid4(),
+        attempt_id=attempt.id,
         event_id="job_attempt:test:dispatch",
         task_name="jobs.run_attempt",
         payload={},
         status="leased",
         lease_token=lease_token,
         publish_attempts=1,
+        max_publish_attempts=3,
     )
     deadline = datetime.now(UTC) + timedelta(seconds=30)
     db = _FakeDB()
-    db.results.append(_ScalarResult(dispatch))
+    db.results.append(_OneRowResult((dispatch, attempt)))
 
     updated = await JobRepo.mark_dispatch_publish_failed(
         db,
@@ -590,53 +650,60 @@ async def test_find_due_dispatches_requires_active_queued_job():
 
 @pytest.mark.asyncio
 async def test_mark_succeeded_persists_public_and_canonical_results():
+    attempt_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
     job = Job(
         id=uuid.uuid4(),
         job_type="test.echo",
         status="running",
-        execution_token="task-1",
+        active_attempt_id=attempt_id,
         progress_percent=30,
         metadata_={},
     )
+    attempt = _attempt(id=attempt_id, job_id=job.id, status="running", lease_token=lease_token)
     db = _FakeDB()
-    db.results.append(_ScalarResult(job))
+    db.results.extend([_OneRowResult((job, attempt)), _ScalarResult(None), _ScalarListResult([])])
 
     updated = await JobRepo.mark_succeeded(
         db,
         job.id,
-        execution_token="task-1",
+        attempt_id=attempt_id,
+        lease_token=lease_token,
         result={"public": True},
         canonical_result={"canonical": True},
-        canonical_result_ref={"oss_key": "result.json"},
     )
 
     assert updated is True
     assert db.flushed is True
     assert job.status == "succeeded"
+    assert job.active_attempt_id is None
     assert job.result == {"public": True}
     assert job.canonical_result == {"canonical": True}
-    assert job.canonical_result_ref == {"oss_key": "result.json"}
     assert job.error is None
-    assert job.callback_status == "not_configured"
+    assert attempt.status == "succeeded"
+    assert attempt.lease_token is None
+    assert attempt.lease_expires_at is None
 
 
 @pytest.mark.asyncio
-async def test_mark_succeeded_rejects_stale_execution_token():
+async def test_mark_succeeded_rejects_stale_attempt_lease():
+    attempt_id = uuid.uuid4()
     job = Job(
         id=uuid.uuid4(),
         job_type="test.echo",
         status="running",
-        execution_token="current-attempt",
+        active_attempt_id=attempt_id,
         progress_percent=30,
         metadata_={},
     )
     db = _FakeDB()
-    db.results.append(_ScalarResult(None))
+    db.results.append(_NoRowResult())
 
     updated = await JobRepo.mark_succeeded(
         db,
         job.id,
-        execution_token="stale-attempt",
+        attempt_id=attempt_id,
+        lease_token=uuid.uuid4(),
         result={"public": True},
     )
 
@@ -645,18 +712,20 @@ async def test_mark_succeeded_rejects_stale_execution_token():
     assert job.status == "running"
     assert job.result is None
     sql = _compile(db.statements[0])
-    assert "job_aggregates.execution_token =" in sql
+    assert "job_execution_attempts.lease_token =" in sql
 
 
 @pytest.mark.asyncio
 async def test_mark_succeeded_creates_pending_callback_outbox_for_subscribed_event():
+    attempt_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
     job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
         client_request_id="client-1",
         job_type="test.echo",
         status="running",
-        execution_token="task-1",
+        active_attempt_id=attempt_id,
         progress_percent=30,
         metadata_={},
         callback_url="https://example.com/callback",
@@ -669,20 +738,21 @@ async def test_mark_succeeded_creates_pending_callback_outbox_for_subscribed_eve
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
+    attempt = _attempt(id=attempt_id, job_id=job.id, status="running", lease_token=lease_token)
     db = _FakeDB()
-    db.results.extend([_ScalarResult(job), _ScalarResult(None), _ScalarListResult([])])
+    db.results.extend([_OneRowResult((job, attempt)), _ScalarResult(None), _ScalarListResult([])])
 
     updated = await JobRepo.mark_succeeded(
         db,
         job.id,
-        execution_token="task-1",
+        attempt_id=attempt_id,
+        lease_token=lease_token,
         result={"public": True},
     )
 
     outboxes = [item for item in db.added if isinstance(item, CallbackOutbox)]
     assert updated is True
     assert job.status == "succeeded"
-    assert job.callback_status == "pending"
     assert len(outboxes) == 1
     assert outboxes[0].job_id == job.id
     assert outboxes[0].event_type == "job.succeeded"
@@ -697,38 +767,41 @@ async def test_mark_succeeded_creates_pending_callback_outbox_for_subscribed_eve
 
 
 @pytest.mark.asyncio
-async def test_mark_failed_rejects_stale_execution_token():
+async def test_mark_failed_rejects_stale_attempt_lease():
     error = {"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {}}
+    attempt_id = uuid.uuid4()
     job = Job(
         id=uuid.uuid4(),
         job_type="test.echo",
         status="running",
-        execution_token="current-attempt",
+        active_attempt_id=attempt_id,
         progress_percent=30,
         metadata_={},
     )
     db = _FakeDB()
-    db.results.append(_ScalarResult(None))
+    db.results.append(_NoRowResult())
 
-    updated = await JobRepo.mark_failed(db, job.id, error, execution_token="stale-attempt")
+    updated = await JobRepo.mark_failed(db, job.id, error, attempt_id=attempt_id, lease_token=uuid.uuid4())
 
     assert updated is False
     assert db.flushed is False
     assert job.status == "running"
     assert job.error is None
     sql = _compile(db.statements[0])
-    assert "job_aggregates.execution_token =" in sql
+    assert "job_execution_attempts.lease_token =" in sql
 
 
 @pytest.mark.asyncio
 async def test_mark_failed_creates_skipped_callback_outbox_for_unsubscribed_event(monkeypatch):
+    attempt_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
     job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
         client_request_id="client-1",
         job_type="test.echo",
         status="running",
-        execution_token="task-1",
+        active_attempt_id=attempt_id,
         progress_percent=30,
         metadata_={},
         callback_url="https://example.com/callback",
@@ -736,8 +809,9 @@ async def test_mark_failed_creates_skipped_callback_outbox_for_unsubscribed_even
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
+    attempt = _attempt(id=attempt_id, job_id=job.id, status="running", lease_token=lease_token)
     db = _FakeDB()
-    db.results.extend([_ScalarResult(job), _ScalarResult(None), _ScalarListResult([])])
+    db.results.extend([_OneRowResult((job, attempt)), _ScalarResult(None), _ScalarListResult([])])
     monkeypatch.setattr(
         "app.jobs.factory.get_job_executor",
         lambda _job_type: _DefaultOffResultSnapshotHandler(),
@@ -747,14 +821,13 @@ async def test_mark_failed_creates_skipped_callback_outbox_for_unsubscribed_even
         db,
         job.id,
         {"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {}},
-        execution_token="task-1",
+        attempt_id=attempt_id,
+        lease_token=lease_token,
     )
 
     outboxes = [item for item in db.added if isinstance(item, CallbackOutbox)]
     assert updated is True
     assert job.status == "failed"
-    assert job.callback_status == "skipped"
-    assert job.callback_next_retry_at is None
     assert len(outboxes) == 1
     assert outboxes[0].job_id == job.id
     assert outboxes[0].event_type == "job.failed"
@@ -862,8 +935,6 @@ async def test_mark_callback_delivering_does_not_count_unsent_http_attempt():
         client_request_id="client-1",
         job_type="test.echo",
         status="succeeded",
-        callback_status="pending",
-        callback_attempts=0,
         metadata_={},
     )
     outbox = CallbackOutbox(
@@ -890,7 +961,6 @@ async def test_mark_callback_delivering_does_not_count_unsent_http_attempt():
     assert outbox.delivery_attempts == 0
     assert outbox.first_attempt_at is None
     assert outbox.last_attempt_at is None
-    assert job.callback_attempts == 0
 
 
 @pytest.mark.asyncio
@@ -902,8 +972,6 @@ async def test_mark_callback_result_counts_only_actual_http_attempts():
         client_request_id="client-1",
         job_type="test.echo",
         status="succeeded",
-        callback_status="delivering",
-        callback_attempts=0,
         metadata_={},
     )
     outbox = CallbackOutbox(
@@ -914,6 +982,7 @@ async def test_mark_callback_result_counts_only_actual_http_attempts():
         lease_token=lease_token,
         payload={},
         delivery_attempts=0,
+        max_delivery_attempts=3,
     )
     db = _FakeDB()
     db.results.append(_OneRowResult((job, outbox)))
@@ -936,8 +1005,6 @@ async def test_mark_callback_result_counts_only_actual_http_attempts():
     assert outbox.first_attempt_at is not None
     assert outbox.last_attempt_at is not None
     assert outbox.last_response == {"format": "ack", "valid": False}
-    assert job.callback_attempts == 1
-    assert job.callback_status == "retrying"
 
 
 @pytest.mark.asyncio
@@ -948,19 +1015,18 @@ async def test_mark_attempt_failed_closes_attempt_when_job_already_failed():
         id=uuid.uuid4(),
         job_type="test.echo",
         status="failed",
-        execution_token="task-1",
+        active_attempt_id=None,
         progress_percent=30,
         metadata_={},
         error=error,
     )
-    attempt = JobAttempt(
+    attempt = _attempt(
         id=uuid.uuid4(),
         job_id=job.id,
-        attempt_no=1,
         status="running",
         lease_token=lease_token,
-        timeout_seconds=60,
     )
+    job.active_attempt_id = attempt.id
     db = _FakeDB()
     db.results.append(_OneRowResult((job, attempt)))
 
@@ -1016,17 +1082,15 @@ async def test_mark_workflow_orchestration_attempt_succeeded_accepts_running_roo
         job_type="test.workflow",
         status="running",
         active_attempt_id=attempt_id,
-        execution_token=str(attempt_id),
         progress_percent=15,
         metadata_={},
     )
-    attempt = JobAttempt(
+    attempt = _attempt(
         id=attempt_id,
         job_id=job.id,
-        attempt_no=1,
+        purpose="workflow_orchestration",
         status="running",
         lease_token=lease_token,
-        timeout_seconds=60,
     )
     db = _FakeDB()
     db.results.append(_OneRowResult((job, attempt)))
@@ -1041,7 +1105,6 @@ async def test_mark_workflow_orchestration_attempt_succeeded_accepts_running_roo
     assert db.flushed is True
     assert job.status == "running"
     assert job.active_attempt_id is None
-    assert job.execution_token is None
     assert job.progress_percent == 20
     assert job.progress_stage == "planning"
     assert attempt.status == "succeeded"
@@ -1093,7 +1156,6 @@ async def test_mark_workflow_root_succeeded_finalizes_waiting_root_and_callback(
         job_type="test.workflow",
         status="running",
         active_attempt_id=None,
-        is_internal=False,
         progress_percent=80,
         metadata_={},
         callback_url="https://example.com/callback",
@@ -1130,7 +1192,8 @@ async def test_mark_workflow_root_succeeded_finalizes_waiting_root_and_callback(
     assert events[-1].event_type == "workflow.root.succeeded"
     sql = _compile(db.statements[0])
     assert "job_aggregates.active_attempt_id IS NULL" in sql
-    assert "job_aggregates.is_internal IS false" in sql
+    assert "job_aggregates.root_job_id IS NULL" in sql
+    assert "job_aggregates.workflow_node_key IS NULL" in sql
 
 
 @pytest.mark.asyncio
@@ -1142,7 +1205,6 @@ async def test_mark_workflow_root_failed_finalizes_waiting_root_and_callback(mon
         job_type="test.workflow",
         status="running",
         active_attempt_id=None,
-        is_internal=False,
         progress_percent=80,
         metadata_={},
         callback_url="https://example.com/callback",
@@ -1190,7 +1252,8 @@ async def test_mark_workflow_root_succeeded_rejects_active_root_attempt():
     assert db.flushed is False
     sql = _compile(db.statements[0])
     assert "job_aggregates.active_attempt_id IS NULL" in sql
-    assert "job_aggregates.is_internal IS false" in sql
+    assert "job_aggregates.root_job_id IS NULL" in sql
+    assert "job_aggregates.workflow_node_key IS NULL" in sql
 
 
 @pytest.mark.asyncio
@@ -1201,22 +1264,17 @@ async def test_mark_attempt_failed_creates_retry_attempt_when_allowed():
         id=uuid.uuid4(),
         job_type="test.echo",
         status="running",
-        execution_token="task-1",
-        execution_generation=1,
-        attempt_count=1,
-        max_attempts=2,
-        timeout_seconds=60,
         progress_percent=50,
         metadata_={},
     )
-    attempt = JobAttempt(
+    attempt = _attempt(
         id=uuid.uuid4(),
         job_id=job.id,
-        attempt_no=1,
         status="running",
         lease_token=lease_token,
-        timeout_seconds=60,
+        policy_max_attempts=2,
     )
+    job.active_attempt_id = attempt.id
     next_attempt_at = datetime.now(UTC)
     db = _FakeDB()
     db.results.append(_OneRowResult((job, attempt)))
@@ -1234,13 +1292,14 @@ async def test_mark_attempt_failed_creates_retry_attempt_when_allowed():
     retry_dispatches = [item for item in db.added if isinstance(item, DispatchOutbox)]
     assert updated is True
     assert attempt.status == "failed"
-    assert attempt.retryable is True
+    assert attempt.retry_eligible is True
+    assert attempt.retry_decision == "retry"
     assert job.status == "queued"
     assert job.error is None
-    assert job.execution_generation == 2
-    assert job.attempt_count == 2
     assert len(retry_attempts) == 1
-    assert retry_attempts[0].attempt_no == 2
+    assert retry_attempts[0].purpose_attempt_no == 2
+    assert retry_attempts[0].purpose == "business_execution"
+    assert retry_attempts[0].previous_attempt_id == attempt.id
     assert retry_attempts[0].status == "pending"
     assert len(retry_dispatches) == 1
     assert retry_dispatches[0].attempt_id == retry_attempts[0].id
@@ -1248,17 +1307,83 @@ async def test_mark_attempt_failed_creates_retry_attempt_when_allowed():
 
 
 @pytest.mark.asyncio
-async def test_update_progress_can_require_current_task_and_generation():
+async def test_mark_attempt_failed_uses_attempt_retry_delay_when_no_explicit_schedule():
+    error = {"code": "JOB_TIMEOUT", "message": "timed out", "details": {}}
+    lease_token = uuid.uuid4()
     job = Job(
         id=uuid.uuid4(),
         job_type="test.echo",
         status="running",
-        execution_token="task-1",
-        execution_generation=2,
+        progress_percent=50,
+        metadata_={},
+    )
+    attempt = _attempt(
+        id=uuid.uuid4(),
+        job_id=job.id,
+        status="running",
+        lease_token=lease_token,
+        policy_max_attempts=2,
+    )
+    job.active_attempt_id = attempt.id
+    db = _FakeDB()
+    db.results.append(_OneRowResult((job, attempt)))
+
+    before = datetime.now(UTC)
+    updated = await JobRepo.mark_attempt_failed(
+        db,
+        attempt.id,
+        lease_token=lease_token,
+        error=error,
+        retryable=True,
+    )
+    after = datetime.now(UTC)
+
+    retry_dispatches = [item for item in db.added if isinstance(item, DispatchOutbox)]
+    assert updated is True
+    assert len(retry_dispatches) == 1
+    assert attempt.next_attempt_scheduled_at == retry_dispatches[0].next_attempt_at
+    assert retry_dispatches[0].next_attempt_at >= before + timedelta(seconds=5)
+    assert retry_dispatches[0].next_attempt_at <= after + timedelta(seconds=5)
+
+
+def test_next_retry_scheduled_at_applies_exponential_backoff():
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    attempt = _attempt(
+        purpose_attempt_no=3,
+        policy_max_attempts=4,
+        policy_retry_delay_seconds=5,
+        policy_backoff_kind="exponential",
+    )
+
+    assert JobRepo._next_retry_scheduled_at(attempt, now) == now + timedelta(seconds=20)
+
+
+def test_next_retry_scheduled_at_rejects_delayless_fixed_or_exponential_policy():
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    attempt = _attempt(
+        policy_max_attempts=2,
+        policy_backoff_kind="exponential",
+    )
+    attempt.policy_retry_delay_seconds = None
+
+    with pytest.raises(ValueError, match="requires retry delay seconds"):
+        JobRepo._next_retry_scheduled_at(attempt, now)
+
+
+@pytest.mark.asyncio
+async def test_update_progress_can_require_current_task_and_generation():
+    attempt_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        job_type="test.echo",
+        status="running",
+        active_attempt_id=attempt_id,
         progress_percent=10,
     )
+    attempt = _attempt(id=attempt_id, job_id=job.id, status="running", lease_token=lease_token)
     db = _FakeDB()
-    db.results.append(_ScalarResult(job))
+    db.results.append(_OneRowResult((job, attempt)))
 
     updated = await JobRepo.update_progress(
         db,
@@ -1266,8 +1391,8 @@ async def test_update_progress_can_require_current_task_and_generation():
         progress_percent=90,
         progress_text="正在执行成功前副作用",
         progress_stage="success_side_effect",
-        execution_token="task-1",
-        execution_generation=2,
+        attempt_id=attempt_id,
+        lease_token=lease_token,
     )
 
     assert updated is True
@@ -1276,5 +1401,4 @@ async def test_update_progress_can_require_current_task_and_generation():
     assert job.progress_stage == "success_side_effect"
     sql = _compile(db.statements[0])
     assert "job_aggregates.status =" in sql
-    assert "job_aggregates.execution_token =" in sql
-    assert "job_aggregates.execution_generation =" in sql
+    assert "job_execution_attempts.lease_token =" in sql

@@ -1495,10 +1495,36 @@ def test_jobs_child_jobs_query_filters_internal_children(monkeypatch):
 
     sql = captured_sql[0]
     assert "FROM job_aggregates j" in sql
-    assert "j.is_internal IS TRUE" in sql
     assert "j.root_job_id = %(root_job_id)s" in sql
+    assert "j.workflow_node_key IS NOT NULL" in sql
     assert "ORDER BY j.created_at ASC" in sql
     assert captured_params[0] == {"root_job_id": "root-job-1"}
+
+
+def test_jobs_list_and_inspect_map_skipped_callback_status_to_public_semantics(monkeypatch):
+    captured_sql: list[str] = []
+
+    def fake_fetch(conn, sql, params):
+        captured_sql.append(sql)
+        return [] if "LIMIT %(limit)s" in sql else None
+
+    monkeypatch.setattr(queries, "_fetch_all", fake_fetch)
+    monkeypatch.setattr(queries, "_fetch_one", fake_fetch)
+
+    queries.list_jobs(
+        None,
+        statuses=[],
+        job_type=None,
+        caller_id=None,
+        client_request_id=None,
+        since=None,
+        limit=20,
+    )
+    queries.get_job(None, "job-1")
+
+    combined_sql = "\n".join(captured_sql)
+    assert "WHEN cb.status = 'skipped' AND cb.last_error IS NOT NULL THEN 'failed'" in combined_sql
+    assert "WHEN cb.status = 'skipped' THEN 'not_configured'" in combined_sql
 
 
 def test_jobs_human_payload_summary_truncates_long_strings():

@@ -13,7 +13,6 @@ def _settings_kwargs(**overrides):
         "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/fastapi_best_ai_architecture",
         "SERVICE_API_KEY": "test-token",
         "CALLBACK_SIGNING_SECRET": "test-callback-secret",
-        "CALLBACK_RETRY_DELAY_SECONDS": 300,
     }
     values.update(overrides)
     if "MODEL_CONFIG_PATH" in values and "POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID" not in values:

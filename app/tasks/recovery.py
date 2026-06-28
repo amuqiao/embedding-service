@@ -80,7 +80,6 @@ async def _run_recovery(db: AsyncSession) -> dict:
                 error_kind="timeout",
                 failure_phase="lease",
                 retryable="JOB_TIMEOUT" in (attempt.policy_retryable_error_codes or []),
-                next_attempt_at=now,
                 retry_created_reason="recovery_retry",
             )
             if claimed:
@@ -121,14 +120,16 @@ async def _run_recovery(db: AsyncSession) -> dict:
             limit=settings.job.recovery_batch_size,
         )
         for attempt in missing_dispatch_attempts:
+            next_attempt_at = attempt.next_attempt_scheduled_at or now
             await JobRepo.create_dispatch_outbox(
                 db,
                 event_job_id=attempt.job_id,
                 attempt_id=attempt.id,
-                next_attempt_at=now,
+                next_attempt_at=next_attempt_at,
                 dispatch_reason="reconciler_missing_dispatch",
             )
-            dispatch_attempts.append(attempt.id)
+            if next_attempt_at <= now:
+                dispatch_attempts.append(attempt.id)
             dispatch_reconciled += 1
 
         terminal_jobs_missing_callback = await JobRepo.find_terminal_root_jobs_missing_callback_outbox(

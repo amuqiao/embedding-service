@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.exceptions import AppError
-from app.models.job import Job
+from app.models.job import Job, JobAttempt
 from app.services.job_runtime import payload_hash
 from app.jobs.runner import execute_job, fail_job
 from app.jobs.types.register import register_all_job_types
@@ -31,6 +31,7 @@ class _FakeDB:
 
 
 def _running_add_job() -> Job:
+    attempt_id = uuid.uuid4()
     params = {"a": 2, "b": 3}
     return Job(
         id=uuid.uuid4(),
@@ -38,10 +39,9 @@ def _running_add_job() -> Job:
         client_request_id="client-add-1",
         job_type="job_test_add",
         status="running",
+        active_attempt_id=attempt_id,
         progress_percent=5,
         progress_stage="running",
-        execution_token="attempt-1",
-        execution_generation=1,
         job_params_ref={
             "storage": "db_inline",
             "type": "json",
@@ -54,24 +54,47 @@ def _running_add_job() -> Job:
     )
 
 
-def test_should_retry_attempt_respects_platform_retry_policy(monkeypatch):
-    monkeypatch.setattr(
-        task_jobs,
-        "get_job_type_spec",
-        lambda _job_type: SimpleNamespace(platform_retry_policy="no_platform_retry"),
+def _attempt(
+    *,
+    id: uuid.UUID | None = None,
+    job_id: uuid.UUID | None = None,
+    purpose: str = "business_execution",
+    status: str = "running",
+    lease_token: uuid.UUID | None = None,
+    retryable_error_codes: list[str] | None = None,
+) -> JobAttempt:
+    attempt_id = id or uuid.uuid4()
+    retryable_error_codes = retryable_error_codes or []
+    return JobAttempt(
+        id=attempt_id,
+        job_id=job_id or uuid.uuid4(),
+        purpose=purpose,
+        purpose_attempt_no=1,
+        retry_chain_id=attempt_id,
+        created_reason="initial",
+        status=status,
+        lease_token=lease_token,
+        policy_max_attempts=2 if retryable_error_codes else 1,
+        policy_retry_delay_seconds=5 if retryable_error_codes else None,
+        policy_backoff_kind="fixed" if retryable_error_codes else "none",
+        policy_retryable_error_codes=retryable_error_codes,
+        retry_policy_snapshot={
+            "max_attempts": 2 if retryable_error_codes else 1,
+            "retry_delay_seconds": 5 if retryable_error_codes else None,
+            "backoff_kind": "fixed" if retryable_error_codes else "none",
+            "retryable_error_codes": retryable_error_codes,
+        },
     )
 
-    assert task_jobs._should_retry_attempt("job_test_add", {"code": "JOB_TIMEOUT"}) is False
 
-    monkeypatch.setattr(
-        task_jobs,
-        "get_job_type_spec",
-        lambda _job_type: SimpleNamespace(platform_retry_policy="retry_transient_platform_errors"),
-    )
+def test_should_retry_attempt_respects_attempt_retry_policy():
+    no_retry = _attempt(retryable_error_codes=[])
+    transient_retry = _attempt(retryable_error_codes=["JOB_TIMEOUT"])
 
-    assert task_jobs._should_retry_attempt("job_test_add", {"code": "JOB_TIMEOUT"}) is True
-    assert task_jobs._should_retry_attempt("job_test_add", {"code": "MODEL_CALL_FAILED"}) is False
-    assert task_jobs._should_retry_attempt("job_test_add", {"code": "AI_LEDGER_UPDATE_FAILED"}) is False
+    assert task_jobs._should_retry_attempt(no_retry, {"code": "JOB_TIMEOUT"}) is False
+    assert task_jobs._should_retry_attempt(transient_retry, {"code": "JOB_TIMEOUT"}) is True
+    assert task_jobs._should_retry_attempt(transient_retry, {"code": "MODEL_CALL_FAILED"}) is False
+    assert task_jobs._should_retry_attempt(transient_retry, {"code": "AI_LEDGER_UPDATE_FAILED"}) is False
 
 
 @pytest.mark.asyncio
@@ -157,17 +180,17 @@ async def test_workflow_child_validation_rejects_non_text_model_for_custom_text_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("policy", "error_code", "expected_retryable"),
+    ("retryable_error_codes", "error_code", "expected_retryable"),
     [
-        ("retry_transient_platform_errors", "JOB_TIMEOUT", True),
-        ("retry_transient_platform_errors", "MODEL_CALL_FAILED", False),
-        ("retry_transient_platform_errors", "AI_LEDGER_UPDATE_FAILED", False),
-        ("no_platform_retry", "JOB_TIMEOUT", False),
+        (["JOB_TIMEOUT"], "JOB_TIMEOUT", True),
+        (["JOB_TIMEOUT"], "MODEL_CALL_FAILED", False),
+        (["JOB_TIMEOUT"], "AI_LEDGER_UPDATE_FAILED", False),
+        ([], "JOB_TIMEOUT", False),
     ],
 )
 async def test_run_job_attempt_failure_path_passes_policy_retryable(
     monkeypatch,
-    policy,
+    retryable_error_codes,
     error_code,
     expected_retryable,
 ):
@@ -178,10 +201,10 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
         caller_id="caller-1",
         job_type="job_test_add",
         status="running",
-        execution_token=str(attempt_id),
-        execution_generation=1,
+        active_attempt_id=attempt_id,
         progress_percent=5,
     )
+    attempt = _attempt(id=attempt_id, job_id=job.id, lease_token=lease_token, retryable_error_codes=retryable_error_codes)
     marked: dict[str, object] = {}
 
     async def fake_with_db(coro):
@@ -189,7 +212,7 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
 
     async def fake_claim_attempt_for_execution(_db, received_attempt_id, *, worker_id, lease_seconds):
         assert received_attempt_id == attempt_id
-        return job, SimpleNamespace(id=attempt_id), lease_token
+        return job, attempt, lease_token
 
     async def fake_heartbeat_attempt(_db, received_attempt_id, *, lease_token: uuid.UUID, lease_seconds):
         assert received_attempt_id == attempt_id
@@ -207,13 +230,11 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
         lease_token: uuid.UUID,
         error,
         retryable,
-        next_attempt_at,
     ):
         marked["attempt_id"] = received_attempt_id
         marked["lease_token"] = lease_token
         marked["error"] = error
         marked["retryable"] = retryable
-        marked["next_attempt_at"] = next_attempt_at
         return True
 
     async def fake_deliver_callback_for_job(_job_id):
@@ -224,7 +245,6 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
     monkeypatch.setattr(task_jobs.JobRepo, "claim_attempt_for_execution", fake_claim_attempt_for_execution)
     monkeypatch.setattr(task_jobs.JobRepo, "heartbeat_attempt", fake_heartbeat_attempt)
     monkeypatch.setattr(task_jobs.JobRepo, "mark_attempt_failed", fake_mark_attempt_failed)
-    monkeypatch.setattr(task_jobs, "get_job_type_spec", lambda _job_type: SimpleNamespace(platform_retry_policy=policy))
     monkeypatch.setattr(task_jobs, "deliver_callback_for_job", fake_deliver_callback_for_job)
     monkeypatch.setattr("app.jobs.runner.execute_job", fake_execute_job)
 
@@ -236,13 +256,12 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
     assert marked["lease_token"] == lease_token
     assert marked["error"]["code"] == error_code
     assert marked["retryable"] is expected_retryable
-    assert marked["next_attempt_at"] is not None
 
 
 @pytest.mark.asyncio
-async def test_publish_job_attempt_marks_published_before_enqueue(monkeypatch):
+async def test_publish_job_attempt_marks_published_after_enqueue(monkeypatch):
     attempt_id = uuid.uuid4()
-    dispatch = SimpleNamespace(id=uuid.uuid4())
+    dispatch = SimpleNamespace(id=uuid.uuid4(), orphan_timeout_seconds=300)
     lease_token = uuid.uuid4()
     calls: list[str] = []
 
@@ -270,13 +289,13 @@ async def test_publish_job_attempt_marks_published_before_enqueue(monkeypatch):
 
     await task_jobs.publish_job_attempt(attempt_id)
 
-    assert calls == ["lease", "mark", "kiq"]
+    assert calls == ["lease", "kiq", "mark"]
 
 
 @pytest.mark.asyncio
-async def test_publish_job_attempt_defers_after_uncertain_enqueue(monkeypatch):
+async def test_publish_job_attempt_records_failed_publish_after_broker_error(monkeypatch):
     attempt_id = uuid.uuid4()
-    dispatch = SimpleNamespace(id=uuid.uuid4())
+    dispatch = SimpleNamespace(id=uuid.uuid4(), publish_retry_delay_seconds=5, max_publish_attempts=12)
     lease_token = uuid.uuid4()
     calls: list[str] = []
 
@@ -288,9 +307,19 @@ async def test_publish_job_attempt_defers_after_uncertain_enqueue(monkeypatch):
         calls.append("lease")
         return dispatch, lease_token
 
-    async def fake_mark_dispatch_published(_db, dispatch_id, *, lease_token: uuid.UUID, next_attempt_at):
+    async def fake_mark_dispatch_publish_failed(
+        _db,
+        dispatch_id,
+        *,
+        lease_token: uuid.UUID,
+        error,
+        next_attempt_at,
+        max_publish_attempts,
+    ):
         assert dispatch_id == dispatch.id
-        calls.append("mark")
+        assert error["code"] == "TASKIQ_PUBLISH_FAILED"
+        assert max_publish_attempts == 12
+        calls.append("failed")
         return True
 
     async def fake_kiq(received_attempt_id):
@@ -300,13 +329,13 @@ async def test_publish_job_attempt_defers_after_uncertain_enqueue(monkeypatch):
 
     monkeypatch.setattr(task_jobs, "_with_db", fake_with_db)
     monkeypatch.setattr(task_jobs.JobRepo, "lease_dispatch_for_publish", fake_lease_dispatch_for_publish)
-    monkeypatch.setattr(task_jobs.JobRepo, "mark_dispatch_published", fake_mark_dispatch_published)
+    monkeypatch.setattr(task_jobs.JobRepo, "mark_dispatch_publish_failed", fake_mark_dispatch_publish_failed)
     monkeypatch.setattr(task_jobs.run_job_attempt, "kiq", fake_kiq)
 
     with pytest.raises(task_jobs.TaskiqPublishDeferredError) as exc:
         await task_jobs.publish_job_attempt(attempt_id)
 
-    assert calls == ["lease", "mark", "kiq"]
+    assert calls == ["lease", "kiq", "failed"]
     assert exc.value.attempt_id == attempt_id
     assert exc.value.error["code"] == "TASKIQ_PUBLISH_FAILED"
     assert exc.value.error["details"]["type"] == "RuntimeError"
@@ -316,12 +345,18 @@ async def test_publish_job_attempt_defers_after_uncertain_enqueue(monkeypatch):
 async def test_execute_job_runs_custom_job_without_model_runtime(monkeypatch):
     register_all_job_types()
     job = _running_add_job()
+    lease_token = uuid.uuid4()
+    attempt = _attempt(id=job.active_attempt_id, job_id=job.id, lease_token=lease_token)
     progress_updates = []
     succeeded = {}
 
     async def fake_get_job_or_404(_db, job_id):
         assert job_id == job.id
         return job
+
+    async def fake_get_attempt(_db, attempt_id):
+        assert attempt_id == attempt.id
+        return attempt
 
     async def fake_update_progress(
         _db,
@@ -330,12 +365,12 @@ async def test_execute_job_runs_custom_job_without_model_runtime(monkeypatch):
         progress_percent,
         progress_text,
         progress_stage,
-        execution_token,
-        execution_generation,
+        attempt_id,
+        lease_token,
     ):
         assert job_id == job.id
-        assert execution_token == "attempt-1"
-        assert execution_generation == 1
+        assert attempt_id == attempt.id
+        assert lease_token == attempt.lease_token
         progress_updates.append((progress_percent, progress_stage, progress_text))
         job.progress_percent = progress_percent
         job.progress_stage = progress_stage
@@ -345,16 +380,16 @@ async def test_execute_job_runs_custom_job_without_model_runtime(monkeypatch):
         _db,
         job_id,
         *,
-        execution_token,
+        attempt_id,
+        lease_token,
         result,
         canonical_result,
-        canonical_result_ref=None,
     ):
         assert job_id == job.id
-        assert execution_token == "attempt-1"
+        assert attempt_id == attempt.id
+        assert lease_token == attempt.lease_token
         succeeded["result"] = result
         succeeded["canonical_result"] = canonical_result
-        succeeded["canonical_result_ref"] = canonical_result_ref
         job.status = "succeeded"
         return True
 
@@ -363,6 +398,7 @@ async def test_execute_job_runs_custom_job_without_model_runtime(monkeypatch):
         return False
 
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
     monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
     monkeypatch.setattr("app.jobs.runner.JobRepo.mark_succeeded", fake_mark_succeeded)
     monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback_for_job)
@@ -371,7 +407,7 @@ async def test_execute_job_runs_custom_job_without_model_runtime(monkeypatch):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("custom job should not call model runtime")),
     )
 
-    result = await execute_job(_FakeDB(), job.id, execution_generation=1)
+    result = await execute_job(_FakeDB(), job.id, attempt_id=attempt.id, lease_token=lease_token)
 
     assert result == {"job_id": str(job.id), "status": "succeeded"}
     assert progress_updates[0][1] == "calling_model"
@@ -392,10 +428,7 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
         status="running",
         progress_percent=5,
         progress_stage="running",
-        execution_token="attempt-root",
-        execution_generation=1,
         priority="normal",
-        timeout_seconds=300,
         job_params_hash=payload_hash(root_params),
         runtime_ref={
             "storage": "db_inline",
@@ -446,6 +479,13 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
     )
     root_attempt_id = uuid.uuid4()
     lease_token = uuid.uuid4()
+    root_job.active_attempt_id = root_attempt_id
+    root_attempt = _attempt(
+        id=root_attempt_id,
+        job_id=root_job.id,
+        purpose="workflow_orchestration",
+        lease_token=lease_token,
+    )
     created_children = []
     created_attempt_ids = []
     published_attempt_ids = []
@@ -455,6 +495,10 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
         assert job_id == root_job.id
         return root_job
 
+    async def fake_get_attempt(_db, attempt_id):
+        assert attempt_id == root_attempt_id
+        return root_attempt
+
     async def fake_update_progress(
         _db,
         job_id,
@@ -462,12 +506,12 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
         progress_percent,
         progress_text,
         progress_stage,
-        execution_token,
-        execution_generation,
+        attempt_id,
+        lease_token: uuid.UUID,
     ):
         assert job_id == root_job.id
-        assert execution_token == "attempt-root"
-        assert execution_generation == 1
+        assert attempt_id == root_attempt_id
+        assert lease_token == root_attempt.lease_token
         root_job.progress_percent = progress_percent
         root_job.progress_stage = progress_stage
         return True
@@ -484,8 +528,6 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
 
     async def fake_create(_db, **kwargs):
         assert kwargs["root_job_id"] == root_job.id
-        assert kwargs["parent_job_id"] == root_job.id
-        assert kwargs["is_internal"] is True
         assert kwargs["workflow_node_key"] == "first"
         assert kwargs["client_request_id"] is None
         assert kwargs["callback_url"] is None
@@ -496,10 +538,7 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
             status="queued",
             progress_percent=0,
             priority=kwargs["priority"],
-            timeout_seconds=kwargs["timeout_seconds"],
             root_job_id=kwargs["root_job_id"],
-            parent_job_id=kwargs["parent_job_id"],
-            is_internal=kwargs["is_internal"],
             workflow_node_key=kwargs["workflow_node_key"],
             created_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
             updated_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
@@ -507,7 +546,8 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
         created_children.append(child)
         return child
 
-    async def fake_create_initial_attempt(_db, child, *, timeout_seconds):
+    async def fake_create_initial_attempt(_db, child, *, timeout_seconds, purpose=None, retry_policy=None):
+        assert purpose == "business_execution"
         attempt_id = uuid.uuid4()
         child.active_attempt_id = attempt_id
         created_attempt_ids.append(attempt_id)
@@ -520,7 +560,6 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
     async def fake_mark_workflow_orchestration_attempt_succeeded(_db, attempt_id, *, lease_token: uuid.UUID):
         assert attempt_id == root_attempt_id
         root_job.active_attempt_id = None
-        root_job.execution_token = None
         root_job.progress_stage = "planning"
         return True
 
@@ -529,6 +568,7 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
         raise task_jobs.TaskiqPublishDeferredError(attempt_id, {"code": "TASKIQ_PUBLISH_FAILED"})
 
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
     monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
     monkeypatch.setattr("app.workflows.orchestrator.JobRepo.list_internal_children", fake_list_internal_children)
     monkeypatch.setattr(
@@ -551,7 +591,6 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
     result = await execute_job(
         _FakeDB(),
         root_job.id,
-        execution_generation=1,
         attempt_id=root_attempt_id,
         lease_token=lease_token,
     )
@@ -577,20 +616,16 @@ async def test_create_ready_child_jobs_does_not_duplicate_existing_child(monkeyp
         job_type="test.workflow",
         status="running",
         priority="normal",
-        timeout_seconds=300,
     )
     existing_child = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
         job_type="job_test_echo",
         status="queued",
-        is_internal=True,
         root_job_id=root_job.id,
-        parent_job_id=root_job.id,
         workflow_node_key="first",
         progress_percent=0,
         priority="normal",
-        timeout_seconds=300,
     )
     workflow_plan = {
         "schema_version": 1,
@@ -645,7 +680,6 @@ async def test_create_ready_child_jobs_rejects_mismatched_persisted_plan_header(
         job_type="test.workflow",
         status="running",
         priority="normal",
-        timeout_seconds=300,
     )
     workflow_plan = {
         "schema_version": 1,
@@ -681,9 +715,7 @@ async def test_reconcile_workflow_root_creates_missing_ready_child(monkeypatch):
         status="running",
         progress_percent=20,
         active_attempt_id=None,
-        is_internal=False,
         priority="normal",
-        timeout_seconds=300,
         job_params_hash=payload_hash({"workflow": True}),
         runtime_ref={
             "storage": "db_inline",
@@ -747,16 +779,13 @@ async def test_reconcile_workflow_root_creates_missing_ready_child(monkeypatch):
             status="queued",
             progress_percent=0,
             priority=kwargs["priority"],
-            timeout_seconds=kwargs["timeout_seconds"],
             root_job_id=kwargs["root_job_id"],
-            parent_job_id=kwargs["parent_job_id"],
-            is_internal=kwargs["is_internal"],
             workflow_node_key=kwargs["workflow_node_key"],
         )
         created_children.append(child)
         return child
 
-    async def fake_create_initial_attempt(_db, child, *, timeout_seconds):
+    async def fake_create_initial_attempt(_db, child, *, timeout_seconds, purpose=None, retry_policy=None):
         attempt_id = uuid.uuid4()
         child.active_attempt_id = attempt_id
         created_attempt_ids.append(attempt_id)
@@ -824,7 +853,6 @@ async def test_create_ready_child_jobs_rejects_invalid_persisted_plan_header(
         job_type="test.workflow",
         status="running",
         priority="normal",
-        timeout_seconds=300,
     )
     workflow_plan = {
         "schema_version": 1,
@@ -863,9 +891,7 @@ async def test_advance_workflow_after_child_success_creates_downstream_ready_chi
         status="running",
         progress_percent=20,
         active_attempt_id=None,
-        is_internal=False,
         priority="normal",
-        timeout_seconds=300,
         job_params_hash=payload_hash({"workflow": True}),
         runtime_ref={
             "storage": "db_inline",
@@ -919,12 +945,9 @@ async def test_advance_workflow_after_child_success_creates_downstream_ready_chi
         status="succeeded",
         result={"message": "hello"},
         progress_percent=100,
-        is_internal=True,
         root_job_id=root_job.id,
-        parent_job_id=root_job.id,
         workflow_node_key="first",
         priority="normal",
-        timeout_seconds=300,
     )
     created_children = []
     created_attempt_ids = []
@@ -952,16 +975,13 @@ async def test_advance_workflow_after_child_success_creates_downstream_ready_chi
             status="queued",
             progress_percent=0,
             priority=kwargs["priority"],
-            timeout_seconds=kwargs["timeout_seconds"],
             root_job_id=kwargs["root_job_id"],
-            parent_job_id=kwargs["parent_job_id"],
-            is_internal=kwargs["is_internal"],
             workflow_node_key=kwargs["workflow_node_key"],
         )
         created_children.append(child)
         return child
 
-    async def fake_create_initial_attempt(_db, child, *, timeout_seconds):
+    async def fake_create_initial_attempt(_db, child, *, timeout_seconds, purpose=None, retry_policy=None):
         attempt_id = uuid.uuid4()
         created_attempt_ids.append(attempt_id)
         return SimpleNamespace(id=attempt_id)
@@ -1003,9 +1023,7 @@ async def test_advance_workflow_after_last_child_success_finalizes_root(monkeypa
         status="running",
         progress_percent=80,
         active_attempt_id=None,
-        is_internal=False,
         priority="normal",
-        timeout_seconds=300,
         job_params_hash=payload_hash({"workflow": True}),
         runtime_ref={
             "storage": "db_inline",
@@ -1051,12 +1069,9 @@ async def test_advance_workflow_after_last_child_success_finalizes_root(monkeypa
         status="succeeded",
         result={"message": "done"},
         progress_percent=100,
-        is_internal=True,
         root_job_id=root_job.id,
-        parent_job_id=root_job.id,
         workflow_node_key="only",
         priority="normal",
-        timeout_seconds=300,
     )
     finalized = {}
 
@@ -1097,9 +1112,7 @@ async def test_poster_title_image_workflow_root_public_result_uses_join_result(m
         status="running",
         progress_percent=80,
         active_attempt_id=None,
-        is_internal=False,
         priority="normal",
-        timeout_seconds=600,
         job_params_hash=payload_hash({"items": []}),
         runtime_ref={
             "storage": "db_inline",
@@ -1186,12 +1199,9 @@ async def test_poster_title_image_workflow_root_public_result_uses_join_result(m
             status="succeeded",
             result={"style_key": "a", "style_desc": "heavy"},
             progress_percent=100,
-            is_internal=True,
             root_job_id=root_job.id,
-            parent_job_id=root_job.id,
             workflow_node_key="probe.0",
             priority="normal",
-            timeout_seconds=300,
         ),
         Job(
             id=uuid.uuid4(),
@@ -1200,12 +1210,9 @@ async def test_poster_title_image_workflow_root_public_result_uses_join_result(m
             status="succeeded",
             result={"item": poster_result["items"][0], "duration_ms": {"ai_model": 9, "total": 9}},
             progress_percent=100,
-            is_internal=True,
             root_job_id=root_job.id,
-            parent_job_id=root_job.id,
             workflow_node_key="item.es",
             priority="normal",
-            timeout_seconds=600,
         ),
         Job(
             id=uuid.uuid4(),
@@ -1214,12 +1221,9 @@ async def test_poster_title_image_workflow_root_public_result_uses_join_result(m
             status="succeeded",
             result=poster_result,
             progress_percent=100,
-            is_internal=True,
             root_job_id=root_job.id,
-            parent_job_id=root_job.id,
             workflow_node_key="join",
             priority="normal",
-            timeout_seconds=120,
         ),
     ]
     finalized = {}
@@ -1260,9 +1264,7 @@ async def test_advance_workflow_after_required_child_failed_finalizes_root_faile
         status="running",
         progress_percent=50,
         active_attempt_id=None,
-        is_internal=False,
         priority="normal",
-        timeout_seconds=300,
         job_params_hash=payload_hash({"workflow": True}),
         runtime_ref={
             "storage": "db_inline",
@@ -1308,12 +1310,9 @@ async def test_advance_workflow_after_required_child_failed_finalizes_root_faile
         status="failed",
         error={"code": "MODEL_CALL_FAILED", "message": "failed", "details": {}},
         progress_percent=100,
-        is_internal=True,
         root_job_id=root_job.id,
-        parent_job_id=root_job.id,
         workflow_node_key="only",
         priority="normal",
-        timeout_seconds=300,
     )
     finalized = {}
 
@@ -1352,9 +1351,7 @@ async def test_advance_workflow_allow_partial_finalizes_partial_success(monkeypa
         status="running",
         progress_percent=80,
         active_attempt_id=None,
-        is_internal=False,
         priority="normal",
-        timeout_seconds=300,
         job_params_hash=payload_hash({"workflow": True}),
         runtime_ref={
             "storage": "db_inline",
@@ -1408,12 +1405,9 @@ async def test_advance_workflow_allow_partial_finalizes_partial_success(monkeypa
         status="succeeded",
         result={"message": "ok"},
         progress_percent=100,
-        is_internal=True,
         root_job_id=root_job.id,
-        parent_job_id=root_job.id,
         workflow_node_key="ok",
         priority="normal",
-        timeout_seconds=300,
     )
     bad_child = Job(
         id=uuid.uuid4(),
@@ -1422,12 +1416,9 @@ async def test_advance_workflow_allow_partial_finalizes_partial_success(monkeypa
         status="failed",
         error={"code": "MODEL_CALL_FAILED", "message": "failed", "details": {}},
         progress_percent=100,
-        is_internal=True,
         root_job_id=root_job.id,
-        parent_job_id=root_job.id,
         workflow_node_key="bad",
         priority="normal",
-        timeout_seconds=300,
     )
     finalized = {}
 
@@ -1468,9 +1459,7 @@ async def test_advance_workflow_allow_partial_finalizes_when_failed_dependency_b
         status="running",
         progress_percent=80,
         active_attempt_id=None,
-        is_internal=False,
         priority="normal",
-        timeout_seconds=300,
         job_params_hash=payload_hash({"workflow": True}),
         runtime_ref={
             "storage": "db_inline",
@@ -1524,12 +1513,9 @@ async def test_advance_workflow_allow_partial_finalizes_when_failed_dependency_b
         status="failed",
         error={"code": "MODEL_CALL_FAILED", "message": "failed", "details": {}},
         progress_percent=100,
-        is_internal=True,
         root_job_id=root_job.id,
-        parent_job_id=root_job.id,
         workflow_node_key="optional-upstream",
         priority="normal",
-        timeout_seconds=300,
     )
     finalized = {}
 
@@ -1567,9 +1553,7 @@ async def test_advance_workflow_skips_callback_side_effect_for_already_terminal_
         status="succeeded",
         progress_percent=100,
         active_attempt_id=None,
-        is_internal=False,
         priority="normal",
-        timeout_seconds=300,
     )
     child = Job(
         id=uuid.uuid4(),
@@ -1577,12 +1561,9 @@ async def test_advance_workflow_skips_callback_side_effect_for_already_terminal_
         job_type="job_test_echo",
         status="succeeded",
         progress_percent=100,
-        is_internal=True,
         root_job_id=root_job.id,
-        parent_job_id=root_job.id,
         workflow_node_key="only",
         priority="normal",
-        timeout_seconds=300,
     )
 
     async def fake_get_workflow_root_for_update(_db, root_job_id):
@@ -1601,18 +1582,18 @@ async def test_advance_workflow_skips_callback_side_effect_for_already_terminal_
 @pytest.mark.asyncio
 async def test_execute_workflow_root_rejects_cyclic_persisted_workflow_plan(monkeypatch):
     root_params = {"workflow": True}
+    attempt_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
     root_job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
         client_request_id="client-workflow-1",
         job_type="test.workflow",
         status="running",
+        active_attempt_id=attempt_id,
         progress_percent=5,
         progress_stage="running",
-        execution_token="attempt-root",
-        execution_generation=1,
         priority="normal",
-        timeout_seconds=300,
         job_params_hash=payload_hash(root_params),
         runtime_ref={
             "storage": "db_inline",
@@ -1662,6 +1643,15 @@ async def test_execute_workflow_root_rejects_cyclic_persisted_workflow_plan(monk
         assert job_id == root_job.id
         return root_job
 
+    async def fake_get_attempt(_db, received_attempt_id):
+        assert received_attempt_id == attempt_id
+        return _attempt(
+            id=attempt_id,
+            job_id=root_job.id,
+            purpose="workflow_orchestration",
+            lease_token=lease_token,
+        )
+
     async def fake_update_progress(*_args, **_kwargs):
         return True
 
@@ -1669,6 +1659,7 @@ async def test_execute_workflow_root_rejects_cyclic_persisted_workflow_plan(monk
         return True
 
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
     monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
     monkeypatch.setattr("app.jobs.runner.JobRepo.heartbeat_attempt", fake_heartbeat_attempt)
 
@@ -1676,9 +1667,8 @@ async def test_execute_workflow_root_rejects_cyclic_persisted_workflow_plan(monk
         await execute_job(
             _FakeDB(),
             root_job.id,
-            execution_generation=1,
-            attempt_id=uuid.uuid4(),
-            lease_token=uuid.uuid4(),
+            attempt_id=attempt_id,
+            lease_token=lease_token,
         )
 
     assert exc.value.code == "RUNTIME_REF_INVALID"
@@ -1688,50 +1678,49 @@ async def test_execute_workflow_root_rejects_cyclic_persisted_workflow_plan(monk
 async def test_execute_job_marks_attempt_succeeded_in_same_success_path(monkeypatch):
     register_all_job_types()
     job = _running_add_job()
-    attempt_id = uuid.uuid4()
     lease_token = uuid.uuid4()
+    attempt = _attempt(id=job.active_attempt_id, job_id=job.id, lease_token=lease_token)
     marked_attempt = {}
 
     async def fake_get_job_or_404(_db, _job_id):
         return job
 
+    async def fake_get_attempt(_db, attempt_id):
+        assert attempt_id == attempt.id
+        return attempt
+
     async def fake_update_progress(*_args, **_kwargs):
         return True
 
-    async def fake_mark_succeeded(_db, _job_id, **_kwargs):
-        job.status = "succeeded"
-        return True
-
-    async def fake_mark_attempt_succeeded(_db, received_attempt_id, *, lease_token: uuid.UUID):
-        marked_attempt["attempt_id"] = received_attempt_id
+    async def fake_mark_succeeded(_db, _job_id, *, attempt_id, lease_token, **_kwargs):
+        marked_attempt["attempt_id"] = attempt_id
         marked_attempt["lease_token"] = lease_token
+        job.status = "succeeded"
         return True
 
     async def fake_deliver_callback_for_job(_job_id):
         return False
 
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
     monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
     monkeypatch.setattr("app.jobs.runner.JobRepo.mark_succeeded", fake_mark_succeeded)
-    monkeypatch.setattr("app.jobs.runner.JobRepo.mark_attempt_succeeded", fake_mark_attempt_succeeded)
     monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback_for_job)
 
-    result = await execute_job(_FakeDB(), job.id, execution_generation=1, attempt_id=attempt_id, lease_token=lease_token)
+    result = await execute_job(_FakeDB(), job.id, attempt_id=attempt.id, lease_token=lease_token)
 
     assert result["status"] == "succeeded"
-    assert marked_attempt == {"attempt_id": attempt_id, "lease_token": lease_token}
+    assert marked_attempt == {"attempt_id": attempt.id, "lease_token": lease_token}
 
 
 @pytest.mark.asyncio
 async def test_execute_internal_child_success_runs_workflow_advance_side_effects(monkeypatch):
     register_all_job_types()
     job = _running_add_job()
-    job.is_internal = True
     job.root_job_id = uuid.uuid4()
-    job.parent_job_id = job.root_job_id
     job.workflow_node_key = "first"
-    attempt_id = uuid.uuid4()
     lease_token = uuid.uuid4()
+    attempt = _attempt(id=job.active_attempt_id, job_id=job.id, lease_token=lease_token)
     advance_result = SimpleNamespace(
         root_job_id=job.root_job_id,
         created_attempt_ids=(uuid.uuid4(),),
@@ -1742,14 +1731,15 @@ async def test_execute_internal_child_success_runs_workflow_advance_side_effects
     async def fake_get_job_or_404(_db, _job_id):
         return job
 
+    async def fake_get_attempt(_db, attempt_id):
+        assert attempt_id == attempt.id
+        return attempt
+
     async def fake_update_progress(*_args, **_kwargs):
         return True
 
     async def fake_mark_succeeded(_db, _job_id, **_kwargs):
         job.status = "succeeded"
-        return True
-
-    async def fake_mark_attempt_succeeded(_db, _attempt_id, *, lease_token: uuid.UUID):
         return True
 
     async def fake_advance(_db, *, child_job):
@@ -1763,14 +1753,14 @@ async def test_execute_internal_child_success_runs_workflow_advance_side_effects
         raise AssertionError("internal child should not deliver caller callback")
 
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
     monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
     monkeypatch.setattr("app.jobs.runner.JobRepo.mark_succeeded", fake_mark_succeeded)
-    monkeypatch.setattr("app.jobs.runner.JobRepo.mark_attempt_succeeded", fake_mark_attempt_succeeded)
     monkeypatch.setattr("app.jobs.runner.advance_workflow_after_child_terminal", fake_advance)
     monkeypatch.setattr("app.tasks.jobs.handle_workflow_advance_result", fake_handle_workflow_advance_result)
     monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fail_deliver_callback_for_job)
 
-    result = await execute_job(_FakeDB(), job.id, execution_generation=1, attempt_id=attempt_id, lease_token=lease_token)
+    result = await execute_job(_FakeDB(), job.id, attempt_id=attempt.id, lease_token=lease_token)
 
     assert result["status"] == "succeeded"
     assert captured["advanced_child_job_id"] == job.id
@@ -1781,61 +1771,72 @@ async def test_execute_internal_child_success_runs_workflow_advance_side_effects
 async def test_execute_job_reports_unregistered_job_type(monkeypatch):
     job = _running_add_job()
     job.job_type = "missing.job_type"
+    lease_token = uuid.uuid4()
+    attempt = _attempt(id=job.active_attempt_id, job_id=job.id, lease_token=lease_token)
 
     async def fake_get_job_or_404(_db, _job_id):
         return job
+
+    async def fake_get_attempt(_db, attempt_id):
+        assert attempt_id == attempt.id
+        return attempt
 
     async def fake_update_progress(*_args, **_kwargs):
         return True
 
     db = _FakeDB()
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
     monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
 
     with pytest.raises(Exception) as exc:
-        await execute_job(db, job.id, execution_generation=1)
+        await execute_job(db, job.id, attempt_id=attempt.id, lease_token=lease_token)
 
     assert exc.value.code == "INVALID_JOB_TYPE"
 
 
 @pytest.mark.asyncio
-async def test_execute_job_skips_stale_execution_generation(monkeypatch):
+async def test_execute_job_skips_stale_attempt_lease(monkeypatch):
     job = _running_add_job()
-    job.execution_generation = 2
+    lease_token = uuid.uuid4()
+    attempt = _attempt(id=job.active_attempt_id, job_id=job.id, lease_token=lease_token)
 
     async def fake_get_job_or_404(_db, _job_id):
         return job
 
-    async def fail_update_progress(*_args, **_kwargs):
-        raise AssertionError("stale generation should not execute")
+    async def fake_get_attempt(_db, attempt_id):
+        assert attempt_id == attempt.id
+        return attempt
+
+    async def fake_update_progress(*_args, **_kwargs):
+        return False
 
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
-    monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fail_update_progress)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
 
-    result = await execute_job(_FakeDB(), job.id, execution_generation=1)
+    result = await execute_job(_FakeDB(), job.id, attempt_id=attempt.id, lease_token=lease_token)
 
     assert result == {
         "job_id": str(job.id),
         "status": "skipped",
-        "reason": "stale_execution_generation",
-        "expected_execution_generation": 1,
-        "current_execution_generation": 2,
+        "reason": "stale_attempt_lease",
     }
 
 
 @pytest.mark.asyncio
 async def test_fail_job_marks_job_failed_and_delivers_callback(monkeypatch):
     job = _running_add_job()
+    job.active_attempt_id = None
     error = {"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {}}
     marked = {}
 
     async def fake_get_job_or_404(_db, _job_id):
         return job
 
-    async def fake_mark_failed(_db, job_id, received_error, *, execution_token):
+    async def fake_mark_failed(_db, job_id, received_error):
         marked["job_id"] = job_id
         marked["error"] = received_error
-        marked["execution_token"] = execution_token
         job.status = "failed"
         return True
 
@@ -1854,7 +1855,6 @@ async def test_fail_job_marks_job_failed_and_delivers_callback(monkeypatch):
     assert marked == {
         "job_id": job.id,
         "error": error,
-        "execution_token": "attempt-1",
         "callback_job_id": job.id,
     }
 
@@ -1862,9 +1862,7 @@ async def test_fail_job_marks_job_failed_and_delivers_callback(monkeypatch):
 @pytest.mark.asyncio
 async def test_fail_job_rejects_active_attempt_without_dangling_attempt(monkeypatch):
     job = _running_add_job()
-    job.is_internal = True
     job.root_job_id = uuid.uuid4()
-    job.parent_job_id = job.root_job_id
     job.workflow_node_key = "first"
     job.active_attempt_id = uuid.uuid4()
     error = {"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {}}

@@ -29,6 +29,7 @@ from app.models.job import Job
 from app.schemas.billing import BillingEnvelope
 from app.schemas.jobs import CreateJobRequest, JobEnvelope, PosterTitleImageParams
 from app.services.billing import job_cost_from_billing
+from app.services.job_runtime import payload_hash
 from app.services.ai_capability_kernel import ModelGate
 
 
@@ -103,6 +104,18 @@ def _params(ref: dict, *, model_id: str | None = None) -> dict:
         item["model_id"] = model_id
     return {
         "items": [item]
+    }
+
+
+def _job_params_fields(params: dict) -> dict:
+    return {
+        "job_params_ref": {
+            "storage": "db_inline",
+            "type": "json",
+            "name": "job_params",
+            "payload": params,
+        },
+        "job_params_hash": payload_hash(params),
     }
 
 
@@ -611,13 +624,13 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
         status="running",
         active_attempt_id=uuid.uuid4(),
         root_job_id=root_id,
-        parent_job_id=root_id,
         workflow_node_key="item.es",
-        is_internal=True,
-        job_params={
-            "item": _params(_url_ref("reference/title.png", reference))["items"][0],
-            "probe_node_key": "probe.0",
-        },
+        **_job_params_fields(
+            {
+                "item": _params(_url_ref("reference/title.png", reference))["items"][0],
+                "probe_node_key": "probe.0",
+            }
+        ),
         created_at=datetime.now(timezone.utc),
     )
 
@@ -703,10 +716,8 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
         status="running",
         active_attempt_id=uuid.uuid4(),
         root_job_id=root_id,
-        parent_job_id=root_id,
         workflow_node_key="item.es",
-        is_internal=True,
-        job_params={"item": params["items"][0], "probe_node_key": "probe.0"},
+        **_job_params_fields({"item": params["items"][0], "probe_node_key": "probe.0"}),
         created_at=datetime.now(timezone.utc),
     )
 
@@ -772,10 +783,8 @@ async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeyp
         status="running",
         active_attempt_id=uuid.uuid4(),
         root_job_id=root_id,
-        parent_job_id=root_id,
         workflow_node_key="join",
-        is_internal=True,
-        job_params={"items": params["items"]},
+        **_job_params_fields({"items": params["items"]}),
         created_at=datetime.now(timezone.utc),
     )
 
@@ -844,7 +853,7 @@ async def test_poster_title_image_running_result_contains_only_succeeded_items(m
         job_type="poster_title_image",
         status="running",
         progress_percent=55,
-        job_params=params,
+        **_job_params_fields(params),
         created_at=datetime.now(timezone.utc),
     )
 
@@ -883,7 +892,7 @@ async def test_poster_title_image_running_result_is_null_before_first_succeeded_
         job_type="poster_title_image",
         status="running",
         progress_percent=30,
-        job_params=_params(ref),
+        **_job_params_fields(_params(ref)),
         created_at=datetime.now(timezone.utc),
     )
 
@@ -940,7 +949,7 @@ async def test_poster_title_image_failed_result_reuses_succeeded_item_subset(mon
         status="failed",
         progress_percent=100,
         progress_stage="failed",
-        job_params=params,
+        **_job_params_fields(params),
         error={"code": "WORKFLOW_CHILD_FAILED", "message": "workflow child job failed"},
         created_at=datetime.now(timezone.utc),
     )
@@ -977,9 +986,7 @@ async def test_get_job_response_projects_poster_title_image_running_result(monke
         progress_percent=55,
         progress_text="正在生成标题图",
         progress_stage="calling_model",
-        callback_status="pending",
-        callback_attempts=0,
-        job_params=params,
+        **_job_params_fields(params),
         created_at=datetime.now(timezone.utc),
     )
 
@@ -1051,9 +1058,7 @@ async def test_get_job_response_preserves_succeeded_items_when_poster_title_imag
         progress_percent=100,
         progress_text="failed",
         progress_stage="failed",
-        callback_status="pending",
-        callback_attempts=0,
-        job_params=params,
+        **_job_params_fields(params),
         error={"code": "WORKFLOW_CHILD_FAILED", "message": "workflow child job failed"},
         created_at=datetime.now(timezone.utc),
         finished_at=datetime.now(timezone.utc),
@@ -1142,7 +1147,7 @@ async def test_style_probe_uses_ai_ledger(monkeypatch):
         job_type="poster_title_image",
         status="running",
         active_attempt_id=uuid.uuid4(),
-        job_params={},
+        **_job_params_fields({}),
         created_at=datetime.now(timezone.utc),
     )
     reference_image = ImageInput(data=b"png", content_type="image/png")

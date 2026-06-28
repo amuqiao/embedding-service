@@ -9,7 +9,7 @@ import pytest
 
 from app.core.exceptions import AppError
 from app.main import API_PREFIX
-from app.models.job import Job
+from app.models.job import CallbackOutbox, Job
 from app.schemas.jobs import CallbackResponseEnvelope
 from app.services.callbacks import (
     CallbackDeliveryResult,
@@ -111,13 +111,31 @@ def _job(callback_url: str | None = "https://example.com/callback") -> Job:
         },
         callback_url=callback_url,
         result={"a": 2, "b": 3, "result": 5},
-        callback_status="pending",
-        callback_attempts=0,
-        callback_next_retry_at=None,
-        callback_last_error=None,
         created_at=now,
         updated_at=now,
         finished_at=now,
+    )
+
+
+def _callback_outbox(
+    job: Job,
+    *,
+    status: str = "pending",
+    delivery_attempts: int = 0,
+    last_error: dict | None = None,
+    next_attempt_at: datetime | None = None,
+) -> CallbackOutbox:
+    return CallbackOutbox(
+        id=uuid.uuid4(),
+        job_id=job.id,
+        event_id=uuid.uuid4(),
+        event_type="job.succeeded" if job.status == "succeeded" else "job.failed",
+        callback_url=job.callback_url or "https://example.com/callback",
+        status=status,
+        payload={},
+        delivery_attempts=delivery_attempts,
+        last_error=last_error,
+        next_attempt_at=next_attempt_at,
     )
 
 
@@ -289,12 +307,15 @@ def test_build_callback_body_uses_arithmetic_public_result_schema(monkeypatch):
 def test_job_view_exposes_callback_delivery_state():
     next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=5)
     job = _job()
-    job.callback_status = "failed"
-    job.callback_attempts = 2
-    job.callback_next_retry_at = next_retry_at
-    job.callback_last_error = {"code": "CALLBACK_HTTP_ERROR", "status_code": 503}
+    callback_outbox = _callback_outbox(
+        job,
+        status="retrying",
+        delivery_attempts=2,
+        next_attempt_at=next_retry_at,
+        last_error={"code": "CALLBACK_HTTP_ERROR", "status_code": 503},
+    )
 
-    job_view = _job_to_response(job, request_id="req-view")
+    job_view = _job_to_response(job, request_id="req-view", callback_outbox=callback_outbox)
 
     assert job_view.callback.status == "retrying"
     assert job_view.callback.attempt == 2
@@ -312,11 +333,9 @@ def test_job_view_marks_missing_callback_not_configured():
 
 def test_job_view_maps_skipped_callback_without_error_to_not_configured():
     job = _job()
-    job.callback_status = "skipped"
-    job.callback_attempts = 0
-    job.callback_last_error = None
+    callback_outbox = _callback_outbox(job, status="skipped", delivery_attempts=0)
 
-    job_view = _job_to_response(job, request_id="req-view")
+    job_view = _job_to_response(job, request_id="req-view", callback_outbox=callback_outbox)
 
     assert job_view.callback.status == "not_configured"
     assert job_view.callback.attempt == 0
@@ -325,11 +344,14 @@ def test_job_view_maps_skipped_callback_without_error_to_not_configured():
 
 def test_job_view_maps_skipped_callback_with_error_to_failed():
     job = _job()
-    job.callback_status = "skipped"
-    job.callback_attempts = 0
-    job.callback_last_error = {"code": "CALLBACK_URL_INVALID", "message": "callback.url must be HTTPS"}
+    callback_outbox = _callback_outbox(
+        job,
+        status="skipped",
+        delivery_attempts=0,
+        last_error={"code": "CALLBACK_URL_INVALID", "message": "callback.url must be HTTPS"},
+    )
 
-    job_view = _job_to_response(job, request_id="req-view")
+    job_view = _job_to_response(job, request_id="req-view", callback_outbox=callback_outbox)
 
     assert job_view.callback.status == "failed"
     assert job_view.callback.last_error.reason == "CALLBACK_URL_INVALID"
@@ -368,11 +390,10 @@ def test_job_view_uses_shell_result_and_metadata():
 def test_build_callback_body_uses_next_attempt_number():
     job = _job()
     first_body = build_callback_body(job)
-    job.callback_attempts = 2
 
     body = build_callback_body(job)
 
-    assert body["attempt"] == 3
+    assert body["attempt"] == 1
     assert body["event_id"] == first_body["event_id"]
 
     job.status = "failed"
@@ -823,10 +844,12 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
             "id": callback_id,
             "lease_token": lease_token,
             "payload": {"event": "job.succeeded", "job": {"job_type": job.job_type}},
-            "callback_url": job.callback_url,
-            "delivery_attempts": 0,
-        },
-    )()
+                "callback_url": job.callback_url,
+                "delivery_attempts": 0,
+                "last_error": None,
+                "next_attempt_at": None,
+            },
+        )()
     commits = 0
     recorded: dict = {}
 
@@ -851,9 +874,11 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
 
     async def fake_deliver_callback(sent_job, *, payload=None, callback_url=None):
         assert sent_job is job
-        assert sent_job.callback_status == "delivering"
-        assert sent_job.callback_next_retry_at == recorded["claimed_next_retry_at"]
-        assert payload is outbox.payload
+        assert payload["event"] == outbox.payload["event"]
+        assert payload["job"]["job_type"] == job.job_type
+        assert payload["job"]["callback"]["status"] == "delivering"
+        assert payload["job"]["callback"]["attempt"] == 1
+        assert payload["job"]["callback"]["next_retry_at"] is not None
         assert callback_url == job.callback_url
         return CallbackDeliveryResult(
             status="failed",

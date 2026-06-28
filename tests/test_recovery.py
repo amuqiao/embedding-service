@@ -44,21 +44,34 @@ async def _no_jobs(*_args, **_kwargs):
 
 
 def _attempt(status: str = "published") -> JobAttempt:
+    attempt_id = uuid.uuid4()
     return JobAttempt(
-        id=uuid.uuid4(),
+        id=attempt_id,
         job_id=uuid.uuid4(),
-        attempt_no=1,
+        purpose="business_execution",
+        purpose_attempt_no=1,
+        retry_chain_id=attempt_id,
+        created_reason="initial",
         status=status,
-        timeout_seconds=60,
         lease_token=uuid.uuid4() if status == "running" else None,
         lease_expires_at=datetime.now(timezone.utc) - timedelta(minutes=1) if status == "running" else None,
+        timeout_seconds=300,
+        policy_max_attempts=2,
+        policy_retry_delay_seconds=5,
+        policy_backoff_kind="fixed",
+        policy_retryable_error_codes=["JOB_TIMEOUT"],
+        retry_policy_snapshot={
+            "max_attempts": 2,
+            "retry_delay_seconds": 5,
+            "backoff_kind": "fixed",
+            "retryable_error_codes": ["JOB_TIMEOUT"],
+        },
     )
 
 
 def _dispatch(attempt_id: uuid.UUID) -> DispatchOutbox:
     return DispatchOutbox(
         id=uuid.uuid4(),
-        job_id=uuid.uuid4(),
         attempt_id=attempt_id,
         event_id=f"job_attempt:{attempt_id}:dispatch",
         task_name="jobs.run_attempt",
@@ -127,7 +140,7 @@ async def test_recovery_marks_stale_running_attempt_failed(monkeypatch):
         error_kind,
         failure_phase,
         retryable,
-        next_attempt_at,
+        retry_created_reason,
     ):
         assert attempt_id == attempt.id
         assert lease_token == attempt.lease_token
@@ -135,7 +148,7 @@ async def test_recovery_marks_stale_running_attempt_failed(monkeypatch):
         assert error_kind == "timeout"
         assert failure_phase == "lease"
         assert retryable is True
-        assert next_attempt_at is not None
+        assert retry_created_reason == "recovery_retry"
         marked.append(attempt_id)
         return True
 
@@ -163,13 +176,10 @@ async def test_recovery_advances_workflow_after_stale_internal_child_failed(monk
         caller_id="caller-1",
         job_type="job_test_echo",
         status="failed",
-        is_internal=True,
         root_job_id=root_job_id,
-        parent_job_id=root_job_id,
         workflow_node_key="first",
         progress_percent=100,
         priority="normal",
-        timeout_seconds=60,
     )
     advance_result = type(
         "AdvanceResult",
@@ -220,7 +230,6 @@ async def test_recovery_reconciles_workflow_root_and_handles_side_effects(monkey
         caller_id="caller-1",
         job_type="test.workflow",
         status="running",
-        is_internal=False,
         active_attempt_id=None,
     )
     advance_result = SimpleNamespace(
@@ -260,7 +269,6 @@ async def test_recovery_deduplicates_dispatch_attempt_from_reconciler_and_due_sc
         caller_id="caller-1",
         job_type="test.workflow",
         status="running",
-        is_internal=False,
         active_attempt_id=None,
     )
     advance_result = SimpleNamespace(
@@ -304,7 +312,6 @@ async def test_recovery_deduplicates_callback_from_reconciler_and_due_scan(monke
         caller_id="caller-1",
         job_type="test.workflow",
         status="running",
-        is_internal=False,
         active_attempt_id=None,
     )
     due_job = Job(
@@ -312,7 +319,6 @@ async def test_recovery_deduplicates_callback_from_reconciler_and_due_scan(monke
         caller_id="caller-1",
         job_type="test.workflow",
         status="succeeded",
-        is_internal=False,
         callback_url="https://callback.example/jobs",
     )
     advance_result = SimpleNamespace(
@@ -362,8 +368,8 @@ async def test_recovery_repairs_missing_dispatch_outbox_and_publishes_attempt(mo
     async def missing_dispatch(*_args, **_kwargs):
         return [attempt]
 
-    async def create_dispatch(_db, *, job_id, attempt_id, next_attempt_at, dispatch_reason):
-        assert job_id == attempt.job_id
+    async def create_dispatch(_db, *, event_job_id, attempt_id, next_attempt_at, dispatch_reason):
+        assert event_job_id == attempt.job_id
         assert attempt_id == attempt.id
         assert next_attempt_at is not None
         assert dispatch_reason == "reconciler_missing_dispatch"
@@ -386,13 +392,46 @@ async def test_recovery_repairs_missing_dispatch_outbox_and_publishes_attempt(mo
 
 
 @pytest.mark.asyncio
+async def test_recovery_repairs_future_missing_dispatch_without_early_publish(monkeypatch):
+    attempt = _attempt("pending")
+    scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+    attempt.next_attempt_scheduled_at = scheduled_at
+    created = []
+    published = []
+
+    async def missing_dispatch(*_args, **_kwargs):
+        return [attempt]
+
+    async def create_dispatch(_db, *, event_job_id, attempt_id, next_attempt_at, dispatch_reason):
+        assert event_job_id == attempt.job_id
+        assert attempt_id == attempt.id
+        assert next_attempt_at == scheduled_at
+        assert dispatch_reason == "reconciler_missing_dispatch"
+        created.append(attempt_id)
+
+    async def publish(attempt_id):
+        published.append(attempt_id)
+
+    _patch_common_recovery(monkeypatch)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_active_pending_attempts_missing_dispatch", missing_dispatch)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.create_dispatch_outbox", create_dispatch)
+    monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", publish)
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["dispatch_reconciled"] == 1
+    assert result["recovered"] == 0
+    assert created == [attempt.id]
+    assert published == []
+
+
+@pytest.mark.asyncio
 async def test_recovery_repairs_missing_callback_outbox_and_delivers(monkeypatch):
     job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
         job_type="job_test_echo",
         status="succeeded",
-        is_internal=False,
         callback_url="https://callback.example/jobs",
     )
     ensured = []

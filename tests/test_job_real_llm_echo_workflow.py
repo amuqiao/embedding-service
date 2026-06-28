@@ -8,7 +8,7 @@ from app.jobs.runner import execute_job
 from app.jobs.types.job_real_llm_double_echo import JobRealLlmDoubleEchoJob
 from app.jobs.types.job_real_llm_echo import JobRealLlmEchoJob
 from app.jobs.types.register import register_all_job_types
-from app.models.job import Job
+from app.models.job import Job, JobAttempt
 from app.schemas.jobs import CreateJobRequest, JobRealLlmDoubleEchoParams, JobRealLlmEchoParams, JobResult
 from app.services.job_runtime import payload_hash
 from app.services.jobs import validate_create_contract
@@ -24,6 +24,31 @@ class _FakeDB:
 
     async def refresh(self, obj):
         self.refreshed.append(obj)
+
+
+def _business_attempt(job: Job, *, lease_token: uuid.UUID | None = None) -> tuple[JobAttempt, uuid.UUID]:
+    token = lease_token or uuid.uuid4()
+    attempt = JobAttempt(
+        id=job.active_attempt_id or uuid.uuid4(),
+        job_id=job.id,
+        purpose="business_execution",
+        purpose_attempt_no=1,
+        retry_chain_id=job.active_attempt_id or uuid.uuid4(),
+        created_reason="initial",
+        status="running",
+        lease_token=token,
+        timeout_seconds=180,
+        policy_max_attempts=1,
+        policy_backoff_kind="none",
+        policy_retryable_error_codes=[],
+        retry_policy_snapshot={
+            "max_attempts": 1,
+            "retry_delay_seconds": None,
+            "backoff_kind": "none",
+            "retryable_error_codes": [],
+        },
+    )
+    return attempt, token
 
 
 def test_job_real_llm_echo_builds_model_runtime_fields():
@@ -136,8 +161,6 @@ def _running_real_llm_job() -> Job:
         status="running",
         progress_percent=5,
         progress_stage="running",
-        execution_token="attempt-1",
-        execution_generation=1,
         active_attempt_id=attempt_id,
         job_params_ref={
             "storage": "db_inline",
@@ -204,10 +227,15 @@ def _running_real_llm_double_job() -> Job:
 async def test_job_real_llm_echo_uses_shared_llm_runtime(monkeypatch):
     register_all_job_types()
     job = _running_real_llm_job()
+    attempt, lease_token = _business_attempt(job)
     captured = {}
 
     async def fake_get_job_or_404(_db, _job_id):
         return job
+
+    async def fake_get_attempt(_db, attempt_id):
+        assert attempt_id == attempt.id
+        return attempt
 
     async def fake_update_progress(_db, _job_id, *, progress_percent, progress_text, progress_stage, **_kwargs):
         job.progress_percent = progress_percent
@@ -229,12 +257,13 @@ async def test_job_real_llm_echo_uses_shared_llm_runtime(monkeypatch):
         return False
 
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
     monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
     monkeypatch.setattr("app.jobs.runner.run_ai_job", fake_run_ai_job)
     monkeypatch.setattr("app.jobs.runner.JobRepo.mark_succeeded", fake_mark_succeeded)
     monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback_for_job)
 
-    result = await execute_job(_FakeDB(), job.id, execution_generation=1)
+    result = await execute_job(_FakeDB(), job.id, attempt_id=attempt.id, lease_token=lease_token)
 
     assert result == {"job_id": str(job.id), "status": "succeeded"}
     assert captured["job_type"] == "job_real_llm_echo"
@@ -287,15 +316,18 @@ async def test_job_real_llm_double_echo_calls_ledger_twice(monkeypatch):
 async def test_internal_real_llm_echo_bills_root_scope(monkeypatch):
     register_all_job_types()
     job = _running_real_llm_job()
+    attempt, lease_token = _business_attempt(job)
     root_id = uuid.uuid4()
-    job.is_internal = True
     job.root_job_id = root_id
-    job.parent_job_id = root_id
     job.workflow_node_key = "first"
     captured = {}
 
     async def fake_get_job_or_404(_db, _job_id):
         return job
+
+    async def fake_get_attempt(_db, attempt_id):
+        assert attempt_id == attempt.id
+        return attempt
 
     async def fake_update_progress(_db, _job_id, *, progress_percent, progress_text, progress_stage, **_kwargs):
         job.progress_percent = progress_percent
@@ -322,6 +354,7 @@ async def test_internal_real_llm_echo_bills_root_scope(monkeypatch):
         return False
 
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
     monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
     monkeypatch.setattr("app.jobs.runner.run_ai_job", fake_run_ai_job)
     monkeypatch.setattr("app.jobs.runner.JobRepo.mark_succeeded", fake_mark_succeeded)
@@ -332,7 +365,7 @@ async def test_internal_real_llm_echo_bills_root_scope(monkeypatch):
     monkeypatch.setattr("app.tasks.jobs.handle_workflow_advance_result", fake_handle_workflow_advance_result)
     monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback_for_job)
 
-    result = await execute_job(_FakeDB(), job.id, execution_generation=1)
+    result = await execute_job(_FakeDB(), job.id, attempt_id=attempt.id, lease_token=lease_token)
 
     assert result == {"job_id": str(job.id), "status": "succeeded"}
     assert captured["job_id"] == job.id
@@ -346,9 +379,7 @@ async def test_internal_real_llm_echo_bills_root_scope(monkeypatch):
 async def test_internal_real_llm_double_echo_bills_root_scope(monkeypatch):
     job = _running_real_llm_double_job()
     root_id = uuid.uuid4()
-    job.is_internal = True
     job.root_job_id = root_id
-    job.parent_job_id = root_id
     job.workflow_node_key = "double"
     calls = []
 

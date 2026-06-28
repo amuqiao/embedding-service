@@ -133,15 +133,21 @@ async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
         raise TaskiqPublishDeferredError(attempt_id, error) from exc
 
     async def mark_published(db):
-        await JobRepo.mark_dispatch_published(
+        marked = await JobRepo.mark_dispatch_published(
             db,
             dispatch.id,
             lease_token=lease_token,
             next_attempt_at=datetime.now(timezone.utc) + timedelta(seconds=dispatch.orphan_timeout_seconds),
         )
         await db.commit()
+        return marked
 
-    await _with_db(mark_published)
+    if not await _with_db(mark_published):
+        logger.warning(
+            "dispatch_publish_mark_conflict attempt_id=%s dispatch_id=%s",
+            attempt_id,
+            dispatch.id,
+        )
 
 
 async def handle_workflow_advance_result(result: Any) -> None:
@@ -233,7 +239,6 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
                     lease_token=lease_token,
                     error=error,
                     retryable=claimed_attempt is not None and _should_retry_attempt(claimed_attempt, error),
-                    next_attempt_at=datetime.now(timezone.utc),
                 )
                 workflow_advance = None
                 if marked and job_id is not None and job is not None and job.root_job_id is not None:

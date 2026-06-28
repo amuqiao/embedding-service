@@ -102,9 +102,17 @@ def list_jobs(
           j.client_request_id,
           j.progress_percent,
           j.progress_stage,
-          j.callback_status,
+          CASE
+            WHEN j.callback_url IS NULL THEN 'not_configured'
+            WHEN cb.status IS NULL THEN 'pending'
+            WHEN cb.status = 'leased' THEN 'delivering'
+            WHEN cb.status = 'dead_letter' THEN 'failed'
+            WHEN cb.status = 'skipped' AND cb.last_error IS NOT NULL THEN 'failed'
+            WHEN cb.status = 'skipped' THEN 'not_configured'
+            ELSE cb.status
+          END AS callback_status,
           a.status AS attempt_status,
-          a.attempt_no,
+          a.purpose_attempt_no AS attempt_no,
           d.status AS dispatch_status,
           d.publish_attempts,
           a.lease_expires_at,
@@ -119,6 +127,13 @@ def list_jobs(
         FROM job_aggregates j
         LEFT JOIN job_execution_attempts a ON a.id = j.active_attempt_id
         LEFT JOIN dispatch_outbox d ON d.attempt_id = a.id AND d.task_name = 'jobs.run_attempt'
+        LEFT JOIN LATERAL (
+          SELECT c.status, c.last_error
+          FROM callback_outbox c
+          WHERE c.job_id = j.id
+          ORDER BY c.created_at DESC
+          LIMIT 1
+        ) cb ON TRUE
         WHERE j.deleted_at IS NULL
         {filters}
         ORDER BY j.created_at DESC
@@ -129,7 +144,36 @@ def list_jobs(
 
 
 def get_job(conn: connection, job_id: str) -> dict | None:
-    return _fetch_one(conn, "SELECT * FROM job_aggregates WHERE id = %(job_id)s AND deleted_at IS NULL", {"job_id": job_id})
+    return _fetch_one(
+        conn,
+        """
+        SELECT
+          j.*,
+          CASE
+            WHEN j.callback_url IS NULL THEN 'not_configured'
+            WHEN cb.status IS NULL THEN 'pending'
+            WHEN cb.status = 'leased' THEN 'delivering'
+            WHEN cb.status = 'dead_letter' THEN 'failed'
+            WHEN cb.status = 'skipped' AND cb.last_error IS NOT NULL THEN 'failed'
+            WHEN cb.status = 'skipped' THEN 'not_configured'
+            ELSE cb.status
+          END AS callback_status,
+          COALESCE(cb.delivery_attempts, 0) AS callback_attempts,
+          cb.next_attempt_at AS callback_next_retry_at,
+          cb.last_error AS callback_last_error
+        FROM job_aggregates j
+        LEFT JOIN LATERAL (
+          SELECT c.status, c.delivery_attempts, c.next_attempt_at, c.last_error, c.created_at
+          FROM callback_outbox c
+          WHERE c.job_id = j.id
+          ORDER BY c.created_at DESC
+          LIMIT 1
+        ) cb ON TRUE
+        WHERE j.id = %(job_id)s
+          AND j.deleted_at IS NULL
+        """,
+        {"job_id": job_id},
+    )
 
 
 def child_jobs(conn: connection, root_job_id: str) -> list[dict]:
@@ -139,7 +183,6 @@ def child_jobs(conn: connection, root_job_id: str) -> list[dict]:
         SELECT
           j.workflow_node_key,
           j.id::text AS job_id,
-          j.parent_job_id::text AS parent_job_id,
           j.root_job_id::text AS root_job_id,
           j.status,
           j.job_type,
@@ -148,7 +191,7 @@ def child_jobs(conn: connection, root_job_id: str) -> list[dict]:
           j.progress_text,
           j.active_attempt_id::text AS active_attempt_id,
           a.status AS attempt_status,
-          a.attempt_no,
+          a.purpose_attempt_no AS attempt_no,
           a.worker_id,
           a.lease_expires_at,
           d.status AS dispatch_status,
@@ -168,8 +211,8 @@ def child_jobs(conn: connection, root_job_id: str) -> list[dict]:
         LEFT JOIN job_execution_attempts a ON a.id = j.active_attempt_id
         LEFT JOIN dispatch_outbox d ON d.attempt_id = a.id AND d.task_name = 'jobs.run_attempt'
         WHERE j.deleted_at IS NULL
-          AND j.is_internal IS TRUE
           AND j.root_job_id = %(root_job_id)s
+          AND j.workflow_node_key IS NOT NULL
         ORDER BY j.created_at ASC
         """,
         {"root_job_id": root_job_id},
@@ -467,19 +510,21 @@ def attempts(conn: connection, job_id: str) -> list[dict]:
     return _fetch_all(
         conn,
         """
-        SELECT a.id::text, a.job_id::text, a.attempt_no, a.status,
+        SELECT a.id::text, a.job_id::text, a.purpose, a.purpose_attempt_no, a.purpose_attempt_no AS attempt_no,
+               a.status,
                d.status AS dispatch_status, d.published_at,
                d.publish_attempts, d.next_attempt_at, d.last_error AS dispatch_last_error,
                a.worker_id, a.lease_token::text, a.leased_at, a.lease_expires_at,
                a.heartbeat_at, a.started_at, a.finished_at, a.timeout_seconds,
-               a.error, a.error_kind, a.failure_phase, a.retryable,
+               a.error, a.error_kind, a.failure_phase, a.retry_eligible, a.retry_decision,
+               a.next_attempt_scheduled_at,
                a.created_at, a.updated_at
         FROM job_execution_attempts a
         JOIN job_aggregates j ON j.id = a.job_id
         LEFT JOIN dispatch_outbox d ON d.attempt_id = a.id AND d.task_name = 'jobs.run_attempt'
         WHERE a.job_id = %(job_id)s
           AND j.deleted_at IS NULL
-        ORDER BY a.attempt_no ASC, a.created_at ASC
+        ORDER BY a.purpose ASC, a.purpose_attempt_no ASC, a.created_at ASC
         """,
         {"job_id": job_id},
     )
@@ -601,13 +646,14 @@ def stuck(
         UNION ALL
         (
           SELECT 'terminal_callback_not_settled' AS issue, j.id::text AS job_id, j.status AS job_status, j.job_type,
-                 NULL::text AS related_id, j.callback_status AS related_status,
-                 j.finished_at AS since_at, j.callback_next_retry_at AS next_attempt_at,
-                 j.callback_last_error AS detail
+                 c.id::text AS related_id, c.status AS related_status,
+                 j.finished_at AS since_at, c.next_attempt_at,
+                 c.last_error AS detail
           FROM job_aggregates j
+          JOIN callback_outbox c ON c.job_id = j.id
           WHERE j.deleted_at IS NULL
             AND j.status IN ('succeeded', 'failed')
-            AND j.callback_status IN ('pending', 'delivering')
+            AND c.status IN ('pending', 'leased', 'retrying')
             AND j.finished_at < %(cutoff)s
             {scope_filters}
         )

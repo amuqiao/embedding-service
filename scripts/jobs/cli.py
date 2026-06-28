@@ -984,6 +984,18 @@ def _render_result(*, section: str, target: str, rows: list[dict], columns: list
     formatters.print_table(rows, columns)
 
 
+def _retry_policy_summary(spec: dict[str, Any]) -> str:
+    retry_policy = spec.get("retry_policy")
+    if not isinstance(retry_policy, dict):
+        return "-"
+    parts: list[str] = []
+    for key, label in (("business_execution", "business"), ("workflow_orchestration", "orchestration")):
+        policy = retry_policy.get(key)
+        if isinstance(policy, dict):
+            parts.append(f"{label}:{policy.get('max_attempts', '-')}")
+    return ", ".join(parts) if parts else "-"
+
+
 def _connect():
     try:
         return db.connect_readonly()
@@ -2393,7 +2405,7 @@ def types(
             "params_schema": spec["params_schema"],
             "public_result_schema": spec["public_result_schema"],
             "allow_callback": spec["allow_callback"],
-            "max_attempts": spec["max_attempts"],
+            "retry_policy": _retry_policy_summary(spec),
             "timeout_seconds": spec["timeout_seconds"],
         }
         for spec in specs
@@ -2409,7 +2421,7 @@ def types(
             ("params_schema", "params_schema"),
             ("public_result_schema", "public_result_schema"),
             ("allow_callback", "callback"),
-            ("max_attempts", "attempts"),
+            ("retry_policy", "retry"),
             ("timeout_seconds", "timeout"),
         ],
     )
