@@ -15,12 +15,14 @@ from app.core.prompt_templates import get_prompt_block_default
 from app.integrations.ai_adapters.base import ImageInput
 from app.integrations.image import (
     TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
+    TRANSPARENT_REFERENCE_MAX_BYTES,
     transparent_title_layer_from_green_screen_bytes,
     validate_transparent_reference_image,
 )
 from app.integrations.object_storage import sha256_digest
 from app.integrations.storage import storage
 from app.jobs.adapters.cpp_oss_url_ref import canonical_ref_from_cpp_oss_url_ref, cpp_oss_url_ref_from_output_object
+from app.jobs.adapters.http_url_input import read_http_url_bytes
 from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
 from app.jobs.types.poster_title_image.errors import (
@@ -160,9 +162,10 @@ def _validate_reference_ref_payload(reference_image: Any) -> None:
 
 
 def _load_reference_image_from_ref(reference_image: Any) -> ImageInput:
+    payload = reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image
     try:
         ref = canonical_ref_from_cpp_oss_url_ref(
-            reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image,
+            payload,
             allowed_buckets=settings.job.poster_title_image_allowed_oss_buckets,
             allowed_regions=settings.job.poster_title_image_allowed_oss_regions,
             allowed_content_types=TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
@@ -170,8 +173,8 @@ def _load_reference_image_from_ref(reference_image: Any) -> ImageInput:
     except AppError as exc:
         _raise_reference_invalid_if_applicable(exc)
         raise
-    data = storage.read_bytes(bucket=ref.bucket, key=ref.key, region=ref.region)
     try:
+        data = read_http_url_bytes(str(payload["public_url"]).strip(), max_bytes=TRANSPARENT_REFERENCE_MAX_BYTES)
         if sha256_digest(data) != ref.content_hash:
             raise AppError("INPUT_HASH_MISMATCH", "reference image sha256 mismatch")
         if ref.content_type is None:

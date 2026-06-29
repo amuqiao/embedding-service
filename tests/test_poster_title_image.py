@@ -514,25 +514,51 @@ def test_validate_transparent_reference_image_accepts_palette_png_and_rejects_we
         validate_transparent_reference_image(_transparent_reference_png_bytes(), content_type="image/webp")
 
 
-def test_poster_title_image_reference_validation_uses_business_error(monkeypatch, tmp_path):
+def test_poster_title_image_reference_validation_uses_business_error(monkeypatch):
     from app.jobs.types.poster_title_image.executor import _load_reference_image_from_ref
 
     data = _png_bytes()
-    local_storage = LocalObjectStorage(tmp_path)
-    local_storage.write_bytes(
-        bucket=_allowed_reference_bucket(),
-        region=_allowed_reference_region(),
-        key="reference/title.png",
-        data=data,
-        content_type="image/png",
-    )
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor.read_http_url_bytes", lambda *_args, **_kwargs: data)
 
     with pytest.raises(AppError) as exc:
         _load_reference_image_from_ref(_url_ref("reference/title.png", data))
 
     assert exc.value.code == POSTER_TITLE_IMAGE_REFERENCE_INVALID
     assert exc.value.details["source_reason"] == "INVALID_INPUT"
+
+
+def test_poster_title_image_reference_read_uses_public_url_not_output_storage(monkeypatch):
+    from app.jobs.types.poster_title_image.executor import _load_reference_image_from_ref
+
+    data = _transparent_reference_png_bytes()
+    ref = _url_ref("reference/title.png", data, bucket="cpp-rs-dev", region="ap-southeast-1")
+    calls = []
+
+    class NoReadStorage:
+        def read_bytes(self, **_kwargs):
+            raise AssertionError("reference image must not be read through output storage")
+
+    def fake_read_http_url_bytes(url, **kwargs):
+        calls.append((url, kwargs))
+        return data
+
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.settings",
+        SimpleNamespace(
+            job=SimpleNamespace(
+                poster_title_image_allowed_oss_buckets=("cpp-rs-dev",),
+                poster_title_image_allowed_oss_regions=("ap-southeast-1",),
+            )
+        ),
+    )
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", NoReadStorage())
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor.read_http_url_bytes", fake_read_http_url_bytes)
+
+    result = _load_reference_image_from_ref(ref)
+
+    assert result.data == data
+    assert result.content_type == "image/png"
+    assert calls == [(ref["public_url"], {"max_bytes": TRANSPARENT_REFERENCE_MAX_BYTES})]
 
 
 def test_validate_transparent_reference_image_rejects_oversized_dimensions(monkeypatch):
@@ -588,21 +614,32 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     reference = _transparent_reference_png_bytes(accent=(0, 0, 255, 255))
     reference_bucket = _allowed_reference_bucket()
     reference_region = _allowed_reference_region()
-    local_storage.write_bytes(
-        bucket=reference_bucket,
-        region=reference_region,
-        key="reference/title.png",
-        data=reference,
-        content_type="image/png",
-    )
+    output_bucket = "service-output"
+    output_region = "service-region"
     output_target = {
         "type": "oss_prefix",
-        "oss_bucket": reference_bucket,
-        "oss_region": reference_region,
+        "oss_bucket": output_bucket,
+        "oss_region": output_region,
         "oss_prefix": "ai-jobs/job-1/",
     }
     generated_green = _png_bytes()
     recorded = []
+    opened_urls = []
+
+    class _ReferenceResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, size=None):
+            return reference if size is None else reference[:size]
+
+    class _ReferenceOpener:
+        def open(self, request, *, timeout):
+            opened_urls.append(request.full_url)
+            return _ReferenceResponse()
 
     async def fake_generate_image_with_ledger(**kwargs):
         recorded.append(kwargs)
@@ -618,6 +655,10 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
         return [probe_child]
 
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
+    monkeypatch.setattr(
+        "app.jobs.adapters.http_url_input.urllib.request.build_opener",
+        lambda *_args: _ReferenceOpener(),
+    )
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.output_target_from_job", lambda _job: output_target)
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_provider_model", lambda: "gpt-5.5")
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
@@ -628,6 +669,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
 
     root_id = uuid.uuid4()
     job_id = uuid.uuid4()
+    reference_ref = _url_ref("reference/title.png", reference, bucket=reference_bucket, region=reference_region)
     job = Job(
         id=job_id,
         caller_id="caller-1",
@@ -639,7 +681,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
         workflow_node_key="item.es",
         **_job_params_fields(
             {
-                "item": _params(_url_ref("reference/title.png", reference))["items"][0],
+                "item": _params(reference_ref)["items"][0],
                 "probe_node_key": "probe.0",
             }
         ),
@@ -652,7 +694,8 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     item = result["item"]
     assert item["status"] == "succeeded"
     obj = item["images"][0]["object"]
-    assert obj["public_url"].startswith(f"https://{reference_bucket}.oss-{reference_region}.aliyuncs.com/")
+    assert opened_urls == [reference_ref["public_url"]]
+    assert obj["public_url"].startswith(f"https://{output_bucket}.oss-{output_region}.aliyuncs.com/")
     assert obj["content_type"] == "image/png"
     assert len(recorded) == 1
     assert recorded[0]["model_id"] == "gpt-image-2"
@@ -666,7 +709,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     assert "poster title text only" in recorded[0]["prompt"]
 
     output_key = "ai-jobs/job-1/poster-title/{}/es/title-layer.png".format(root_id)
-    written = local_storage.read_bytes(bucket=reference_bucket, region=reference_region, key=output_key)
+    written = local_storage.read_bytes(bucket=output_bucket, region=output_region, key=output_key)
     output_image = Image.open(io.BytesIO(written)).convert("RGBA")
     assert output_image.getpixel((0, 0))[3] == 0
     assert output_image.getpixel((20, 20))[3] == 255
@@ -731,6 +774,10 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
         ]
 
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.read_http_url_bytes",
+        lambda *_args, **_kwargs: reference,
+    )
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.output_target_from_job", lambda _job: output_target)
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_provider_model", lambda: "gpt-5.5")
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
@@ -1187,6 +1234,10 @@ async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, 
         return "bold stone title letters"
 
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.read_http_url_bytes",
+        lambda *_args, **_kwargs: reference,
+    )
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._probe_style", fake_probe_style)
     root_id = uuid.uuid4()
     attempt_id = uuid.uuid4()
