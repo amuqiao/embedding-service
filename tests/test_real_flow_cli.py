@@ -55,6 +55,25 @@ def test_poster_title_image_cli_requires_confirm_cost():
     assert "poster title image flow requires --confirm-cost" in result.stderr
 
 
+def test_poster_title_image_cli_requires_explicit_reference(tmp_path, monkeypatch):
+    clear_storage_env(monkeypatch)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+    monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text(
+        "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["poster-title-image", "--confirm-cost"])
+
+    assert result.exit_code == 2
+    assert "requires --reference or explicit OSS URL Ref options" in result.stderr
+
+
 def test_poster_title_image_cli_accepts_reference_alias(monkeypatch):
     captured = {}
 
@@ -83,10 +102,17 @@ def test_poster_title_image_cli_accepts_reference_alias(monkeypatch):
 
 
 def test_oss_upload_image_cli_requires_confirm_upload():
-    result = runner.invoke(app, ["oss-upload-image"])
+    result = runner.invoke(app, ["oss-upload-image", "--image", ".data/title/英语.png"])
 
     assert result.exit_code == 2
     assert "OSS image upload requires --confirm-upload" in result.stderr
+
+
+def test_oss_upload_image_cli_requires_explicit_image():
+    result = runner.invoke(app, ["oss-upload-image", "--confirm-upload"])
+
+    assert result.exit_code == 2
+    assert "OSS image upload requires --image" in result.stderr
 
 
 def test_real_flow_builds_job_payload_for_real_llm_job():
@@ -1163,7 +1189,7 @@ def test_poster_title_image_explicit_url_ref_does_not_upload(monkeypatch):
     monkeypatch.setattr(oss_image_upload, "upload_image", unexpected_upload)
 
     resolution = poster_title_image.resolve_reference_image(
-        reference_image="reference.png",
+        reference_image=None,
         reference_public_url=uploaded_ref["public_url"],
         reference_internal_url=uploaded_ref["internal_url"],
         reference_sha256=uploaded_ref["sha256"],
@@ -1191,7 +1217,7 @@ def test_poster_title_image_explicit_url_ref_rejects_jpeg_content_type(monkeypat
         )
 
 
-def test_real_flow_run_uses_script_env_reference_url_ref_by_default(tmp_path, monkeypatch, capsys):
+def test_real_flow_run_ignores_script_env_reference_url_ref_by_default(tmp_path, monkeypatch):
     clear_storage_env(monkeypatch)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
@@ -1212,95 +1238,44 @@ def test_real_flow_run_uses_script_env_reference_url_ref_by_default(tmp_path, mo
         ),
         encoding="utf-8",
     )
-    script_ref = {
-        "public_url": "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.png",
-        "internal_url": "https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.png",
-        "content_type": "image/png",
-        "sha256": "c" * 64,
-    }
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts/.env").write_text(
         "\n".join(
             [
                 "API_HOST=127.0.0.1",
                 "API_PORT=18200",
-                f"POSTER_TITLE_IMAGE_REFERENCE_PUBLIC_URL={script_ref['public_url']}",
-                f"POSTER_TITLE_IMAGE_REFERENCE_INTERNAL_URL={script_ref['internal_url']}",
-                f"POSTER_TITLE_IMAGE_REFERENCE_CONTENT_TYPE={script_ref['content_type']}",
-                f"POSTER_TITLE_IMAGE_REFERENCE_SHA256={script_ref['sha256']}",
+                "POSTER_TITLE_IMAGE_REFERENCE_PUBLIC_URL=https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.png",
+                "POSTER_TITLE_IMAGE_REFERENCE_INTERNAL_URL=https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.png",
+                "POSTER_TITLE_IMAGE_REFERENCE_CONTENT_TYPE=image/png",
+                f"POSTER_TITLE_IMAGE_REFERENCE_SHA256={'c' * 64}",
             ]
         ),
         encoding="utf-8",
     )
-    calls = []
 
-    def unexpected_upload(**_kwargs):
-        raise AssertionError("script env URL Ref must not upload")
-
-    def fake_request_json(url, *, method, headers, payload=None, timeout_seconds=10):
-        calls.append({"url": url, "method": method, "payload": payload})
-        if method == "POST":
-            return {"code": "0", "data": {"job": {"job_id": "poster-job-script-ref", "job_status": "queued"}}}
-        return {
-            "code": "0",
-            "data": {
-                "billing": {
-                    "status": "estimated",
-                    "currency": "USD",
-                    "total_cost_amount": "0.04000000",
-                    "usage_units": {},
-                    "pricing_refs": [],
-                    "ai_call_count": 2,
-                    "billable_call_count": 2,
-                    "failed_call_count": 0,
-                }
-            },
-        }
-
-    monkeypatch.setattr(oss_image_upload, "upload_image", unexpected_upload)
-    monkeypatch.setattr(llm_job_billing, "request_json", fake_request_json)
-    monkeypatch.setattr(
-        llm_job_billing,
-        "poll_job_envelope",
-        lambda **_kwargs: {
-            "code": "0",
-            "data": {
-                "job": {
-                    "job_id": "poster-job-script-ref",
-                    "job_status": "succeeded",
-                    "job_type": "poster_title_image",
-                    "job_result": {"items": []},
-                }
-            },
-        },
-    )
-
-    poster_title_image.run(
-        confirm_cost=True,
-        confirm_upload=False,
-        api_url=None,
-        items_json=None,
-        reference_image=poster_title_image.DEFAULT_REFERENCE_IMAGE,
-        reference_public_url=None,
-        reference_internal_url=None,
-        reference_sha256=None,
-        reference_content_type=None,
-        item_id="es",
-        language="es",
-        title_text="Cuando el amor se alejo",
-        size="auto",
-        quality="high",
-        draw_count=1,
-        caller_id="caller-1",
-        timeout_seconds=1,
-        poll_interval_seconds=0.1,
-        client_request_id="poster-client-script-ref",
-        json_output=True,
-    )
-
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["summary"]["job_id"] == "poster-job-script-ref"
-    assert calls[0]["payload"]["job_params"]["items"][0]["reference_image"] == script_ref
+    with pytest.raises(poster_title_image.FlowError, match="requires --reference or explicit OSS URL Ref options"):
+        poster_title_image.run(
+            confirm_cost=True,
+            confirm_upload=False,
+            api_url=None,
+            items_json=None,
+            reference_image=None,
+            reference_public_url=None,
+            reference_internal_url=None,
+            reference_sha256=None,
+            reference_content_type=None,
+            item_id="es",
+            language="es",
+            title_text="Cuando el amor se alejo",
+            size="auto",
+            quality="high",
+            draw_count=1,
+            caller_id="caller-1",
+            timeout_seconds=1,
+            poll_interval_seconds=0.1,
+            client_request_id="poster-client-script-ref",
+            json_output=True,
+        )
 
 
 def test_poster_title_image_keeps_uploaded_reference_when_create_response_is_unknown(tmp_path, monkeypatch):

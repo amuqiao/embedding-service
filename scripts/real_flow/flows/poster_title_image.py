@@ -30,10 +30,6 @@ DEFAULT_IMAGE_MODEL_ID = "gpt-image-2"
 DEFAULT_BUCKET = "local-dev"
 DEFAULT_REGION = "local"
 ALLOWED_CONTENT_TYPES = TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES
-SCRIPT_ENV_REFERENCE_PUBLIC_URL = "POSTER_TITLE_IMAGE_REFERENCE_PUBLIC_URL"
-SCRIPT_ENV_REFERENCE_INTERNAL_URL = "POSTER_TITLE_IMAGE_REFERENCE_INTERNAL_URL"
-SCRIPT_ENV_REFERENCE_CONTENT_TYPE = "POSTER_TITLE_IMAGE_REFERENCE_CONTENT_TYPE"
-SCRIPT_ENV_REFERENCE_SHA256 = "POSTER_TITLE_IMAGE_REFERENCE_SHA256"
 
 
 @dataclass(frozen=True)
@@ -178,7 +174,7 @@ def stage_local_reference_image(
 
 def resolve_reference_image(
     *,
-    reference_image: str,
+    reference_image: str | None,
     reference_public_url: str | None,
     reference_internal_url: str | None,
     reference_sha256: str | None,
@@ -194,6 +190,11 @@ def resolve_reference_image(
     )
     if explicit is not None:
         return ReferenceImageResolution(ref=explicit)
+    if reference_image is None:
+        raise FlowError(
+            "poster title image flow requires --reference or explicit OSS URL Ref options",
+            exit_code=2,
+        )
     storage_backend = llm_job_billing.env_value("STORAGE_BACKEND", app_env) or "local"
     if storage_backend == "aliyun_oss":
         if not confirm_upload:
@@ -216,51 +217,6 @@ def resolve_reference_image(
             content_type=reference_content_type,
             app_env=app_env,
         )
-    )
-
-
-def reference_image_ref(
-    *,
-    reference_image: str,
-    reference_public_url: str | None,
-    reference_internal_url: str | None,
-    reference_sha256: str | None,
-    reference_content_type: str | None,
-    app_env: dict[str, str],
-) -> dict[str, str]:
-    return resolve_reference_image(
-        reference_image=reference_image,
-        reference_public_url=reference_public_url,
-        reference_internal_url=reference_internal_url,
-        reference_sha256=reference_sha256,
-        reference_content_type=reference_content_type,
-        app_env=app_env,
-        confirm_upload=True,
-    ).ref
-
-
-def resolved_reference_options(
-    *,
-    reference_public_url: str | None,
-    reference_internal_url: str | None,
-    reference_sha256: str | None,
-    reference_content_type: str | None,
-    script_env: dict[str, str],
-) -> tuple[str | None, str | None, str | None, str | None]:
-    cli_ref_values = [reference_public_url, reference_internal_url, reference_sha256]
-    if any(cli_ref_values):
-        return reference_public_url, reference_internal_url, reference_sha256, reference_content_type
-
-    env_public_url = llm_job_billing.env_value(SCRIPT_ENV_REFERENCE_PUBLIC_URL, script_env)
-    env_internal_url = llm_job_billing.env_value(SCRIPT_ENV_REFERENCE_INTERNAL_URL, script_env)
-    env_sha256 = llm_job_billing.env_value(SCRIPT_ENV_REFERENCE_SHA256, script_env)
-    if not any([env_public_url, env_internal_url, env_sha256]):
-        return reference_public_url, reference_internal_url, reference_sha256, reference_content_type
-    return (
-        env_public_url,
-        env_internal_url,
-        env_sha256,
-        reference_content_type or llm_job_billing.env_value(SCRIPT_ENV_REFERENCE_CONTENT_TYPE, script_env),
     )
 
 
@@ -680,7 +636,7 @@ def run(
     confirm_upload: bool,
     api_url: str | None,
     items_json: str | None,
-    reference_image: str,
+    reference_image: str | None,
     reference_public_url: str | None,
     reference_internal_url: str | None,
     reference_sha256: str | None,
@@ -709,18 +665,6 @@ def run(
     api_prefix = (llm_job_billing.env_value("SERVICE_API_PREFIX", app_env) or llm_job_billing.DEFAULT_API_PREFIX).rstrip("/")
     jobs_url = f"{base_url}{api_prefix}/jobs"
     headers = llm_job_billing.build_headers(app_env, caller_id=caller_id)
-    (
-        resolved_reference_public_url,
-        resolved_reference_internal_url,
-        resolved_reference_sha256,
-        resolved_reference_content_type,
-    ) = resolved_reference_options(
-        reference_public_url=reference_public_url,
-        reference_internal_url=reference_internal_url,
-        reference_sha256=reference_sha256,
-        reference_content_type=reference_content_type,
-        script_env=script_env,
-    )
     resolutions: list[ReferenceImageResolution] = []
     create_attempted = False
     job_id: str | None = None
@@ -739,10 +683,10 @@ def run(
         else:
             resolution = resolve_reference_image(
                 reference_image=reference_image,
-                reference_public_url=resolved_reference_public_url,
-                reference_internal_url=resolved_reference_internal_url,
-                reference_sha256=resolved_reference_sha256,
-                reference_content_type=resolved_reference_content_type,
+                reference_public_url=reference_public_url,
+                reference_internal_url=reference_internal_url,
+                reference_sha256=reference_sha256,
+                reference_content_type=reference_content_type,
                 app_env=app_env,
                 confirm_upload=confirm_upload,
             )

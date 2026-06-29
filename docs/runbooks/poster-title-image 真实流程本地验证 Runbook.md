@@ -40,11 +40,12 @@
 
 ## 最小实测命令
 
-使用默认参考图 `.data/title/英语.png`：
+使用本地参考图：
 
 ```bash
 ./scripts/real-flow.sh poster-title-image \
   --confirm-cost \
+  --reference .data/title/英语.png \
   --language es \
   --title-text "Cuando el amor se alejo" \
   --download-outputs \
@@ -198,19 +199,16 @@ JSON
 }
 ```
 
-参考图选择顺序：
+参考图只能通过两种显式方式进入脚本：
 
 ```text
-显式 --reference-public-url / --reference-internal-url / --reference-content-type / --reference-sha256
-  |
-  v
-scripts/.env 中的 POSTER_TITLE_IMAGE_REFERENCE_* 配置
-  |
-  v
---reference 指定的本地图片
-  |
-  v
-默认 .data/title/英语.png
+方式 1：--reference / --reference-image 指定本地图片
+  -> STORAGE_BACKEND=local 时 stage 到本地对象存储
+  -> STORAGE_BACKEND=aliyun_oss 时必须传 --confirm-upload，脚本上传到 OSS
+
+方式 2：--reference-public-url / --reference-internal-url / --reference-content-type / --reference-sha256
+  -> 调用方显式提供已有 OSS URL Ref 四字段
+  -> 脚本只拼接 API payload，不 stage 或上传本地图片
 ```
 
 本地图片处理规则：
@@ -218,6 +216,7 @@ scripts/.env 中的 POSTER_TITLE_IMAGE_REFERENCE_* 配置
 - `STORAGE_BACKEND=local`：脚本把本地图片 stage 到 `LOCAL_OBJECT_STORAGE_PATH`，再生成 URL Ref。
 - `STORAGE_BACKEND=aliyun_oss`：脚本会上传本地图片到 OSS，必须额外传 `--confirm-upload`。
 - 传完整 OSS URL Ref 时，不会 stage 或上传本地图片。
+- 脚本不从 `scripts/.env` 读取默认参考图 URL Ref。真实流程验证必须在命令参数或 `items-json` 中显式声明参考图来源，避免不同调用方式走不同逻辑链。
 
 参考图必须是透明背景 PNG 标题图层，不是完整海报图。
 
@@ -452,7 +451,7 @@ job_id   = child_job_id
 修改 `poster-title-image` 真实流程后，同步检查本文：
 
 - CLI 参数是否变化。
-- 默认参考图和下载目录是否变化。
+- 参考图显式传入方式和下载目录是否变化。
 - `summary` 字段是否变化。
 - `--download-outputs` 的下载、sha256 校验和图片检测语义是否变化。
 - 常见失败是否仍是当前实现事实。

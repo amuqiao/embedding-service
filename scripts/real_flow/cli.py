@@ -114,7 +114,7 @@ HELP_EPILOG = f"""\b
   ./scripts/real-flow.sh llm-job-billing --confirm-cost --input-text "用一句话回复：计费验证成功" --json
   ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini --json
   ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png --signed-url-expires-seconds 3600 --json
-  ./scripts/real-flow.sh poster-title-image --confirm-cost --language es --title-text "Cuando el amor se alejo" --json
+  ./scripts/real-flow.sh poster-title-image --confirm-cost --reference .data/title/英语.png --language es --title-text "Cuando el amor se alejo" --json
 
 \b
 进阶用法：
@@ -290,9 +290,9 @@ def oss_upload_image_command(
         typer.Option("--confirm-upload", help="确认本命令会上传文件到阿里云 OSS。"),
     ] = False,
     image: Annotated[
-        str,
-        typer.Option("--image", help="需要上传的本地图片路径。"),
-    ] = poster_title_image.DEFAULT_REFERENCE_IMAGE,
+        str | None,
+        typer.Option("--image", help="需要上传的本地图片路径；必须显式传入。"),
+    ] = None,
     content_type: Annotated[
         str | None,
         typer.Option("--content-type", help="图片 MIME type；默认按扩展名推断。"),
@@ -315,6 +315,8 @@ def oss_upload_image_command(
     ] = False,
 ) -> None:
     try:
+        if image is None:
+            raise oss_image_upload.FlowError("OSS image upload requires --image", exit_code=2)
         oss_image_upload.run(
             confirm_upload=confirm_upload,
             image=image,
@@ -348,13 +350,13 @@ def poster_title_image_command(
         typer.Option("--api-url", help="本地 API 基础 URL；默认从 scripts/.env 的 API_HOST/API_PORT 推导。"),
     ] = None,
     reference_image: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--reference",
             "--reference-image",
-            help="本地参考标题图；STORAGE_BACKEND=local 写入本地对象存储，aliyun_oss 上传到阿里云 OSS。",
+            help="本地参考标题图；必须显式传入，除非使用 --items-json 或完整 OSS URL Ref。",
         ),
-    ] = poster_title_image.DEFAULT_REFERENCE_IMAGE,
+    ] = None,
     items_json: Annotated[
         str | None,
         typer.Option("--items-json", help="多 item JSON 文件；支持每个 item 指定 language/title_text/reference。传入后忽略单 item 参考图与文案参数。"),
