@@ -54,6 +54,48 @@ pid_in_lines() {
   esac
 }
 
+canonical_existing_dir() {
+  local path="$1"
+  if [[ -d "$path" ]]; then
+    (cd "$path" >/dev/null 2>&1 && pwd -P) || printf "%s" "$path"
+    return
+  fi
+  printf "%s" "$path"
+}
+
+assert_no_compose_project_name_conflict() {
+  local project_name
+  local current_working_dir
+  local working_dirs
+  local working_dir
+  local normalized_working_dir
+  local conflicting_working_dirs=""
+
+  project_name="$(compose_project_name)"
+  current_working_dir="$(canonical_existing_dir "$ROOT_DIR")"
+  command -v docker >/dev/null 2>&1 || die "docker is required for COMPOSE_PROJECT_NAME conflict check" 2
+  working_dirs="$(docker ps -a \
+    --filter "label=com.docker.compose.project=$project_name" \
+    --format '{{.Label "com.docker.compose.project.working_dir"}}')" \
+    || die "docker ps failed while checking COMPOSE_PROJECT_NAME conflict" 2
+
+  while IFS= read -r working_dir; do
+    [[ -n "$working_dir" ]] || continue
+    normalized_working_dir="$(canonical_existing_dir "$working_dir")"
+    [[ "$normalized_working_dir" != "$current_working_dir" ]] || continue
+
+    if [[ -z "$conflicting_working_dirs" ]]; then
+      conflicting_working_dirs="$working_dir"
+    elif ! pid_in_lines "$working_dir" "$conflicting_working_dirs"; then
+      conflicting_working_dirs="${conflicting_working_dirs}"$'\n'"${working_dir}"
+    fi
+  done <<< "$working_dirs"
+
+  [[ -z "$conflicting_working_dirs" ]] && return 0
+
+  die "COMPOSE_PROJECT_NAME conflict: project name '$project_name' has existing working_dir '${conflicting_working_dirs//$'\n'/, }' but current ROOT_DIR is '$ROOT_DIR'" 4
+}
+
 local_service_pids() {
   local service="$1"
   local pid_file

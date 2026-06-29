@@ -13,10 +13,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-.env}"
 source "$ROOT_DIR/scripts/lib/common.sh"
-TEMPLATE_NAME="${TEMPLATE_NAME:-$(env_value_from TEMPLATE_NAME "$(resolve_repo_path "$ENV_FILE")")}"
-TEMPLATE_NAME="${TEMPLATE_NAME:-fastapi-best-ai-architecture}"
-PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(env_value_from COMPOSE_PROJECT_NAME "$(resolve_repo_path "$ENV_FILE")")}"
-PROJECT_NAME="${PROJECT_NAME:-$TEMPLATE_NAME}"
 source "$ROOT_DIR/scripts/lib/compose.sh"
 source "$ROOT_DIR/scripts/lib/modes.sh"
 
@@ -34,11 +30,11 @@ usage() {
 
 运行环境：
   Requires: Bash
-  Dependencies: Docker Compose
+  Dependencies: Docker Compose；check / up 的 project 名冲突检查需要 Docker CLI 读取容器 label。
 
 命令：
   modes                 展示本脚本管理的 compose 部署模式。
-  check                 校验部署入口、Dockerfile 和 compose 配置。
+  check                 校验部署入口、Dockerfile、compose 配置和 compose project 名冲突。
   up compose-deps       启动 PostgreSQL / Redis 依赖服务。
   down compose-deps     停止 PostgreSQL / Redis 依赖服务。
   status compose-deps   查看依赖服务状态。
@@ -56,11 +52,11 @@ usage() {
 
 输出：
   stdout: check 结果、compose 状态、启动/停止结果。
-  stderr: 缺少文件、非法 mode、Docker Compose 错误。
+  stderr: 缺少文件、非法 mode、Docker Compose / Docker CLI 错误或 project 名冲突。
 
 幂等性和副作用：
-  check 只做静态校验，不启动服务。
-  up 会创建或更新 compose 服务。
+  check 不启动服务；会通过 Docker CLI 读取 Docker compose 容器 label 检查 project 名是否被其他目录占用。
+  up 会先检查 ENV_FILE 和 project 名冲突，再创建或更新 compose 服务。
   down 使用 compose stop，停止服务但不删除 volume。
   compose-full 会拒绝与 ./scripts/dev.sh 管理的本地 api/worker 混跑。
 
@@ -73,6 +69,7 @@ usage() {
 Exit Codes:
   0  成功
   2  缺少 command、非法 mode、缺少必要文件或 Docker Compose 不可用
+  4  compose project 名已被其他目录占用
 EOF
 }
 
@@ -114,6 +111,8 @@ check_deploy() {
   event "OK" "compose-deps" "docker compose config"
   ENV_FILE=.env.example compose --profile app config --quiet
   event "OK" "compose-full" "docker compose --profile app config"
+  assert_no_compose_project_name_conflict
+  event "OK" "compose-project" "no working_dir conflict"
 
   section "Scripts"
   bash -n "$ROOT_DIR/scripts/deploy.sh"
@@ -127,6 +126,8 @@ check_deploy() {
 }
 
 up_deps() {
+  require_env_file
+  assert_no_compose_project_name_conflict
   section "Compose Deps"
   compose up -d postgres redis
 }
@@ -143,6 +144,7 @@ status_deps() {
 
 up_full() {
   require_env_file
+  assert_no_compose_project_name_conflict
   assert_no_local_app_running_for_compose_full
   section "Compose Full"
   compose --profile app up -d --build api worker

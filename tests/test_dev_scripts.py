@@ -351,6 +351,196 @@ def test_compose_wrapper_injects_root_env_file_values(tmp_path):
     assert "WORKER_RECOVERY_LOOP=false" in result.stdout
 
 
+def test_deploy_check_rejects_compose_project_used_by_other_working_dir(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("COMPOSE_PROJECT_NAME=shared-project\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "if [[ \"$1 $2\" == \"compose config\" ]]; then exit 0; fi\n"
+        "if [[ \"$1\" == \"compose\" && \"$2 $3 $4\" == \"--profile app config\" ]]; then exit 0; fi\n"
+        "if [[ \"$1 $2\" == \"ps -a\" ]]; then\n"
+        "  if [[ \"$*\" == *\"label=com.docker.compose.project=shared-project\"* ]]; then\n"
+        "    printf '/srv/other-service\\n'\n"
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n",
+    )
+    env = _clean_root_env()
+    env.update({"ENV_FILE": str(env_file), "PATH": f"{fake_bin}:{env['PATH']}"})
+
+    result = subprocess.run(
+        ["./scripts/deploy.sh", "check"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 4
+    assert "COMPOSE_PROJECT_NAME conflict" in result.stderr
+    assert "shared-project" in result.stderr
+    assert "/srv/other-service" in result.stderr
+    assert str(ROOT_DIR) in result.stderr
+
+
+def test_deploy_check_allows_compose_project_from_current_working_dir(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("COMPOSE_PROJECT_NAME=current-project\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "if [[ \"$1 $2\" == \"compose config\" ]]; then exit 0; fi\n"
+        "if [[ \"$1\" == \"compose\" && \"$2 $3 $4\" == \"--profile app config\" ]]; then exit 0; fi\n"
+        "if [[ \"$1 $2\" == \"ps -a\" ]]; then\n"
+        "  if [[ \"$*\" == *\"label=com.docker.compose.project=current-project\"* ]]; then\n"
+        f"    printf '%s\\n' '{ROOT_DIR}'\n"
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n",
+    )
+    env = _clean_root_env()
+    env.update({"ENV_FILE": str(env_file), "PATH": f"{fake_bin}:{env['PATH']}"})
+
+    result = subprocess.run(
+        ["./scripts/deploy.sh", "check"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "OK        compose-project no working_dir conflict" in result.stdout
+
+
+def test_deploy_check_allows_current_working_dir_symlink_path(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("COMPOSE_PROJECT_NAME=current-project\n", encoding="utf-8")
+    repo_link = tmp_path / "repo-link"
+    repo_link.symlink_to(ROOT_DIR, target_is_directory=True)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "if [[ \"$1 $2\" == \"compose config\" ]]; then exit 0; fi\n"
+        "if [[ \"$1\" == \"compose\" && \"$2 $3 $4\" == \"--profile app config\" ]]; then exit 0; fi\n"
+        "if [[ \"$1 $2\" == \"ps -a\" ]]; then\n"
+        "  if [[ \"$*\" == *\"label=com.docker.compose.project=current-project\"* ]]; then\n"
+        f"    printf '%s\\n' '{repo_link}'\n"
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n",
+    )
+    env = _clean_root_env()
+    env.update({"ENV_FILE": str(env_file), "PATH": f"{fake_bin}:{env['PATH']}"})
+
+    result = subprocess.run(
+        ["./scripts/deploy.sh", "check"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "OK        compose-project no working_dir conflict" in result.stdout
+
+
+def test_deploy_check_uses_runtime_compose_project_override(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("COMPOSE_PROJECT_NAME=file-project\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "if [[ \"$1 $2\" == \"compose config\" ]]; then exit 0; fi\n"
+        "if [[ \"$1\" == \"compose\" && \"$2 $3 $4\" == \"--profile app config\" ]]; then exit 0; fi\n"
+        "if [[ \"$1 $2\" == \"ps -a\" ]]; then\n"
+        "  if [[ \"$*\" == *\"label=com.docker.compose.project=runtime-project\"* ]]; then\n"
+        "    printf '/srv/runtime-owner\\n'\n"
+        "  fi\n"
+        "  if [[ \"$*\" == *\"label=com.docker.compose.project=file-project\"* ]]; then\n"
+        "    printf '/srv/file-owner\\n'\n"
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "ENV_FILE": str(env_file),
+            "COMPOSE_PROJECT_NAME": "runtime-project",
+            "PATH": f"{fake_bin}:{env['PATH']}",
+        }
+    )
+
+    result = subprocess.run(
+        ["./scripts/deploy.sh", "check"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 4
+    assert "runtime-project" in result.stderr
+    assert "/srv/runtime-owner" in result.stderr
+    assert "file-project" not in result.stderr
+    assert "/srv/file-owner" not in result.stderr
+
+
+def test_deploy_check_requires_docker_cli_for_project_conflict_check(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("COMPOSE_PROJECT_NAME=standalone-project\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker-compose",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == \"config --quiet\" ]]; then exit 0; fi\n"
+        "if [[ \"$*\" == \"--profile app config --quiet\" ]]; then exit 0; fi\n"
+        "exit 1\n",
+    )
+    env = _clean_root_env()
+    env.update({"ENV_FILE": str(env_file), "PATH": f"{fake_bin}:/bin:/usr/bin"})
+
+    result = subprocess.run(
+        ["./scripts/deploy.sh", "check"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "docker is required for COMPOSE_PROJECT_NAME conflict check" in result.stderr
+
+
 def test_local_mode_rejects_running_compose_full_app(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("", encoding="utf-8")
@@ -484,6 +674,7 @@ def test_deploy_compose_full_up_allows_clean_local_mode(tmp_path):
         "docker",
         "#!/usr/bin/env bash\n"
         "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "if [[ \"$1 $2\" == \"ps -a\" ]]; then exit 0; fi\n"
         "if [[ \"$*\" == \"compose --profile app up -d --build api worker\" ]]; then printf 'compose up clean\\n'; exit 0; fi\n"
         "exit 0\n",
     )
@@ -509,6 +700,70 @@ def test_deploy_compose_full_up_allows_clean_local_mode(tmp_path):
     assert result.returncode == 0
     assert "== Compose Full ==" in result.stdout
     assert "compose up clean" in result.stdout
+
+
+def test_deploy_compose_full_up_rejects_project_name_conflict(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("COMPOSE_PROJECT_NAME=shared-project\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "if [[ \"$1 $2\" == \"ps -a\" ]]; then\n"
+        "  if [[ \"$*\" == *\"label=com.docker.compose.project=shared-project\"* ]]; then\n"
+        "    printf '/srv/other-service\\n'\n"
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
+        "if [[ \"$*\" == \"compose --profile app up -d --build api worker\" ]]; then printf 'unexpected up\\n'; exit 0; fi\n"
+        "exit 1\n",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "ENV_FILE": str(env_file),
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "RUN_DIR": str(tmp_path / "run"),
+            "LOG_DIR": str(tmp_path / "logs"),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", "./scripts/deploy.sh up compose-full"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 4
+    assert "COMPOSE_PROJECT_NAME conflict" in result.stderr
+    assert "/srv/other-service" in result.stderr
+    assert "unexpected up" not in result.stdout
+    assert "== Compose Full ==" not in result.stdout
+
+
+def test_deploy_up_requires_env_file(tmp_path):
+    env_file = tmp_path / ".env.missing"
+    env = _clean_root_env()
+    env["ENV_FILE"] = str(env_file)
+
+    result = subprocess.run(
+        ["bash", "-c", "./scripts/deploy.sh up compose-deps"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert f"{env_file} not found" in result.stderr
+    assert "== Compose Deps ==" not in result.stdout
 
 
 def test_compose_full_rejects_local_worker_residual_log_writer(tmp_path):

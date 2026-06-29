@@ -13,21 +13,30 @@ compose_available() {
   docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null 2>&1
 }
 
-compose() {
+compose_project_name() {
   local env_file
   local template_name
-  local compose_project_name
+  local project_name
+
+  env_file="$(resolve_repo_path "${ENV_FILE:-.env}")"
+  template_name="${TEMPLATE_NAME:-$(env_value_from TEMPLATE_NAME "$env_file")}"
+  template_name="${template_name:-fastapi-best-ai-architecture}"
+  project_name="${COMPOSE_PROJECT_NAME:-$(env_value_from COMPOSE_PROJECT_NAME "$env_file")}"
+  project_name="${project_name:-${PROJECT_NAME:-$template_name}}"
+  printf "%s" "$project_name"
+}
+
+compose() {
+  local env_file
+  local resolved_project_name
   local key
   local value
   local env_args=()
 
   env_file="$(resolve_repo_path "${ENV_FILE:-.env}")"
-  template_name="${TEMPLATE_NAME:-$(env_value_from TEMPLATE_NAME "$env_file")}"
-  template_name="${template_name:-fastapi-best-ai-architecture}"
-  compose_project_name="${COMPOSE_PROJECT_NAME:-$(env_value_from COMPOSE_PROJECT_NAME "$env_file")}"
-  compose_project_name="${compose_project_name:-${PROJECT_NAME:-$template_name}}"
+  resolved_project_name="$(compose_project_name)"
   env_args+=(ENV_FILE="${ENV_FILE:-.env}")
-  env_args+=(COMPOSE_PROJECT_NAME="$compose_project_name")
+  env_args+=(COMPOSE_PROJECT_NAME="$resolved_project_name")
   for key in API_HOST_PORT POSTGRES_DB POSTGRES_HOST_PORT REDIS_HOST_PORT WORKER_CONCURRENCY WORKER_LOGLEVEL WORKER_RECOVERY_LOOP; do
     value="${!key:-$(env_value_from "$key" "$env_file")}"
     [[ -n "$value" ]] && env_args+=("$key=$value")
