@@ -24,7 +24,7 @@
 
 | 项 | 处理方式 |
 |---|---|
-| 项目身份 | 替换 `TEMPLATE_NAME`、`SERVICE_NAME`、`SERVICE_TITLE`、`POSTGRES_DB`、`COMPOSE_PROJECT_NAME` |
+| 项目身份与 compose 命名空间 | 替换 `TEMPLATE_NAME`、`SERVICE_NAME`、`SERVICE_TITLE`、`POSTGRES_DB`；为当前仓库设置独立 `COMPOSE_PROJECT_NAME` |
 | API 前缀 | 按业务服务确定 `SERVICE_API_PREFIX`，默认 `/api/v1/ai-jobs` 可保留 |
 | 数据库与 Redis | 为新服务使用独立 database 和独立 Redis URL/实例 |
 | 模型配置 | 按业务更新 `MODEL_CONFIG_PATH` 指向的模型目录和 required env |
@@ -79,7 +79,8 @@
 | 运行环境 | `APP_ENV=test` 和 `APP_ENV=prd` 使用同一套发布模式校验 |
 | 本地绕过认证 | 生产不得启用 `DISABLE_HTTP_AUTH_HEADER=true` 或 `DISABLE_CALLER_ID_HEADER=true` |
 | 本地存储 | 多副本部署不得使用 `STORAGE_BACKEND=local` |
-| 本地配置文件 | 项目只维护 `.env.example`；`.env.dev`、`.env.test`、`.env.prd` 是开发者本地自管文件，必须通过 `ENV_FILE` 或平台注入显式选择 |
+| 本地配置文件 | `deploy.sh` 默认 `ENV_FILE=.env`，`up` 要求该文件存在；`.env.dev`、`.env.test`、`.env.prd` 不会因 `APP_ENV` 自动加载，必须通过 `ENV_FILE` 或平台注入显式选择 |
+| compose 命名空间 | 复制模板后先确认 `COMPOSE_PROJECT_NAME` 独立，避免 compose 入口拒绝复用其他目录的资源 |
 | 部署入口 | 当前只提供 `compose-deps` 和 `compose-full`，不提供 Kubernetes、CI/CD 或云平台 Secrets 管理 |
 | 跨服务编排 | 跨多个微服务的业务流程不应塞进本服务内部 workflow |
 | 真实模型 e2e | 接入正式 `job_type` 后，应在 `examples/business/` 或业务仓库内维护真实业务 e2e |
@@ -105,6 +106,12 @@
 
 ```bash
 ./scripts/verify.sh check
+```
+
+如果业务项目会使用 `compose-deps` 或 `compose-full`，还应运行 compose 部署入口检查：
+
+```bash
+./scripts/deploy.sh check
 ```
 
 准备发布到测试或生产环境前，先用目标配置文件在本地跑启动配置校验，提前发现 `APP_ENV=test/prd` 下的安全配置问题：

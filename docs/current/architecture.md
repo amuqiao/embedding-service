@@ -16,7 +16,16 @@
 
 ## 运行形态
 
-本地开发入口是 `./scripts/dev.sh`，compose 部署检查入口是 `./scripts/deploy.sh`。生产 K8s 资源和发布流水线不由本仓库管理；已部署 Pod 内的 PostgreSQL / Redis 连接检查和 Alembic 迁移入口是 `./scripts/k8s.sh`。
+运行形态先按“谁运行 API/worker、谁提供 PostgreSQL/Redis”区分。`APP_ENV` 只参与配置安全校验，不选择运行形态，也不会自动选择 `.env.dev`、`.env.test` 或 `.env.prd`。
+
+| 形态 | 入口 | API/worker 运行位置 | PostgreSQL/Redis 来源 | 关键边界 |
+|---|---|---|---|---|
+| `local` | `./scripts/dev.sh` | 宿主机 | docker compose 依赖服务 | 本地开发默认形态；可复用 `compose-deps`，不能和 `compose-full` 的 API/worker 混跑 |
+| `compose-deps` | `./scripts/deploy.sh up compose-deps` | 宿主机或外部进程 | docker compose | 只启动 PostgreSQL/Redis 依赖服务 |
+| `compose-full` | `./scripts/deploy.sh up compose-full` | docker compose | docker compose | API、worker、PostgreSQL、Redis 全部由 compose 管理 |
+| 已部署 Pod | 平台部署 + `./scripts/k8s.sh` | Pod | 平台注入的外部资源 | 本仓库不创建 K8s 资源、云平台 Secrets 或 CI/CD 流水线 |
+
+`deploy.sh check` 是只读部署入口检查，不启动服务。`deploy.sh check` 和 `deploy.sh up` 会读取 Docker Compose 容器 label，检查当前 `COMPOSE_PROJECT_NAME` 是否已经被其他 `working_dir` 占用；`deploy.sh up` 还要求 `ENV_FILE` 指向的配置文件存在，默认是 `.env`。
 
 ```text
 API Pod(s)
@@ -117,9 +126,9 @@ AI billing 当前事实见 [`ai-billing.md`](ai-billing.md)。`GET /jobs/{job_id
 - `BILLING_ENABLED`
 - `CALLBACK_SIGNING_SECRET`
 
-`APP_ENV` 允许 `local`、`dev`、`test` 和 `prd`。它是配置安全规则开关，不是 API/worker 生命周期开关，也不是自动选择 env 文件的开关。`test/prd` 是发布模式，启动时使用同一套生产级校验：不能关闭 HTTP 鉴权或 caller header，不能允许 insecure callback，不能使用本地对象存储或 `redis_list` broker，且必须提供非占位的服务密钥和 Callback 签名密钥。应用默认只读取根目录 `.env`；其它 env 文件必须由 `ENV_FILE` 或平台环境变量显式选择，不会根据 `APP_ENV` 自动加载。
+`APP_ENV` 允许 `local`、`dev`、`test` 和 `prd`。它是配置安全规则开关，不是 API/worker 生命周期开关，也不是自动选择 env 文件的开关。`test/prd` 是发布模式，启动时使用同一套生产级校验：不能关闭 HTTP 鉴权或 caller header，不能允许 insecure callback，不能使用本地对象存储或 `redis_list` broker，且必须提供非占位的服务密钥和 Callback 签名密钥。
 
-配置加载优先级和本地/compose 运行规则以顶层 `README.md` 与 `AGENTS.md` 为准。
+配置文件选择是显式行为：本地和 compose 入口默认使用 `ENV_FILE=.env`；需要使用 `.env.dev`、`.env.test` 或 `.env.prd` 时，必须显式设置 `ENV_FILE`，或由平台直接注入环境变量。`APP_ENV` 只参与安全校验，不参与 env 文件选择。
 
 ## 验证基线
 

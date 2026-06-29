@@ -53,6 +53,8 @@ API、worker 和 Alembic 迁移都使用同一套 `DATABASE_URL`。K8s 场景下
 
 `COMPOSE_PROJECT_NAME` 属于根目录 `.env` 中的 launcher/compose 配置；应用 `Settings` 允许该 key 出现在 `.env`，但不会把它作为业务配置字段使用。
 
+复制模板后，如果多个仓库继续共用同一个 `COMPOSE_PROJECT_NAME`，compose 入口会拒绝复用或接管其他目录的容器；完整运行边界见 [`architecture.md`](architecture.md)。
+
 ## 需要确认的对象存储命名空间
 
 如果业务项目启用外部对象存储，应按项目隔离 bucket、根路径或输出前缀，避免多个项目把产物写进同一命名空间。
@@ -88,6 +90,8 @@ K8s Secret / ConfigMap / Helm values 中的服务名和数据库连接串
 ```
 
 `.env.example` 是后续 `bootstrap` 生成本地 `.env` 的来源。业务项目如果要长期维护自己的模板副本，应先替换 `.env.example` 里的项目身份、数据库名和 compose 命名空间，再生成本地 `.env`。
+
+如果复制项目决定不使用根目录 `.env`，启动 `compose-deps` 或 `compose-full` 前必须显式设置一个存在的 `ENV_FILE`。
 
 重点搜索这些值：
 
