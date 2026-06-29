@@ -51,7 +51,11 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/jobs.sh" \
     "$ROOT_DIR/scripts/real-flow.sh" \
     "$ROOT_DIR/scripts/tools.sh" \
-    "$ROOT_DIR/scripts/verify/tasks.sh"
+    "$ROOT_DIR/scripts/verify/tasks.sh" \
+    "$ROOT_DIR/scripts/verify/release_flow_smoke.sh" \
+    "$ROOT_DIR/deploy/release-test.sh" \
+    "$ROOT_DIR/deploy/release-master.sh" \
+    "$ROOT_DIR/deploy/lib/release-flow.sh"
   do
     bash -n "$script"
     event "OK" "${script#$ROOT_DIR/}" "syntax"
@@ -75,6 +79,16 @@ run_cli_smoke() {
   event "OK" "real-flow.sh" "help"
   "$ROOT_DIR/scripts/tools.sh" --help >/dev/null
   event "OK" "tools.sh" "help"
+  "$ROOT_DIR/deploy/release-test.sh" --help >/dev/null
+  event "OK" "release-test.sh" "help"
+  "$ROOT_DIR/deploy/release-master.sh" --help >/dev/null
+  event "OK" "release-master.sh" "help"
+}
+
+run_release_flow_smoke() {
+  section "Release Flow"
+  "$ROOT_DIR/scripts/verify/release_flow_smoke.sh"
+  event "OK" "release-flow" "prepare/status/push and safety gates"
 }
 
 run_python_syntax() {
@@ -152,6 +166,7 @@ run_image_inspect() {
 run_check() {
   run_script_syntax
   run_cli_smoke
+  run_release_flow_smoke
   run_python_syntax
   run_env_config_check
   run_alembic_revision_check
