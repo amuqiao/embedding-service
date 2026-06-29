@@ -10,6 +10,7 @@ DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$(cd "$DEV_DIR/../.." && pwd)}"
 source "$ROOT_DIR/scripts/lib/runtime.sh"
 source "$ROOT_DIR/scripts/lib/compose.sh"
+source "$ROOT_DIR/scripts/lib/modes.sh"
 
 APP_SERVICES=(api worker)
 DEP_SERVICES=(postgres redis)
@@ -18,19 +19,11 @@ mkdir -p "$RUN_DIR" "$LOG_DIR"
 cd "$ROOT_DIR"
 
 service_pid_file() {
-  case "$1" in
-    api) printf "%s/api.pid" "$RUN_DIR" ;;
-    worker) printf "%s/worker.pid" "$RUN_DIR" ;;
-    *) die "unknown service: $1" 2 ;;
-  esac
+  mode_pid_file "$1"
 }
 
 service_log_file() {
-  case "$1" in
-    api) printf "%s/api.log" "$LOG_DIR" ;;
-    worker) printf "%s/worker.log" "$LOG_DIR" ;;
-    *) die "unknown service: $1" 2 ;;
-  esac
+  mode_log_file "$1"
 }
 
 service_url() {
@@ -119,15 +112,14 @@ require_app_service() {
 }
 
 pid_of() {
-  local pid_file="$1"
-  [[ -f "$pid_file" ]] && cat "$pid_file" 2>/dev/null || true
+  mode_pid_of "$1"
 }
 
 is_running_pid_file() {
   local pid_file="$1"
   local pid
   pid="$(pid_of "$pid_file")"
-  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+  mode_pid_running "$pid"
 }
 
 port_owner_pid() {
@@ -188,6 +180,50 @@ wait_for_container_health() {
   done
 }
 
+extract_url_port() {
+  local url="$1"
+  "$PYTHON_BIN" -c 'from urllib.parse import urlparse; import sys; print(urlparse(sys.argv[1]).port or "")' "$url"
+}
+
+extract_database_name() {
+  local url="$1"
+  "$PYTHON_BIN" -c 'from urllib.parse import urlparse, unquote; import sys; print(unquote(urlparse(sys.argv[1]).path).lstrip("/"))' "$url"
+}
+
+assert_local_config_consistency() {
+  local database_url redis_url database_name database_port redis_port
+
+  require_project_python
+  database_url="$(env_value DATABASE_URL)"
+  redis_url="$(env_value REDIS_URL)"
+  [[ -n "$database_url" ]] || return 0
+  [[ -n "$redis_url" ]] || return 0
+
+  database_name="$(extract_database_name "$database_url")"
+  database_port="$(extract_url_port "$database_url")"
+  redis_port="$(extract_url_port "$redis_url")"
+
+  [[ "$database_name" == "$POSTGRES_DB" ]] ||
+    die "DATABASE_URL database (${database_name}) must match POSTGRES_DB (${POSTGRES_DB})" 2
+  [[ "$database_port" == "$POSTGRES_HOST_PORT" ]] ||
+    die "DATABASE_URL port (${database_port}) must match POSTGRES_HOST_PORT (${POSTGRES_HOST_PORT})" 2
+  [[ "$redis_port" == "$REDIS_HOST_PORT" ]] ||
+    die "REDIS_URL port (${redis_port}) must match REDIS_HOST_PORT (${REDIS_HOST_PORT})" 2
+}
+
+assert_compose_port_mapping() {
+  local service="$1"
+  local host_port="$2"
+  local container_port="$3"
+  local ports
+
+  ports="$(compose ps "$service" --format '{{.Ports}}' 2>/dev/null || true)"
+  case "$ports" in
+    *":${host_port}->${container_port}/tcp"*) return 0 ;;
+  esac
+  die "${service} compose port mapping must include ${host_port}->${container_port}; current ports=${ports:-none}. Recreate the service with ./scripts/dev.sh stop && docker compose up -d --force-recreate ${service}" 4
+}
+
 wait_for_api() {
   local timeout_seconds="$1"
   local elapsed=0
@@ -221,13 +257,6 @@ bootstrap() {
     event "CREATED" ".env" "from .env.example"
   fi
 
-  if [[ -f "$ROOT_DIR/scripts/.env" ]]; then
-    event "EXISTS" "scripts/.env" "kept"
-  else
-    cp "$ROOT_DIR/scripts/.env.example" "$ROOT_DIR/scripts/.env"
-    event "CREATED" "scripts/.env" "from scripts/.env.example"
-  fi
-
   uv sync
 }
 
@@ -236,6 +265,8 @@ start_dependencies() {
   compose up -d "${DEP_SERVICES[@]}"
   wait_for_container_health postgres 90
   wait_for_container_health redis 60
+  assert_compose_port_mapping postgres "$POSTGRES_HOST_PORT" "5432"
+  assert_compose_port_mapping redis "$REDIS_HOST_PORT" "6379"
 }
 
 stop_dependencies() {
@@ -248,7 +279,9 @@ stop_dependencies() {
 }
 
 migrate() {
+  assert_no_compose_full_app_running_for_local
   guard_local_env
+  assert_local_config_consistency
   section "Database"
   require_executable "$ALEMBIC_BIN" "run: ./scripts/dev.sh bootstrap"
   "$ALEMBIC_BIN" upgrade head
@@ -311,20 +344,33 @@ stop_service() {
   local service="$1"
   local pid_file
   local pid
+  local residual_pids
 
   require_app_service "$service"
   pid_file="$(service_pid_file "$service")"
   pid="$(pid_of "$pid_file")"
 
   if [[ -z "$pid" ]]; then
-    event "STOPPED" "$service" "already stopped"
-    return
+    residual_pids="$(local_service_pids "$service")" || return "$?"
+    residual_pids="${residual_pids//$'\n'/,}"
+    if [[ -n "$residual_pids" ]]; then
+      die "$service residual local processes are still running: pid=${residual_pids}. Stop them manually before continuing." 4
+    else
+      event "STOPPED" "$service" "already stopped"
+      return
+    fi
   fi
 
   if ! kill -0 "$pid" 2>/dev/null; then
     event "STALE" "$service" "removed pid=$pid"
     rm -f "$pid_file"
-    return
+    residual_pids="$(local_service_pids "$service")" || return "$?"
+    residual_pids="${residual_pids//$'\n'/,}"
+    if [[ -n "$residual_pids" ]]; then
+      die "$service residual local processes are still running: pid=${residual_pids}. Stop them manually before continuing." 4
+    else
+      return
+    fi
   fi
 
   event "STOPPING" "$service" "pid=$pid"
@@ -342,11 +388,18 @@ stop_service() {
     fi
   fi
   rm -f "$pid_file"
+  residual_pids="$(local_service_pids "$service")" || return "$?"
+  residual_pids="${residual_pids//$'\n'/,}"
+  if [[ -n "$residual_pids" ]]; then
+    die "$service residual local processes are still running after stop: pid=${residual_pids}. Stop them manually before continuing." 4
+  fi
   event "STOPPED" "$service" ""
 }
 
 start_all() {
+  assert_no_compose_full_app_running_for_local
   guard_local_env
+  assert_local_config_consistency
   start_dependencies
   migrate
   start_application
@@ -368,22 +421,35 @@ status_service() {
   local state
   local summary
   local display_log
+  local residual_pids
 
   require_app_service "$service"
   pid_file="$(service_pid_file "$service")"
   log_file="$(service_log_file "$service")"
   display_log="${log_file#$ROOT_DIR/}"
   pid="$(pid_of "$pid_file")"
+  residual_pids="$(local_service_pids "$service")" || return "$?"
+  residual_pids="${residual_pids//$'\n'/,}"
 
   if [[ -z "$pid" ]]; then
-    state="stopped"
-    summary="pid=-"
+    if [[ -n "$residual_pids" ]]; then
+      state="residual"
+      summary="pid=$residual_pids"
+    else
+      state="stopped"
+      summary="pid=-"
+    fi
   elif kill -0 "$pid" 2>/dev/null; then
     state="running"
     summary="pid=$pid"
   else
-    state="stale"
-    summary="pid=$pid"
+    if [[ -n "$residual_pids" ]]; then
+      state="residual"
+      summary="pid=$residual_pids stale_pid=$pid"
+    else
+      state="stale"
+      summary="pid=$pid"
+    fi
   fi
 
   # status 使用 row/detail：一行状态摘要加 URL、health、log 等可复制证据。
@@ -429,6 +495,7 @@ status_dependencies() {
 }
 
 status_application() {
+  warn_if_compose_full_app_running
   section "Application"
   status_service api
   status_service worker
@@ -453,7 +520,9 @@ start_target() {
     start_all
     return
   fi
+  assert_no_compose_full_app_running_for_local
   guard_local_env
+  assert_local_config_consistency
   section "Application"
   start_service "$service"
   [[ "$service" == "api" ]] && wait_for_api 30

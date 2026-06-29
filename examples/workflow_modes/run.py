@@ -27,26 +27,12 @@ CASES = {case.mode: case for case in WORKFLOW_MODE_CASES}
 MODES = tuple(CASES)
 
 
-def load_script_env() -> dict[str, str]:
-    env_path = ROOT_DIR / "scripts" / ".env"
-    if not env_path.exists():
-        return {}
-    values: dict[str, str] = {}
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        values[key.strip()] = value.strip().strip("'\"")
-    return values
-
-
 def default_api_url() -> str:
-    script_env = load_script_env()
+    app_env = load_dotenv()
     if os.environ.get("API_URL"):
         return os.environ["API_URL"]
-    host = os.environ.get("API_HOST") or script_env.get("API_HOST") or "127.0.0.1"
-    port = os.environ.get("API_PORT") or script_env.get("API_PORT") or "8100"
+    host = os.environ.get("API_HOST") or app_env.get("API_HOST") or "127.0.0.1"
+    port = os.environ.get("API_PORT") or app_env.get("API_PORT") or "8100"
     return f"http://{host}:{port}"
 
 

@@ -44,6 +44,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/lib/common.sh" \
     "$ROOT_DIR/scripts/lib/runtime.sh" \
     "$ROOT_DIR/scripts/lib/compose.sh" \
+    "$ROOT_DIR/scripts/lib/modes.sh" \
     "$ROOT_DIR/scripts/dev/services.sh" \
     "$ROOT_DIR/scripts/deploy.sh" \
     "$ROOT_DIR/scripts/k8s.sh" \

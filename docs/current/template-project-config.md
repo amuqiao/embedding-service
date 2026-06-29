@@ -35,11 +35,11 @@ DATABASE_URL=postgresql+asyncpg://user:password@postgres-host:5432/your_project_
 
 API、worker 和 Alembic 迁移都使用同一套 `DATABASE_URL`。K8s 场景下，Pod 注入的 `DATABASE_URL` 是事实源；不要依赖 `POSTGRES_DB` 来决定应用连接哪个数据库。
 
-本地 compose 还有一个脚本配置：
+本地 compose 还有一个 launcher 配置：
 
 | 配置 | 模板默认值 | 使用场景 |
 |---|---|---|
-| `POSTGRES_DB` | `fastapi_best_ai_architecture` | `scripts/.env` 中的 compose PostgreSQL 初始化库名，并用于 compose 内部拼接 `DATABASE_URL` |
+| `POSTGRES_DB` | `fastapi_best_ai_architecture` | 根目录 `.env` 中的 compose PostgreSQL 初始化库名，并用于 compose 内部拼接 `DATABASE_URL` |
 
 使用 local 或 compose 模式时，`POSTGRES_DB` 应与根目录 `.env` 里的 `DATABASE_URL` database name 保持一致。使用 K8s 时，直接检查平台注入的 `DATABASE_URL`。
 
@@ -51,7 +51,7 @@ API、worker 和 Alembic 迁移都使用同一套 `DATABASE_URL`。K8s 场景下
 |---|---|---|
 | `COMPOSE_PROJECT_NAME` | `fastapi-best-ai-architecture` | 改成目标项目名；未设置时部署脚本会使用 `TEMPLATE_NAME` 作为默认来源 |
 
-`COMPOSE_PROJECT_NAME` 属于 `scripts/.env`，不是应用 `Settings` 读取的业务配置。
+`COMPOSE_PROJECT_NAME` 属于根目录 `.env` 中的 launcher/compose 配置；应用 `Settings` 允许该 key 出现在 `.env`，但不会把它作为业务配置字段使用。
 
 ## 需要确认的对象存储命名空间
 
@@ -82,14 +82,12 @@ API、worker 和 Alembic 迁移都使用同一套 `DATABASE_URL`。K8s 场景下
 ```text
 .env.example
 .env
-scripts/.env.example
-scripts/.env
 pyproject.toml
 部署平台注入的 DATABASE_URL
 K8s Secret / ConfigMap / Helm values 中的服务名和数据库连接串
 ```
 
-`.env.example` 和 `scripts/.env.example` 是后续 `bootstrap` 生成本地配置的来源。业务项目如果要长期维护自己的模板副本，应先替换这两个 example 文件里的项目身份和数据库名，再生成本地 `.env` / `scripts/.env`。
+`.env.example` 是后续 `bootstrap` 生成本地 `.env` 的来源。业务项目如果要长期维护自己的模板副本，应先替换 `.env.example` 里的项目身份、数据库名和 compose 命名空间，再生成本地 `.env`。
 
 重点搜索这些值：
 

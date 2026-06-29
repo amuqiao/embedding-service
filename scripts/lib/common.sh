@@ -12,7 +12,6 @@ COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$(cd "$COMMON_DIR/../.." && pwd)}"
 RUN_DIR="${RUN_DIR:-$ROOT_DIR/.run}"
 LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs}"
-SCRIPT_ENV_FILE="${SCRIPT_ENV_FILE:-$ROOT_DIR/scripts/.env}"
 
 section() {
   printf "\n== %s ==\n" "$1"
@@ -69,11 +68,6 @@ application_env_file() {
 env_value() {
   local key="$1"
   env_value_from "$key" "$(application_env_file)"
-}
-
-script_env_value() {
-  local key="$1"
-  env_value_from "$key" "$SCRIPT_ENV_FILE"
 }
 
 assert_local_url() {

@@ -69,14 +69,14 @@ def require_local_api_url(api_url: str) -> str:
     raise FlowError(f"real-flow only targets local API URLs, got host={host}", exit_code=2)
 
 
-def resolved_api_url(api_url: str | None, app_env: dict[str, str], script_env: dict[str, str]) -> str:
+def resolved_api_url(api_url: str | None, app_env: dict[str, str]) -> str:
     if api_url:
         return require_local_api_url(api_url.rstrip("/"))
-    configured = env_value("API_URL", app_env, script_env)
+    configured = env_value("API_URL", app_env)
     if configured:
         return require_local_api_url(configured.rstrip("/"))
-    host = env_value("API_HOST", script_env) or "127.0.0.1"
-    port = env_value("API_PORT", script_env) or "8100"
+    host = env_value("API_HOST", app_env) or "127.0.0.1"
+    port = env_value("API_PORT", app_env) or "8100"
     return require_local_api_url(f"http://{host}:{port}")
 
 
@@ -254,9 +254,8 @@ def run(
     if not confirm_cost:
         raise FlowError("real LLM flow requires --confirm-cost", exit_code=2)
     app_env = load_env_file(ROOT_DIR / ".env")
-    script_env = load_env_file(ROOT_DIR / "scripts/.env")
     selected_model = model_id or env_value("DEFAULT_MODEL_ID", app_env) or "gpt-5.5"
-    base_url = resolved_api_url(api_url, app_env, script_env)
+    base_url = resolved_api_url(api_url, app_env)
     api_prefix = (env_value("SERVICE_API_PREFIX", app_env) or DEFAULT_API_PREFIX).rstrip("/")
     jobs_url = f"{base_url}{api_prefix}/jobs"
     headers = build_headers(app_env, caller_id=caller_id)

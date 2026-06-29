@@ -80,9 +80,15 @@ Exit code 应保持小而稳定：
 
 ## 配置边界
 
-本地运行形态配置放在 `scripts/.env`，应用业务配置、密钥、模型参数和数据库连接放在仓库根目录 `.env`。
+本地运行形态配置、应用业务配置、密钥、模型参数和数据库连接统一放在仓库根目录 `.env`。`.env.example` 是唯一可提交配置模板；不要再维护 `scripts/.env` 或 `scripts/.env.example`。
 
 新增脚本读取配置时应沿用现有优先级和 helper，不要重新发明配置加载规则。真实流程脚本只能面向本地 API，不能默认指向远程生产服务。
+
+## 运行模式边界
+
+`local` 与当前仓库下任何 `compose-full` 的 API / worker 不能混跑。`local` 可以复用 `compose-deps` 的 PostgreSQL / Redis，但当 `compose-full` 的 API / worker 已运行时，`dev.sh start` / `migrate` 应直接失败；当本地 API / worker 或残留本地进程仍在运行时，`deploy.sh up compose-full` 应直接失败。
+
+运行模式检测放在 `scripts/lib/modes.sh`，不要在各入口里重新实现一套。检测到冲突时不要自动杀进程，应提示用户执行明确的停止命令。
 
 ## 验证要求
 

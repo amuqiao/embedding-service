@@ -105,8 +105,7 @@ HELP_EPILOG = f"""\b
 
 \b
 环境变量：
-  scripts/.env: API_HOST / API_PORT 用于定位本地 API。
-  .env: SERVICE_API_PREFIX / SERVICE_API_KEY / DISABLE_HTTP_AUTH_HEADER / DISABLE_CALLER_ID_HEADER / DEFAULT_MODEL_ID。
+  .env: API_HOST / API_PORT / SERVICE_API_PREFIX / SERVICE_API_KEY / DISABLE_HTTP_AUTH_HEADER / DISABLE_CALLER_ID_HEADER / DEFAULT_MODEL_ID。
 
 \b
 常用示例：
@@ -161,7 +160,7 @@ def llm_job_billing_command(
     ] = False,
     api_url: Annotated[
         str | None,
-        typer.Option("--api-url", help="本地 API 基础 URL；默认从 scripts/.env 的 API_HOST/API_PORT 推导。"),
+        typer.Option("--api-url", help="本地 API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导。"),
     ] = None,
     model_id: Annotated[
         str | None,
@@ -224,7 +223,7 @@ def llm_job_double_billing_command(
     ] = False,
     api_url: Annotated[
         str | None,
-        typer.Option("--api-url", help="本地 API 基础 URL；默认从 scripts/.env 的 API_HOST/API_PORT 推导。"),
+        typer.Option("--api-url", help="本地 API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导。"),
     ] = None,
     model_id: Annotated[
         str | None,
@@ -347,7 +346,7 @@ def poster_title_image_command(
     ] = False,
     api_url: Annotated[
         str | None,
-        typer.Option("--api-url", help="本地 API 基础 URL；默认从 scripts/.env 的 API_HOST/API_PORT 推导。"),
+        typer.Option("--api-url", help="本地 API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导。"),
     ] = None,
     reference_image: Annotated[
         str | None,

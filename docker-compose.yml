@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: ${POSTGRES_DB:-cms_poster_title}
+      POSTGRES_DB: ${POSTGRES_DB:-fastapi_best_ai_architecture}
     ports:
       - "${POSTGRES_HOST_PORT:-25432}:5432"
     volumes:
@@ -32,7 +32,7 @@ services:
     env_file:
       - ${ENV_FILE:-.env}
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_poster_title}
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-fastapi_best_ai_architecture}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
     command: ["alembic", "upgrade", "head"]
@@ -50,7 +50,7 @@ services:
       - ${ENV_FILE:-.env}
     command: ["/app/start-api.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_poster_title}
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-fastapi_best_ai_architecture}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
       API_HOST: 0.0.0.0
@@ -86,7 +86,7 @@ services:
       - ${ENV_FILE:-.env}
     command: ["/app/start-worker.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_poster_title}
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-fastapi_best_ai_architecture}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}

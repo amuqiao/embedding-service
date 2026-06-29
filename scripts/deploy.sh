@@ -15,9 +15,10 @@ ENV_FILE="${ENV_FILE:-.env}"
 source "$ROOT_DIR/scripts/lib/common.sh"
 TEMPLATE_NAME="${TEMPLATE_NAME:-$(env_value_from TEMPLATE_NAME "$(resolve_repo_path "$ENV_FILE")")}"
 TEMPLATE_NAME="${TEMPLATE_NAME:-fastapi-best-ai-architecture}"
-PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(script_env_value COMPOSE_PROJECT_NAME)}"
+PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(env_value_from COMPOSE_PROJECT_NAME "$(resolve_repo_path "$ENV_FILE")")}"
 PROJECT_NAME="${PROJECT_NAME:-$TEMPLATE_NAME}"
 source "$ROOT_DIR/scripts/lib/compose.sh"
+source "$ROOT_DIR/scripts/lib/modes.sh"
 
 cd "$ROOT_DIR"
 
@@ -61,6 +62,7 @@ usage() {
   check 只做静态校验，不启动服务。
   up 会创建或更新 compose 服务。
   down 使用 compose stop，停止服务但不删除 volume。
+  compose-full 会拒绝与 ./scripts/dev.sh 管理的本地 api/worker 混跑。
 
 常用示例：
   ./scripts/deploy.sh check
@@ -104,6 +106,8 @@ check_deploy() {
   event "OK" "start-api.sh" "present"
   require_file "start-worker.sh"
   event "OK" "start-worker.sh" "present"
+  require_file "scripts/lib/modes.sh"
+  event "OK" "modes.sh" "present"
 
   section "Compose Config"
   ENV_FILE=.env.example compose config --quiet
@@ -114,6 +118,8 @@ check_deploy() {
   section "Scripts"
   bash -n "$ROOT_DIR/scripts/deploy.sh"
   event "OK" "deploy.sh" "syntax"
+  bash -n "$ROOT_DIR/scripts/lib/modes.sh"
+  event "OK" "modes.sh" "syntax"
   sh -n "$ROOT_DIR/start-api.sh"
   event "OK" "start-api.sh" "syntax"
   sh -n "$ROOT_DIR/start-worker.sh"
@@ -137,6 +143,7 @@ status_deps() {
 
 up_full() {
   require_env_file
+  assert_no_local_app_running_for_compose_full
   section "Compose Full"
   compose --profile app up -d --build api worker
 }
@@ -147,6 +154,7 @@ down_full() {
 }
 
 status_full() {
+  warn_if_local_app_running
   section "Compose Full"
   compose --profile app ps
 }

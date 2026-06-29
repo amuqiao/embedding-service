@@ -6,12 +6,11 @@
 
 ## 当前本地前提
 
-本仓库本地开发入口会把脚本运行形态写在 `scripts/.env`，应用业务配置写在 `.env`。压测前先确认当前状态：
+本仓库本地开发入口统一从根目录 `.env` 读取应用配置、本地端口和 worker 启动参数。压测前先确认当前状态：
 
 ```bash
 ./scripts/dev.sh status
-rg -n '^(DISABLE_HTTP_AUTH_HEADER|DISABLE_CALLER_ID_HEADER|MAX_ACTIVE_JOBS)=' .env
-rg -n '^(API_PORT|WORKER_CONCURRENCY)=' scripts/.env
+rg -n '^(DISABLE_HTTP_AUTH_HEADER|DISABLE_CALLER_ID_HEADER|MAX_ACTIVE_JOBS|API_PORT|WORKER_CONCURRENCY)=' .env
 ```
 
 如果 `.env` 中是以下本地联调配置：

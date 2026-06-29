@@ -45,9 +45,12 @@
 ```bash
 ./scripts/real-flow.sh poster-title-image \
   --confirm-cost \
-  --reference .data/title/英语.png \
+  --confirm-upload \
+  --reference .data/title/True_Heiress_Never_Lies.png \
   --language es \
   --title-text "Cuando el amor se alejo" \
+  --api-url http://127.0.0.1:18300 \
+  --caller-id default \
   --download-outputs \
   --json
 ```
@@ -216,7 +219,7 @@ JSON
 - `STORAGE_BACKEND=local`：脚本把本地图片 stage 到 `LOCAL_OBJECT_STORAGE_PATH`，再生成 URL Ref。
 - `STORAGE_BACKEND=aliyun_oss`：脚本会上传本地图片到 OSS，必须额外传 `--confirm-upload`。
 - 传完整 OSS URL Ref 时，不会 stage 或上传本地图片。
-- 脚本不从 `scripts/.env` 读取默认参考图 URL Ref。真实流程验证必须在命令参数或 `items-json` 中显式声明参考图来源，避免不同调用方式走不同逻辑链。
+- 脚本不从 env 文件读取默认参考图 URL Ref。真实流程验证必须在命令参数或 `items-json` 中显式声明参考图来源，避免不同调用方式走不同逻辑链。
 
 参考图必须是透明背景 PNG 标题图层，不是完整海报图。
 
@@ -295,7 +298,7 @@ JSON
 你执行 real-flow.sh
   |
   v
-读取 .env / scripts/.env
+读取 .env
   |
   v
 解析本地 API 地址、鉴权 header、参考图来源

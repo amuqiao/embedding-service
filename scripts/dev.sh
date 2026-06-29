@@ -34,7 +34,7 @@ usage() {
             worker 代码变更后使用 ./scripts/dev.sh restart worker。
 
 命令：
-  bootstrap           缺少 .env / scripts/.env 时分别从对应 example 创建，并执行 uv sync。
+  bootstrap           缺少 .env 时从 .env.example 创建，并执行 uv sync。
   start [service]     启动服务；不传 service 时启动依赖、执行迁移、启动 api 和 worker。
   stop [service]      停止服务；不传 service 时停止 api、worker、postgres 和 redis。
   restart [service]   重启服务；不传 service 时重启完整本地服务栈。
@@ -45,9 +45,9 @@ usage() {
   help                显示帮助。
 
 环境变量：
+  ENV_FILE                    可选，指定本地入口读取的 env 文件，默认 .env。
   DEV_API_RELOAD              可选，true 时 api 使用 uvicorn --reload。
   WATCHFILES_FORCE_POLLING    可选，reload 文件监听是否强制 polling。
-  SCRIPT_ENV_FILE             可选，覆盖脚本配置文件路径，默认 scripts/.env。
 
 输出：
   stdout: 正常状态、PID、URL、日志路径、端口扫描结果。
@@ -61,13 +61,14 @@ usage() {
   日志: ${LOG_DIR}/api.log, ${LOG_DIR}/worker.log
 
 保护边界：
-  应用配置写入 .env；脚本端口、compose 项目名和 worker 启动参数写入 scripts/.env。
+  应用配置、本地端口、compose 项目名和 worker 启动参数统一写入 .env。
   生命周期和迁移动作会拒绝非本地 DATABASE_URL / REDIS_URL。
+  local 本地 api/worker 会拒绝与 compose-full 的 api/worker 混跑；切换前先执行 ./scripts/deploy.sh down compose-full。
   未知 service 会直接报错。
   启动 api 前会检查端口 ${API_PORT} 是否已被其他进程占用。
 
 幂等性和副作用：
-  bootstrap 缺文件时创建 .env / scripts/.env，已存在则保留。
+  bootstrap 缺文件时创建 .env，已存在则保留。
   start 重复执行不会重复启动已运行的 api/worker。
   stop 对已停止服务输出 STOPPED，不视为失败。
 

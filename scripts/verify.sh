@@ -43,7 +43,7 @@ usage() {
 
 环境变量：
   API_HOST / API_PORT        可选，workflow-smoke 使用的本地 API 地址来源。
-  SCRIPT_ENV_FILE            可选，覆盖脚本配置文件路径，默认 scripts/.env。
+  ENV_FILE                   可选，覆盖配置文件路径，默认 .env。
 
 输出：
   stdout: 阶段化验证结果；pytest 和 workflow-smoke 输出可透传。

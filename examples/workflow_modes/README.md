@@ -28,4 +28,4 @@ uv run examples/workflow_modes/run.py --api-url http://127.0.0.1:8100 --mode chu
 
 脚本会读取根目录 `.env` 中的 `SERVICE_API_KEY`、`DISABLE_HTTP_AUTH_HEADER`、`DISABLE_CALLER_ID_HEADER` 和 `SERVICE_API_PREFIX`，提交 Job 后轮询到终态并打印每个模式的 root job id。
 
-默认 API 地址来自运行时 `API_URL`，或 `API_HOST` / `API_PORT`，或 `scripts/.env`，最后才使用 `http://127.0.0.1:8100`。
+默认 API 地址来自运行时 `API_URL`，或 `.env` / 运行时环境中的 `API_HOST` / `API_PORT`，最后才使用 `http://127.0.0.1:8100`。

@@ -1,5 +1,6 @@
 import json
 import io
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -41,6 +42,14 @@ def clear_storage_env(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
+def append_root_env(root: Path, *lines: str) -> None:
+    env_path = root / ".env"
+    existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    prefix = existing.rstrip("\n")
+    suffix = "\n".join(lines)
+    env_path.write_text(f"{prefix}\n{suffix}\n" if prefix else f"{suffix}\n", encoding="utf-8")
+
+
 def test_real_flow_cli_requires_confirm_cost():
     result = runner.invoke(app, ["llm-job-billing"])
 
@@ -65,8 +74,7 @@ def test_poster_title_image_cli_requires_explicit_reference(tmp_path, monkeypatc
         "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
         encoding="utf-8",
     )
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
 
     result = runner.invoke(app, ["poster-title-image", "--confirm-cost"])
 
@@ -224,8 +232,7 @@ def test_poster_title_image_run_supports_items_json_with_multiple_references(tmp
         ),
         encoding="utf-8",
     )
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
     reference_path = tmp_path / "title-fr.png"
     reference_path.write_bytes(_transparent_png_bytes())
     items_path = tmp_path / "poster-items.json"
@@ -493,15 +500,15 @@ def test_real_flow_headers_use_auth_and_caller_id(monkeypatch):
     assert headers["X-AI-Service-Caller-ID"] == "caller-1"
 
 
-def test_real_flow_resolves_api_url_from_script_env():
-    api_url = llm_job_billing.resolved_api_url(None, {}, {"API_HOST": "127.0.0.1", "API_PORT": "18200"})
+def test_real_flow_resolves_api_url_from_root_env():
+    api_url = llm_job_billing.resolved_api_url(None, {"API_HOST": "127.0.0.1", "API_PORT": "18200"})
 
     assert api_url == "http://127.0.0.1:18200"
 
 
 def test_real_flow_rejects_non_local_api_url():
     with pytest.raises(llm_job_billing.FlowError) as exc:
-        llm_job_billing.resolved_api_url("https://api.example.com", {}, {})
+        llm_job_billing.resolved_api_url("https://api.example.com", {})
 
     assert exc.value.exit_code == 2
     assert "only targets local API URLs" in str(exc.value)
@@ -510,14 +517,14 @@ def test_real_flow_rejects_non_local_api_url():
 @pytest.mark.parametrize("api_url", ["https://127.example.com", "https://127.0.0.1.nip.io"])
 def test_real_flow_rejects_loopback_prefix_hostnames(api_url):
     with pytest.raises(llm_job_billing.FlowError) as exc:
-        llm_job_billing.resolved_api_url(api_url, {}, {})
+        llm_job_billing.resolved_api_url(api_url, {})
 
     assert exc.value.exit_code == 2
     assert "only targets local API URLs" in str(exc.value)
 
 
 def test_real_flow_accepts_loopback_ip_url():
-    api_url = llm_job_billing.resolved_api_url("http://127.0.0.1:18200", {}, {})
+    api_url = llm_job_billing.resolved_api_url("http://127.0.0.1:18200", {})
 
     assert api_url == "http://127.0.0.1:18200"
 
@@ -529,15 +536,12 @@ def test_real_flow_run_uses_http_job_and_billing_flow(tmp_path, monkeypatch):
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
 
     app_env = tmp_path / ".env"
-    scripts_env = tmp_path / "scripts.env"
     app_env.write_text(
         "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=false\nDEFAULT_MODEL_ID=gpt-5.4-mini\n",
         encoding="utf-8",
     )
-    scripts_env.write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
     monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
-    (tmp_path / "scripts").mkdir()
-    scripts_env.rename(tmp_path / "scripts/.env")
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
 
     calls = []
 
@@ -604,8 +608,7 @@ def test_real_flow_run_uses_double_job_type(tmp_path, monkeypatch):
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
     monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text("DISABLE_HTTP_AUTH_HEADER=true\nDEFAULT_MODEL_ID=gpt-5.4-mini\n", encoding="utf-8")
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts/.env").write_text("API_PORT=18200\n", encoding="utf-8")
+    append_root_env(tmp_path, "API_PORT=18200")
     calls = []
 
     def fake_request_json(url, *, method, headers, payload=None, timeout_seconds=10):
@@ -677,8 +680,7 @@ def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, c
         ),
         encoding="utf-8",
     )
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
     (tmp_path / ".data/title").mkdir(parents=True)
     reference_data = _transparent_png_bytes()
     reference_path = tmp_path / ".data/title/英语.png"
@@ -796,8 +798,7 @@ def test_poster_title_image_downloads_all_output_artifacts(tmp_path, monkeypatch
         ),
         encoding="utf-8",
     )
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
     (tmp_path / ".data/title").mkdir(parents=True)
     (tmp_path / ".data/title/英语.png").write_bytes(_transparent_png_bytes())
 
@@ -1057,8 +1058,7 @@ def test_real_flow_run_uploads_poster_reference_when_aliyun_oss_enabled(tmp_path
         ),
         encoding="utf-8",
     )
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
     reference_path = tmp_path / "reference.png"
     reference_path.write_bytes(_transparent_png_bytes())
     uploaded_ref = {
@@ -1217,7 +1217,7 @@ def test_poster_title_image_explicit_url_ref_rejects_jpeg_content_type(monkeypat
         )
 
 
-def test_real_flow_run_ignores_script_env_reference_url_ref_by_default(tmp_path, monkeypatch):
+def test_real_flow_run_ignores_env_reference_url_ref_by_default(tmp_path, monkeypatch):
     clear_storage_env(monkeypatch)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
@@ -1238,19 +1238,14 @@ def test_real_flow_run_ignores_script_env_reference_url_ref_by_default(tmp_path,
         ),
         encoding="utf-8",
     )
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts/.env").write_text(
-        "\n".join(
-            [
-                "API_HOST=127.0.0.1",
-                "API_PORT=18200",
-                "POSTER_TITLE_IMAGE_REFERENCE_PUBLIC_URL=https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.png",
-                "POSTER_TITLE_IMAGE_REFERENCE_INTERNAL_URL=https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.png",
-                "POSTER_TITLE_IMAGE_REFERENCE_CONTENT_TYPE=image/png",
-                f"POSTER_TITLE_IMAGE_REFERENCE_SHA256={'c' * 64}",
-            ]
-        ),
-        encoding="utf-8",
+    append_root_env(
+        tmp_path,
+        "API_HOST=127.0.0.1",
+        "API_PORT=18200",
+        "POSTER_TITLE_IMAGE_REFERENCE_PUBLIC_URL=https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.png",
+        "POSTER_TITLE_IMAGE_REFERENCE_INTERNAL_URL=https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.png",
+        "POSTER_TITLE_IMAGE_REFERENCE_CONTENT_TYPE=image/png",
+        f"POSTER_TITLE_IMAGE_REFERENCE_SHA256={'c' * 64}",
     )
 
     with pytest.raises(poster_title_image.FlowError, match="requires --reference or explicit OSS URL Ref options"):
@@ -1299,8 +1294,7 @@ def test_poster_title_image_keeps_uploaded_reference_when_create_response_is_unk
         ),
         encoding="utf-8",
     )
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
     reference_path = tmp_path / "reference.png"
     reference_path.write_bytes(_transparent_png_bytes())
     uploaded_image = {
@@ -1373,8 +1367,7 @@ def test_poster_title_image_cleans_uploaded_reference_when_failure_happens_befor
         ),
         encoding="utf-8",
     )
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts/.env").write_text("API_HOST=127.0.0.1\nAPI_PORT=18200\n", encoding="utf-8")
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
     reference_path = tmp_path / "reference.png"
     reference_path.write_bytes(_transparent_png_bytes())
     uploaded_image = {
@@ -1490,8 +1483,7 @@ def test_real_flow_json_output_is_machine_readable(tmp_path, monkeypatch, capsys
 
     monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text("DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n", encoding="utf-8")
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts/.env").write_text("API_PORT=18200\n", encoding="utf-8")
+    append_root_env(tmp_path, "API_PORT=18200")
 
     monkeypatch.setattr(
         llm_job_billing,

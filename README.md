@@ -22,6 +22,8 @@ FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默�
 - `compose-deps`：只启动 PostgreSQL / Redis 依赖服务，适合给宿主机上的应用进程提供依赖。
 - `compose-full`：API、worker、PostgreSQL、Redis 全部由 `docker compose` 管理，并在应用启动前执行 Alembic 迁移。
 
+`local` 可以与 `compose-deps` 组合使用，但不能与当前仓库下任何 `compose-full` 的 API / worker 混跑。切换到 `compose-full` 前先执行 `./scripts/dev.sh stop`；切回 `local` 前先执行 `./scripts/deploy.sh down compose-full`。
+
 生产 K8s 形态不由本仓库创建或管理资源。api / worker Pod 可继续使用 `start-api.sh` 和 `start-worker.sh` 作为启动入口；Pod 内连接检查和手动数据库迁移使用 `./scripts/k8s.sh`。
 
 `deploy.sh` 只管理 compose 部署入口：
@@ -65,7 +67,7 @@ K8s Pod 内运维入口只在已经部署的 Pod 中执行，不调用 `kubectl`
 
 应用默认只自动读取根目录 `.env`。`.env.dev`、`.env.test` 和 `.env.prd` 可以作为开发者本地自管的配置草稿或复制粘贴来源，但项目不维护这些文件，也不会根据 `APP_ENV` 自动选择它们。需要显式使用某份文件时，由启动或部署入口设置 `ENV_FILE`，或由平台直接注入环境变量。
 
-脚本配置独立维护在 `scripts/.env`，模板是 `scripts/.env.example`。`API_PORT`、`API_HOST_PORT`、`POSTGRES_HOST_PORT`、`REDIS_HOST_PORT`、`COMPOSE_PROJECT_NAME`、`WORKER_CONCURRENCY`、`WORKER_LOGLEVEL` 和 `WORKER_RECOVERY_LOOP` 等只影响本地脚本或 compose 编排的变量不要写入应用 `.env`。
+本地配置统一维护在仓库根目录 `.env`，模板是 `.env.example`。`API_PORT`、`API_HOST_PORT`、`POSTGRES_DB`、`POSTGRES_HOST_PORT`、`REDIS_HOST_PORT`、`COMPOSE_PROJECT_NAME`、`WORKER_CONCURRENCY`、`WORKER_LOGLEVEL` 和 `WORKER_RECOVERY_LOOP` 等本地脚本或 compose 编排变量也写入这套文件，避免应用、脚本和 compose 使用不同配置源。
 
 `APP_ENV=test` 或 `APP_ENV=prd` 时，启动会拒绝本地绕过认证、`ALLOW_INSECURE_CALLBACKS=true`、`STORAGE_BACKEND=local`、`TASKIQ_BROKER_KIND=redis_list` 和明显占位或过短的 `SERVICE_API_KEY` / `CALLBACK_SIGNING_SECRET`。`STORAGE_BACKEND=local` 只适用于本地开发或单机 compose；发布模式必须使用外部对象存储后端，例如 `aliyun_oss`，避免 API / worker 节点之间读写不同本地磁盘。
 
@@ -74,8 +76,8 @@ K8s Pod 内运维入口只在已经部署的 Pod 中执行，不调用 `kubectl`
 - `TEMPLATE_NAME=fastapi-best-ai-architecture`
 - `SERVICE_NAME=fastapi-best-ai-architecture`
 - `SERVICE_TITLE=FastAPI Best AI Architecture`
-- `POSTGRES_DB=fastapi_best_ai_architecture`（脚本配置）
-- `COMPOSE_PROJECT_NAME` 未设置时，`scripts/deploy.sh` 使用 `TEMPLATE_NAME` 作为 compose project name；需要显式设置时写入 `scripts/.env`。
+- `POSTGRES_DB=fastapi_best_ai_architecture`（本地 PostgreSQL 初始化库名）
+- `COMPOSE_PROJECT_NAME` 未设置时，`scripts/deploy.sh` 使用 `TEMPLATE_NAME` 作为 compose project name；需要显式设置时写入根目录 `.env`。
 
 复用模板时优先替换这些值；不要直接改脚本逻辑来表达业务项目名。
 
@@ -220,17 +222,18 @@ Job 只读排障由 `jobs.sh` 承接：
 
 `jobs.sh` 只执行只读查询，不创建 Job、不取消、不重试、不补偿、不重放 callback。默认输出面向人读，`--json` 输出纯 JSON，适合 AI、CI 或运维平台解析。`verify.sh check` 只校验 `jobs.sh --help` 和 Python 语法，不连接数据库。
 
-脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/jobs.sh` 调度 `scripts/jobs/` 中的只读 Job 排障能力，`scripts/deploy.sh` 只调度 compose 部署能力，`scripts/k8s.sh` 只提供 Pod 内连接检查和 Alembic 运维入口。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。脚本专用变量从 `scripts/.env` 或运行时环境读取，不从应用 `.env` 读取。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
+脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/jobs.sh` 调度 `scripts/jobs/` 中的只读 Job 排障能力，`scripts/deploy.sh` 只调度 compose 部署能力，`scripts/k8s.sh` 只提供 Pod 内连接检查和 Alembic 运维入口。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。本地脚本变量、应用配置和 compose 编排变量统一从根目录 `.env` 或运行时环境读取；不再维护 `scripts/.env`。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
 
 入口脚本约束：
 
 - 外层入口脚本只做参数分发、帮助说明和稳定命令面，不承载具体业务实现。
-- 具体能力下沉到职责对应的子目录原子脚本；公共 shell 能力按 `common.sh`、`runtime.sh`、`compose.sh` 分层放在 `scripts/lib/`。
+- 具体能力下沉到职责对应的子目录原子脚本；公共 shell 能力按 `common.sh`、`runtime.sh`、`compose.sh`、`modes.sh` 分层放在 `scripts/lib/`。
 - `scripts/dev.sh` 只管理本地服务生命周期和本地开发端口探测；模板级一次性验证放在 `scripts/verify.sh`。
 - 业务/供应商扩展示例放在 `examples/business/`，不进入 `scripts/` 稳定命令面。
 - `scripts/deploy.sh` 只管理 `compose-deps` 和 `compose-full`，不管理 `local` 本地服务生命周期。
 - `scripts/k8s.sh` 只在 K8s Pod 内检查 PostgreSQL / Redis 连接、查询或执行 Alembic 迁移，不管理 K8s 资源，不替代发布编排。
 - 不新增 silent fallback、默认吞错或跨职责兼容别名；命令不满足前置条件时应直接报错。
+- `local` 与 `compose-full` 的 API / worker 运行模式必须互斥；脚本发现混跑或残留进程时应 fail-fast 或在 status 中明确告警。
 
 `deploy.sh` 只面向本项目已验收的 compose 部署形态，不负责本地服务生命周期、生产部署、远程数据库、K8s 资源、云平台 Secrets 或 CI/CD 发布流水线。
 

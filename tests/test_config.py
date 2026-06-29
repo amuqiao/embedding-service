@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core import config as config_module
+from scripts.verify import env_config_check as env_check_module
 from app.core.config import (
     Settings,
     _CALLBACK_DELIVERY_CLAIM_GRACE,
@@ -12,8 +13,7 @@ from app.core.config import (
 from scripts.verify.env_config_check import (
     APPLICATION_ENV_KEYS,
     DERIVED_ENV_KEYS,
-    SCRIPT_ENV_KEYS,
-    SCRIPT_OR_DEPLOYMENT_ENV_KEYS,
+    LAUNCHER_ENV_KEYS,
     _key_set,
     check_example_alignment,
     check_file,
@@ -507,55 +507,39 @@ def test_settings_dotenv_source_requires_explicit_env_file_to_exist(monkeypatch,
 
 
 def test_env_config_examples_match_declared_manifests():
-    assert _key_set(config_module.ROOT_DIR / ".env.example") == APPLICATION_ENV_KEYS
-    assert _key_set(config_module.ROOT_DIR / "scripts" / ".env.example") == SCRIPT_ENV_KEYS
+    assert _key_set(config_module.ROOT_DIR / ".env.example") == APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS
     assert check_example_alignment() == []
 
 
-def test_env_config_check_rejects_script_keys_in_application_env(tmp_path):
+def test_env_config_check_allows_launcher_keys_in_root_env(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("API_PORT=8100\nPOSTGRES_HOST_PORT=25432\n", encoding="utf-8")
 
     issues = check_file(env_file)
 
-    assert "API_PORT" in SCRIPT_OR_DEPLOYMENT_ENV_KEYS
-    assert "POSTGRES_HOST_PORT" in SCRIPT_OR_DEPLOYMENT_ENV_KEYS
-    assert issues == [
-        f"{env_file}:1: script key must be set in scripts/.env, not application env: API_PORT",
-        f"{env_file}:2: script key must be set in scripts/.env, not application env: POSTGRES_HOST_PORT",
-    ]
-
-
-def test_env_config_check_allows_script_keys_in_scripts_env(tmp_path):
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    env_file = scripts_dir / ".env"
-    env_file.write_text("API_PORT=8100\nPOSTGRES_HOST_PORT=25432\n", encoding="utf-8")
-
-    issues = check_file(env_file)
-
+    assert "API_PORT" in LAUNCHER_ENV_KEYS
+    assert "POSTGRES_HOST_PORT" in LAUNCHER_ENV_KEYS
     assert issues == []
 
 
-def test_env_config_check_allows_script_env_variants(tmp_path):
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    env_file = scripts_dir / ".env.dev"
-    env_file.write_text("API_PORT=8100\nWORKER_CONCURRENCY=4\n", encoding="utf-8")
+def test_env_config_check_detects_launcher_key_missing_from_env_example(monkeypatch, tmp_path):
+    env_example = tmp_path / ".env.example"
+    env_example.write_text(
+        "\n".join(f"{key}=value" for key in sorted((APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS) - {"API_PORT"}))
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(env_check_module, "SERVICE_EXAMPLE_PATH", env_example)
+
+    issues = check_example_alignment()
+
+    assert issues == [f"{env_example}: missing root config key from .env.example: API_PORT"]
+
+
+def test_env_config_check_rejects_unknown_root_keys(tmp_path):
+    env_file = tmp_path / ".env.test"
+    env_file.write_text("UNKNOWN_LOCAL_KEY=value\n", encoding="utf-8")
 
     issues = check_file(env_file)
 
-    assert issues == []
-
-
-def test_env_config_check_rejects_application_keys_in_script_env_variants(tmp_path):
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    env_file = scripts_dir / ".env.test"
-    env_file.write_text("DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/db\n", encoding="utf-8")
-
-    issues = check_file(env_file)
-
-    assert issues == [
-        f"{env_file}:1: application key must be set in application env, not scripts/.env: DATABASE_URL"
-    ]
+    assert issues == [f"{env_file}:1: unknown config key: UNKNOWN_LOCAL_KEY"]

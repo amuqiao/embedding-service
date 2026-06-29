@@ -1,4 +1,4 @@
-"""Check service and script env files against their explicit key manifests.
+"""Check root env files against their explicit key manifests.
 
 This script is called under the shell "Env Config" section. Success is printed
 as one OK event; issues go to stderr with file, line, object, and reason.
@@ -18,7 +18,6 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT_DIR / "app" / "core" / "config.py"
 SERVICE_EXAMPLE_PATH = ROOT_DIR / ".env.example"
-SCRIPT_EXAMPLE_PATH = ROOT_DIR / "scripts" / ".env.example"
 
 KEY_PATTERN = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 APP_ENV_VALUES = ("local", "dev", "test", "prd")
@@ -26,13 +25,13 @@ APP_ENV_VALUES = ("local", "dev", "test", "prd")
 
 @dataclass(frozen=True)
 class EnvKeyManifest:
-    script_keys: frozenset[str]
+    launcher_keys: frozenset[str]
     deprecated_keys: frozenset[str]
     derived_keys: frozenset[str]
 
 
 ENV_KEY_MANIFEST = EnvKeyManifest(
-    script_keys=frozenset(
+    launcher_keys=frozenset(
         {
             "API_HOST",
             "API_PORT",
@@ -87,25 +86,36 @@ ENV_KEY_MANIFEST = EnvKeyManifest(
     ),
 )
 
-def settings_keys_from_config() -> frozenset[str]:
+def constant_keys_from_config(name: str) -> frozenset[str]:
     module = ast.parse(CONFIG_PATH.read_text(encoding="utf-8"))
     for node in module.body:
         if not isinstance(node, ast.AnnAssign):
             continue
-        if not isinstance(node.target, ast.Name) or node.target.id != "APPLICATION_ENV_FIELD_MAP":
+        if not isinstance(node.target, ast.Name) or node.target.id != name:
             continue
         if node.value is None:
             break
-        mapping = ast.literal_eval(node.value)
-        if not isinstance(mapping, dict) or not all(isinstance(key, str) for key in mapping):
-            raise RuntimeError(f"APPLICATION_ENV_FIELD_MAP must be a string-keyed dict: {CONFIG_PATH}")
-        return frozenset(mapping)
-    raise RuntimeError(f"APPLICATION_ENV_FIELD_MAP not found: {CONFIG_PATH}")
+        if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id == "frozenset":
+            if len(node.value.args) != 1:
+                raise RuntimeError(f"{name} frozenset must have exactly one argument: {CONFIG_PATH}")
+            value = ast.literal_eval(node.value.args[0])
+        else:
+            value = ast.literal_eval(node.value)
+        if isinstance(value, dict):
+            if not all(isinstance(key, str) for key in value):
+                raise RuntimeError(f"{name} must be a string-keyed dict: {CONFIG_PATH}")
+            return frozenset(value)
+        if isinstance(value, (set, frozenset)):
+            if not all(isinstance(key, str) for key in value):
+                raise RuntimeError(f"{name} must contain strings: {CONFIG_PATH}")
+            return frozenset(value)
+        raise RuntimeError(f"{name} must be a dict or set literal: {CONFIG_PATH}")
+    raise RuntimeError(f"{name} not found: {CONFIG_PATH}")
 
 
-APPLICATION_ENV_KEYS = settings_keys_from_config()
-SCRIPT_ENV_KEYS = ENV_KEY_MANIFEST.script_keys
-SCRIPT_OR_DEPLOYMENT_ENV_KEYS = SCRIPT_ENV_KEYS
+APPLICATION_ENV_KEYS = constant_keys_from_config("APPLICATION_ENV_FIELD_MAP")
+LAUNCHER_ENV_KEYS = constant_keys_from_config("LAUNCHER_ENV_KEYS")
+ROOT_ENV_KEYS = APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS
 DEPRECATED_KEYS = ENV_KEY_MANIFEST.deprecated_keys
 DERIVED_ENV_KEYS = ENV_KEY_MANIFEST.derived_keys
 
@@ -115,15 +125,6 @@ def _relative_path(path: Path) -> Path:
         return path.resolve().relative_to(ROOT_DIR)
     except ValueError:
         return path
-
-
-def _is_script_env_file(path: Path) -> bool:
-    relative = _relative_path(path)
-    return (
-        len(relative.parts) >= 2
-        and relative.parts[-2] == "scripts"
-        and (relative.name == ".env" or relative.name.startswith(".env."))
-    )
 
 
 def _is_service_env_file(path: Path) -> bool:
@@ -141,13 +142,7 @@ def _service_example_keys() -> frozenset[str]:
     return _key_set(SERVICE_EXAMPLE_PATH)
 
 
-def _script_example_keys() -> frozenset[str]:
-    return _key_set(SCRIPT_EXAMPLE_PATH)
-
-
 def allowed_keys_for_file(path: Path) -> frozenset[str]:
-    if _is_script_env_file(path):
-        return _script_example_keys()
     return _service_example_keys()
 
 
@@ -164,7 +159,7 @@ def parse_keys(path: Path) -> list[tuple[int, str]]:
 
 
 def check_file(path: Path, manifest: EnvKeyManifest = ENV_KEY_MANIFEST) -> list[str]:
-    # File-level checks enforce the service/script config boundary before Settings loads.
+    # File-level checks enforce the root env config boundary before Settings loads.
     issues: list[str] = []
     allowed_keys = allowed_keys_for_file(path)
     for line_no, key in parse_keys(path):
@@ -175,38 +170,24 @@ def check_file(path: Path, manifest: EnvKeyManifest = ENV_KEY_MANIFEST) -> list[
             issues.append(f"{path}:{line_no}: deprecated or unsupported config key: {key}")
         elif normalized_key in manifest.derived_keys:
             issues.append(f"{path}:{line_no}: derived config key must not be set in env: {key}")
-        elif normalized_key in manifest.script_keys and normalized_key not in allowed_keys:
-            issues.append(f"{path}:{line_no}: script key must be set in scripts/.env, not application env: {key}")
-        elif normalized_key in APPLICATION_ENV_KEYS and normalized_key not in allowed_keys:
-            issues.append(f"{path}:{line_no}: application key must be set in application env, not scripts/.env: {key}")
+        elif normalized_key in ROOT_ENV_KEYS and normalized_key not in allowed_keys:
+            issues.append(f"{path}:{line_no}: root env key is missing from .env.example: {key}")
         elif normalized_key not in allowed_keys:
             issues.append(f"{path}:{line_no}: unknown config key: {key}")
     return issues
 
 
 def check_example_alignment() -> list[str]:
-    # Example files are the committed truth sources for local env file key sets.
+    # .env.example is the committed truth source for local env file key sets.
     issues: list[str] = []
     service_keys = _service_example_keys()
-    script_keys = _script_example_keys()
 
-    missing_service = sorted(APPLICATION_ENV_KEYS - service_keys)
-    extra_service = sorted(service_keys - APPLICATION_ENV_KEYS)
+    missing_service = sorted(ROOT_ENV_KEYS - service_keys)
+    extra_service = sorted(service_keys - ROOT_ENV_KEYS)
     for key in missing_service:
-        issues.append(f"{SERVICE_EXAMPLE_PATH}: missing service config key from .env.example: {key}")
+        issues.append(f"{SERVICE_EXAMPLE_PATH}: missing root config key from .env.example: {key}")
     for key in extra_service:
-        issues.append(f"{SERVICE_EXAMPLE_PATH}: key is not defined by APPLICATION_ENV_FIELD_MAP: {key}")
-
-    missing_script = sorted(SCRIPT_ENV_KEYS - script_keys)
-    extra_script = sorted(script_keys - SCRIPT_ENV_KEYS)
-    for key in missing_script:
-        issues.append(f"{SCRIPT_EXAMPLE_PATH}: missing script config key from scripts/.env.example: {key}")
-    for key in extra_script:
-        issues.append(f"{SCRIPT_EXAMPLE_PATH}: key is not defined by SCRIPT_ENV_KEYS: {key}")
-
-    overlap = sorted(service_keys & script_keys)
-    for key in overlap:
-        issues.append(f"env examples define key in both service and script domains: {key}")
+        issues.append(f"{SERVICE_EXAMPLE_PATH}: key is not defined by root env manifest: {key}")
 
     return issues
 
@@ -217,8 +198,6 @@ def default_env_files() -> list[Path]:
     env_test = ROOT_DIR / "env_test" / ".env"
     if env_test.exists():
         candidates.append(env_test)
-    scripts_dir = ROOT_DIR / "scripts"
-    candidates.extend(path for path in sorted(scripts_dir.glob(".env*")) if path.is_file())
 
     seen: set[Path] = set()
     result: list[Path] = []

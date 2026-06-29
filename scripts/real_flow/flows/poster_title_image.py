@@ -660,8 +660,7 @@ def run(
     if not confirm_cost:
         raise FlowError("poster title image flow requires --confirm-cost", exit_code=2)
     app_env = llm_job_billing.load_env_file(ROOT_DIR / ".env")
-    script_env = llm_job_billing.load_env_file(ROOT_DIR / "scripts/.env")
-    base_url = llm_job_billing.resolved_api_url(api_url, app_env, script_env)
+    base_url = llm_job_billing.resolved_api_url(api_url, app_env)
     api_prefix = (llm_job_billing.env_value("SERVICE_API_PREFIX", app_env) or llm_job_billing.DEFAULT_API_PREFIX).rstrip("/")
     jobs_url = f"{base_url}{api_prefix}/jobs"
     headers = llm_job_billing.build_headers(app_env, caller_id=caller_id)

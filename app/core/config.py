@@ -85,6 +85,20 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
 }
 
 APPLICATION_ENV_KEYS = frozenset(APPLICATION_ENV_FIELD_MAP)
+LAUNCHER_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "API_HOST",
+        "API_PORT",
+        "API_HOST_PORT",
+        "COMPOSE_PROJECT_NAME",
+        "POSTGRES_DB",
+        "POSTGRES_HOST_PORT",
+        "REDIS_HOST_PORT",
+        "WORKER_CONCURRENCY",
+        "WORKER_LOGLEVEL",
+        "WORKER_RECOVERY_LOOP",
+    }
+)
 DERIVED_ENV_KEYS = frozenset(
     {
         "WORKER_SOFT_TIME_LIMIT",
@@ -154,7 +168,8 @@ def _read_dotenv_values(path: Path) -> dict[str, str]:
 
 
 def _unknown_dotenv_keys(dotenv: dict[str, str]) -> list[str]:
-    return sorted(key for key in dotenv if key != key.upper() or key not in APPLICATION_ENV_KEYS)
+    allowed_keys = APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS
+    return sorted(key for key in dotenv if key != key.upper() or key not in allowed_keys)
 
 
 def _selected_env_file_path() -> Path | None:

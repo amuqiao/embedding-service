@@ -22,7 +22,7 @@ from scripts.jobs.cli import (
 from scripts.jobs.db import normalize_database_url
 from scripts.verify.env_config_check import (
     APPLICATION_ENV_KEYS,
-    SCRIPT_OR_DEPLOYMENT_ENV_KEYS,
+    LAUNCHER_ENV_KEYS,
     check_file,
     default_env_files,
 )
@@ -48,8 +48,15 @@ def _clean_application_env() -> dict[str, str]:
     return env
 
 
+def _clean_root_env() -> dict[str, str]:
+    env = _clean_application_env()
+    for key in LAUNCHER_ENV_KEYS:
+        env.pop(key, None)
+    return env
+
+
 def _service_command(service: str, **env_overrides: str) -> str:
-    env = os.environ.copy()
+    env = _clean_root_env()
     env.update(env_overrides)
     result = subprocess.run(
         ["bash", "-lc", f"source scripts/dev/services.sh >/dev/null; service_command {service}"],
@@ -64,6 +71,13 @@ def _service_command(service: str, **env_overrides: str) -> str:
 
 def _api_service_command(**env_overrides: str) -> str:
     return _service_command("api", **env_overrides)
+
+
+def _write_fake_command(bin_dir: Path, name: str, body: str) -> Path:
+    path = bin_dir / name
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+    return path
 
 
 def test_dev_api_service_command_uses_uvicorn_reload_when_enabled():
@@ -87,7 +101,7 @@ def test_dev_api_service_command_uses_start_api_by_default():
 
 @pytest.mark.parametrize("flag", ["DISABLE_HTTP_AUTH_HEADER", "DISABLE_CALLER_ID_HEADER"])
 def test_start_api_rejects_public_bind_when_auth_headers_are_disabled(flag):
-    env = os.environ.copy()
+    env = _clean_root_env()
     env.update({"API_HOST": "0.0.0.0", flag: "true"})
 
     result = subprocess.run(
@@ -103,25 +117,11 @@ def test_start_api_rejects_public_bind_when_auth_headers_are_disabled(flag):
     assert "API_HOST must be 127.0.0.1" in result.stderr
 
 
-@pytest.mark.parametrize("flag", ["DISABLE_HTTP_AUTH_HEADER", "DISABLE_CALLER_ID_HEADER"])
-def test_start_api_rejects_public_bind_when_env_file_disables_auth_headers(tmp_path, flag):
-    env_file = tmp_path / ".env.test"
-    env_file.write_text(f"{flag}=true\n", encoding="utf-8")
-    env = os.environ.copy()
-    env.update({"API_HOST": "0.0.0.0", "ENV_FILE": str(env_file)})
-    env.pop(flag, None)
+def test_start_api_does_not_read_env_file_directly():
+    script = (ROOT_DIR / "start-api.sh").read_text(encoding="utf-8")
 
-    result = subprocess.run(
-        ["./start-api.sh"],
-        cwd=ROOT_DIR,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 2
-    assert "API_HOST must be 127.0.0.1" in result.stderr
+    assert "ENV_FILE" not in script
+    assert "grep -E" not in script
 
 
 @pytest.mark.parametrize("flag", ["DISABLE_HTTP_AUTH_HEADER", "DISABLE_CALLER_ID_HEADER"])
@@ -175,7 +175,7 @@ def test_dev_local_env_guard_reads_selected_env_file(tmp_path):
         + "\n",
         encoding="utf-8",
     )
-    env = os.environ.copy()
+    env = _clean_root_env()
     env["ENV_FILE"] = str(env_file)
 
     result = subprocess.run(
@@ -191,19 +191,516 @@ def test_dev_local_env_guard_reads_selected_env_file(tmp_path):
     assert f"REDIS_URL in {env_file}" in result.stderr
 
 
-def test_dev_worker_service_command_injects_script_env(tmp_path):
-    script_env = tmp_path / "scripts.env"
-    script_env.write_text(
+def test_dev_migrate_rejects_database_name_mismatch(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/app_a",
+                "REDIS_URL=redis://127.0.0.1:26379/0",
+                "POSTGRES_DB=app_b",
+                "POSTGRES_HOST_PORT=25432",
+                "REDIS_HOST_PORT=26379",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env = _clean_root_env()
+    env["ENV_FILE"] = str(env_file)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "exit 0\n",
+    )
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    result = subprocess.run(
+        ["bash", "-c", "source scripts/dev/services.sh >/dev/null; migrate"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "DATABASE_URL database (app_a) must match POSTGRES_DB (app_b)" in result.stderr
+    assert "== Database ==" not in result.stdout
+
+
+def test_dev_start_target_rejects_database_port_mismatch(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:25433/app",
+                "REDIS_URL=redis://127.0.0.1:26379/0",
+                "POSTGRES_DB=app",
+                "POSTGRES_HOST_PORT=25432",
+                "REDIS_HOST_PORT=26379",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env = _clean_root_env()
+    env["ENV_FILE"] = str(env_file)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "exit 0\n",
+    )
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    result = subprocess.run(
+        ["bash", "-c", "source scripts/dev/services.sh >/dev/null; start_target api"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "DATABASE_URL port (25433) must match POSTGRES_HOST_PORT (25432)" in result.stderr
+    assert "== Application ==" not in result.stdout
+
+
+def test_dev_worker_service_command_injects_root_env(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
         "WORKER_CONCURRENCY=7\nWORKER_LOGLEVEL=DEBUG\nWORKER_RECOVERY_LOOP=false\n",
         encoding="utf-8",
     )
 
-    command = _service_command("worker", SCRIPT_ENV_FILE=str(script_env))
+    command = _service_command("worker", ENV_FILE=str(env_file))
 
     assert "WORKER_CONCURRENCY=7" in command
     assert "WORKER_LOGLEVEL=DEBUG" in command
     assert "WORKER_RECOVERY_LOOP=false" in command
     assert "start-worker.sh" in command
+
+
+def test_compose_wrapper_injects_root_env_file_values(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "TEMPLATE_NAME=template-from-env",
+                "COMPOSE_PROJECT_NAME=project-from-env",
+                "POSTGRES_DB=db_from_env",
+                "POSTGRES_HOST_PORT=35432",
+                "REDIS_HOST_PORT=36379",
+                "API_HOST_PORT=38100",
+                "WORKER_CONCURRENCY=6",
+                "WORKER_LOGLEVEL=DEBUG",
+                "WORKER_RECOVERY_LOOP=false",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "printf '%s\\n' \"COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME\"\n"
+        "printf '%s\\n' \"ENV_FILE=$ENV_FILE\"\n"
+        "printf '%s\\n' \"POSTGRES_DB=$POSTGRES_DB\"\n"
+        "printf '%s\\n' \"POSTGRES_HOST_PORT=$POSTGRES_HOST_PORT\"\n"
+        "printf '%s\\n' \"REDIS_HOST_PORT=$REDIS_HOST_PORT\"\n"
+        "printf '%s\\n' \"API_HOST_PORT=$API_HOST_PORT\"\n"
+        "printf '%s\\n' \"WORKER_CONCURRENCY=$WORKER_CONCURRENCY\"\n"
+        "printf '%s\\n' \"WORKER_LOGLEVEL=$WORKER_LOGLEVEL\"\n"
+        "printf '%s\\n' \"WORKER_RECOVERY_LOOP=$WORKER_RECOVERY_LOOP\"\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    env = _clean_root_env()
+    env["ENV_FILE"] = str(env_file)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    result = subprocess.run(
+        ["bash", "-c", "source scripts/lib/compose.sh >/dev/null; compose config"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "COMPOSE_PROJECT_NAME=project-from-env" in result.stdout
+    assert f"ENV_FILE={env_file}" in result.stdout
+    assert "POSTGRES_DB=db_from_env" in result.stdout
+    assert "POSTGRES_HOST_PORT=35432" in result.stdout
+    assert "REDIS_HOST_PORT=36379" in result.stdout
+    assert "API_HOST_PORT=38100" in result.stdout
+    assert "WORKER_CONCURRENCY=6" in result.stdout
+    assert "WORKER_LOGLEVEL=DEBUG" in result.stdout
+    assert "WORKER_RECOVERY_LOOP=false" in result.stdout
+
+
+def test_local_mode_rejects_running_compose_full_app(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "if [[ \"$*\" == \"compose --profile app ps api\"* ]]; then printf 'running\\n'; exit 0; fi\n"
+        "if [[ \"$*\" == \"compose --profile app ps worker\"* ]]; then exit 0; fi\n"
+        "exit 0\n",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "ENV_FILE": str(env_file),
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "RUN_DIR": str(tmp_path / "run"),
+            "LOG_DIR": str(tmp_path / "logs"),
+        }
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "source scripts/dev/services.sh >/dev/null; assert_no_compose_full_app_running_for_local",
+        ],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 4
+    assert "compose-full app services are running: api" in result.stderr
+    assert "./scripts/deploy.sh down compose-full" in result.stderr
+
+
+def test_local_mode_rejects_compose_full_app_from_same_repo_different_project(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "if [[ \"$1\" == \"ps\" && \"$*\" == *\"com.docker.compose.service=worker\"* ]]; then printf 'other-project-worker-1\\n'; exit 0; fi\n"
+        "if [[ \"$*\" == \"compose --profile app ps api\"* ]]; then exit 0; fi\n"
+        "if [[ \"$*\" == \"compose --profile app ps worker\"* ]]; then exit 0; fi\n"
+        "exit 0\n",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "ENV_FILE": str(env_file),
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "RUN_DIR": str(tmp_path / "run"),
+            "LOG_DIR": str(tmp_path / "logs"),
+            "COMPOSE_PROJECT_NAME": "current-project",
+        }
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "source scripts/dev/services.sh >/dev/null; assert_no_compose_full_app_running_for_local",
+        ],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 4
+    assert "compose-full app services are running: worker" in result.stderr
+
+
+def test_deploy_compose_full_status_allows_clean_local_mode(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "if [[ \"$*\" == \"compose --profile app ps\" ]]; then printf 'compose ps clean\\n'; exit 0; fi\n"
+        "exit 0\n",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "ENV_FILE": str(env_file),
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "RUN_DIR": str(tmp_path / "run"),
+            "LOG_DIR": str(tmp_path / "logs"),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", "./scripts/deploy.sh status compose-full"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "== Compose Full ==" in result.stdout
+    assert "compose ps clean" in result.stdout
+    assert "Mode Guard" not in result.stdout
+
+
+def test_deploy_compose_full_up_allows_clean_local_mode(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "if [[ \"$*\" == \"compose --profile app up -d --build api worker\" ]]; then printf 'compose up clean\\n'; exit 0; fi\n"
+        "exit 0\n",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "ENV_FILE": str(env_file),
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "RUN_DIR": str(tmp_path / "run"),
+            "LOG_DIR": str(tmp_path / "logs"),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", "./scripts/deploy.sh up compose-full"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "== Compose Full ==" in result.stdout
+    assert "compose up clean" in result.stdout
+
+
+def test_compose_full_rejects_local_worker_residual_log_writer(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    worker_log = logs_dir / "worker.log"
+    worker_log.write_text("", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "lsof",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *\"worker.log\"* ]]; then\n"
+        "  printf 'COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\\n'\n"
+        "  printf 'python3.1 12345 admin 1w REG 1,18 1 1 %s\\n' \"$4\"\n"
+        "fi\n",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "RUN_DIR": str(tmp_path / "run"),
+            "LOG_DIR": str(logs_dir),
+        }
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "source scripts/lib/modes.sh >/dev/null; assert_no_local_app_running_for_compose_full",
+        ],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 4
+    assert "local app processes are running: worker pid=12345" in result.stderr
+    assert "./scripts/dev.sh stop" in result.stderr
+
+
+def test_compose_full_residual_detection_requires_lsof_when_logs_exist(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "worker.log").write_text("", encoding="utf-8")
+    env = _clean_root_env()
+    env.update(
+        {
+            "PATH": "/bin:/usr/bin",
+            "RUN_DIR": str(tmp_path / "run"),
+            "LOG_DIR": str(logs_dir),
+        }
+    )
+
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            "source scripts/lib/modes.sh >/dev/null; assert_no_local_app_running_for_compose_full",
+        ],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "lsof is required for local process residual detection" in result.stderr
+
+
+def test_status_guard_warns_when_compose_full_app_is_running(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "docker",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
+        "if [[ \"$*\" == \"compose --profile app ps api\"* ]]; then exit 0; fi\n"
+        "if [[ \"$*\" == \"compose --profile app ps worker\"* ]]; then printf 'running\\n'; exit 0; fi\n"
+        "exit 0\n",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "ENV_FILE": str(env_file),
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "RUN_DIR": str(tmp_path / "run"),
+            "LOG_DIR": str(tmp_path / "logs"),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", "source scripts/dev/services.sh >/dev/null; warn_if_compose_full_app_running"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "WARN" in result.stdout
+    assert "compose-full" in result.stdout
+    assert "worker" in result.stdout
+
+
+def test_status_guard_warns_when_local_worker_residual_is_running(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "worker.log").write_text("", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "lsof",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *\"worker.log\"* ]]; then\n"
+        "  printf 'COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\\n'\n"
+        "  printf 'python3.1 23456 admin 1w REG 1,18 1 1 %s\\n' \"$4\"\n"
+        "fi\n",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "RUN_DIR": str(tmp_path / "run"),
+            "LOG_DIR": str(logs_dir),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", "source scripts/lib/modes.sh >/dev/null; warn_if_local_app_running"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "WARN" in result.stdout
+    assert "local" in result.stdout
+    assert "worker pid=23456" in result.stdout
+
+
+def test_dev_status_service_reports_residual_worker_process(tmp_path):
+    logs_dir = tmp_path / "logs"
+    run_dir = tmp_path / "run"
+    logs_dir.mkdir()
+    run_dir.mkdir()
+    (logs_dir / "worker.log").write_text("", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "lsof",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *\"worker.log\"* ]]; then\n"
+        "  printf 'COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\\n'\n"
+        "  printf 'python3.1 34567 admin 1w REG 1,18 1 1 %s\\n' \"$4\"\n"
+        "fi\n",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "RUN_DIR": str(run_dir),
+            "LOG_DIR": str(logs_dir),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", "source scripts/dev/services.sh >/dev/null; status_service worker"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "worker" in result.stdout
+    assert "residual" in result.stdout
+    assert "pid=34567" in result.stdout
 
 
 def test_jobs_cli_help_is_available_without_db():
@@ -1569,18 +2066,15 @@ def test_env_config_check_rejects_env_file_keys_missing_from_manifest(tmp_path):
     ]
 
 
-def test_env_config_check_rejects_script_keys_inside_env_example(tmp_path):
+def test_env_config_check_allows_launcher_keys_inside_env_example(tmp_path):
     env_file = tmp_path / ".env.example"
     env_file.write_text("API_PORT=8100\nWORKER_CONCURRENCY=4\n", encoding="utf-8")
 
     issues = check_file(env_file)
 
-    assert "API_PORT" in SCRIPT_OR_DEPLOYMENT_ENV_KEYS
-    assert "WORKER_CONCURRENCY" in SCRIPT_OR_DEPLOYMENT_ENV_KEYS
-    assert issues == [
-        f"{env_file}:1: script key must be set in scripts/.env, not application env: API_PORT",
-        f"{env_file}:2: script key must be set in scripts/.env, not application env: WORKER_CONCURRENCY",
-    ]
+    assert "API_PORT" in LAUNCHER_ENV_KEYS
+    assert "WORKER_CONCURRENCY" in LAUNCHER_ENV_KEYS
+    assert issues == []
 
 
 def test_verify_check_uses_default_env_config_scan():
@@ -1782,8 +2276,8 @@ def test_env_config_default_scan_includes_env_variants():
     }
 
     assert ".env.example" in relative_paths
-    assert "scripts/.env.example" in relative_paths
-    assert any(path.startswith("scripts/.env") for path in relative_paths)
+    assert "scripts/.env.example" not in relative_paths
+    assert not any(path.startswith("scripts/.env") for path in relative_paths)
 
 
 def test_workflow_smoke_accepts_standard_string_success_code():
