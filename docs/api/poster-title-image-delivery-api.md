@@ -25,7 +25,7 @@
 
 | 项 | 值 | 说明 |
 |---|---|---|
-| Base URL | `http://127.0.0.1:8100` | 本地 dev API |
+| Base URL | `http://47.119.149.179:18200` | 本地 dev API |
 | `SERVICE_API_KEY` | `dev-service-key` | 用于 `Authorization: Bearer` |
 | `CALLBACK_SIGNING_SECRET` | `dev-service-key` | 请求中传 `callback.url` 时必填；dev 默认可与 `SERVICE_API_KEY` 一致 |
 | `X-Request-ID` | `dev-poster-title-image-001` | 可选 |
