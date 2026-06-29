@@ -12,6 +12,7 @@
 | [`current/job-kernel.md`](current/job-kernel.md) | 当前 Job、幂等键、Attempt、Dispatch outbox、Callback outbox、root/child lineage 和表设计边界 |
 | [`current/workflow-kernel.md`](current/workflow-kernel.md) | 当前 DAG-lite root/child workflow、child Job 执行、root 汇总和 billing scope 行为 |
 | [`current/template-readiness.md`](current/template-readiness.md) | 当前仓库作为 AI Job 微服务模板复制给新业务前的就绪边界、必改项和最小验收 |
+| [`current/template-project-config.md`](current/template-project-config.md) | 复制模板成为真实业务项目时，项目身份、数据库名、compose 命名空间和对象存储命名空间的替换清单 |
 | [`current/job-load-testing.md`](current/job-load-testing.md) | Job 发布、查询和完整异步流程的 Locust 压测选型、执行、指标和评估方法 |
 | [`current/job-load-test-plan.md`](current/job-load-test-plan.md) | Job 压测的分阶段执行命令、浏览器实时查看和离线报告查看方法 |
 | [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` 查询 Job 状态、定位异步任务问题和常见排障顺序 |
