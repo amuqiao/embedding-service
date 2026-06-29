@@ -56,7 +56,7 @@
 ```bash
 ./scripts/real-flow.sh poster-title-image \
   --confirm-cost \
-  --reference .data/title/标题2.png \
+  --reference .data/title/Silent_Heart_Stolen_Love.png \
   --language ja \
   --title-text "愛が終わりを告げたとき" \
   --download-outputs \
