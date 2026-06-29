@@ -1420,6 +1420,282 @@ def test_jobs_inspect_json_includes_children_only_when_requested(monkeypatch):
     assert payload["children"] == [{"workflow_node_key": "probe.0", "job_id": "child-job-1"}]
 
 
+def test_jobs_inspect_json_includes_single_job_diagnosis(monkeypatch):
+    attempt_id = "attempt-1"
+
+    def fake_with_connection(action):
+        monkeypatch.setattr(
+            queries,
+            "get_job",
+            lambda _conn, _job_id: {
+                "id": "root-job-1",
+                "status": "running",
+                "active_attempt_id": attempt_id,
+            },
+        )
+        monkeypatch.setattr(
+            queries,
+            "attempts",
+            lambda _conn, _job_id: [
+                {
+                    "id": attempt_id,
+                    "status": "pending",
+                    "dispatch_status": "dead_letter",
+                    "dispatch_last_error": {"code": "TASKIQ_PUBLISH_FAILED"},
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            queries,
+            "callbacks",
+            lambda _conn, _job_id: [
+                {
+                    "id": "callback-1",
+                    "status": "dead_letter",
+                    "last_error": {"code": "CALLBACK_HTTP_ERROR"},
+                    "dead_lettered_at": datetime(2026, 6, 29, 7, 0, tzinfo=timezone.utc),
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            queries,
+            "timeline",
+            lambda _conn, _job_id, *, limit: [{"event_type": "dispatch.published"}],
+        )
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["inspect", "root-job-1", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["diagnosis"]["status"] == "critical"
+    signals = {item["signal"] for item in payload["diagnosis"]["findings"]}
+    assert "dispatch_dead_letter" in signals
+    assert "callback_dead_letter" in signals
+    assert "./scripts/jobs.sh stuck --older-than 1m --limit 20" in payload["diagnosis"]["next_checks"]
+
+
+def test_jobs_diagnose_command_outputs_human_and_json(monkeypatch):
+    def fake_with_connection(action):
+        monkeypatch.setattr(
+            queries,
+            "get_job",
+            lambda _conn, _job_id: {
+                "id": "root-job-1",
+                "status": "queued",
+                "active_attempt_id": "attempt-1",
+            },
+        )
+        monkeypatch.setattr(
+            queries,
+            "attempts",
+            lambda _conn, _job_id: [
+                {
+                    "id": "attempt-1",
+                    "status": "pending",
+                    "dispatch_status": "published",
+                    "published_at": datetime(2000, 1, 1, tzinfo=timezone.utc),
+                }
+            ],
+        )
+        monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(
+            queries,
+            "timeline",
+            lambda _conn, _job_id, *, limit: [{"event_type": "dispatch.published"}],
+        )
+        monkeypatch.setattr(queries, "child_jobs", lambda _conn, _root_job_id: [])
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    human = RUNNER.invoke(jobs_cli_app, ["diagnose", "root-job-1"])
+    json_result = RUNNER.invoke(jobs_cli_app, ["diagnose", "root-job-1", "--json"])
+
+    assert human.exit_code == 0
+    assert "== Job Diagnosis ==" in human.stdout
+    assert "published_dispatch_not_claimed" in human.stdout
+    assert '"diagnosis"' not in human.stdout
+    assert json_result.exit_code == 0
+    payload = json.loads(json_result.stdout)
+    assert payload["job_id"] == "root-job-1"
+    assert payload["diagnosis"]["status"] == "warning"
+    assert payload["diagnosis"]["findings"][0]["signal"] == "published_dispatch_not_claimed"
+    assert payload["diagnosis"]["findings"][0]["evidence"]["stale"] is True
+
+
+def test_jobs_diagnose_keeps_fresh_published_attempt_as_info(monkeypatch):
+    def fake_with_connection(action):
+        monkeypatch.setattr(
+            queries,
+            "get_job",
+            lambda _conn, _job_id: {
+                "id": "root-job-1",
+                "status": "queued",
+                "active_attempt_id": "attempt-1",
+            },
+        )
+        monkeypatch.setattr(
+            queries,
+            "attempts",
+            lambda _conn, _job_id: [
+                {
+                    "id": "attempt-1",
+                    "status": "pending",
+                    "dispatch_status": "published",
+                    "published_at": datetime(2999, 1, 1, tzinfo=timezone.utc),
+                }
+            ],
+        )
+        monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["diagnose", "root-job-1", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["diagnosis"]["status"] == "info"
+    finding = payload["diagnosis"]["findings"][0]
+    assert finding["signal"] == "published_dispatch_not_claimed"
+    assert finding["evidence"]["stale"] is False
+
+
+def test_jobs_diagnose_keeps_fresh_dispatch_and_callback_due_as_info(monkeypatch):
+    def fake_with_connection(action):
+        monkeypatch.setattr(
+            queries,
+            "get_job",
+            lambda _conn, _job_id: {
+                "id": "root-job-1",
+                "status": "queued",
+                "active_attempt_id": "attempt-1",
+            },
+        )
+        monkeypatch.setattr(
+            queries,
+            "attempts",
+            lambda _conn, _job_id: [
+                {
+                    "id": "attempt-1",
+                    "status": "pending",
+                    "dispatch_status": "pending",
+                    "next_attempt_at": None,
+                    "created_at": datetime(2999, 1, 1, tzinfo=timezone.utc),
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            queries,
+            "callbacks",
+            lambda _conn, _job_id: [
+                {
+                    "id": "callback-1",
+                    "status": "pending",
+                    "next_attempt_at": None,
+                    "created_at": datetime(2999, 1, 1, tzinfo=timezone.utc),
+                }
+            ],
+        )
+        monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["diagnose", "root-job-1", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["diagnosis"]["status"] == "info"
+    findings = {item["signal"]: item for item in payload["diagnosis"]["findings"]}
+    assert findings["dispatch_due"]["severity"] == "info"
+    assert findings["dispatch_due"]["evidence"]["stale"] is False
+    assert findings["callback_due"]["severity"] == "info"
+    assert findings["callback_due"]["evidence"]["stale"] is False
+
+
+def test_jobs_diagnose_keeps_succeeded_job_failed_attempt_history_as_info(monkeypatch):
+    def fake_with_connection(action):
+        monkeypatch.setattr(
+            queries,
+            "get_job",
+            lambda _conn, _job_id: {
+                "id": "root-job-1",
+                "status": "succeeded",
+                "active_attempt_id": "attempt-2",
+            },
+        )
+        monkeypatch.setattr(
+            queries,
+            "attempts",
+            lambda _conn, _job_id: [
+                {
+                    "id": "attempt-1",
+                    "status": "failed",
+                    "error_kind": "retryable",
+                    "failure_phase": "execute",
+                    "retry_decision": "retry",
+                }
+            ],
+        )
+        monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["diagnose", "root-job-1", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["diagnosis"]["status"] == "info"
+    finding = payload["diagnosis"]["findings"][0]
+    assert finding["signal"] == "attempt_failed"
+    assert finding["severity"] == "info"
+
+
+def test_jobs_diagnose_includes_children_only_when_requested(monkeypatch):
+    child_job_calls = []
+
+    def fake_with_connection(action):
+        monkeypatch.setattr(
+            queries,
+            "get_job",
+            lambda _conn, _job_id: {
+                "id": "root-job-1",
+                "status": "running",
+                "active_attempt_id": None,
+            },
+        )
+        monkeypatch.setattr(queries, "attempts", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
+
+        def fake_child_jobs(_conn, _root_job_id):
+            child_job_calls.append("child_jobs")
+            return [{"job_id": "child-job-1", "status": "running"}]
+
+        monkeypatch.setattr(queries, "child_jobs", fake_child_jobs)
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    without_children = RUNNER.invoke(jobs_cli_app, ["diagnose", "root-job-1", "--json"])
+    with_children = RUNNER.invoke(jobs_cli_app, ["diagnose", "root-job-1", "--include-children", "--json"])
+
+    assert without_children.exit_code == 0
+    assert with_children.exit_code == 0
+    assert child_job_calls == ["child_jobs"]
+    without_payload = json.loads(without_children.stdout)
+    with_payload = json.loads(with_children.stdout)
+    assert without_payload["diagnosis"]["findings"][0]["signal"] == "job_waiting_children_unchecked"
+    assert with_payload["diagnosis"]["findings"][0]["signal"] == "job_waiting_children"
+
+
 def test_jobs_inspect_human_summarizes_workflow_plan(monkeypatch):
     long_prompt = "Analyze title image. " * 40
 

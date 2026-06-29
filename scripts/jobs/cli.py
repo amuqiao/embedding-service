@@ -41,6 +41,14 @@ INSPECT_HELP_EPILOG = """\b
   ./scripts/jobs.sh inspect <job_id> --include-children --json
 """
 
+DIAGNOSE_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh diagnose <job_id>
+  ./scripts/jobs.sh diagnose <job_id> --include-children
+  ./scripts/jobs.sh diagnose <job_id> --older-than 1m
+  ./scripts/jobs.sh diagnose <job_id> --json
+"""
+
 TIMELINE_HELP_EPILOG = """\b
 示例：
   ./scripts/jobs.sh timeline <job_id> --limit 50
@@ -118,6 +126,7 @@ HELP_EPILOG = """\b
   list       查看最近 Job 摘要，支持状态、类型、调用方、时间窗口和 limit 过滤。
   show       查看单个 Job 权威状态。
   inspect    聚合查看单个 Job、attempt、callback 和最近 timeline。
+  diagnose   诊断单个 Job 的 attempt、dispatch、callback、dead-letter 和 claim 风险。
   timeline   查看 lifecycle job events。
   attempts   查看 lifecycle attempts。
   callbacks  查看 lifecycle callback outbox。
@@ -564,6 +573,15 @@ def _log_match_columns() -> list[tuple[str, str]]:
     ]
 
 
+def _diagnosis_columns() -> list[tuple[str, str]]:
+    return [
+        ("severity", "severity"),
+        ("area", "area"),
+        ("signal", "signal"),
+        ("message", "message"),
+    ]
+
+
 def _job_summary(job: dict) -> dict[str, Any]:
     return {
         "job_id": str(job.get("id")),
@@ -883,6 +901,264 @@ def _inspect_payload_summary(job: dict) -> dict[str, Any]:
     }
 
 
+def _as_aware_utc(value: Any) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _is_due(value: Any, *, now: datetime) -> bool:
+    due_at = _as_aware_utc(value)
+    return due_at is None or due_at <= now
+
+
+def _older_than(value: Any, *, now: datetime, older_than: timedelta) -> bool:
+    started_at = _as_aware_utc(value)
+    if started_at is None:
+        return True
+    return started_at <= now - older_than
+
+
+def _event_types(timeline: list[dict]) -> set[str]:
+    return {str(row.get("event_type")) for row in timeline if row.get("event_type") is not None}
+
+
+def _diagnose_job(
+    payload: dict[str, Any],
+    *,
+    include_children: bool,
+    older_than: timedelta | None = None,
+) -> dict[str, Any]:
+    job = payload["job"]
+    attempts = payload.get("attempts") or []
+    callbacks = payload.get("callbacks") or []
+    timeline = payload.get("timeline") or []
+    children = payload.get("children") or []
+    job_id = str(job.get("id"))
+    now = datetime.now(timezone.utc)
+    older_than = older_than or timedelta(minutes=1)
+    older_than_seconds = int(older_than.total_seconds())
+    findings: list[dict[str, Any]] = []
+
+    def add(severity: str, area: str, signal: str, message: str, evidence: dict[str, Any] | None = None) -> None:
+        findings.append(
+            {
+                "severity": severity,
+                "area": area,
+                "signal": signal,
+                "message": message,
+                "evidence": evidence or {},
+            }
+        )
+
+    job_status = job.get("status")
+    active_attempt_id = job.get("active_attempt_id")
+    if job_status in {"queued", "running"} and active_attempt_id is None:
+        if job_status == "running":
+            if include_children:
+                active_children = [row for row in children if row.get("status") in {"queued", "running"}]
+                failed_children = [row for row in children if row.get("status") == "failed"]
+                if failed_children:
+                    add(
+                        "critical",
+                        "workflow",
+                        "workflow_child_failed",
+                        "root 正在等待 child 收敛，且存在 failed child。",
+                        {"failed_children": len(failed_children), "sample": failed_children[:3]},
+                    )
+                elif active_children:
+                    add(
+                        "info",
+                        "workflow",
+                        "job_waiting_children",
+                        "root 没有 active attempt，正在等待 internal child Job。",
+                        {"active_children": len(active_children), "sample": active_children[:3]},
+                    )
+                else:
+                    add("info", "workflow", "job_waiting_reconcile", "root 没有 active attempt，可能正在等待 workflow reconciler 收敛。")
+            else:
+                add(
+                    "info",
+                    "workflow",
+                    "job_waiting_children_unchecked",
+                    "running Job 没有 active attempt；如它是 workflow root，请用 --include-children 查看 child 状态。",
+                )
+        else:
+            add("critical", "job", "active_attempt_missing", "queued Job 缺少 active_attempt_id，worker 无法领取。")
+
+    if job_status == "failed":
+        add("warning", "job", "job_failed", "Job 已失败；优先查看 job.error 和 failed attempt。", {"error": job.get("error")})
+
+    events = _event_types(timeline)
+    for attempt in attempts:
+        attempt_id = attempt.get("id")
+        attempt_status = attempt.get("status")
+        dispatch_status = attempt.get("dispatch_status")
+        if dispatch_status == "dead_letter":
+            add(
+                "critical",
+                "dispatch",
+                "dispatch_dead_letter",
+                "dispatch outbox 已 dead-letter，worker 任务发布路径已经失败。",
+                {"attempt_id": attempt_id, "dispatch_last_error": attempt.get("dispatch_last_error")},
+            )
+        elif dispatch_status in {"pending", "retrying"} and _is_due(attempt.get("next_attempt_at"), now=now):
+            reference_at = attempt.get("next_attempt_at") or attempt.get("created_at")
+            stale = _older_than(reference_at, now=now, older_than=older_than)
+            add(
+                "warning" if stale else "info",
+                "dispatch",
+                "dispatch_due",
+                "dispatch 到期但尚未成功发布；短时间内可能正常，超过阈值后检查 outbox 发布和 broker。",
+                {
+                    "attempt_id": attempt_id,
+                    "dispatch_status": dispatch_status,
+                    "next_attempt_at": attempt.get("next_attempt_at"),
+                    "older_than_seconds": older_than_seconds,
+                    "stale": stale,
+                },
+            )
+        elif attempt_status == "pending" and dispatch_status == "published":
+            signal = "published_dispatch_not_claimed"
+            stale = _older_than(attempt.get("published_at"), now=now, older_than=older_than)
+            severity = "warning" if stale and job_status in {"queued", "running"} else "info"
+            add(
+                severity,
+                "claim",
+                signal,
+                "dispatch 已发布但 attempt 仍是 pending；短时间内可能正常，超过阈值或持续 stuck 时查 worker/broker 消费。",
+                {
+                    "attempt_id": attempt_id,
+                    "published_at": attempt.get("published_at"),
+                    "older_than_seconds": older_than_seconds,
+                    "stale": stale,
+                },
+            )
+
+        if attempt_status == "running":
+            lease_expires_at = _as_aware_utc(attempt.get("lease_expires_at"))
+            if lease_expires_at is not None and lease_expires_at <= now:
+                add(
+                    "critical",
+                    "attempt",
+                    "running_attempt_lease_expired",
+                    "running attempt lease 已过期；检查 worker 心跳和 recovery。",
+                    {"attempt_id": attempt_id, "lease_expires_at": attempt.get("lease_expires_at"), "worker_id": attempt.get("worker_id")},
+                )
+            else:
+                add(
+                    "info",
+                    "attempt",
+                    "active_attempt_running",
+                    "attempt 正在运行；如长期无进展，继续看 worker 日志和外部依赖。",
+                    {"attempt_id": attempt_id, "worker_id": attempt.get("worker_id"), "lease_expires_at": attempt.get("lease_expires_at")},
+                )
+        elif attempt_status == "failed":
+            severity = "info" if job_status == "succeeded" else "warning"
+            add(
+                severity,
+                "attempt",
+                "attempt_failed",
+                "存在 failed attempt；如果 Job 已 succeeded，这是历史重试证据，否则查看 error_kind、failure_phase 和 retry_decision。",
+                {
+                    "attempt_id": attempt_id,
+                    "error_kind": attempt.get("error_kind"),
+                    "failure_phase": attempt.get("failure_phase"),
+                    "retry_decision": attempt.get("retry_decision"),
+                },
+            )
+
+    for callback in callbacks:
+        callback_id = callback.get("id")
+        callback_status = callback.get("status")
+        if callback_status == "dead_letter":
+            add(
+                "critical",
+                "callback",
+                "callback_dead_letter",
+                "callback delivery 已 dead-letter；Job 终态不受影响，但回调没有送达。",
+                {"callback_id": callback_id, "last_error": callback.get("last_error")},
+            )
+        elif callback_status == "leased":
+            lease_expires_at = _as_aware_utc(callback.get("lease_expires_at"))
+            if lease_expires_at is not None and lease_expires_at <= now:
+                add(
+                    "critical",
+                    "callback",
+                    "callback_lease_expired",
+                    "callback lease 已过期；检查 callback 投递和 recovery。",
+                    {"callback_id": callback_id, "lease_expires_at": callback.get("lease_expires_at")},
+                )
+        elif callback_status in {"pending", "retrying"} and _is_due(callback.get("next_attempt_at"), now=now):
+            reference_at = callback.get("next_attempt_at") or callback.get("created_at")
+            stale = _older_than(reference_at, now=now, older_than=older_than)
+            add(
+                "warning" if stale else "info",
+                "callback",
+                "callback_due",
+                "callback 已到期等待投递或重试；短时间内可能正常，超过阈值后检查 callback worker 和目标服务。",
+                {
+                    "callback_id": callback_id,
+                    "status": callback_status,
+                    "next_attempt_at": callback.get("next_attempt_at"),
+                    "older_than_seconds": older_than_seconds,
+                    "stale": stale,
+                },
+            )
+
+    if "dispatch.published" in events and "attempt.claimed" not in events and job_status in {"queued", "running"}:
+        add(
+            "info",
+            "timeline",
+            "published_without_claim_event",
+            "timeline 中已有 dispatch.published 但没有 attempt.claimed；结合 Attempts 表判断是否仍 pending。",
+        )
+
+    if include_children:
+        child_dispatch_dead = [row for row in children if row.get("dispatch_status") == "dead_letter"]
+        if child_dispatch_dead:
+            add(
+                "critical",
+                "workflow",
+                "child_dispatch_dead_letter",
+                "存在 child Job 的 dispatch dead-letter。",
+                {"count": len(child_dispatch_dead), "sample": child_dispatch_dead[:3]},
+            )
+
+    if not findings:
+        add("ok", "job", "no_obvious_risk", "当前 Job 证据没有明显 attempt、dispatch、callback 或 claim 风险。")
+
+    severity_rank = {"critical": 3, "warning": 2, "info": 1, "ok": 0}
+    worst = max((severity_rank.get(item["severity"], 0) for item in findings), default=0)
+    status = {3: "critical", 2: "warning", 1: "info", 0: "ok"}[worst]
+    next_checks: list[str] = []
+    signals = {item["signal"] for item in findings}
+    if signals & {"published_dispatch_not_claimed", "published_without_claim_event", "dispatch_due", "dispatch_dead_letter"}:
+        next_checks.extend(
+            [
+                f"./scripts/jobs.sh timeline {job_id} --limit 100",
+                f"./scripts/jobs.sh stuck --older-than 1m --limit 20",
+                "tail -n 100 logs/worker.log",
+            ]
+        )
+    if signals & {"running_attempt_lease_expired", "active_attempt_running", "attempt_failed"}:
+        next_checks.append(f"./scripts/jobs.sh attempts {job_id}")
+    if signals & {"callback_dead_letter", "callback_lease_expired", "callback_due"}:
+        next_checks.append(f"./scripts/jobs.sh callbacks {job_id}")
+    if signals & {"job_waiting_children", "workflow_child_failed", "child_dispatch_dead_letter", "job_waiting_children_unchecked"}:
+        next_checks.append(f"./scripts/jobs.sh inspect {job_id} --include-children --events-limit 50")
+    if status in {"critical", "warning"}:
+        next_checks.append("docker compose logs --tail=100 postgres")
+
+    deduped_checks: list[str] = []
+    for check in next_checks:
+        if check not in deduped_checks:
+            deduped_checks.append(check)
+    return {"status": status, "findings": findings, "next_checks": deduped_checks}
+
+
 def _render_inspect_human(payload: dict[str, Any], *, include_children: bool) -> None:
     job = payload["job"]
     attempts = payload["attempts"]
@@ -899,6 +1175,8 @@ def _render_inspect_human(payload: dict[str, Any], *, include_children: bool) ->
 
     _render_job_detail_sections(job)
 
+    _render_diagnosis_human(payload["diagnosis"], title="Diagnosis")
+
     formatters.section("Attempts")
     formatters.print_table(attempts, _attempt_columns(), empty_message="no attempts")
     if callbacks:
@@ -912,6 +1190,25 @@ def _render_inspect_human(payload: dict[str, Any], *, include_children: bool) ->
         children = payload.get("children") or []
         formatters.event("OK", "children", f"count={len(children)}")
         formatters.print_table(children, _child_job_columns(), empty_message="no workflow children")
+
+
+def _render_diagnosis_human(diagnosis: dict[str, Any], *, title: str = "Job Diagnosis") -> None:
+    formatters.section(title)
+    formatters.event(diagnosis["status"].upper(), "diagnosis", f"findings={len(diagnosis['findings'])}")
+    rows = [
+        {
+            "severity": item["severity"],
+            "area": item["area"],
+            "signal": item["signal"],
+            "message": item["message"],
+        }
+        for item in diagnosis["findings"]
+    ]
+    formatters.print_table(rows, _diagnosis_columns())
+    if diagnosis.get("next_checks"):
+        formatters.section("Next Checks")
+        for item in diagnosis["next_checks"]:
+            print(f"- {item}")
 
 
 def _registered_job_type_specs() -> list[dict[str, Any]]:
@@ -1910,6 +2207,7 @@ def inspect(
         }
         if include_children:
             payload["children"] = queries.child_jobs(conn, job_id)
+        payload["diagnosis"] = _diagnose_job(payload, include_children=include_children)
         return payload
 
     payload = _with_connection(action)
@@ -1920,6 +2218,56 @@ def inspect(
         formatters.print_json(payload)
         return
     _render_inspect_human(payload, include_children=include_children)
+
+
+@app.command(help="诊断单个 Job 的 attempt、dispatch、callback 和 claim 风险。", epilog=DIAGNOSE_HELP_EPILOG)
+def diagnose(
+    job_id: JobIdArgument,
+    include_children: Annotated[
+        bool,
+        typer.Option("--include-children/--no-children", help="是否包含 workflow internal child jobs；默认只诊断 root job。"),
+    ] = False,
+    events_limit: Annotated[
+        int,
+        typer.Option("--events-limit", min=1, max=1000, help="用于诊断的最近事件条数。"),
+    ] = 100,
+    older_than: Annotated[
+        str,
+        typer.Option("--older-than", help="把刚发布/刚到期状态升为 warning 的最小年龄，例如 1m。"),
+    ] = "1m",
+    json_output: JsonOption = False,
+) -> None:
+    try:
+        older_than_delta = parse_duration(older_than)
+    except ValueError as exc:
+        print(f"ERROR: invalid --older-than: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+
+    def action(conn):
+        job = queries.get_job(conn, job_id)
+        if job is None:
+            return None
+        payload = {
+            "job": job,
+            "attempts": queries.attempts(conn, job_id),
+            "callbacks": queries.callbacks(conn, job_id),
+            "timeline": queries.timeline(conn, job_id, limit=events_limit),
+        }
+        if include_children:
+            payload["children"] = queries.child_jobs(conn, job_id)
+        return {
+            "job_id": job_id,
+            "diagnosis": _diagnose_job(payload, include_children=include_children, older_than=older_than_delta),
+        }
+
+    payload = _with_connection(action)
+    if payload is None:
+        print(f"ERROR: job not found: {job_id}", file=sys.stderr)
+        raise typer.Exit(3)
+    if json_output:
+        formatters.print_json(payload)
+        return
+    _render_diagnosis_human(payload["diagnosis"])
 
 
 def _run_related_collection(

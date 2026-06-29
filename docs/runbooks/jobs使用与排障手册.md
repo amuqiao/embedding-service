@@ -28,7 +28,7 @@ Job 是否积压?
   -> summary / list
 
 单个 Job 卡在哪里?
-  -> inspect / timeline / attempts / callbacks
+  -> diagnose / inspect / timeline / attempts / callbacks
 
 是否存在卡住的 lease 或 outbox?
   -> stuck
@@ -50,8 +50,9 @@ Job 是否积压?
 5. capacity 看 MAX_ACTIVE_JOBS 当前水位
 6. latency 看 queue/run/lifecycle p95
 7. list 找具体异常 Job
-8. inspect 深挖单个 Job
-9. stuck 查 lease/outbox 卡住
+8. diagnose 快速判断单个 Job 的 claim / dispatch / callback 风险
+9. inspect 深挖单个 Job 原始证据
+10. stuck 查 lease/outbox 卡住
 ```
 
 ## 使用前提
@@ -77,7 +78,10 @@ DB_SSL        可选；false/0/no/off 且 DATABASE_URL 未显式配置 sslmode �
 ```bash
 ./scripts/jobs.sh summary --since 10m --json
 ./scripts/jobs.sh doctor --since 10m --json
+./scripts/jobs.sh diagnose <job_id> --json
 ```
+
+默认输出面向人读，会主动压缩 payload、分 section 展示结论和下一步命令。`--json` 输出稳定结构，stdout 只包含 JSON，适合自动化解析；不要用人读表格做脚本解析。
 
 ## 命令速查
 
@@ -85,13 +89,14 @@ DB_SSL        可选；false/0/no/off 且 DATABASE_URL 未显式配置 sslmode �
 | --- | --- | --- |
 | `pressure` | 聚合压测窗口并给出瓶颈方向 | 每一档 Locust 压测后首选 |
 | `doctor` | 对 summary 结果做诊断并给下一步命令 | 新维护人员或不确定从哪里查时先用 |
+| `diagnose` | 诊断单个 Job 的 attempt、dispatch、callback、dead-letter 和 claim 风险 | 已有 `job_id`，需要快速判断卡在哪里 |
 | `drain` | 判断当前 scope 是否还有 active 或 stuck 证据 | 压测前后判断是否可以进入下一档 |
 | `summary` | 汇总 Job、attempt、dispatch、callback 状态 | 看当前窗口的关键计数和水位 |
 | `capacity` | 查看全局 active 水位和窗口估算 | 判断是否接近 `MAX_ACTIVE_JOBS` |
 | `latency` | 按维度统计生命周期耗时 | 判断慢在排队、执行还是整体生命周期 |
 | `list` | 查看最近 Job 摘要 | 找异常 Job 样本 |
 | `show` | 查看单个 Job 权威状态 | 只需要 Job 当前事实 |
-| `inspect` | 聚合查看单个 Job、attempt、callback、timeline | 单 Job 深挖首选 |
+| `inspect` | 聚合查看单个 Job、diagnosis、attempt、callback、timeline | 单 Job 深挖首选 |
 | `timeline` | 查看 Job 事件流 | 追状态流转 |
 | `attempts` | 查看执行 attempt | 查 worker、lease、失败阶段 |
 | `callbacks` | 查看 callback outbox | 查 callback 投递 |
@@ -389,25 +394,86 @@ success_rate 低
 ./scripts/jobs.sh list --client-request-id <client_request_id>
 ```
 
-`list` 适合找样本，不适合深挖。拿到 `job_id` 后用 `inspect`。
+`list` 适合找样本，不适合深挖。拿到 `job_id` 后先用 `diagnose` 判断风险，再用 `inspect` 深挖原始证据。
 
-### 2. 聚合查看单个 Job
+### 2. 先看单 Job 诊断结论
+
+已经拿到 `job_id` 时，先用 `diagnose` 看脚本给出的风险分类：
+
+```bash
+./scripts/jobs.sh diagnose <job_id>
+./scripts/jobs.sh diagnose <job_id> --include-children
+./scripts/jobs.sh diagnose <job_id> --older-than 1m
+./scripts/jobs.sh diagnose <job_id> --json
+```
+
+`diagnose` 是单 Job 入口，和窗口级 `doctor` 不同：
+
+| 命令 | 作用域 | 适合读者 |
+|---|---|---|
+| `doctor --since 10m` | 一个时间窗口内的整体 Job / dispatch / callback 计数 | 人工巡检、压测外的全局判断 |
+| `diagnose <job_id>` | 单个 Job 的 attempt、dispatch、callback、claim 风险 | 已有异常 Job 样本后的快速定位 |
+
+默认情况下，`diagnose` 和 `inspect` 一样只看 root job 的证据。排查 workflow root 等待 child 的问题时，显式加 `--include-children`。
+
+`--older-than` 控制“刚发布 / 刚到期”的状态什么时候从 `info` 升为 `warning`，默认是 `1m`。这能避免刚入队、刚 dispatch、刚到期重试的正常瞬时窗口被当成异常。
+
+人读输出会显示：
+
+```text
+Job Diagnosis
+  severity / area / signal / message
+
+Next Checks
+  下一步建议命令
+```
+
+JSON 输出会保留结构化字段：
+
+```text
+diagnosis.status
+diagnosis.findings[].severity
+diagnosis.findings[].area
+diagnosis.findings[].signal
+diagnosis.findings[].evidence
+diagnosis.next_checks[]
+```
+
+常见 `signal`：
+
+| signal | 含义 | 下一步 |
+|---|---|---|
+| `published_dispatch_not_claimed` | dispatch 已发布，但 attempt 还没被 worker claim | 短时间内看作 `info`；超过 `--older-than` 后看 worker 日志、timeline、`stuck --older-than 1m` |
+| `dispatch_due` | dispatch 到期但仍未发布 | 短时间内看作 `info`；超过 `--older-than` 后查 outbox 发布和 broker |
+| `dispatch_dead_letter` | Taskiq 发布路径已 dead-letter | 查 `dispatch_last_error`，先不要重跑业务 |
+| `running_attempt_lease_expired` | running attempt lease 已过期 | 查 worker 心跳和 recovery |
+| `callback_due` | callback 到期等待投递或重试 | 短时间内看作 `info`；超过 `--older-than` 后查 callback worker 和目标服务 |
+| `callback_dead_letter` | callback 投递已 dead-letter | Job 终态不受影响，但回调没有送达 |
+| `job_waiting_children` | workflow root 正在等待 child | 用 `inspect --include-children` 查看 child |
+| `workflow_child_failed` | workflow child 已 failed | inspect failed child 的 attempt/error |
+
+### 3. 聚合查看单个 Job 原始证据
 
 ```bash
 ./scripts/jobs.sh inspect <job_id>
+./scripts/jobs.sh inspect <job_id> --include-children
 ./scripts/jobs.sh inspect <job_id> --events-limit 50 --json
 ```
 
 `inspect` 一次返回：
 
 ```text
-job       Job 当前状态
-attempts  执行尝试
-callbacks callback outbox
-timeline  按 created_at 升序返回的 JobEvent，受 events-limit 限制
+job        Job 当前状态
+diagnosis  单 Job 风险摘要；人读输出中展示为 Diagnosis section，JSON 输出中是 diagnosis 字段
+attempts   执行尝试
+callbacks  callback outbox
+timeline   按 created_at 升序返回的 JobEvent，受 events-limit 限制
+children   只有传入 --include-children 时返回 workflow internal child jobs
 ```
 
-### 3. 只查某一类证据
+默认人读输出适合维护人员扫读，会隐藏或压缩长 payload。`--json` 会保留完整 `job`、`attempts`、`callbacks`、`timeline` 和 `diagnosis`，适合复制给 AI 或自动化工具继续分析。`inspect` 的 `diagnosis` 也遵循 root-only 默认；只有加 `--include-children` 时才把 child Job 状态纳入诊断。
+
+### 4. 只查某一类证据
 
 ```bash
 ./scripts/jobs.sh show <job_id>
@@ -574,6 +640,7 @@ stuck 有结果
 ### 单个 Job 一直 running
 
 ```bash
+./scripts/jobs.sh diagnose <job_id>
 ./scripts/jobs.sh inspect <job_id> --events-limit 50
 ./scripts/jobs.sh attempts <job_id>
 ./scripts/jobs.sh timeline <job_id> --limit 100
@@ -588,6 +655,9 @@ attempt lease 过期
 timeline 没有 attempt.claimed
   -> dispatch/broker/worker 领取路径。
 
+diagnose 显示 published_dispatch_not_claimed
+  -> 短时间内可能是刚发布后的锁竞争；如果持续存在或 stuck 也命中，查 worker/broker。
+
 timeline 有 attempt.claimed 但没有终态
   -> Job 执行路径、worker 日志、外部依赖。
 ```
@@ -595,6 +665,7 @@ timeline 有 attempt.claimed 但没有终态
 ### callback 没送到
 
 ```bash
+./scripts/jobs.sh diagnose <job_id>
 ./scripts/jobs.sh callbacks <job_id>
 ./scripts/jobs.sh inspect <job_id>
 ./scripts/jobs.sh stuck --older-than 10m
