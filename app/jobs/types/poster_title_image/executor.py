@@ -24,6 +24,11 @@ from app.integrations.storage import storage
 from app.jobs.adapters.cpp_oss_url_ref import canonical_ref_from_cpp_oss_url_ref, cpp_oss_url_ref_from_output_object
 from app.jobs.adapters.http_url_input import read_http_url_bytes
 from app.jobs.base import JobExecutor
+from app.jobs.model_selection import (
+    poster_title_image_generation_allowed_model_ids,
+    poster_title_image_generation_default_model_id,
+    poster_title_image_style_probe_model_id,
+)
 from app.jobs.registry import register_job_type
 from app.jobs.types.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_ALL_ITEMS_FAILED,
@@ -112,7 +117,7 @@ Scale: Render the title LARGE — main-title proportions. The text block must fi
 
 
 def _style_probe_provider_model() -> str:
-    model_id = settings.registry.poster_title_image_style_probe_model_id
+    model_id = _style_probe_model_id()
     model = get_enabled_model(model_id)
     if model is None:
         raise AppError("MODEL_NOT_AVAILABLE", f"模型不可用: {model_id}")
@@ -120,13 +125,13 @@ def _style_probe_provider_model() -> str:
 
 
 def _style_probe_model_id_for_reference(reference_image: ImageInput) -> str:
-    model_id = settings.registry.poster_title_image_style_probe_model_id
+    model_id = _style_probe_model_id()
     _validate_style_probe_model(required_media_types={reference_image.content_type})
     return model_id
 
 
 def _validate_style_probe_model(*, required_media_types: set[str]) -> None:
-    model_id = settings.registry.poster_title_image_style_probe_model_id
+    model_id = _style_probe_model_id()
     result = STYLE_PROBE_MODEL_GATE.resolve_multimodal_text(model_id, required_media_types=required_media_types)
     if result.model.features.get("supports_image_generation_tool") is not True:
         raise AppError("MODEL_NOT_AVAILABLE", f"模型不支持 image_generation tool 调用: {model_id}")
@@ -210,12 +215,16 @@ def _style_key(item: PosterTitleImageItemParams, *, style_prompt: str) -> str:
     return f"{item.reference_image.sha256}:{style_prompt}"
 
 
+def _style_probe_model_id() -> str:
+    return poster_title_image_style_probe_model_id()
+
+
 def _generation_default_model_id() -> str:
-    return settings.registry.poster_title_image_generation_default_model_id
+    return poster_title_image_generation_default_model_id()
 
 
 def _generation_allowed_model_ids() -> tuple[str, ...]:
-    return settings.registry.poster_title_image_generation_allowed_model_ids
+    return poster_title_image_generation_allowed_model_ids()
 
 
 def _max_workflow_nodes() -> int:
@@ -472,7 +481,7 @@ class PosterTitleImageJob(JobExecutor):
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = PosterTitleImageParams.model_validate(job_params)
         return PosterTitleImageRuntimeFields(
-            style_probe_model_id=settings.registry.poster_title_image_style_probe_model_id,
+            style_probe_model_id=_style_probe_model_id(),
             generation_model_id=_generation_model_id_from_params(params),
         ).model_dump()
 
@@ -546,7 +555,7 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         return PosterTitleImageStyleProbeRuntimeFields(
-            style_probe_model_id=settings.registry.poster_title_image_style_probe_model_id
+            style_probe_model_id=_style_probe_model_id()
         ).model_dump()
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:
@@ -582,7 +591,7 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
             job_type=job.job_type,
             workflow_node_key=job.workflow_node_key,
             operation="poster_title_image.probe_style",
-            model_id=settings.registry.poster_title_image_style_probe_model_id,
+            model_id=_style_probe_model_id(),
             duration_ms=elapsed_ms,
         )
         return PosterTitleImageStyleProbeResult(

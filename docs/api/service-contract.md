@@ -184,11 +184,14 @@ CallbackResponseEnvelope
 
 ```http
 GET /api/v1/ai-jobs/models
+GET /api/v1/ai-jobs/models?job_type=poster_title_image
 GET /api/v1/ai-jobs/languages
 GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
 ```
 
-模型配置来自 `MODEL_CONFIG_PATH`，语种目录来自 `app/core/language_catalog.py`，Prompt 配置来自 `PROMPT_CONFIG_PATH` 和各 `job_type` 垂直目录下的 `prompts.yaml`。这些接口只暴露当前服务允许调用方看到的元信息，不暴露 provider 密钥或内部 pricing 明细。
+模型事实源来自 `MODEL_CONFIG_PATH`。`GET /models` 未传 `job_type` 时返回服务级模型目录；传入 `job_type` 时，如果该 `job_type` 目录下存在 `models.yaml`，响应会投影为该任务允许调用方选择的模型列表。没有 `models.yaml` 的已注册 `job_type` 使用服务级模型目录；未知 `job_type` 返回 `INVALID_JOB_TYPE`。
+
+语种目录来自 `app/core/language_catalog.py`，Prompt 配置来自 `PROMPT_CONFIG_PATH` 和各 `job_type` 垂直目录下的 `prompts.yaml`。这些接口只暴露当前服务允许调用方看到的元信息，不暴露 provider 密钥或内部 pricing 明细。
 
 `GET /prompt-templates` 支持可选 query 参数 `job_type`。未传时默认使用 `poster_title_image`，响应只返回该 `job_type` 的模板；传入未知 `job_type` 会返回 `INVALID_JOB_TYPE`。
 
@@ -226,6 +229,8 @@ HttpEnvelope[ModelsResponse]
   data.billing_enabled?
   data.cost_estimate_available?
 ```
+
+未传 `job_type` 时，`data.default_model_id` 是服务级默认模型；传入 `job_type` 且存在任务级 `models.yaml` 时，`data.default_model_id` 是该任务的 `public_model_selection.default_model_id`，`data.models[]` 只包含该任务 `public_model_selection.allowed_model_ids` 中当前可用的模型。任务级 `internal_models` 不进入响应。
 
 `ModelsResponse.models[]` 的单个模型条目包含：
 

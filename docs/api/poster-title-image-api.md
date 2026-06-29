@@ -127,9 +127,9 @@ Rules:
 
 ## 1. Shared Model Catalog
 
-CPP 可以调用服务级基础模型目录 `GET /api/v1/ai-jobs/models` 渲染模型名称。该接口只返回模型基础信息，不接收 `job_type`，不返回 `poster_title_image` 业务字段。
+CPP 可以调用 `GET /api/v1/ai-jobs/models?job_type=poster_title_image` 渲染标题图任务可选模型。该接口响应结构仍是共享 `ModelsResponse`，但 `data.default_model_id` 和 `data.models[]` 会按 `poster_title_image` 的任务级模型配置过滤。
 
-本文不定义 `/models` 的响应结构；该接口的权威合同以 [`service-contract.md`](service-contract.md) 为准。`poster_title_image` 首版允许调用方传入 `items[].model_id`，但必须命中服务端配置的 `poster_title_image` 生图模型 allowlist。
+本文不定义 `/models` 的响应结构；该接口的权威合同以 [`service-contract.md`](service-contract.md) 为准。`poster_title_image` 首版允许调用方传入 `items[].model_id`，但必须命中 `app/jobs/types/poster_title_image/models.yaml` 中的 `public_model_selection.allowed_model_ids`。
 
 ## 2. Shared Language Catalog
 
@@ -323,7 +323,7 @@ Job constraints:
 | `job_params.items[].item_id` | 1 到 64 个字符；同一 Job 内唯一；首字符必须是字母或数字，后续只允许字母、数字、`.`、`_`、`-` |
 | `job_params.items[].language` | 语种代码必须来自 [`业务语种规范.md`](业务语种规范.md)；同一 Job 内允许重复 |
 | `job_params.items[].title_text` | 1 到 200 个字符 |
-| `job_params.items[].model_id` | 可省略；首版默认和 allowlist 均为 `gpt-image-2`；同一 Job 内必须一致 |
+| `job_params.items[].model_id` | 可省略；默认值和 allowlist 来自 `app/jobs/types/poster_title_image/models.yaml`；当前默认和 allowlist 均为 `gpt-image-2`；同一 Job 内必须一致 |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
 | `job_params.items[].model_options.quality` | `low`、`medium`、`high`、`auto` |
 | `job_params.items[].model_options.draw_count` | 1 到 4，且不能超过服务端 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` |

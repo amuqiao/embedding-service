@@ -419,6 +419,14 @@ def test_poster_title_image_create_request_rejects_unavailable_configured_genera
             ),
         ),
     )
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.poster_title_image_generation_default_model_id",
+        lambda: "not-an-image-model",
+    )
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.poster_title_image_generation_allowed_model_ids",
+        lambda: ("not-an-image-model",),
+    )
     register_all_job_types()
     with pytest.raises(Exception, match="模型不可用"):
         _validate_create_request(
@@ -431,12 +439,15 @@ def test_poster_title_image_create_request_rejects_unavailable_configured_genera
 
 
 def test_style_probe_response_model_supports_reference_image_input():
+    from app.jobs.model_selection import poster_title_image_style_probe_model_id
+
+    model_id = poster_title_image_style_probe_model_id()
     result = ModelGate().resolve_multimodal_text(
-        settings.registry.poster_title_image_style_probe_model_id,
+        model_id,
         required_media_types={"image/png"},
     )
 
-    assert result.resolved_model.model_id == settings.registry.poster_title_image_style_probe_model_id
+    assert result.resolved_model.model_id == model_id
     assert result.resolved_model.provider_model == "gpt-5.5"
     assert result.model.features["supports_image_generation_tool"] is True
 
@@ -445,8 +456,8 @@ def test_poster_title_image_response_model_requires_image_generation_tool(monkey
     from app.jobs.types.poster_title_image.executor import _validate_style_probe_model
 
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.settings",
-        SimpleNamespace(registry=SimpleNamespace(poster_title_image_style_probe_model_id="gpt-4o")),
+        "app.jobs.types.poster_title_image.executor.poster_title_image_style_probe_model_id",
+        lambda: "gpt-4o",
     )
 
     with pytest.raises(AppError, match="image_generation tool"):

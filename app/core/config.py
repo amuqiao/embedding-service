@@ -59,15 +59,6 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "OPENAI_API_KEY": ("ai_provider", "openai_api_key"),
     "OPENAI_BASE_URL": ("ai_provider", "openai_base_url"),
     "DEFAULT_MODEL_ID": ("registry", "default_model_id"),
-    "POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID": ("registry", "poster_title_image_style_probe_model_id"),
-    "POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID": (
-        "registry",
-        "poster_title_image_generation_default_model_id",
-    ),
-    "POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS": (
-        "registry",
-        "poster_title_image_generation_allowed_model_ids_raw",
-    ),
     "MODEL_CONFIG_PATH": ("registry", "model_config_path_raw"),
     "MODEL_CALL_TIMEOUT_SECONDS": ("ai_provider", "model_call_timeout_seconds"),
     "BILLING_ENABLED": ("billing", "enabled"),
@@ -423,21 +414,8 @@ class AIProviderSettings(ConfigSection):
 
 class RegistrySettings(ConfigSection):
     default_model_id: str = "gpt-5.5"
-    poster_title_image_style_probe_model_id: str = "gpt-5.5"
-    poster_title_image_generation_default_model_id: str = "gpt-image-2"
-    poster_title_image_generation_allowed_model_ids_raw: str = "gpt-image-2"
     model_config_path_raw: str = "app/core/models.yaml"
     prompt_config_path_raw: str = "app/core/prompts.yaml"
-
-    @model_validator(mode="after")
-    def validate_registry(self) -> "RegistrySettings":
-        allowed = self.poster_title_image_generation_allowed_model_ids
-        if self.poster_title_image_generation_default_model_id not in allowed:
-            raise ValueError(
-                "POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID must be included in "
-                "POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS"
-            )
-        return self
 
     @property
     def model_config_path(self) -> Path:
@@ -446,14 +424,6 @@ class RegistrySettings(ConfigSection):
     @property
     def prompt_config_path(self) -> Path:
         return _resolve_repo_path(self.prompt_config_path_raw)
-
-    @property
-    def poster_title_image_generation_allowed_model_ids(self) -> tuple[str, ...]:
-        return _comma_separated_non_empty_values(
-            self.poster_title_image_generation_allowed_model_ids_raw,
-            env_name="POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS",
-        )
-
 
 class BillingSettings(ConfigSection):
     enabled: bool = True
@@ -664,38 +634,10 @@ class Settings(BaseSettings):
         }
         required_enabled_models = {
             "DEFAULT_MODEL_ID": self.registry.default_model_id,
-            "POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID": self.registry.poster_title_image_style_probe_model_id,
-            "POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID": (
-                self.registry.poster_title_image_generation_default_model_id
-            ),
-            **{
-                f"POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS[{index}]": model_id
-                for index, model_id in enumerate(self.registry.poster_title_image_generation_allowed_model_ids)
-            },
         }
         for env_name, model_id in required_enabled_models.items():
             if model_id not in enabled_models:
                 raise ValueError(f"{env_name} must exist in enabled model config: {model_id}")
-        style_probe_model = enabled_models[self.registry.poster_title_image_style_probe_model_id]
-        style_probe_capabilities = set(style_probe_model.get("capabilities") or [])
-        style_probe_input_media_types = set(style_probe_model.get("input_media_types") or [])
-        style_probe_features = style_probe_model.get("features")
-        if style_probe_model.get("model_type") != "text":
-            raise ValueError("POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID must reference a text model")
-        if "multimodal_text_generation" not in style_probe_capabilities:
-            raise ValueError("POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID must support multimodal_text_generation")
-        if "image/png" not in style_probe_input_media_types:
-            raise ValueError("POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID must support image/png input")
-        if not isinstance(style_probe_features, dict) or style_probe_features.get("supports_image_generation_tool") is not True:
-            raise ValueError("POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID must support image_generation tool")
-
-        for generation_model_id in self.registry.poster_title_image_generation_allowed_model_ids:
-            generation_model = enabled_models[generation_model_id]
-            generation_capabilities = set(generation_model.get("capabilities") or [])
-            if generation_model.get("model_type") != "image":
-                raise ValueError("POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS must reference image models")
-            if "image_edit" not in generation_capabilities:
-                raise ValueError("POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS must support image_edit")
 
 
 @lru_cache

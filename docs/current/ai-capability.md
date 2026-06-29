@@ -53,7 +53,7 @@ Job executor / real LLM job_type
 
 `limits` 和 `features` 是公开的类型化元信息。当前文本模型使用 `limits.context_window` 和 `features.supports_json_output`。`parameters.public` 是允许 `GET /models` 展示给调用方的模型级可配置参数 schema。当前内置文本模型没有公开模型级参数，因此配置为 `parameters.public: []`。`generation` 仍是 text provider 内部调用配置，不进入公开模型合同。
 
-`adapter` 指向模型调用 adapter，当前内置 `litellm` adapter 复用 LiteLLM 文本生成调用。`provider_model` 是 provider 原始模型名，用于 pricing 匹配和审计；`adapter_model` 是传给 adapter 的模型标识，LiteLLM adapter 当前使用 `openai/<provider_model>` 形式。缺少 required env 的模型不会出现在 `GET /models` 返回中。`GET /models` 只返回模型目录的公开投影，不暴露 `adapter`、`adapter_model`、`pricing_ref`、`requires_env`、`generation` 或 provider 内部参数。
+`adapter` 指向模型调用 adapter，当前内置 `litellm` adapter 复用 LiteLLM 文本生成调用。`provider_model` 是 provider 原始模型名，用于 pricing 匹配和审计；`adapter_model` 是传给 adapter 的模型标识，LiteLLM adapter 当前使用 `openai/<provider_model>` 形式。缺少 required env 的模型不会出现在 `GET /models` 返回中。`GET /models` 只返回模型目录的公开投影，不暴露 `adapter`、`adapter_model`、`pricing_ref`、`requires_env`、`generation` 或 provider 内部参数。`GET /models?job_type=<job_type>` 仍使用同一个公开模型投影；当对应 `app/jobs/types/<job_type>/models.yaml` 存在时，响应会按任务级 `public_model_selection` 过滤并返回任务级默认模型。
 
 Prompt 目录由 `PROMPT_CONFIG_PATH` 指向的基础配置和 `app/jobs/types/*/prompts.yaml` 的业务包内配置共同组成，加载逻辑在 `app/core/prompt_templates.py`。当前 Prompt registry 会进入 registry consistency 校验；正式业务 `job_type` 需要按自身 schema 引用 prompt refs，且不同配置文件之间不得重复声明同一个 prompt ref。
 

@@ -813,7 +813,7 @@ def test_models_route_exposes_public_model_selection_metadata(monkeypatch):
     monkeypatch.setattr(
         meta_routes,
         "list_models_response",
-        lambda: ModelsResponse(
+        lambda job_type=None: ModelsResponse(
             default_model_id="custom-model",
             models=[
                 ModelOut(
@@ -909,6 +909,35 @@ def test_models_route_exposes_public_model_selection_metadata(monkeypatch):
     operation = app.openapi()["paths"][f"{API_PREFIX}/models"]["get"]
     response_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert response_schema["properties"]["data"]["$ref"].endswith("/ModelsResponse")
+    assert any(parameter["name"] == "job_type" and parameter["in"] == "query" for parameter in operation["parameters"])
+
+
+def test_models_route_filters_by_job_type(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(f"{API_PREFIX}/models", params={"job_type": "poster_title_image"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == "0"
+    data = body["data"]
+    assert data["default_model_id"] == "gpt-image-2"
+    assert [model["id"] for model in data["models"]] == ["gpt-image-2"]
+
+
+def test_models_route_rejects_unknown_job_type(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(f"{API_PREFIX}/models", params={"job_type": "missing.job"})
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["code"] == "100011"
+    assert body["data"] is None
 
 
 def test_languages_route_exposes_shared_language_catalog(monkeypatch):

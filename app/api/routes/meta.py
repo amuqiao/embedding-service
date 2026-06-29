@@ -16,8 +16,14 @@ router = APIRouter(tags=["meta"], dependencies=[Depends(require_service_auth)])
     response_model_exclude_none=True,
     operation_id=OperationID.LIST_MODELS,
 )
-async def list_models():
-    return list_models_response()
+async def list_models(
+    job_type: str | None = Query(
+        default=None,
+        min_length=1,
+        description="Optional job type whose caller-selectable model list should be returned.",
+    )
+):
+    return list_models_response(job_type=job_type)
 
 
 @router.get(

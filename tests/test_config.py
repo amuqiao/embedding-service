@@ -105,17 +105,8 @@ def test_template_identity_defaults_and_overrides():
 
 def test_poster_title_image_model_config_defaults_and_overrides():
     default_settings = _build_settings()
-    assert default_settings.registry.poster_title_image_style_probe_model_id == "gpt-5.5"
-    assert default_settings.registry.poster_title_image_generation_default_model_id == "gpt-image-2"
-    assert default_settings.registry.poster_title_image_generation_allowed_model_ids == ("gpt-image-2",)
-
-    custom_settings = _build_settings(
-        POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID="gpt-image-2",
-        POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS="gpt-image-2",
-    )
-    assert custom_settings.registry.poster_title_image_style_probe_model_id == "gpt-5.5"
-    assert custom_settings.registry.poster_title_image_generation_default_model_id == "gpt-image-2"
-    assert custom_settings.registry.poster_title_image_generation_allowed_model_ids == ("gpt-image-2",)
+    assert default_settings.registry.model_config_path_raw == "app/core/models.yaml"
+    assert default_settings.registry.prompt_config_path_raw == "app/core/prompts.yaml"
 
 
 def test_poster_title_image_max_draw_count_config_defaults_and_overrides():
@@ -169,42 +160,6 @@ def test_poster_title_image_oss_allowlist_config_defaults_and_overrides():
 def test_poster_title_image_oss_allowlist_rejects_empty_values(key, value):
     with pytest.raises(ValidationError, match=key):
         _build_settings(**{key: value})
-
-
-@pytest.mark.parametrize(
-    ("key", "value"),
-    [
-        ("POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID", "missing-model"),
-        ("POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID", "missing-model"),
-        ("POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS", "missing-model"),
-    ],
-)
-def test_settings_rejects_unknown_poster_title_image_model(key, value):
-    with pytest.raises(ValidationError, match=key):
-        _build_settings(**{key: value})
-
-
-@pytest.mark.parametrize(
-    ("key", "value", "message"),
-    [
-        ("POSTER_TITLE_IMAGE_STYLE_PROBE_MODEL_ID", "gpt-4o", "image_generation tool"),
-        ("POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS", "gpt-5.5", "image model"),
-    ],
-)
-def test_settings_rejects_poster_title_image_model_without_required_capability(key, value, message):
-    with pytest.raises(ValidationError, match=message):
-        overrides = {key: value}
-        if key == "POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS":
-            overrides["POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID"] = value
-        _build_settings(**overrides)
-
-
-def test_settings_rejects_poster_title_image_generation_default_outside_allowlist():
-    with pytest.raises(ValidationError, match="POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID"):
-        _build_settings(
-            POSTER_TITLE_IMAGE_GENERATION_DEFAULT_MODEL_ID="gpt-image-2",
-            POSTER_TITLE_IMAGE_GENERATION_ALLOWED_MODEL_IDS="gpt-5.5",
-        )
 
 
 def test_settings_requires_callback_signing_secret():

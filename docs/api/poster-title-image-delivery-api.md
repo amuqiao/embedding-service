@@ -15,7 +15,7 @@
 >
 > | 版本 | 日期 | 修改内容 |
 > |---|---|---|
-> | `current + vNext review` | `2026-06-29` | 调整为调用方独立交付文档，移除其它文档依赖；模型获取接口收敛为只返回图片模型。 |
+> | `current + vNext review` | `2026-06-29` | 调整为调用方独立交付文档，移除其它文档依赖；模型获取接口使用 `job_type=poster_title_image` 返回标题图可选模型。 |
 > | `current + vNext review` | `2026-06-29` | 更新 dev 环境模型、语种、Prompt 模板和任务查询响应示例，对齐当前接口实际返回字段。 |
 > | `current + vNext review` | `2026-06-24` | 初版交付评审草案，定义 AI 标题图生成对接入口、Job 查询结果、费用查询和终态 Callback 合同。 |
 
@@ -211,25 +211,27 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 
 ## 2. 模型获取接口
 
-获取 AI 标题图生成可用的图片模型列表。该接口不接收 `job_type`，交付给调用方时只需要返回可用于标题图生成的图片模型。
+获取 AI 标题图生成可用的图片模型列表。调用方应传 `job_type=poster_title_image`，服务返回同一个 `ModelsResponse` 结构，但只包含标题图任务允许调用方选择的模型。
 
-`poster_title_image` 首版允许调用方传入 `items[].model_id`，但必须命中服务端配置的生图模型 allowlist；当前默认和 allowlist 均为 `gpt-image-2`。
+`poster_title_image` 首版允许调用方传入 `items[].model_id`，但必须命中 `app/jobs/types/poster_title_image/models.yaml` 中的生图模型 allowlist；当前默认和 allowlist 均为 `gpt-image-2`。
 
 ### Method / Path
 
 ```http
 GET /api/v1/ai-jobs/models
+GET /api/v1/ai-jobs/models?job_type=poster_title_image
 ```
 
 ### Response Example
 
-以下示例是交付给调用方的图片模型响应形状；模型清单会随服务端配置变化，但只返回图片模型。
+以下示例是交付给调用方的图片模型响应形状；模型清单会随服务端任务级配置变化。
 
 ```json
 {
   "code": "0",
   "msg": "success",
   "data": {
+    "default_model_id": "gpt-image-2",
     "models": [
       {
         "id": "gpt-image-2",
@@ -269,6 +271,7 @@ GET /api/v1/ai-jobs/models
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
+| `data.default_model_id` | string | `poster_title_image` 默认生图模型；调用方不传 `job_params.items[].model_id` 时服务端使用该模型 |
 | `data.models` | array | 当前可用于标题图生成的图片模型列表 |
 | `data.models[].id` | string | 图片模型 ID；任务创建接口的 `job_params.items[].model_id` 必须使用该列表中的值 |
 | `data.models[].name` | string | 模型名称 |
@@ -281,7 +284,7 @@ GET /api/v1/ai-jobs/models
 | `data.models[].limits` | object | 类型化公开限制；图片模型当前包含 `max_output_count` |
 | `data.models[].features` | object | 类型化公开能力开关，例如 `supports_edit`、`native_transparency` |
 
-`/models` 在本文交付范围内只返回图片模型。当前 `poster_title_image` 可提交的生图模型基线是 `gpt-image-2`。
+`/models?job_type=poster_title_image` 在本文交付范围内只返回标题图任务允许展示和提交的模型。当前 `poster_title_image` 可提交的生图模型基线是 `gpt-image-2`。
 
 图片生成参数不通过 `/models` 提交；调用方创建任务时仍以第 5 节的 `job_params.items[].model_options` 合同为准，例如使用 `draw_count` 表达候选图数量、`background` 固定为 `transparent`、`output_format` 固定为 `png`，且 `size` 只能提交本业务约束表允许的值。
 
@@ -631,7 +634,7 @@ POST /api/v1/ai-jobs/jobs
 | `job_params.items[].item_id` | 1 到 64 个字符；同一任务内唯一；首字符必须是字母或数字，后续只允许字母、数字、`.`、`_`、`-` |
 | `job_params.items[].language` | 语种代码必须来自第 3 节 `GET /languages` 返回的 `data.languages[].language`；同一任务内允许重复 |
 | `job_params.items[].title_text` | 1 到 200 个字符 |
-| `job_params.items[].model_id` | 可省略；首版默认和 allowlist 均为 `gpt-image-2`；同一任务内必须一致 |
+| `job_params.items[].model_id` | 可省略；默认值和 allowlist 来自 `app/jobs/types/poster_title_image/models.yaml`；当前默认和 allowlist 均为 `gpt-image-2`；同一任务内必须一致 |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
 | `job_params.items[].model_options.quality` | `low`、`medium`、`high`、`auto` |
 | `job_params.items[].model_options.draw_count` | 1 到 4，且不能超过服务端 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` |

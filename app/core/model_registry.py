@@ -5,6 +5,7 @@ from typing import Any
 import yaml
 
 from app.core.config import settings
+from app.core.exceptions import ValidationAppError
 from app.core.pricing_registry import validate_price_matches_model
 from app.integrations.ai_adapters.registry import (
     validate_image_generation_adapter,
@@ -420,9 +421,63 @@ def _models() -> list[ModelCatalogEntry]:
     return models
 
 
-def list_models_response() -> ModelsResponse:
+def _model_out(model: ModelCatalogEntry) -> ModelOut:
+    return ModelOut(
+        id=model.id,
+        name=model.name,
+        model_type=model.model_type,
+        provider=model.provider,
+        enabled=model.enabled,
+        capabilities=list(model.capabilities),
+        input_media_types=list(model.input_media_types),
+        output_media_types=list(model.output_media_types),
+        limits=model.limits,
+        features=model.features,
+        parameters=[
+            ModelParameterOut(
+                name=parameter.name,
+                label=parameter.label,
+                type=parameter.type,
+                required=parameter.required,
+                default=parameter.default,
+                options=list(parameter.options) if parameter.options is not None else None,
+                min=parameter.min,
+                max=parameter.max,
+            )
+            for parameter in model.parameters
+        ],
+        notes=model.notes,
+    )
+
+
+def _job_type_exists(job_type: str) -> bool:
+    from app.jobs import registry as job_registry
+
+    return job_type in set(job_registry.all_job_types())
+
+
+def _job_scoped_models(models: list[ModelCatalogEntry], job_type: str) -> tuple[str, list[ModelCatalogEntry]]:
+    from app.jobs import model_selection
+
+    normalized_job_type = job_type.strip()
+    if not normalized_job_type:
+        raise ValidationAppError("INVALID_JOB_TYPE", "job_type must be a non-empty string")
+    if not _job_type_exists(normalized_job_type):
+        raise ValidationAppError("INVALID_JOB_TYPE", f"不支持的 job_type: {normalized_job_type}")
+    if not model_selection.has_model_selection_config(normalized_job_type):
+        return settings.registry.default_model_id, models
+
+    selection = model_selection.get_public_model_selection(normalized_job_type)
+    model_by_id = {model.id: model for model in models}
+    selected_models = [model_by_id[model_id] for model_id in selection.allowed_model_ids if model_id in model_by_id]
+    return selection.default_model_id, selected_models
+
+
+def list_models_response(job_type: str | None = None) -> ModelsResponse:
     models = [model for model in _models() if _model_is_available(model)]
     default = settings.registry.default_model_id
+    if job_type is not None:
+        default, models = _job_scoped_models(models, job_type)
     billing_capability = (
         {
             "billing_enabled": settings.billing.enabled,
@@ -433,35 +488,7 @@ def list_models_response() -> ModelsResponse:
     )
     return ModelsResponse(
         default_model_id=default,
-        models=[
-            ModelOut(
-                id=m.id,
-                name=m.name,
-                model_type=m.model_type,
-                provider=m.provider,
-                enabled=m.enabled,
-                capabilities=list(m.capabilities),
-                input_media_types=list(m.input_media_types),
-                output_media_types=list(m.output_media_types),
-                limits=m.limits,
-                features=m.features,
-                parameters=[
-                    ModelParameterOut(
-                        name=parameter.name,
-                        label=parameter.label,
-                        type=parameter.type,
-                        required=parameter.required,
-                        default=parameter.default,
-                        options=list(parameter.options) if parameter.options is not None else None,
-                        min=parameter.min,
-                        max=parameter.max,
-                    )
-                    for parameter in m.parameters
-                ],
-                notes=m.notes,
-            )
-            for m in models
-        ],
+        models=[_model_out(model) for model in models],
         **billing_capability,
     )
 
@@ -494,3 +521,52 @@ def validate_model_catalog() -> None:
             provider=model.provider,
             provider_model=model.provider_model,
         )
+    _validate_job_model_selection_configs(enabled)
+
+
+def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry]) -> None:
+    from app.jobs import model_selection
+    from app.jobs import registry as job_registry
+
+    known_job_types = set(job_registry.all_job_types())
+    poster_job_type = model_selection.POSTER_TITLE_IMAGE_JOB_TYPE
+    if poster_job_type in known_job_types and not model_selection.has_model_selection_config(poster_job_type):
+        raise RuntimeError("poster_title_image requires app/jobs/types/poster_title_image/models.yaml")
+    model_by_id = {model.id: model for model in enabled_models}
+    for path in sorted(model_selection.JOB_MODEL_CONFIG_ROOT.glob(f"*/{model_selection.JOB_MODEL_CONFIG_FILENAME}")):
+        job_type = path.parent.name
+        if known_job_types and job_type not in known_job_types:
+            raise RuntimeError(f"job model selection config references unknown job_type: {job_type}")
+        selection = model_selection.get_public_model_selection(job_type)
+        missing_model_ids = sorted(set(selection.allowed_model_ids) - set(model_by_id))
+        if missing_model_ids:
+            raise RuntimeError(
+                f"job_type {job_type} public_model_selection references non-enabled models: {missing_model_ids}"
+            )
+
+    if model_selection.has_model_selection_config(model_selection.POSTER_TITLE_IMAGE_JOB_TYPE):
+        poster_selection = model_selection.get_poster_title_image_model_selection()
+        for model_id in poster_selection.public_model_selection.allowed_model_ids:
+            generation_model = model_by_id[model_id]
+            if generation_model.model_type != "image":
+                raise RuntimeError("poster_title_image public_model_selection must reference image models")
+            if "image_edit" not in generation_model.capabilities:
+                raise RuntimeError("poster_title_image public_model_selection must support image_edit")
+        style_probe_model = next(
+            (model for model in enabled_models if model.id == poster_selection.style_probe_model_id),
+            None,
+        )
+        if style_probe_model is None:
+            raise RuntimeError(
+                "poster_title_image internal_models.style_probe.model_id must reference an enabled model"
+            )
+        if style_probe_model.model_type != "text":
+            raise RuntimeError("poster_title_image internal_models.style_probe.model_id must reference a text model")
+        if "multimodal_text_generation" not in style_probe_model.capabilities:
+            raise RuntimeError(
+                "poster_title_image internal_models.style_probe.model_id must support multimodal_text_generation"
+            )
+        if "image/png" not in style_probe_model.input_media_types:
+            raise RuntimeError("poster_title_image internal_models.style_probe.model_id must support image/png input")
+        if style_probe_model.features.get("supports_image_generation_tool") is not True:
+            raise RuntimeError("poster_title_image internal_models.style_probe.model_id must support image_generation tool")
