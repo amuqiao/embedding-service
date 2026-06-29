@@ -17,6 +17,62 @@
 > |---|---|---|
 > | `current + vNext review` | `2026-06-24` | 初版交付评审草案，定义 AI 标题图生成对接入口、Job 查询结果、费用查询和终态 Callback 合同。 |
 
+## 联调填写区
+
+对接或联调前，先在对应环境填入访问地址、请求头值和 Callback 验签密钥。`SERVICE_API_KEY` 用于生成 `Authorization` 请求头；`CALLBACK_SIGNING_SECRET` 用于调用方校验 AI 服务投递到 `callback.url` 的终态 Callback。`X-Request-ID` 是可选的单次请求追踪 ID，不表示调用方身份。不传 `X-Request-ID` 时，服务端会生成新的请求追踪 ID。
+
+### 开发
+
+| 项 | 值 | 说明 |
+|---|---|---|
+| Base URL | `http://127.0.0.1:8100` | 本地 dev API |
+| `SERVICE_API_KEY` | `dev-service-key` | 用于 `Authorization: Bearer` |
+| `CALLBACK_SIGNING_SECRET` | `dev-service-key` | 请求中传 `callback.url` 时必填；dev 默认可与 `SERVICE_API_KEY` 一致 |
+| `X-Request-ID` | `dev-poster-title-image-001` | 可选 |
+| `X-AI-Service-Caller-ID` | `dev-caller` | 可选；不传时使用 `default` |
+
+### 测试
+
+| 项 | 值 | 说明 |
+|---|---|---|
+| Base URL |  | 测试环境 AI 服务地址 |
+| `SERVICE_API_KEY` |  | 用于 `Authorization: Bearer` |
+| `CALLBACK_SIGNING_SECRET` |  | 请求中传 `callback.url` 时必填 |
+| `X-Request-ID` |  | 可选 |
+| `X-AI-Service-Caller-ID` |  | 可选；不传时使用 `default` |
+
+### 生产
+
+| 项 | 值 | 说明 |
+|---|---|---|
+| Base URL |  | 生产环境 AI 服务地址 |
+| `SERVICE_API_KEY` |  | 用于 `Authorization: Bearer` |
+| `CALLBACK_SIGNING_SECRET` |  | 请求中传 `callback.url` 时必填 |
+| `X-Request-ID` |  | 可选 |
+| `X-AI-Service-Caller-ID` |  | 可选；不传时使用 `default` |
+
+请求头：
+
+```http
+Authorization: Bearer <SERVICE_API_KEY>
+X-Request-ID: <request-id>
+X-AI-Service-Caller-ID: <caller-id>
+Content-Type: application/json
+```
+
+`X-AI-Service-Caller-ID` 格式：长度 1 到 64；首字符必须是 ASCII 字母或数字；后续字符只能使用 ASCII 字母、数字、下划线 `_`、点号 `.`、冒号 `:` 或连字符 `-`。示例：`cpp-service`、`cpp.service:dev`、`caller_01`。不要包含空格、斜杠或中文字符。
+
+Callback 签名：如果创建任务时传了 `callback.url`，调用方必须使用同一个 `CALLBACK_SIGNING_SECRET` 校验 AI 服务回调请求头 `X-Callback-Signature`。当前 dev 环境可约定 `CALLBACK_SIGNING_SECRET` 与 `SERVICE_API_KEY` 使用同一个值，例如 `dev-service-key`。
+
+dev 示例：
+
+```bash
+curl -sS -X GET "http://127.0.0.1:8100/api/v1/ai-jobs/models" \
+  -H "Authorization: Bearer dev-service-key" \
+  -H "X-Request-ID: dev-poster-title-image-001" \
+  -H "X-AI-Service-Caller-ID: dev-caller"
+```
+
 ### 合同状态说明
 
 本文定义交付评审合同，用于双方评审接口形态；不表示所有字段、状态和路由都已经在当前服务实现中上线。
@@ -42,6 +98,8 @@ Authorization: Bearer <service-key>
 X-AI-Service-Caller-ID: <caller-id>
 Content-Type: application/json
 ```
+
+`X-AI-Service-Caller-ID` 可选；不传时使用 `default` caller。传入时必须满足 `^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,63}$`，否则服务会按未授权请求处理。`X-Request-ID` 也是可选请求头；调用方传入合法值时，服务会在响应 envelope 和响应头中返回同一个请求追踪 ID。
 
 ### Success Envelope
 
@@ -464,6 +522,19 @@ POST /api/v1/ai-jobs/jobs
 ### Callback Notification
 
 `callback` 是任务创建接口的可选通知配置，不是额外 HTTP 查询接口。服务只在 Job 进入终态后向 `callback.url` 投递通知。Callback 投递失败只影响 `job.callback` 投递摘要；`job.job_status` 不会因为 callback delivery retry 或 dead letter 回退或改写。
+
+只要请求中传入 `callback.url`，调用方就必须提前配置 `CALLBACK_SIGNING_SECRET`，用于校验 AI 服务投递 Callback 时携带的 `X-Callback-Signature`。签名算法为 HMAC-SHA256，签名输入为：
+
+```text
+<X-Callback-Timestamp>.<raw request body>
+```
+
+签名头格式：
+
+```http
+X-Callback-Timestamp: <iso-datetime>
+X-Callback-Signature: sha256=<hex-hmac>
+```
 
 Callback payload 不套 HTTP success envelope：
 
