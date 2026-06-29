@@ -36,8 +36,8 @@
 | 项 | 值 | 说明 |
 |---|---|---|
 | Base URL |  | 测试环境 AI 服务地址 |
-| `SERVICE_API_KEY` |  | 用于 `Authorization: Bearer` |
-| `CALLBACK_SIGNING_SECRET` |  | 请求中传 `callback.url` 时必填 |
+| `SERVICE_API_KEY` | `test_gawgTHkWo6afEC0wAe-1FbTfYQ-_9sOm1B_WQoft7fc` | 用于 `Authorization: Bearer` |
+| `CALLBACK_SIGNING_SECRET` | `test_gawgTHkWo6afEC0wAe-1FbTfYQ-_9sOm1B_WQoft7fc` | 请求中传 `callback.url` 时必填 |
 | `X-Request-ID` |  | 可选 |
 | `X-AI-Service-Caller-ID` |  | 可选；不传时使用 `default` |
 
@@ -46,8 +46,8 @@
 | 项 | 值 | 说明 |
 |---|---|---|
 | Base URL |  | 生产环境 AI 服务地址 |
-| `SERVICE_API_KEY` |  | 用于 `Authorization: Bearer` |
-| `CALLBACK_SIGNING_SECRET` |  | 请求中传 `callback.url` 时必填 |
+| `SERVICE_API_KEY` | `prd_9sUubcUpISZKB3OfNP0zRdZZGhoMfm-LK5obiMADyag` | 用于 `Authorization: Bearer` |
+| `CALLBACK_SIGNING_SECRET` | `prd_9sUubcUpISZKB3OfNP0zRdZZGhoMfm-LK5obiMADyag` | 请求中传 `callback.url` 时必填 |
 | `X-Request-ID` |  | 可选 |
 | `X-AI-Service-Caller-ID` |  | 可选；不传时使用 `default` |
 
