@@ -1,6 +1,6 @@
 # AI 标题图生成接口文档
 
-本文档面向调用方，定义 AI 标题图生成能力的交付评审接口合同；已实现能力和仍属 vNext 的能力在“合同状态说明”中区分。服务前缀、HTTP envelope、通用 Job、Callback 和 billing 公共合同以 [`service-contract.md`](service-contract.md) 为准。
+本文档面向调用方，定义 AI 标题图生成能力的独立交付接口合同；已实现能力和仍属 vNext 的能力在“合同状态说明”中区分。服务前缀、HTTP envelope、通用 Job、Callback、billing、模型、语种和 Prompt 元信息合同均在本文内说明，不依赖其它文档。
 
 > **版本信息**
 >
@@ -15,6 +15,8 @@
 >
 > | 版本 | 日期 | 修改内容 |
 > |---|---|---|
+> | `current + vNext review` | `2026-06-29` | 调整为调用方独立交付文档，移除其它文档依赖；模型获取接口收敛为只返回图片模型。 |
+> | `current + vNext review` | `2026-06-29` | 更新 dev 环境模型、语种、Prompt 模板和任务查询响应示例，对齐当前接口实际返回字段。 |
 > | `current + vNext review` | `2026-06-24` | 初版交付评审草案，定义 AI 标题图生成对接入口、Job 查询结果、费用查询和终态 Callback 合同。 |
 
 ## 联调填写区
@@ -209,9 +211,9 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 
 ## 2. 模型获取接口
 
-获取 AI 服务当前可用的基础模型列表。该接口不接收 `job_type`，不返回 `poster_title_image` 业务参数。
+获取 AI 标题图生成可用的图片模型列表。该接口不接收 `job_type`，交付给调用方时只需要返回可用于标题图生成的图片模型。
 
-本节只给出调用方需要读取的最小字段示例；共享模型目录的完整响应字段以双方最终发布的共享目录合同为准。`poster_title_image` 首版允许调用方传入 `items[].model_id`，但必须命中服务端配置的 `poster_title_image` 生图模型 allowlist。
+`poster_title_image` 首版允许调用方传入 `items[].model_id`，但必须命中服务端配置的生图模型 allowlist；当前默认和 allowlist 均为 `gpt-image-2`。
 
 ### Method / Path
 
@@ -221,6 +223,8 @@ GET /api/v1/ai-jobs/models
 
 ### Response Example
 
+以下示例是交付给调用方的图片模型响应形状；模型清单会随服务端配置变化，但只返回图片模型。
+
 ```json
 {
   "code": "0",
@@ -228,28 +232,64 @@ GET /api/v1/ai-jobs/models
   "data": {
     "models": [
       {
-        "model_id": "gpt-image-2",
-        "display_name": "GPT Image 2",
-        "provider": "openai"
+        "id": "gpt-image-2",
+        "name": "gpt-image-2",
+        "model_type": "image",
+        "provider": "openai",
+        "enabled": true,
+        "capabilities": [
+          "image_generation",
+          "image_edit"
+        ],
+        "input_media_types": [
+          "text/plain",
+          "image/png",
+          "image/jpeg",
+          "image/webp"
+        ],
+        "output_media_types": [
+          "image/png",
+          "image/jpeg",
+          "image/webp"
+        ],
+        "limits": {
+          "max_output_count": 4
+        },
+        "features": {
+          "native_transparency": false,
+          "supports_edit": true
+        }
       }
     ]
   },
-  "request_id": "01J...",
-  "server_time": "2026-06-24T12:00:00+00:00"
+  "request_id": "trace-id-123",
+  "server_time": "2026-06-29T09:29:15.503461+00:00"
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `models[].model_id` | string | 服务级模型 ID；`poster_title_image` 只接受任务创建接口约束允许的子集 |
-| `models[].display_name` | string | 展示名称 |
-| `models[].provider` | string | 模型供应方标识 |
+| `data.models` | array | 当前可用于标题图生成的图片模型列表 |
+| `data.models[].id` | string | 图片模型 ID；任务创建接口的 `job_params.items[].model_id` 必须使用该列表中的值 |
+| `data.models[].name` | string | 模型名称 |
+| `data.models[].model_type` | string | 模型粗分类；本接口当前只返回 `image` |
+| `data.models[].provider` | string | 模型供应方标识 |
+| `data.models[].enabled` | boolean | 模型是否在当前服务目录中启用 |
+| `data.models[].capabilities` | array | 服务定义的公开能力值，例如 `image_generation`、`image_edit` |
+| `data.models[].input_media_types` | array | 模型可接受的输入 MIME type |
+| `data.models[].output_media_types` | array | 模型可输出的 MIME type |
+| `data.models[].limits` | object | 类型化公开限制；图片模型当前包含 `max_output_count` |
+| `data.models[].features` | object | 类型化公开能力开关，例如 `supports_edit`、`native_transparency` |
+
+`/models` 在本文交付范围内只返回图片模型。当前 `poster_title_image` 可提交的生图模型基线是 `gpt-image-2`。
+
+图片生成参数不通过 `/models` 提交；调用方创建任务时仍以第 5 节的 `job_params.items[].model_options` 合同为准，例如使用 `draw_count` 表达候选图数量、`background` 固定为 `transparent`、`output_format` 固定为 `png`，且 `size` 只能提交本业务约束表允许的值。
 
 ## 3. 语种获取接口
 
 获取 AI 服务当前可用的基础语种列表。该接口不接收 `job_type`，不返回 `poster_title_image` 业务参数。
 
-本节只给出调用方需要读取的最小字段示例；共享语种目录的完整响应字段以 [`service-contract.md`](service-contract.md) 为准，语种主表见 [`业务语种规范.md`](业务语种规范.md)。`poster_title_image` 可提交语种来自共享语种目录，并以服务端校验为准。
+本节定义 `poster_title_image` 可提交的语种目录。任务创建接口中的 `job_params.items[].language` 必须来自本接口返回的 `data.languages[].language`，并以服务端校验为准。
 
 ### Method / Path
 
@@ -259,12 +299,29 @@ GET /api/v1/ai-jobs/languages
 
 ### Response Example
 
+以下示例来自 `2026-06-29` 开发环境，用于展示当前语种目录快照；语种目录会随服务端配置变化。
+
 ```json
 {
   "code": "0",
   "msg": "success",
   "data": {
     "languages": [
+      {
+        "language": "zh",
+        "display_name": "Chinese (Simplified)",
+        "native_name": "中文（简体）"
+      },
+      {
+        "language": "zh-TW",
+        "display_name": "Chinese (Traditional)",
+        "native_name": "繁體中文"
+      },
+      {
+        "language": "en",
+        "display_name": "English",
+        "native_name": "English"
+      },
       {
         "language": "es",
         "display_name": "Spanish",
@@ -274,26 +331,113 @@ GET /api/v1/ai-jobs/languages
         "language": "pt",
         "display_name": "Portuguese",
         "native_name": "Português"
+      },
+      {
+        "language": "in",
+        "display_name": "Indonesian",
+        "native_name": "Bahasa Indonesia"
+      },
+      {
+        "language": "th",
+        "display_name": "Thai",
+        "native_name": "ไทย"
+      },
+      {
+        "language": "de",
+        "display_name": "German",
+        "native_name": "Deutsch"
+      },
+      {
+        "language": "fr",
+        "display_name": "French",
+        "native_name": "Français"
+      },
+      {
+        "language": "hi",
+        "display_name": "Hindi",
+        "native_name": "हिन्दी"
+      },
+      {
+        "language": "fil",
+        "display_name": "Filipino",
+        "native_name": "Filipino"
+      },
+      {
+        "language": "tr",
+        "display_name": "Turkish",
+        "native_name": "Türkçe"
+      },
+      {
+        "language": "ko",
+        "display_name": "Korean",
+        "native_name": "한국어"
+      },
+      {
+        "language": "ja",
+        "display_name": "Japanese",
+        "native_name": "日本語"
+      },
+      {
+        "language": "ru",
+        "display_name": "Russian",
+        "native_name": "Русский"
+      },
+      {
+        "language": "ar",
+        "display_name": "Arabic",
+        "native_name": "العربية"
+      },
+      {
+        "language": "it",
+        "display_name": "Italian",
+        "native_name": "Italiano"
+      },
+      {
+        "language": "pl",
+        "display_name": "Polish",
+        "native_name": "Polski"
+      },
+      {
+        "language": "ro",
+        "display_name": "Romanian",
+        "native_name": "Română"
+      },
+      {
+        "language": "cs",
+        "display_name": "Czech",
+        "native_name": "Čeština"
+      },
+      {
+        "language": "bg",
+        "display_name": "Bulgarian",
+        "native_name": "Български"
+      },
+      {
+        "language": "vi",
+        "display_name": "Vietnamese",
+        "native_name": "Tiếng Việt"
       }
     ]
   },
-  "request_id": "01J...",
-  "server_time": "2026-06-24T12:00:00+00:00"
+  "request_id": "trace-id-123",
+  "server_time": "2026-06-29T09:44:10.518388+00:00"
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `data.languages` | array | 当前接口返回的可用语种列表 |
-| `languages[].language` | string | 提交任务时使用的语种代码 |
-| `languages[].display_name` | string | 英文展示名称 |
-| `languages[].native_name` | string | 本地语言展示名称 |
+| `data.languages[].language` | string | 提交任务时使用的语种代码 |
+| `data.languages[].display_name` | string | 英文展示名称 |
+| `data.languages[].native_name` | string | 本地语言展示名称 |
+
+语种代码 `in` 表示 Indonesian；本服务不会在内部目录接口中映射为 `id`。
 
 ## 4. 模板获取接口
 
 获取指定任务类型下的默认提示词模板。调用方可以展示模板内容，并在创建任务时通过 `prompt_overrides` 临时覆盖；临时覆盖只对本次任务生效。
 
-当前模板内容由 `poster_title_image` 垂直目录下的 `prompts.yaml` 维护；服务级发现、校验和对外响应以 [`service-contract.md`](service-contract.md) 为准。
+当前模板内容由服务端维护；调用方应通过本接口读取当前默认模板，不要在客户端硬编码默认提示词内容。
 
 ### Method / Path
 
@@ -311,6 +455,8 @@ GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
 
 ### Response
 
+以下示例来自 `2026-06-29` 开发环境。`default_content` 是当前默认模板内容快照，不是长期固定文案；调用方如果要展示模板或生成覆盖编辑器，应以接口实时返回为准。模板内容调整不改变本接口的字段合同。
+
 ```json
 {
   "code": "0",
@@ -325,24 +471,24 @@ GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
         "key": "style_probe",
         "role": "user",
         "label": "Style probe",
-        "default_content": "Analyze this title image and describe the visual design style of the LETTERFORMS ONLY..."
+        "default_content": "Analyze this title image and describe the visual design style of the LETTERFORMS ONLY.\nExtract only reusable letterform attributes for a later image-generation prompt. Do not absorb, imitate, or describe any background, board, plaque, panel, canvas, carrier shape, texture field, atmospheric glow, haze, fog, halo, cast shadow, drop shadow, rim glow, lighting bloom, or object behind or around the text. Treat these as contamination unless they are visibly painted, engraved, or built into the strokes themselves.\n\nOutput a single stable English paragraph suitable for direct reuse inside a later image prompt. Be precise, generative, and self-contained. Describe what a new title's letters should look like, not what the surrounding image looks like.\n\nCover only the following aspects of the letterforms themselves:\n- Stroke weight and overall letter mass: whether the type is heavy/bold, medium, or light/thin; describe the main stroke thickness and visual density.\n- Letter dimensionality: flat / subtly embossed / 3D beveled / carved / extruded\n- Material and surface texture inside the strokes: metal, stone, glass, painted, printed, inked, carved, distressed, or smooth; include only texture that appears on the letter surfaces.\n- Lighting on the letterforms: highlights, reflections, shading, bevel edge treatment, and color temperature only where light is visibly part of the letters.\n- Color palette of the letters: fill color, stroke or outline color, inner gradients, inline accents, and edge colors; describe letter colors only, never background colors.\n- Built-in letter effects: cracks, distress, wear, abrasion, engraved marks, chips, or small fragments that are clearly attached to or cut from the strokes; exclude separate debris, smoke, sparks, splashes, or particles.\n- Typography character: serif style, stroke weight contrast, condensed or expanded proportions, decorative details, overall weight and mood\n- Composition scale of the text block: how large the letters fill the frame, such as \"letters fill nearly the full frame width\" or \"compact centered wordmark\"\n- Overall cinematic / genre mood expressed by the letterforms only\n\nDo NOT mention or describe: background color, background texture, atmospheric glow or haze behind the text, plaque or board silhouettes, frames, banners, badges, shadows cast behind the text, light rays, props, scenery, symbols, icons, or any element that is not part of the letterforms themselves.\nDo NOT include instructions to reproduce the reference image background or carrier. Do NOT include uncertain phrases such as \"appears to\" or \"maybe\".\n\nOutput ONLY the style description paragraph - no headers, no preamble, no explanation."
       },
       {
         "key": "additional_prompt",
         "role": "user",
         "label": "Additional title prompt",
-        "default_content": "High resolution, standalone title text only..."
+        "default_content": "High-resolution poster title text only, spelling the requested title exactly with no missing, extra, replaced, or distorted characters. The letterforms must be heavy, bold, legible, and visually dominant, with crisp hard edges and clean internal counters. Render only the text itself: no illustration, icon, symbol, object, decoration, drop shadow, cast shadow, outer glow, halo, blur, bloom, smoke, spark, splash, backing plate, brush stroke, banner, badge, frame, plaque, panel, or any non-text carrier element.\n\nPlace the title on a perfectly uniform flat chroma green background for post-processing. The green area must be smooth and untextured, with no gradient, vignette, noise, shadow, reflection, glow, or lighting variation. Keep the text centered, complete, fully visible, and separated from the frame edges, ready to be isolated as a poster title layer."
       },
       {
         "key": "layout_rules",
         "role": "user",
         "label": "Layout rules",
-        "default_content": "The title is a horizontal poster-title layer..."
+        "default_content": "The title is a horizontal poster-title layer. Render the text large and bold, filling about 85-95% of the frame width while preserving a clear safety margin on every side. Prefer one line when the specific language and text width fit comfortably. For longer text, allow one natural grammatical line break only; keep each line balanced, never split inside a word, and use at most two lines. Do not crop, truncate, overlap, squeeze, warp, rotate, or scatter the text. The full title must remain centered, readable, and naturally spaced."
       }
     ]
   },
-  "request_id": "01J...",
-  "server_time": "2026-06-24T12:00:00+00:00"
+  "request_id": "trace-id-123",
+  "server_time": "2026-06-29T09:44:33.600341+00:00"
 }
 ```
 
@@ -353,14 +499,14 @@ GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
 | `data.name` | string | 模板展示名称 |
 | `data.description` | string | 模板说明 |
 | `data.prompt_blocks[]` | array | 可展示和可覆盖的提示词块 |
-| `prompt_blocks[].key` | string | 稳定提示词块 key |
-| `prompt_blocks[].role` | string | 默认消息角色 |
-| `prompt_blocks[].label` | string | 展示标签 |
-| `prompt_blocks[].default_content` | string | 默认提示词内容 |
+| `data.prompt_blocks[].key` | string | 稳定提示词块 key |
+| `data.prompt_blocks[].role` | string | 默认消息角色 |
+| `data.prompt_blocks[].label` | string | 展示标签 |
+| `data.prompt_blocks[].default_content` | string | 默认提示词内容 |
 
 稳定提示词块：
 
-| `prompt_blocks[].key` | 说明 | 创建任务覆盖字段 |
+| `data.prompt_blocks[].key` | 说明 | 创建任务覆盖字段 |
 |---|---|---|
 | `style_probe` | 风格探针 | `job_params.items[].prompt_overrides.style_probe` |
 | `additional_prompt` | 附加提示词 | `job_params.items[].prompt_overrides.additional_prompt` |
@@ -457,7 +603,7 @@ POST /api/v1/ai-jobs/jobs
 | `job_type` | string | 是 | 固定为 `poster_title_image` |
 | `job_params.items` | array | 是 | 批量生成 item，至少 1 个；数量上限由服务端 `POSTER_TITLE_IMAGE_MAX_ITEMS` 配置，默认 50 |
 | `job_params.items[].item_id` | string | 是 | 调用方提供的稳定 item 关联键；同一任务内唯一 |
-| `job_params.items[].language` | string | 是 | 语种代码，必须来自共享语种目录；同一任务内允许重复 |
+| `job_params.items[].language` | string | 是 | 语种代码，必须来自第 3 节语种目录；同一任务内允许重复 |
 | `job_params.items[].title_text` | string | 是 | 目标语种标题文本 |
 | `job_params.items[].model_id` | string | 否 | 标题图生图模型 ID；不传时使用服务端 `poster_title_image` 默认生图模型 |
 | `job_params.items[].model_options.size` | string | 是 | 目标输出尺寸 |
@@ -477,13 +623,13 @@ POST /api/v1/ai-jobs/jobs
 
 ### Poster Title Image Constraints
 
-`GET /models` 和 `GET /languages` 是服务级基础目录。`poster_title_image` 当前可提交语种来自共享语种目录。新增地区变体前，必须先进入共享语种目录，不能在本接口单独维护平行语种代码。
+`GET /models` 返回当前可用于标题图生成的图片模型。`GET /languages` 返回当前可提交语种。新增地区变体前，必须先进入第 3 节语种目录，不能在任务创建接口单独维护平行语种代码。
 
 | 约束 | 值 |
 |---|---|
 | `job_params.items` | 至少 1 个 item；默认最多 50 个，受服务端 `POSTER_TITLE_IMAGE_MAX_ITEMS` 配置限制 |
 | `job_params.items[].item_id` | 1 到 64 个字符；同一任务内唯一；首字符必须是字母或数字，后续只允许字母、数字、`.`、`_`、`-` |
-| `job_params.items[].language` | 语种代码必须来自 [`业务语种规范.md`](业务语种规范.md)；同一任务内允许重复 |
+| `job_params.items[].language` | 语种代码必须来自第 3 节 `GET /languages` 返回的 `data.languages[].language`；同一任务内允许重复 |
 | `job_params.items[].title_text` | 1 到 200 个字符 |
 | `job_params.items[].model_id` | 可省略；首版默认和 allowlist 均为 `gpt-image-2`；同一任务内必须一致 |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
@@ -747,25 +893,29 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 
 全部成功时，`job_status=succeeded`。
 
+以下示例来自 `2026-06-29` 开发环境，用于展示单 item 成功终态响应；`job_id`、OSS URL、`sha256`、费用、耗时、Callback 状态和时间戳都是该次 Job 的运行快照。
+
 ```json
 {
   "code": "0",
   "msg": "success",
   "data": {
     "job": {
-      "job_id": "018f9a7f-0183-4e4f-938d-1baf7411b4fd",
-      "client_request_id": "cpp-request-20260624-000001",
+      "job_id": "8b88ba9d-eb4b-4f6c-ab79-da28e12d0e70",
+      "client_request_id": "real-flow-poster-title-image-06dba1ec-2d25-4bd9-bd9b-fb60cf30bd8f",
       "job_type": "poster_title_image",
       "job_status": "succeeded",
       "job_progress": {
-        "percent": 100
+        "percent": 100,
+        "stage": "completed",
+        "message": "已完成"
       },
       "job_result": {
         "schema_version": "default",
         "job_type": "poster_title_image",
         "batch_summary": {
-          "total": 2,
-          "succeeded": 2,
+          "total": 1,
+          "succeeded": 1,
           "failed": 0,
           "running": 0,
           "pending": 0
@@ -778,26 +928,10 @@ GET /api/v1/ai-jobs/jobs/{job_id}
             "images": [
               {
                 "object": {
-                  "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/poster-title/018f9a7f/es/title-layer.png",
-                  "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/es/title-layer.png",
+                  "public_url": "https://cms-aicg-sz.oss-cn-shenzhen.aliyuncs.com/aicg/dev_root/cms_poster_title/ai-jobs/6f78785a-8ade-4ef5-9677-f0f776f01933/poster-title/8b88ba9d-eb4b-4f6c-ab79-da28e12d0e70/es/title-layer.png",
+                  "internal_url": "https://cms-aicg-sz.oss-cn-shenzhen-internal.aliyuncs.com/aicg/dev_root/cms_poster_title/ai-jobs/6f78785a-8ade-4ef5-9677-f0f776f01933/poster-title/8b88ba9d-eb4b-4f6c-ab79-da28e12d0e70/es/title-layer.png",
                   "content_type": "image/png",
-                  "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-                }
-              }
-            ],
-            "error": null
-          },
-          {
-            "item_id": "pt",
-            "language": "pt",
-            "status": "succeeded",
-            "images": [
-              {
-                "object": {
-                  "public_url": "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/poster-title/018f9a7f/pt/title-layer.png",
-                  "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/pt/title-layer.png",
-                  "content_type": "image/png",
-                  "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                  "sha256": "068688a4d7f3ba970b03a619e4989401b4fa069225286842dc1c047823ef5d56"
                 }
               }
             ],
@@ -805,30 +939,30 @@ GET /api/v1/ai-jobs/jobs/{job_id}
           }
         ],
         "duration_ms": {
-          "ai_model": 42310,
-          "total": 58920
+          "ai_model": 98922,
+          "total": 98922
         }
       },
       "job_error": null,
       "cost": {
         "currency": "USD",
-        "amount": "0.083400",
+        "amount": "0.04491750",
         "final": true
       },
       "callback": {
-        "status": "delivered",
-        "attempt": 1,
+        "status": "not_configured",
+        "attempt": 0,
         "last_error": null,
         "next_retry_at": null
       },
-      "status_url": "/api/v1/ai-jobs/jobs/018f9a7f-0183-4e4f-938d-1baf7411b4fd",
-      "created_at": "2026-06-24T12:00:00+00:00",
-      "updated_at": "2026-06-24T12:01:00+00:00",
-      "finished_at": "2026-06-24T12:01:00+00:00"
+      "status_url": "/api/v1/ai-jobs/jobs/8b88ba9d-eb4b-4f6c-ab79-da28e12d0e70",
+      "created_at": "2026-06-29T09:16:23.510156Z",
+      "updated_at": "2026-06-29T09:18:04.589707Z",
+      "finished_at": "2026-06-29T09:18:04.589707Z"
     }
   },
-  "request_id": "01J...",
-  "server_time": "2026-06-24T12:01:00+00:00"
+  "request_id": "trace-id-123",
+  "server_time": "2026-06-29T09:45:34.384870+00:00"
 }
 ```
 
@@ -888,6 +1022,8 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | `job.job_type` | string | 固定为 `poster_title_image` |
 | `job.job_status` | string | `queued`、`running`、`succeeded`、`failed` |
 | `job.job_progress.percent` | integer | 展示进度，非终态 0 到 99，终态 100 |
+| `job.job_progress.stage` | string 或 null | 可选展示阶段；调用方不能用它判断程序状态 |
+| `job.job_progress.message` | string 或 null | 可选展示文案；调用方不能用它判断程序状态 |
 | `job.job_result` | object 或 null | 任务结果快照 |
 | `job.job_error` | object 或 null | Job 级失败原因 |
 | `job.cost` | object 或 null | Job 级总费用；非终态为 `null`，终态可返回 `Cost` |
@@ -935,11 +1071,12 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 ### Query Rules
 
 - HTTP `200` 只表示成功查到 Job，不表示 Job 执行成功。
-- `poster_title_image` 声明 `result_snapshot_statuses={"running","failed"}`；其它 `job_type` 是否支持非终态或失败态结果快照，以各自合同为准。
+- `poster_title_image` 支持在 `running` 和 `failed` 状态返回已成功 item 的 `job_result` 增量快照。
 - `queued` 时 `job_result=null`、`cost=null`。
 - `running` 或 `failed` 时可以返回非空 `job_result`，用于展示已经成功生成的 item 图片产物；如果尚未生成首个成功 item，也可以返回 `job_result=null`。
 - `running` 或 `failed` 的非空 `job_result.items[]` 只包含 `status=succeeded` 的 item，不返回未开始、运行中或失败的 internal leaf job 状态。
 - `succeeded`、`failed` 为终态，可返回 `cost`；如果返回，`cost.final=true`。
+- 未传 `callback.url` 时，`job.callback.status=not_configured`，`attempt=0`。
 - `running` 或 `failed` 的非空 `job_result.items[]` 必须按请求 `items[]` 顺序返回已成功 item 子集。
 - 已经公开为 `succeeded` 的 item，后续响应必须继续返回该 item 及其已产出的 `images`。
 - `batch_summary` 必须与 `items[].status` 一致。
