@@ -106,9 +106,9 @@ Transactional Outbox 本体只要求业务事实和待发布消息意图在同�
 - public root 固定为 `root_job_id IS NULL + workflow_node_key IS NULL + client_request_id IS NOT NULL`；workflow child 固定为 `root_job_id IS NOT NULL + workflow_node_key IS NOT NULL + client_request_id IS NULL`。
 - `unique(root_job_id, workflow_node_key) where workflow_node_key is not null` 是 child node 幂等约束，不只是查询索引。
 - `job_params_ref` 和 `job_params_hash` 对每条 Job 必填；公开 result 和 canonical result 保存在 JSONB，外部大文件只通过 result 内部 artifact ref 表达。
-- terminal Job 必须清空 `active_attempt_id`；`active_attempt_id` 有 FK 约束，同 Job 归属当前由 repository 的 claim / terminal 写入条件保护，尚不是数据库复合约束。
-- `dispatch_outbox` 不保存 `job_id`，只通过 `attempt_id` 关联 execution attempt；它保留 `unique(event_id)`、`unique(attempt_id, task_name)`、`pending/leased/published/retrying/dead_letter` status 枚举、publish attempt 计数和 `publish_retry_policy_snapshot`。
-- `callback_outbox` 保留 `unique(job_id, event_type)`、`unique(event_id)`、`pending/leased/delivered/retrying/skipped/dead_letter` status 枚举、delivery attempt 计数和 `delivery_retry_policy_snapshot`；callback 投递失败不会回写或改变 Job 终态。
+- terminal Job 必须清空 `active_attempt_id`；`active_attempt_id` 通过复合 FK 约束为同一 `job_id` 的 execution attempt，避免跨 Job 执行权指针污染。
+- `dispatch_outbox` 不保存 `job_id`，只通过 `attempt_id` 关联 execution attempt；它保留 `unique(event_id)`、`unique(attempt_id, task_name)`、`pending/leased/published/retrying/dead_letter` status 枚举、publish attempt 计数和 `publish_retry_policy_snapshot`。数据库约束要求 lease 字段与 `leased` 状态一致，`pending/retrying/published` 有 `next_attempt_at`，`dead_letter` 与 `dead_lettered_at` 双向一致。
+- `callback_outbox` 保留 `unique(job_id, event_type)`、`unique(event_id)`、`pending/leased/delivered/retrying/skipped/dead_letter` status 枚举、delivery attempt 计数和 `delivery_retry_policy_snapshot`；callback 投递失败不会回写或改变 Job 终态。数据库约束要求 lease 字段与 `leased` 状态一致，`pending/retrying` 有 `next_attempt_at`，terminal callback 状态清空 `next_attempt_at`，`delivered_at` / `dead_lettered_at` 与对应终态双向一致。
 
 ## 关键机制速查
 

@@ -1,7 +1,18 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,6 +60,14 @@ class Job(Base):
             "workflow_node_key",
             unique=True,
             postgresql_where=text("workflow_node_key IS NOT NULL"),
+        ),
+        ForeignKeyConstraint(
+            ["id", "active_attempt_id"],
+            ["job_execution_attempts.job_id", "job_execution_attempts.id"],
+            name="fk_job_aggregates_active_attempt_same_job",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
         ),
     )
 
@@ -155,6 +174,7 @@ class JobAttempt(Base):
             "retry_decision IS NULL OR retry_decision IN ('not_decided', 'retry', 'do_not_retry')",
             name="ck_job_execution_attempts_retry_decision",
         ),
+        UniqueConstraint("job_id", "id", name="uq_job_execution_attempts_job_id_id"),
         UniqueConstraint("job_id", "purpose", "purpose_attempt_no", name="uq_job_execution_attempts_job_purpose_no"),
         Index("ix_job_execution_attempts_running_lease", "status", "lease_expires_at"),
         Index("ix_job_execution_attempts_retry_chain_id", "retry_chain_id"),
@@ -224,6 +244,45 @@ class DispatchOutbox(Base):
             "publish_backoff_kind IN ('none', 'fixed', 'exponential')",
             name="ck_dispatch_outbox_publish_backoff_kind",
         ),
+        CheckConstraint(
+            """
+            (
+                status = 'leased'
+                AND lease_token IS NOT NULL
+                AND lease_expires_at IS NOT NULL
+                AND leased_at IS NOT NULL
+            )
+            OR
+            (
+                status != 'leased'
+                AND lease_token IS NULL
+                AND lease_expires_at IS NULL
+            )
+            """,
+            name="ck_dispatch_outbox_lease_fields",
+        ),
+        CheckConstraint(
+            """
+            (
+                status IN ('pending', 'retrying', 'published')
+                AND next_attempt_at IS NOT NULL
+            )
+            OR status = 'leased'
+            OR (
+                status = 'dead_letter'
+                AND next_attempt_at IS NULL
+            )
+            """,
+            name="ck_dispatch_outbox_status_fields",
+        ),
+        CheckConstraint(
+            "(status = 'dead_letter') = (dead_lettered_at IS NOT NULL)",
+            name="ck_dispatch_outbox_dead_lettered_at",
+        ),
+        CheckConstraint(
+            "status != 'published' OR published_at IS NOT NULL",
+            name="ck_dispatch_outbox_published_at",
+        ),
         UniqueConstraint("event_id", name="uq_dispatch_outbox_event_id"),
         UniqueConstraint("attempt_id", "task_name", name="uq_dispatch_outbox_attempt_task"),
         Index("ix_dispatch_outbox_attempt_id", "attempt_id"),
@@ -269,6 +328,45 @@ class CallbackOutbox(Base):
         CheckConstraint("max_delivery_attempts >= 1", name="ck_callback_outbox_max_delivery_attempts_positive"),
         CheckConstraint("request_timeout_seconds >= 1", name="ck_callback_outbox_request_timeout_seconds_positive"),
         CheckConstraint("retry_delay_seconds >= 0", name="ck_callback_outbox_retry_delay_seconds_non_negative"),
+        CheckConstraint(
+            """
+            (
+                status = 'leased'
+                AND lease_token IS NOT NULL
+                AND lease_expires_at IS NOT NULL
+                AND leased_at IS NOT NULL
+            )
+            OR
+            (
+                status != 'leased'
+                AND lease_token IS NULL
+                AND lease_expires_at IS NULL
+            )
+            """,
+            name="ck_callback_outbox_lease_fields",
+        ),
+        CheckConstraint(
+            """
+            (
+                status IN ('pending', 'retrying')
+                AND next_attempt_at IS NOT NULL
+            )
+            OR status = 'leased'
+            OR (
+                status IN ('delivered', 'skipped', 'dead_letter')
+                AND next_attempt_at IS NULL
+            )
+            """,
+            name="ck_callback_outbox_status_fields",
+        ),
+        CheckConstraint(
+            "(status = 'delivered') = (delivered_at IS NOT NULL)",
+            name="ck_callback_outbox_delivered_at",
+        ),
+        CheckConstraint(
+            "(status = 'dead_letter') = (dead_lettered_at IS NOT NULL)",
+            name="ck_callback_outbox_dead_lettered_at",
+        ),
         UniqueConstraint("job_id", "event_type", name="uq_callback_outbox_job_event_type"),
         UniqueConstraint("event_id", name="uq_callback_outbox_event_id"),
         Index("ix_callback_outbox_due", "status", "next_attempt_at", "created_at"),

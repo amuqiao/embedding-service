@@ -12,6 +12,15 @@ def _constraint_sql(table, name: str) -> str:
     raise AssertionError(f"constraint not found: {name}")
 
 
+def _foreign_key_columns(table, name: str) -> tuple[list[str], list[str]]:
+    for constraint in table.foreign_key_constraints:
+        if constraint.name == name:
+            local = [column.name for column in constraint.columns]
+            remote = [element.column.table.name + "." + element.column.name for element in constraint.elements]
+            return local, remote
+    raise AssertionError(f"foreign key not found: {name}")
+
+
 def test_current_orm_excludes_retired_job_publish_summary_fields():
     retired_fields = {
         "cancel_reason",
@@ -105,6 +114,61 @@ def test_current_orm_declares_hardened_job_status_constraints():
     assert "business_execution" in attempt_purpose
 
 
+def test_current_orm_declares_job_kernel_db_invariants():
+    local_columns, remote_columns = _foreign_key_columns(Job.__table__, "fk_job_aggregates_active_attempt_same_job")
+    assert local_columns == ["id", "active_attempt_id"]
+    assert remote_columns == ["job_execution_attempts.job_id", "job_execution_attempts.id"]
+
+    attempt_unique_constraints = {
+        constraint.name: [column.name for column in constraint.columns]
+        for constraint in JobAttempt.__table__.constraints
+        if constraint.name
+    }
+    assert attempt_unique_constraints["uq_job_execution_attempts_job_id_id"] == ["job_id", "id"]
+
+    dispatch_lease_fields = _constraint_sql(DispatchOutbox.__table__, "ck_dispatch_outbox_lease_fields")
+    dispatch_status_fields = _constraint_sql(DispatchOutbox.__table__, "ck_dispatch_outbox_status_fields")
+    callback_lease_fields = _constraint_sql(CallbackOutbox.__table__, "ck_callback_outbox_lease_fields")
+    callback_status_fields = _constraint_sql(CallbackOutbox.__table__, "ck_callback_outbox_status_fields")
+
+    assert "status = 'leased'" in dispatch_lease_fields
+    assert "lease_token IS NOT NULL" in dispatch_lease_fields
+    assert "lease_expires_at IS NOT NULL" in dispatch_lease_fields
+    assert "leased_at IS NOT NULL" in dispatch_lease_fields
+    assert "status != 'leased'" in dispatch_lease_fields
+    assert "lease_token IS NULL" in dispatch_lease_fields
+    assert "lease_expires_at IS NULL" in dispatch_lease_fields
+    assert "status IN ('pending', 'retrying', 'published')" in dispatch_status_fields
+    assert "next_attempt_at IS NOT NULL" in dispatch_status_fields
+    assert "status = 'dead_letter'" in dispatch_status_fields
+    assert "next_attempt_at IS NULL" in dispatch_status_fields
+    assert "(status = 'dead_letter') = (dead_lettered_at IS NOT NULL)" in _constraint_sql(
+        DispatchOutbox.__table__,
+        "ck_dispatch_outbox_dead_lettered_at",
+    )
+    assert "published_at IS NOT NULL" in _constraint_sql(DispatchOutbox.__table__, "ck_dispatch_outbox_published_at")
+
+    assert "status = 'leased'" in callback_lease_fields
+    assert "lease_token IS NOT NULL" in callback_lease_fields
+    assert "lease_expires_at IS NOT NULL" in callback_lease_fields
+    assert "leased_at IS NOT NULL" in callback_lease_fields
+    assert "status != 'leased'" in callback_lease_fields
+    assert "lease_token IS NULL" in callback_lease_fields
+    assert "lease_expires_at IS NULL" in callback_lease_fields
+    assert "status IN ('pending', 'retrying')" in callback_status_fields
+    assert "next_attempt_at IS NOT NULL" in callback_status_fields
+    assert "status IN ('delivered', 'skipped', 'dead_letter')" in callback_status_fields
+    assert "next_attempt_at IS NULL" in callback_status_fields
+    assert "(status = 'delivered') = (delivered_at IS NOT NULL)" in _constraint_sql(
+        CallbackOutbox.__table__,
+        "ck_callback_outbox_delivered_at",
+    )
+    assert "(status = 'dead_letter') = (dead_lettered_at IS NOT NULL)" in _constraint_sql(
+        CallbackOutbox.__table__,
+        "ck_callback_outbox_dead_lettered_at",
+    )
+
+
 def test_current_orm_declares_retry_domain_columns_and_excludes_aggregate_retry_state():
     aggregate_columns = Job.__table__.columns.keys()
     assert {
@@ -182,6 +246,7 @@ def test_cleanup_migration_tightens_legacy_status_constraints():
     migration_0015 = Path("alembic/versions/0015_transactional_outbox_job_kernel_tables.py").read_text()
     migration_0016 = Path("alembic/versions/0016_add_job_workflow_lineage.py").read_text()
     migration_0018 = Path("alembic/versions/0018_job_retry_kernel_hardening.py").read_text()
+    migration_0019 = Path("alembic/versions/0019_job_kernel_db_invariants.py").read_text()
 
     assert "cannot tighten jobs.status constraint while legacy statuses exist" in migration_0013
     assert "cannot tighten job_attempts.status constraint while legacy statuses exist" in migration_0013
@@ -240,3 +305,20 @@ def test_cleanup_migration_tightens_legacy_status_constraints():
     assert '"callback_status"' in migration_0018
     assert '"ck_job_aggregates_root_child_shape"' in migration_0018
     assert '"ck_job_execution_attempts_purpose"' in migration_0018
+
+    assert 'down_revision: str | Sequence[str] | None = "0018_retry_kernel_hardening"' in migration_0019
+    assert '"uq_job_execution_attempts_job_id_id"' in migration_0019
+    assert '"fk_job_aggregates_active_attempt_same_job"' in migration_0019
+    assert '"ck_dispatch_outbox_lease_fields"' in migration_0019
+    assert '"ck_dispatch_outbox_status_fields"' in migration_0019
+    assert '"ck_dispatch_outbox_dead_lettered_at"' in migration_0019
+    assert '"ck_dispatch_outbox_published_at"' in migration_0019
+    assert '"ck_callback_outbox_lease_fields"' in migration_0019
+    assert '"ck_callback_outbox_status_fields"' in migration_0019
+    assert '"ck_callback_outbox_delivered_at"' in migration_0019
+    assert '"ck_callback_outbox_dead_lettered_at"' in migration_0019
+    assert "active_attempt_id must belong to the same job_id" in migration_0019
+    assert "UPDATE dispatch_outbox" in migration_0019
+    assert "UPDATE callback_outbox" in migration_0019
+    assert "SET leased_at = COALESCE(leased_at, updated_at, created_at, now())" in migration_0019
+    assert "SET status = 'retrying'" in migration_0019

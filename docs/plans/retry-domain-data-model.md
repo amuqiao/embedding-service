@@ -4,7 +4,7 @@
 
 ## Implementation Status
 
-本计划的 retry domain 拆分已经落地到当前模型：execution attempt retry、dispatch publish retry 和 callback delivery retry 已分属不同事实源，workflow orchestration 与 business execution 已通过 `attempt.purpose` 区分。保留本文在 `docs/plans/`，是因为仍有少量 outbox / DB 级不变量 hardening 没有完成，不能把本文作为纯历史归档。
+本计划的 retry domain 拆分和生产前 DB 级 hardening 已落地：execution attempt retry、dispatch publish retry 和 callback delivery retry 已分属不同事实源，workflow orchestration 与 business execution 已通过 `attempt.purpose` 区分。本文保留原始目标和验收清单用于追溯，不再作为待实现计划使用；当前实现事实以 `docs/current/`、代码和测试为准。
 
 已落地：
 
@@ -13,13 +13,14 @@
 - `business_execution` 默认 `max_attempts=1`；`workflow_orchestration` 默认 `max_attempts=3`。
 - dispatch publish retry 和 callback delivery retry 已落在各自 outbox，不创建新的 business execution attempt。
 - `.env.example` 不暴露全局业务执行 retry、orchestration retry、dispatch publish retry 或 callback delivery retry 旋钮。
+- `dispatch_outbox` / `callback_outbox` 已固化 lease 字段、`next_attempt_at` 和 terminal timestamp 的核心 DB 不变量；ORM / migration 合同由 schema contract test 锁定，迁移链通过 migration roundtrip 验证。
+- `active_attempt_id` 已通过数据库复合 FK 约束为同一 `job_id` 的 execution attempt。
 
-剩余 hardening：
+关闭状态：
 
-- outbox terminal timestamp、lease-state、terminal `next_attempt_at` 等状态不变量还需要进一步固化为数据库约束和 schema contract tests。
-- `active_attempt_id` 同 Job 归属仍主要由 repository 写入路径保护，尚未形成数据库复合约束。
+- 本计划不再有生产前必做项。后续如开放业务执行重试、运行时 retry policy 管理或人工 replay，应新建专项计划，不在本文续写。
 
-下方 Target / Planned Work / Acceptance 保留原始目标和仍未完全验收的约束项。当前实现事实不要从本文反推，以 `docs/current/`、代码和测试为准。
+下方 Target / Planned Work / Acceptance 保留原始目标。当前实现事实不要从本文反推，以 `docs/current/`、代码和测试为准。
 
 ## Original Baseline
 

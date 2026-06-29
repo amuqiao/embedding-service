@@ -259,6 +259,56 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
 
 
 @pytest.mark.asyncio
+async def test_run_job_attempt_retries_transient_claim_miss(monkeypatch):
+    attempt_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="job_test_add",
+        status="running",
+        active_attempt_id=attempt_id,
+        progress_percent=5,
+    )
+    attempt = _attempt(id=attempt_id, job_id=job.id, lease_token=lease_token)
+    claim_attempts: list[uuid.UUID] = []
+    sleep_delays: list[float] = []
+
+    async def fake_with_db(coro):
+        return await coro(_FakeDB())
+
+    async def fake_claim_attempt_for_execution(_db, received_attempt_id, *, worker_id, lease_seconds):
+        assert received_attempt_id == attempt_id
+        claim_attempts.append(received_attempt_id)
+        if len(claim_attempts) == 1:
+            return None
+        return job, attempt, lease_token
+
+    async def fake_heartbeat_attempt(_db, received_attempt_id, *, lease_token: uuid.UUID, lease_seconds):
+        assert received_attempt_id == attempt_id
+        return True
+
+    async def fake_execute_job(*_args, **_kwargs):
+        return {"status": "succeeded", "value": 5}
+
+    async def fake_sleep(delay):
+        sleep_delays.append(delay)
+
+    monkeypatch.setattr(task_jobs, "_ensure_workflows_registered", lambda: None)
+    monkeypatch.setattr(task_jobs, "_with_db", fake_with_db)
+    monkeypatch.setattr(task_jobs.JobRepo, "claim_attempt_for_execution", fake_claim_attempt_for_execution)
+    monkeypatch.setattr(task_jobs.JobRepo, "heartbeat_attempt", fake_heartbeat_attempt)
+    monkeypatch.setattr("app.jobs.runner.execute_job", fake_execute_job)
+    monkeypatch.setattr(task_jobs.asyncio, "sleep", fake_sleep)
+
+    result = await task_jobs.run_job_attempt.original_func(str(attempt_id))
+
+    assert result["status"] == "succeeded"
+    assert len(claim_attempts) == 2
+    assert sleep_delays == [task_jobs._CLAIM_RETRY_DELAY_SECONDS]
+
+
+@pytest.mark.asyncio
 async def test_publish_job_attempt_marks_published_after_enqueue(monkeypatch):
     attempt_id = uuid.uuid4()
     dispatch = SimpleNamespace(id=uuid.uuid4(), orphan_timeout_seconds=300)

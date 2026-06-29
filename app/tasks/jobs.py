@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -19,6 +20,10 @@ from app.services.jobs import get_job_or_404
 from app.tasks.taskiq_app import broker
 
 logger = logging.getLogger(__name__)
+
+_CLAIM_RETRY_ATTEMPTS = 3
+_CLAIM_RETRY_DELAY_SECONDS = 0.2
+
 
 class TaskiqPublishDeferredError(RuntimeError):
     def __init__(self, attempt_id: uuid.UUID, error: dict[str, Any]):
@@ -187,7 +192,18 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
             await db.commit()
             return claimed_attempt
 
-        claimed = await _with_db(claim)
+        claimed = None
+        for claim_attempt_no in range(1, _CLAIM_RETRY_ATTEMPTS + 1):
+            claimed = await _with_db(claim)
+            if claimed is not None:
+                break
+            if claim_attempt_no < _CLAIM_RETRY_ATTEMPTS:
+                logger.info(
+                    "taskiq_attempt_claim_retry attempt_id=%s attempt_no=%d",
+                    attempt_id,
+                    claim_attempt_no + 1,
+                )
+                await asyncio.sleep(_CLAIM_RETRY_DELAY_SECONDS)
         if claimed is None:
             logger.info("taskiq_attempt_skipped attempt_id=%s reason=claim_failed", attempt_id)
             return {"attempt_id": attempt_id, "status": "skipped"}

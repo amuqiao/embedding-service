@@ -304,7 +304,7 @@ class JobRepo:
         *,
         event_job_id: uuid.UUID,
         attempt_id: uuid.UUID,
-        next_attempt_at: datetime | None,
+        next_attempt_at: datetime,
         dispatch_reason: str,
     ) -> DispatchOutbox:
         publish_retry_policy_snapshot = {
@@ -560,22 +560,32 @@ class JobRepo:
         worker_id: str,
         lease_seconds: int,
     ) -> tuple[Job, JobAttempt, uuid.UUID] | None:
-        result = await db.execute(
-            select(Job, JobAttempt)
-            .join(JobAttempt, JobAttempt.job_id == Job.id)
+        job_result = await db.execute(
+            select(Job)
             .where(
-                JobAttempt.id == attempt_id,
-                Job.active_attempt_id == JobAttempt.id,
+                Job.active_attempt_id == attempt_id,
                 Job.status == "queued",
                 Job.deleted_at.is_(None),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        job = job_result.scalar_one_or_none()
+        if job is None:
+            return None
+
+        attempt_result = await db.execute(
+            select(JobAttempt)
+            .where(
+                JobAttempt.id == attempt_id,
+                JobAttempt.job_id == job.id,
                 JobAttempt.status == "pending",
             )
-            .with_for_update()
+            .with_for_update(skip_locked=True)
         )
-        row = result.one_or_none()
-        if row is None:
+        attempt = attempt_result.scalar_one_or_none()
+        if attempt is None:
             return None
-        job, attempt = row
+
         now = datetime.now(timezone.utc)
         previous_attempt_status = attempt.status
         lease_token = uuid.uuid4()
@@ -1404,11 +1414,20 @@ class JobRepo:
             return
 
         job, outbox = row
+        attempted_count = max(0, delivery_attempts)
+        current_delivery_attempts = outbox.delivery_attempts or 0
+        max_allowed_attempts = min(max_attempts, outbox.max_delivery_attempts)
+        if (
+            status == "failed"
+            and current_delivery_attempts + attempted_count < max_allowed_attempts
+            and next_retry_at is None
+        ):
+            raise ValueError("callback retrying status requires next_retry_at")
+
         now = datetime.now(timezone.utc)
         previous_status = outbox.status
-        attempted_count = max(0, delivery_attempts)
         if attempted_count:
-            outbox.delivery_attempts = (outbox.delivery_attempts or 0) + attempted_count
+            outbox.delivery_attempts = current_delivery_attempts + attempted_count
             outbox.first_attempt_at = outbox.first_attempt_at or now
             outbox.last_attempt_at = now
         outbox.lease_token = None
@@ -1416,7 +1435,6 @@ class JobRepo:
         outbox.last_error = last_error
         outbox.last_response = last_response
         outbox.updated_at = now
-        max_allowed_attempts = min(max_attempts, outbox.max_delivery_attempts)
         if status == "delivered":
             outbox.status = "delivered"
             outbox.next_attempt_at = None

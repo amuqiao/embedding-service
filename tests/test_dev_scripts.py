@@ -275,6 +275,65 @@ def test_dev_start_target_rejects_database_port_mismatch(tmp_path):
     assert "== Application ==" not in result.stdout
 
 
+def test_dev_start_target_worker_returns_success_without_api_health_wait():
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                [
+                    "set -e",
+                    "source scripts/dev/services.sh >/dev/null",
+                    "assert_no_compose_full_app_running_for_local() { :; }",
+                    "guard_local_env() { :; }",
+                    "assert_local_config_consistency() { :; }",
+                    "section() { :; }",
+                    "start_service() { [[ \"$1\" == worker ]]; }",
+                    "wait_for_api() { exit 99; }",
+                    "start_target worker",
+                ]
+            ),
+        ],
+        cwd=ROOT_DIR,
+        env=_clean_root_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+
+
+def test_dev_stop_service_returns_success_after_removing_stale_pid(tmp_path):
+    pid_file = tmp_path / "worker.pid"
+    pid_file.write_text("999999\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                [
+                    "set -e",
+                    "source scripts/dev/services.sh >/dev/null",
+                    "service_pid_file() { printf '%s'; }" % pid_file,
+                    "local_service_pids() { :; }",
+                    "event() { :; }",
+                    "stop_service worker",
+                ]
+            ),
+        ],
+        cwd=ROOT_DIR,
+        env=_clean_root_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert not pid_file.exists()
+
+
 def test_dev_worker_service_command_injects_root_env(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -2196,6 +2255,9 @@ def test_jobs_summary_dispatch_counts_only_run_attempt_task(monkeypatch):
 
     dispatch_sql = captured_sql[2]
     assert "FROM dispatch_outbox d" in dispatch_sql
+    assert "JOIN job_execution_attempts a ON a.id = d.attempt_id" in dispatch_sql
+    assert "JOIN job_aggregates j ON j.id = a.job_id" in dispatch_sql
+    assert "d.job_id" not in dispatch_sql
     assert "d.task_name = 'jobs.run_attempt'" in dispatch_sql
 
 

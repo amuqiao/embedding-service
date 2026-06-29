@@ -6,7 +6,7 @@ Retry domain 的字段改造以 [`retry-domain-data-model.md`](retry-domain-data
 
 ## Implementation Status
 
-本计划的大部分字段职责收口已经落地，并已同步进 [`../current/job-kernel.md`](../current/job-kernel.md)。保留本文在 `docs/plans/`，是因为仍有少量 DB 级不变量没有完全实现，不能把本文作为纯历史归档。
+本计划的字段职责收口和生产前 DB 级 hardening 已落地，并已同步进 [`../current/job-kernel.md`](../current/job-kernel.md)。本文保留原始目标和验收清单用于追溯，不再作为待实现计划使用；当前实现事实以 `docs/current/`、代码和测试为准。
 
 已落地：
 
@@ -15,13 +15,14 @@ Retry domain 的字段改造以 [`retry-domain-data-model.md`](retry-domain-data
 - `dispatch_outbox` 已改为只通过 `attempt_id` 关联 execution attempt，不再保存 `job_id`。
 - `dispatch_outbox` 和 `callback_outbox` 已保存各自的 retry policy snapshot 和 attempt counter。
 - `job_execution_attempts` 已成为 execution attempt、lease、heartbeat、retry decision 的事实源。
+- `active_attempt_id` 已通过数据库复合 FK 约束为同一 `job_id` 的 execution attempt。
+- `dispatch_outbox` / `callback_outbox` 已固化 lease 字段、`next_attempt_at` 和 terminal timestamp 的核心 DB 不变量；ORM / migration 合同由 schema contract test 锁定，迁移链通过 migration roundtrip 验证。
 
-剩余 hardening：
+关闭状态：
 
-- `active_attempt_id` 必须属于同一 `job_id` 的 attempt 当前由 repository 写入路径保护，尚未升级为数据库复合约束或等价数据库不变量。
-- `dispatch_outbox` / `callback_outbox` 的 lease-state、terminal timestamp、terminal `next_attempt_at` 等状态不变量仍主要依赖代码路径，尚未全部固化为数据库 check constraint 或 schema contract test。
+- 本计划不再有生产前必做项。后续如继续增加 retry policy 管理、人工 replay 或 workflow plan 独立表，应新建专项计划，不在本文续写。
 
-下方 Target / Planned Work / Acceptance 保留原始目标和仍未完全验收的约束项。当前实现事实不要从本文反推，以 `docs/current/`、代码和测试为准。
+下方 Target / Planned Work / Acceptance 保留原始目标。当前实现事实不要从本文反推，以 `docs/current/`、代码和测试为准。
 
 ## Original Baseline
 

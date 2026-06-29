@@ -449,9 +449,9 @@ async def test_create_internal_job_keeps_callback_columns_null():
 
 
 @pytest.mark.asyncio
-async def test_claim_attempt_for_execution_waits_for_specific_attempt_lock():
+async def test_claim_attempt_for_execution_skips_locked_duplicate_attempt():
     db = _FakeDB()
-    db.results.append(_NoRowResult())
+    db.results.append(_ScalarResult(None))
 
     claimed = await JobRepo.claim_attempt_for_execution(
         db,
@@ -461,9 +461,49 @@ async def test_claim_attempt_for_execution_waits_for_specific_attempt_lock():
     )
 
     assert claimed is None
+    assert len(db.statements) == 1
     sql = _compile(db.statements[0])
+    assert "FROM job_aggregates" in sql
+    assert "JOIN job_execution_attempts" not in sql
     assert "FOR UPDATE" in sql
-    assert "SKIP LOCKED" not in sql
+    assert "SKIP LOCKED" in sql
+
+
+@pytest.mark.asyncio
+async def test_claim_attempt_for_execution_returns_none_when_attempt_lock_is_busy():
+    attempt_id = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="busy-attempt",
+        job_type="job_test_echo",
+        status="queued",
+        active_attempt_id=attempt_id,
+        progress_percent=0,
+        metadata_={},
+    )
+    db = _FakeDB()
+    db.results.extend([_ScalarResult(job), _ScalarResult(None)])
+
+    claimed = await JobRepo.claim_attempt_for_execution(
+        db,
+        attempt_id,
+        worker_id="worker-1",
+        lease_seconds=60,
+    )
+
+    assert claimed is None
+    assert db.flushed is False
+    assert len(db.statements) == 2
+    job_sql = _compile(db.statements[0])
+    attempt_sql = _compile(db.statements[1])
+    assert "FROM job_aggregates" in job_sql
+    assert "JOIN job_execution_attempts" not in job_sql
+    assert "FOR UPDATE" in job_sql
+    assert "SKIP LOCKED" in job_sql
+    assert "FROM job_execution_attempts" in attempt_sql
+    assert "FOR UPDATE" in attempt_sql
+    assert "SKIP LOCKED" in attempt_sql
 
 
 @pytest.mark.asyncio
@@ -485,7 +525,7 @@ async def test_claim_attempt_for_execution_accepts_queued_attempt_after_uncertai
         status="pending",
     )
     db = _FakeDB()
-    db.results.append(_OneRowResult((job, attempt)))
+    db.results.extend([_ScalarResult(job), _ScalarResult(attempt)])
 
     claimed = await JobRepo.claim_attempt_for_execution(
         db,
@@ -505,6 +545,10 @@ async def test_claim_attempt_for_execution_accepts_queued_attempt_after_uncertai
     assert attempt.heartbeat_at is not None
     assert job.status == "running"
     assert db.flushed is True
+    assert len(db.statements) == 2
+    assert "FROM job_aggregates" in _compile(db.statements[0])
+    assert "JOIN job_execution_attempts" not in _compile(db.statements[0])
+    assert "FROM job_execution_attempts" in _compile(db.statements[1])
     events = [obj for obj in db.added if isinstance(obj, JobEvent)]
     assert len(events) == 1
     assert events[0].event_type == "attempt.claimed"
@@ -1005,6 +1049,52 @@ async def test_mark_callback_result_counts_only_actual_http_attempts():
     assert outbox.first_attempt_at is not None
     assert outbox.last_attempt_at is not None
     assert outbox.last_response == {"format": "ack", "valid": False}
+
+
+@pytest.mark.asyncio
+async def test_mark_callback_result_rejects_retrying_without_next_retry_at():
+    lease_token = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="client-1",
+        job_type="test.echo",
+        status="succeeded",
+        metadata_={},
+    )
+    outbox = CallbackOutbox(
+        id=uuid.uuid4(),
+        job_id=job.id,
+        event_type="job.succeeded",
+        status="leased",
+        lease_token=lease_token,
+        payload={},
+        delivery_attempts=0,
+        max_delivery_attempts=3,
+    )
+    db = _FakeDB()
+    db.results.append(_OneRowResult((job, outbox)))
+
+    with pytest.raises(ValueError, match="requires next_retry_at"):
+        await JobRepo.mark_callback_result(
+            db,
+            job.id,
+            status="failed",
+            last_error={"code": "CALLBACK_HTTP_ERROR"},
+            next_retry_at=None,
+            max_attempts=3,
+            delivery_attempts=1,
+            callback_id=outbox.id,
+            lease_token=lease_token,
+        )
+
+    assert db.flushed is False
+    assert outbox.status == "leased"
+    assert outbox.delivery_attempts == 0
+    assert outbox.lease_token == lease_token
+    assert outbox.lease_expires_at is None
+    assert outbox.last_error is None
+    assert outbox.next_attempt_at is None
 
 
 @pytest.mark.asyncio

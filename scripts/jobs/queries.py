@@ -303,7 +303,8 @@ def summary(
               AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= now())
           ) AS due
         FROM dispatch_outbox d
-        JOIN job_aggregates j ON j.id = d.job_id
+        JOIN job_execution_attempts a ON a.id = d.attempt_id
+        JOIN job_aggregates j ON j.id = a.job_id
         WHERE j.deleted_at IS NULL
           AND d.task_name = 'jobs.run_attempt'
         {filters}

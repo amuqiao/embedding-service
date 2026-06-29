@@ -369,7 +369,7 @@ stop_service() {
     if [[ -n "$residual_pids" ]]; then
       die "$service residual local processes are still running: pid=${residual_pids}. Stop them manually before continuing." 4
     else
-      return
+      return 0
     fi
   fi
 
@@ -525,7 +525,9 @@ start_target() {
   assert_local_config_consistency
   section "Application"
   start_service "$service"
-  [[ "$service" == "api" ]] && wait_for_api 30
+  if [[ "$service" == "api" ]]; then
+    wait_for_api 30
+  fi
 }
 
 stop_target() {
