@@ -5,6 +5,7 @@ from fastapi.routing import APIRoute
 import pytest
 
 from app.api.operations import all_operation_ids, all_operation_specs
+from app.api.operations import OperationSpec
 from app.core.error_registry import (
     ErrorSpec,
     all_error_reasons,
@@ -12,8 +13,9 @@ from app.core.error_registry import (
     error_registry_is_frozen,
     register_error_specs,
 )
+from app.core.logging import LogEvent
 from app.core import prompt_templates
-from app.core.registry_checks import validate_all_registries, validate_job_type_registry
+from app.core.registry_checks import validate_all_registries, validate_job_type_registry, validate_operation_registry
 from app.main import app
 from app.jobs.base import JobExecutor, JobTypeSpec, PromptSpec
 from app.jobs.types.register import register_all_job_types
@@ -75,6 +77,26 @@ def test_operation_registry_references_registered_errors():
         assert set(spec.error_codes) <= known_errors
         assert spec.operation_id
         assert spec.response_data_schema
+
+
+def test_validate_operation_registry_rejects_unknown_log_event(monkeypatch):
+    spec = OperationSpec(
+        operation_id="test_operation",
+        channel="http",
+        method="GET",
+        path="/test",
+        auth_boundary="test",
+        request_schema=None,
+        response_data_schema="JobResponseData",
+        error_codes=frozenset({"INVALID_INPUT"}),
+        idempotency_key=None,
+        side_effects=(),
+        log_events=("not_registered",),
+    )
+    monkeypatch.setattr("app.core.registry_checks.all_operation_specs", lambda: {"test_operation": spec})
+
+    with pytest.raises(ValueError, match="unknown log events"):
+        validate_operation_registry()
 
 
 def test_error_registry_supports_frozen_idempotent_business_registration():
@@ -267,6 +289,27 @@ def test_job_type_registry_exposes_required_metadata():
     )
 
 
+def test_poster_title_image_job_types_declare_business_log_events():
+    register_all_job_types()
+    specs = job_registry.all_job_type_specs()
+    assert specs["poster_title_image"].log_events == (
+        LogEvent.POSTER_TITLE_IMAGE_STYLE_PROBE_COMPLETED,
+        LogEvent.POSTER_TITLE_IMAGE_OBJECT_STORED,
+        LogEvent.POSTER_TITLE_IMAGE_ITEM_COMPLETED,
+        LogEvent.POSTER_TITLE_IMAGE_JOIN_COMPLETED,
+    )
+    assert specs["poster_title_image_style_probe"].log_events == (
+        LogEvent.POSTER_TITLE_IMAGE_STYLE_PROBE_COMPLETED,
+    )
+    assert specs["poster_title_image_generate_item"].log_events == (
+        LogEvent.POSTER_TITLE_IMAGE_OBJECT_STORED,
+        LogEvent.POSTER_TITLE_IMAGE_ITEM_COMPLETED,
+    )
+    assert specs["poster_title_image_join"].log_events == (
+        LogEvent.POSTER_TITLE_IMAGE_JOIN_COMPLETED,
+    )
+
+
 def _job_type_spec(**overrides) -> JobTypeSpec:
     values = {
         "job_type": "job_test_add",
@@ -374,6 +417,18 @@ def test_validate_job_type_registry_rejects_invalid_phase3_metadata(monkeypatch,
     monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
 
     with pytest.raises(ValueError, match=message):
+        validate_job_type_registry()
+
+
+def test_validate_job_type_registry_rejects_unknown_log_event(monkeypatch):
+    monkeypatch.setattr(
+        job_registry,
+        "all_job_type_specs",
+        lambda: {"job_test_add": _job_type_spec(log_events=("not_registered",))},
+    )
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
+
+    with pytest.raises(ValueError, match="unknown log events"):
         validate_job_type_registry()
 
 

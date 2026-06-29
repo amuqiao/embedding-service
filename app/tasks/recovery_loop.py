@@ -4,12 +4,14 @@ import logging
 import time
 
 from app.core.config import settings
+from app.core.logging import configure_logging
 from app.tasks.recovery import run_recovery
 
 logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    configure_logging()
     while True:
         try:
             result = run_recovery()

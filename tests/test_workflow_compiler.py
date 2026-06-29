@@ -234,7 +234,7 @@ def test_poster_title_image_workflow_max_nodes_follows_configured_item_count(mon
     assert plan["max_nodes"] == 25
 
 
-def test_poster_title_image_workflow_node_keys_do_not_collide_for_sanitized_item_ids():
+def test_poster_title_image_workflow_node_keys_do_not_collide_for_safe_item_ids():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
     register_all_job_types()
@@ -260,16 +260,50 @@ def test_poster_title_image_workflow_node_keys_do_not_collide_for_sanitized_item
         "poster_title_image",
         {
             "items": [
-                {**base_item, "item_id": "a/b", "language": "es"},
-                {**base_item, "item_id": "a?b", "language": "fr"},
+                {**base_item, "item_id": "a-b", "language": "es"},
+                {**base_item, "item_id": "a_b", "language": "fr"},
             ]
         },
     )
 
     nodes = _nodes_by_key(plan)
-    assert _item_node_key("a/b") in nodes
-    assert _item_node_key("a?b") in nodes
-    assert _item_node_key("a/b") != _item_node_key("a?b")
+    assert _item_node_key("a-b") in nodes
+    assert _item_node_key("a_b") in nodes
+    assert _item_node_key("a-b") != _item_node_key("a_b")
+
+
+def test_poster_title_image_workflow_rejects_unsafe_item_ids_before_node_key_building():
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+    register_all_job_types()
+    ref = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/a.png",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/a.png",
+        "content_type": "image/png",
+        "sha256": "a" * 64,
+    }
+    base_item = {
+        "title_text": "Title",
+        "model_options": {
+            "size": "auto",
+            "quality": "high",
+            "draw_count": 1,
+            "background": "transparent",
+            "output_format": "png",
+        },
+        "reference_image": ref,
+    }
+
+    with pytest.raises(Exception, match="item_id"):
+        compile_registered_workflow(
+            "poster_title_image",
+            {
+                "items": [
+                    {**base_item, "item_id": "a/b", "language": "es"},
+                    {**base_item, "item_id": "a?b", "language": "fr"},
+                ]
+            },
+        )
 
 
 def test_map_starmap_and_chunks_expand_to_stable_node_inputs():

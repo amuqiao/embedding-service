@@ -5,6 +5,7 @@ from taskiq_redis import ListQueueBroker, RedisStreamBroker
 
 from app.core.config import settings
 from app.core.database import close_db_engine, init_db_engine
+from app.core.logging import configure_logging
 
 
 def _build_broker():
@@ -20,6 +21,7 @@ broker = _build_broker()
 
 @broker.on_event(TaskiqEvents.WORKER_STARTUP)
 async def _worker_startup(_state) -> None:
+    configure_logging()
     init_db_engine()
 
 

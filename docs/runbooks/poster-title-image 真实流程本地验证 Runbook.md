@@ -49,7 +49,7 @@
   --reference .data/title/True_Heiress_Never_Lies.png \
   --language es \
   --title-text "Cuando el amor se alejo" \
-  --api-url http://127.0.0.1:18300 \
+  --api-url http://127.0.0.1:18200 \
   --caller-id default \
   --download-outputs \
   --json
@@ -85,7 +85,7 @@
 
 每个 item 至少需要：
 
-- `item_id`：同一个 Job 内唯一。
+- `item_id`：同一个 Job 内唯一；首字符必须是字母或数字，后续只允许字母、数字、`.`、`_`、`-`。
 - `language`：必须来自共享业务语种目录；同一个 Job 内允许重复。
 - `title_text`：要渲染到标题图里的目标文案。
 - `reference`：参考标题图，可以是本地图片，也可以是完整 OSS URL Ref。

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.language_catalog import require_supported_language
+from app.core.logging import LogEvent, log_event
 from app.core.model_registry import get_enabled_model
 from app.core.prompt_templates import get_prompt_block_default
 from app.integrations.ai_adapters.base import ImageInput
@@ -64,6 +66,19 @@ IMAGE_MODEL_GATE = ImageModelGate()
 STYLE_PROBE_MODEL_GATE = ModelGate()
 _WORKFLOW_DEFINITION: WorkflowDefinition | None = None
 _REFERENCE_INVALID_SOURCE_ERROR_CODES = frozenset({"INVALID_INPUT", "INPUT_HASH_MISMATCH", "INPUT_TOO_LARGE"})
+POSTER_TITLE_IMAGE_LOG_EVENTS = (
+    LogEvent.POSTER_TITLE_IMAGE_STYLE_PROBE_COMPLETED,
+    LogEvent.POSTER_TITLE_IMAGE_OBJECT_STORED,
+    LogEvent.POSTER_TITLE_IMAGE_ITEM_COMPLETED,
+    LogEvent.POSTER_TITLE_IMAGE_JOIN_COMPLETED,
+)
+POSTER_TITLE_IMAGE_STYLE_PROBE_LOG_EVENTS = (LogEvent.POSTER_TITLE_IMAGE_STYLE_PROBE_COMPLETED,)
+POSTER_TITLE_IMAGE_GENERATE_ITEM_LOG_EVENTS = (
+    LogEvent.POSTER_TITLE_IMAGE_OBJECT_STORED,
+    LogEvent.POSTER_TITLE_IMAGE_ITEM_COMPLETED,
+)
+POSTER_TITLE_IMAGE_JOIN_LOG_EVENTS = (LogEvent.POSTER_TITLE_IMAGE_JOIN_COMPLETED,)
+logger = logging.getLogger(__name__)
 
 PROMPT_TEMPLATE = """\
 Generate a high-resolution standalone title graphic. {bg_header}
@@ -170,6 +185,10 @@ def _load_reference_image_from_ref(reference_image: Any) -> ImageInput:
 
 def _load_reference_image(item: PosterTitleImageItemParams) -> ImageInput:
     return _load_reference_image_from_ref(item.reference_image)
+
+
+def _log_trigger_request_id(job: Job) -> str:
+    return trigger_request_id_from_job(job) or "-"
 
 
 def _effective_style_prompt(
@@ -410,6 +429,7 @@ class PosterTitleImageJob(JobExecutor):
     public_result_schema = PosterTitleImageResult
     result_snapshot_statuses = frozenset({"running", "failed"})
     prompt_template_required_blocks = frozenset(POSTER_TITLE_IMAGE_PROMPT_BLOCKS)
+    log_events = POSTER_TITLE_IMAGE_LOG_EVENTS
     allow_callback = True
     timeout_seconds = 600
     allowed_error_codes = JobExecutor.allowed_error_codes | frozenset(
@@ -516,6 +536,7 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
     allow_callback = False
     timeout_seconds = 300
     allowed_error_codes = PosterTitleImageJob.allowed_error_codes
+    log_events = POSTER_TITLE_IMAGE_STYLE_PROBE_LOG_EVENTS
 
     def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         return PosterTitleImageStyleProbeParams.model_validate(job_params).model_dump()
@@ -531,6 +552,7 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
         if attempt_id is None:
             raise AppError("JOB_RUNTIME_NOT_SUPPORTED", "poster_title_image style probe requires active_attempt_id")
         request_id = trigger_request_id_from_job(job)
+        log_request_id = request_id or "-"
         ai_scope_id = ai_billing_scope_id_from_job(job)
         reference_image = _load_reference_image_from_ref(params.reference_image)
         started = time.monotonic()
@@ -545,6 +567,21 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
             attempt_id=attempt_id,
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
+        log_event(
+            logger,
+            logging.INFO,
+            LogEvent.POSTER_TITLE_IMAGE_STYLE_PROBE_COMPLETED,
+            job_id=job.id,
+            root_job_id=job.root_job_id,
+            attempt_id=attempt_id,
+            trigger_request_id=log_request_id,
+            caller_id=job.caller_id,
+            job_type=job.job_type,
+            workflow_node_key=job.workflow_node_key,
+            operation="poster_title_image.probe_style",
+            model_id=settings.registry.poster_title_image_style_probe_model_id,
+            duration_ms=elapsed_ms,
+        )
         return PosterTitleImageStyleProbeResult(
             style_key=params.style_key,
             style_desc=style_desc,
@@ -564,6 +601,7 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
     allow_callback = False
     timeout_seconds = 600
     allowed_error_codes = PosterTitleImageJob.allowed_error_codes
+    log_events = POSTER_TITLE_IMAGE_GENERATE_ITEM_LOG_EVENTS
 
     def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         return PosterTitleImageGenerateItemParams.model_validate(job_params).model_dump()
@@ -581,6 +619,7 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
         if attempt_id is None:
             raise AppError("JOB_RUNTIME_NOT_SUPPORTED", "poster_title_image item requires active_attempt_id")
         request_id = trigger_request_id_from_job(job)
+        log_request_id = request_id or "-"
         ai_scope_id = ai_billing_scope_id_from_job(job)
         output_target = output_target_from_job(job)
         generation_model_id = item.model_id or _generation_default_model_id()
@@ -636,6 +675,27 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
                 data=image_bytes,
                 content_type="image/png",
             )
+            log_event(
+                logger,
+                logging.INFO,
+                LogEvent.POSTER_TITLE_IMAGE_OBJECT_STORED,
+                job_id=job.id,
+                root_job_id=job.root_job_id,
+                attempt_id=attempt_id,
+                trigger_request_id=log_request_id,
+                caller_id=job.caller_id,
+                job_type=job.job_type,
+                workflow_node_key=job.workflow_node_key,
+                item_id=item.item_id,
+                language=item.language,
+                image_index=image_index,
+                oss_bucket=written["oss_bucket"],
+                oss_region=written["oss_region"],
+                oss_key=written["oss_key"],
+                content_type="image/png",
+                content_hash=written["content_hash"],
+                bytes=len(image_bytes),
+            )
             obj = cpp_oss_url_ref_from_output_object(
                 bucket=str(written["oss_bucket"]),
                 region=str(written["oss_region"]),
@@ -645,6 +705,24 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
             )
             images.append(PosterTitleImageImage(object=PosterTitleImageObject.model_validate(obj)))
         elapsed_ms = int((time.monotonic() - started) * 1000)
+        log_event(
+            logger,
+            logging.INFO,
+            LogEvent.POSTER_TITLE_IMAGE_ITEM_COMPLETED,
+            job_id=job.id,
+            root_job_id=job.root_job_id,
+            attempt_id=attempt_id,
+            trigger_request_id=log_request_id,
+            caller_id=job.caller_id,
+            job_type=job.job_type,
+            workflow_node_key=job.workflow_node_key,
+            item_id=item.item_id,
+            language=item.language,
+            operation="poster_title_image.generate_title",
+            model_id=generation_model_id,
+            image_count=len(images),
+            duration_ms=elapsed_ms,
+        )
         return PosterTitleImageGenerateItemResult(
             item=PosterTitleImageResultItem(
                 item_id=item.item_id,
@@ -669,6 +747,7 @@ class PosterTitleImageJoinJob(JobExecutor):
     allow_callback = False
     timeout_seconds = 120
     allowed_error_codes = PosterTitleImageJob.allowed_error_codes
+    log_events = POSTER_TITLE_IMAGE_JOIN_LOG_EVENTS
 
     def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         return PosterTitleImageJoinParams.model_validate(job_params).model_dump()
@@ -678,6 +757,7 @@ class PosterTitleImageJoinJob(JobExecutor):
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:
         params = PosterTitleImageJoinParams.model_validate(job_params_from_job(job))
+        log_request_id = _log_trigger_request_id(job)
         requested = PosterTitleImageParams.model_validate({"items": [item.model_dump() for item in params.items]})
         children = await _workflow_children(job, db)
         children_by_key = {child.workflow_node_key: child for child in children}
@@ -714,6 +794,23 @@ class PosterTitleImageJoinJob(JobExecutor):
             ),
             items=result_items,
             duration_ms=PosterTitleImageDurationMs(ai_model=ai_model_ms, total=total_ms),
+        )
+        log_event(
+            logger,
+            logging.INFO,
+            LogEvent.POSTER_TITLE_IMAGE_JOIN_COMPLETED,
+            job_id=job.id,
+            root_job_id=job.root_job_id,
+            attempt_id=job.active_attempt_id,
+            trigger_request_id=log_request_id,
+            caller_id=job.caller_id,
+            job_type=job.job_type,
+            workflow_node_key=job.workflow_node_key,
+            total=len(result_items),
+            succeeded=len(result_items),
+            failed=0,
+            ai_model_ms=ai_model_ms,
+            total_ms=total_ms,
         )
         return result.model_dump()
 

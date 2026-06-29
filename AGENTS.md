@@ -148,6 +148,15 @@
 - 子目录默认不维护 README；只有当单个子目录中文档数量明显增多，且确实需要目录级边界规则时，才考虑新增子目录 README。
 - 普通文档不要随意新增“相关文档”“阅读路径”“文档索引”等导航型列表；必要引用只链接直接依赖的事实源或前置规范，避免形成互相引用的维护网。
 
+## 日志规则
+
+- 日志当前事实和新增代码规范以 `docs/current/observability.md` 为准。
+- 服务日志必须输出到 stdout/stderr；生产、compose-full 和 Pod 环境以容器或平台日志采集为准。
+- 不要在应用代码中默认新增 `logging.FileHandler`，也不要让服务日志只写本地文件。
+- `logs/api.log` 和 `logs/worker.log` 只属于 `./scripts/dev.sh` local 模式的 stdout/stderr 重定向结果，不是生产日志合同。
+- 新增业务日志优先使用 `app.core.logging.log_event()` 和 `LogEvent` 白名单；新增事件必须同步 registry 引用和测试。
+- 不记录密钥、token、完整请求体、完整模型响应、图片二进制、base64 载荷或其他敏感大 payload。
+
   # Git 规则
 
   - 提交必须保持单一意图，不混入无关改动；跨主题改动应拆分提交。

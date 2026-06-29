@@ -19,6 +19,10 @@ class LogEvent:
     JOB_SUCCEEDED = "job_succeeded"
     JOB_FAILED = "job_failed"
     JOB_RECOVERED = "job_recovered"
+    POSTER_TITLE_IMAGE_STYLE_PROBE_COMPLETED = "poster_title_image_style_probe_completed"
+    POSTER_TITLE_IMAGE_OBJECT_STORED = "poster_title_image_object_stored"
+    POSTER_TITLE_IMAGE_ITEM_COMPLETED = "poster_title_image_item_completed"
+    POSTER_TITLE_IMAGE_JOIN_COMPLETED = "poster_title_image_join_completed"
     CALLBACK_SCHEDULED = "callback_scheduled"
     CALLBACK_DELIVERED = "callback_delivered"
     CALLBACK_FAILED = "callback_failed"
@@ -36,6 +40,10 @@ _LOG_EVENTS = frozenset(
         LogEvent.JOB_SUCCEEDED,
         LogEvent.JOB_FAILED,
         LogEvent.JOB_RECOVERED,
+        LogEvent.POSTER_TITLE_IMAGE_STYLE_PROBE_COMPLETED,
+        LogEvent.POSTER_TITLE_IMAGE_OBJECT_STORED,
+        LogEvent.POSTER_TITLE_IMAGE_ITEM_COMPLETED,
+        LogEvent.POSTER_TITLE_IMAGE_JOIN_COMPLETED,
         LogEvent.CALLBACK_SCHEDULED,
         LogEvent.CALLBACK_DELIVERED,
         LogEvent.CALLBACK_FAILED,

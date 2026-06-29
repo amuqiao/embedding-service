@@ -1,4 +1,5 @@
 import io
+import logging
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ from PIL import Image
 
 from app.core.config import settings
 from app.core.exceptions import AppError
+from app.core.logging import LogEvent
 from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
 from app.integrations.image import (
     TRANSPARENT_REFERENCE_MAX_BYTES,
@@ -188,6 +190,16 @@ def test_poster_title_image_params_still_reject_duplicate_item_id():
     ref = _url_ref("reference/title.png", b"x")
     params = _params_for_item_count(ref, 2, language="en")
     params["items"][1]["item_id"] = "item-0"
+
+    with pytest.raises(ValueError, match="item_id"):
+        PosterTitleImageParams.model_validate(params)
+
+
+@pytest.mark.parametrize("item_id", ["has space", "has=equals", "path/segment", "-leading-dash", ".leading-dot"])
+def test_poster_title_image_params_rejects_log_and_path_unsafe_item_id(item_id):
+    ref = _url_ref("reference/title.png", b"x")
+    params = _params(ref)
+    params["items"][0]["item_id"] = item_id
 
     with pytest.raises(ValueError, match="item_id"):
         PosterTitleImageParams.model_validate(params)
@@ -569,7 +581,7 @@ def test_poster_title_image_missing_default_prompt_is_runtime_config_error(monke
 
 
 @pytest.mark.asyncio
-async def test_poster_title_image_generate_item_leaf_generates_transparent_title_layer(monkeypatch, tmp_path):
+async def test_poster_title_image_generate_item_leaf_generates_transparent_title_layer(monkeypatch, tmp_path, caplog):
     from app.jobs.types.poster_title_image import PosterTitleImageGenerateItemJob
 
     local_storage = LocalObjectStorage(tmp_path)
@@ -634,6 +646,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
         created_at=datetime.now(timezone.utc),
     )
 
+    caplog.set_level(logging.INFO, logger="app.jobs.types.poster_title_image.executor")
     result = await PosterTitleImageGenerateItemJob()._execute(job, object())
 
     item = result["item"]
@@ -657,6 +670,27 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     output_image = Image.open(io.BytesIO(written)).convert("RGBA")
     assert output_image.getpixel((0, 0))[3] == 0
     assert output_image.getpixel((20, 20))[3] == 255
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert f"event={LogEvent.POSTER_TITLE_IMAGE_OBJECT_STORED}" in messages
+    assert f"event={LogEvent.POSTER_TITLE_IMAGE_ITEM_COMPLETED}" in messages
+    assert f"job_id={job_id}" in messages
+    assert f"root_job_id={root_id}" in messages
+    assert "trigger_request_id=" in messages
+    assert "caller_id=caller-1" in messages
+    assert "job_type=poster_title_image_generate_item" in messages
+    assert "item_id=es" in messages
+    assert "language=es" in messages
+    assert "image_index=1" in messages
+    assert f"oss_key={output_key}" in messages
+    assert "content_type=image/png" in messages
+    assert "content_hash=" in messages
+    assert "image_count=1" in messages
+    assert "operation=poster_title_image.generate_title" in messages
+    assert "model_id=gpt-image-2" in messages
+    assert "public_url" not in messages
+    assert "internal_url" not in messages
+    assert "heavy cracked stone letterforms" not in messages
+    assert "poster-title layer" not in messages
 
 
 @pytest.mark.asyncio
@@ -736,7 +770,7 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeypatch):
+async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeypatch, caplog):
     from app.jobs.types.poster_title_image import PosterTitleImageJoinJob
     from app.jobs.types.poster_title_image.executor import _item_node_key
 
@@ -788,12 +822,24 @@ async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeyp
         created_at=datetime.now(timezone.utc),
     )
 
+    caplog.set_level(logging.INFO, logger="app.jobs.types.poster_title_image.executor")
     result = await PosterTitleImageJoinJob()._execute(job, object())
 
     assert result["batch_summary"] == {"total": 2, "succeeded": 2, "failed": 0, "running": 0, "pending": 0}
     assert [item["item_id"] for item in result["items"]] == ["es", "fr"]
     assert result["duration_ms"]["ai_model"] == 12
     assert result["duration_ms"]["total"] == 12
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert f"event={LogEvent.POSTER_TITLE_IMAGE_JOIN_COMPLETED}" in messages
+    assert f"root_job_id={root_id}" in messages
+    assert "trigger_request_id=" in messages
+    assert "caller_id=caller-1" in messages
+    assert "job_type=poster_title_image_join" in messages
+    assert "workflow_node_key=join" in messages
+    assert "total=2" in messages
+    assert "succeeded=2" in messages
+    assert "ai_model_ms=12" in messages
+    assert "total_ms=12" in messages
 
 
 @pytest.mark.asyncio
@@ -1119,6 +1165,70 @@ async def test_get_job_response_preserves_succeeded_items_when_poster_title_imag
         "pending": 0,
     }
     assert [item["item_id"] for item in response.job_result["items"]] == ["es"]
+
+
+@pytest.mark.asyncio
+async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, tmp_path, caplog):
+    from app.jobs.types.poster_title_image import PosterTitleImageStyleProbeJob
+
+    local_storage = LocalObjectStorage(tmp_path)
+    reference = _transparent_reference_png_bytes()
+    reference_bucket = _allowed_reference_bucket()
+    reference_region = _allowed_reference_region()
+    local_storage.write_bytes(
+        bucket=reference_bucket,
+        region=reference_region,
+        key="reference/title.png",
+        data=reference,
+        content_type="image/png",
+    )
+
+    async def fake_probe_style(*_args, **_kwargs):
+        return "bold stone title letters"
+
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._probe_style", fake_probe_style)
+    root_id = uuid.uuid4()
+    attempt_id = uuid.uuid4()
+    job_id = uuid.uuid4()
+    job = Job(
+        id=job_id,
+        caller_id="caller-1",
+        client_request_id="poster-1",
+        job_type="poster_title_image_style_probe",
+        status="running",
+        active_attempt_id=attempt_id,
+        root_job_id=root_id,
+        workflow_node_key="probe.0",
+        **_job_params_fields(
+            {
+                "style_key": "style-1",
+                "reference_image": _url_ref("reference/title.png", reference),
+                "style_prompt": "describe style",
+            }
+        ),
+        created_at=datetime.now(timezone.utc),
+    )
+
+    caplog.set_level(logging.INFO, logger="app.jobs.types.poster_title_image.executor")
+    result = await PosterTitleImageStyleProbeJob()._execute(job, object())
+
+    assert result["style_key"] == "style-1"
+    assert result["style_desc"] == "bold stone title letters"
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert f"event={LogEvent.POSTER_TITLE_IMAGE_STYLE_PROBE_COMPLETED}" in messages
+    assert f"job_id={job_id}" in messages
+    assert f"root_job_id={root_id}" in messages
+    assert f"attempt_id={attempt_id}" in messages
+    assert "trigger_request_id=-" in messages
+    assert "caller_id=caller-1" in messages
+    assert "job_type=poster_title_image_style_probe" in messages
+    assert "workflow_node_key=probe.0" in messages
+    assert "operation=poster_title_image.probe_style" in messages
+    assert "model_id=gpt-5.5" in messages
+    assert "bold stone title letters" not in messages
+    assert "describe style" not in messages
+    assert "public_url" not in messages
 
 
 @pytest.mark.asyncio
