@@ -21,7 +21,34 @@ KNOWN_MODEL_CAPABILITIES = frozenset(
 )
 MEDIA_TYPE_PATTERN = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
 KNOWN_MODEL_PARAMETER_TYPES = frozenset({"string", "integer", "number", "boolean", "select"})
-MODEL_PARAMETERS_FIELDS = frozenset({"public"})
+MODEL_CONFIG_FIELDS = frozenset(
+    {
+        "id",
+        "adapter",
+        "provider",
+        "provider_model",
+        "adapter_model",
+        "pricing_ref",
+        "enabled",
+        "requires_env",
+        "generation",
+        "public",
+    }
+)
+MODEL_PUBLIC_FIELDS = frozenset(
+    {
+        "name",
+        "provider",
+        "model_type",
+        "capabilities",
+        "input_media_types",
+        "output_media_types",
+        "limits",
+        "features",
+        "parameters",
+        "notes",
+    }
+)
 MODEL_PARAMETER_FIELDS = frozenset({"name", "label", "type", "required", "default", "options", "min", "max"})
 
 
@@ -44,14 +71,15 @@ class ModelParameter:
 @dataclass(frozen=True)
 class ModelCatalogEntry:
     id: str
-    name: str
-    model_type: str
     adapter: str
     provider: str
     provider_model: str
     adapter_model: str
     pricing_ref: str
     enabled: bool
+    public_name: str
+    public_provider: str
+    model_type: str
     capabilities: tuple[str, ...]
     input_media_types: tuple[str, ...]
     output_media_types: tuple[str, ...]
@@ -278,19 +306,13 @@ def _parse_parameter(config: dict[str, Any], model_id: str) -> ModelParameter:
 
 def _parameters(config: dict[str, Any], model_id: str) -> tuple[ModelParameter, ...]:
     value = config.get("parameters")
-    if not isinstance(value, dict):
-        raise RuntimeError(f"model {model_id} requires parameters as a YAML object")
-    unknown = sorted(set(value) - MODEL_PARAMETERS_FIELDS)
-    if unknown:
-        raise RuntimeError(f"model {model_id} parameters contains unknown fields: {unknown}")
-    public_parameters = value.get("public")
-    if not isinstance(public_parameters, list):
-        raise RuntimeError(f"model {model_id} requires parameters.public as a YAML list")
+    if not isinstance(value, list):
+        raise RuntimeError(f"model {model_id} requires public.parameters as a YAML list")
     parameters: list[ModelParameter] = []
     seen_names: set[str] = set()
-    for item in public_parameters:
+    for item in value:
         if not isinstance(item, dict):
-            raise RuntimeError(f"model {model_id} parameters.public items must be YAML objects")
+            raise RuntimeError(f"model {model_id} public.parameters items must be YAML objects")
         parameter = _parse_parameter(item, model_id)
         if parameter.name in seen_names:
             raise RuntimeError(f"model {model_id} has duplicate parameter: {parameter.name}")
@@ -369,33 +391,43 @@ def _parse_model(config: dict[str, Any]) -> ModelCatalogEntry:
     if not isinstance(model_id, str) or not model_id.strip():
         raise RuntimeError("model config item requires string field: id")
     model_id = model_id.strip()
-    model_type = _model_type(config, model_id)
-    limits = _metadata(config, "limits", model_id)
-    features = _metadata(config, "features", model_id)
+    unknown = sorted(set(config) - MODEL_CONFIG_FIELDS)
+    if unknown:
+        raise RuntimeError(f"model {model_id} contains unknown top-level fields: {unknown}")
+    public = config.get("public")
+    if not isinstance(public, dict):
+        raise RuntimeError(f"model {model_id} requires public projection")
+    unknown_public = sorted(set(public) - MODEL_PUBLIC_FIELDS)
+    if unknown_public:
+        raise RuntimeError(f"model {model_id} public projection contains unknown fields: {unknown_public}")
+    model_type = _model_type(public, model_id)
+    limits = _metadata(public, "limits", model_id)
+    features = _metadata(public, "features", model_id)
     temperature, num_retries, drop_params = _generation_config(config, model_id, model_type)
     provider = _required_str(config, "provider", model_id)
-    capabilities = _capabilities(config, model_id)
-    output_media_types = _media_types(config, "output_media_types", model_id)
+    capabilities = _capabilities(public, model_id)
+    output_media_types = _media_types(public, "output_media_types", model_id)
     if model_type == "text":
         _text_context_window(limits, model_id)
         _text_supports_json_output(features, model_id)
     return ModelCatalogEntry(
         id=model_id,
-        name=_required_str(config, "name", model_id),
-        model_type=model_type,
         adapter=_required_str(config, "adapter", model_id),
         provider=provider,
         provider_model=_required_str(config, "provider_model", model_id),
         adapter_model=_required_str(config, "adapter_model", model_id),
         pricing_ref=_required_str(config, "pricing_ref", model_id),
         enabled=_required_bool(config, "enabled", model_id),
+        public_name=_required_str(public, "name", model_id),
+        public_provider=_required_str(public, "provider", model_id),
+        model_type=model_type,
         capabilities=capabilities,
-        input_media_types=_media_types(config, "input_media_types", model_id),
+        input_media_types=_media_types(public, "input_media_types", model_id),
         output_media_types=output_media_types,
         limits=limits,
         features=features,
-        parameters=_parameters(config, model_id),
-        notes=_required_str(config, "notes", model_id, allow_empty=True),
+        parameters=_parameters(public, model_id),
+        notes=_required_str(public, "notes", model_id, allow_empty=True),
         requires_env=_requires_env(config, model_id),
         temperature=temperature,
         num_retries=num_retries,
@@ -424,9 +456,9 @@ def _models() -> list[ModelCatalogEntry]:
 def _model_out(model: ModelCatalogEntry) -> ModelOut:
     return ModelOut(
         id=model.id,
-        name=model.name,
+        name=model.public_name,
         model_type=model.model_type,
-        provider=model.provider,
+        provider=model.public_provider,
         enabled=model.enabled,
         capabilities=list(model.capabilities),
         input_media_types=list(model.input_media_types),

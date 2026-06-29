@@ -189,7 +189,9 @@ GET /api/v1/ai-jobs/languages
 GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
 ```
 
-模型事实源来自 `MODEL_CONFIG_PATH`。`GET /models` 未传 `job_type` 时返回服务级模型目录；传入 `job_type` 时，如果该 `job_type` 目录下存在 `models.yaml`，响应会投影为该任务允许调用方选择的模型列表。没有 `models.yaml` 的已注册 `job_type` 使用服务级模型目录；未知 `job_type` 返回 `INVALID_JOB_TYPE`。
+模型运行时配置来自 `MODEL_CONFIG_PATH`，但 `GET /models` 只返回其中 `public` 块声明的调用方可见投影。顶层 `adapter`、`provider_model`、`adapter_model`、`pricing_ref`、`requires_env` 和 `generation` 等运行时字段不属于 `/models` 合同，更新这些字段不应改变调用方看到的模型信息。
+
+`GET /models` 未传 `job_type` 时返回服务级公开模型投影；传入 `job_type` 时，如果该 `job_type` 目录下存在 `models.yaml`，响应会按该任务允许调用方选择的模型列表过滤同一套公开投影。没有 `models.yaml` 的已注册 `job_type` 使用服务级公开模型投影；未知 `job_type` 返回 `INVALID_JOB_TYPE`。
 
 语种目录来自 `app/core/language_catalog.py`，Prompt 配置来自 `PROMPT_CONFIG_PATH` 和各 `job_type` 垂直目录下的 `prompts.yaml`。这些接口只暴露当前服务允许调用方看到的元信息，不暴露 provider 密钥或内部 pricing 明细。
 
@@ -230,7 +232,9 @@ HttpEnvelope[ModelsResponse]
   data.cost_estimate_available?
 ```
 
-未传 `job_type` 时，`data.default_model_id` 是服务级默认模型；传入 `job_type` 且存在任务级 `models.yaml` 时，`data.default_model_id` 是该任务的 `public_model_selection.default_model_id`，`data.models[]` 只包含该任务 `public_model_selection.allowed_model_ids` 中当前可用的模型。任务级 `internal_models` 不进入响应。
+未传 `job_type` 时，`data.default_model_id` 是服务级默认模型；传入 `job_type` 且存在任务级 `models.yaml` 时，`data.default_model_id` 是该任务的 `public_model_selection.default_model_id`，`data.models[]` 只包含该任务 `public_model_selection.allowed_model_ids` 中当前可用模型的公开投影。任务级 `internal_models` 不进入响应。
+
+`ModelsResponse` 的稳定骨架是 `default_model_id` 和 `models[]`。服务可以新增可选字段或新增 `models[]` 内的公开能力值；删除字段、重命名字段、改变字段类型、把内部运行时字段加入响应，或把公开字段改为 provider 原始配置，都属于 breaking change。
 
 `ModelsResponse.models[]` 的单个模型条目包含：
 
@@ -251,6 +255,8 @@ ModelOut
 ```
 
 `model_type` 是模型目录粗分类，当前取值为 `text`、`image`、`audio` 或 `video`。调用方可以用 `model_type` 做目录分组或粗筛，但具体可执行任务必须看 `capabilities`。例如后续语音转文本模型可以是 `model_type=audio` 且输出 `text/plain`。
+
+`provider` 是调用方展示用的公开 provider 标签，不表示执行路由、provider 原始模型名或 adapter 选择。调用方不能依赖它推导计费、调用协议或真实 provider 参数。
 
 `capabilities`、`input_media_types`、`output_media_types`、`limits`、`features` 和 `parameters` 是调用方选择模型需要的公开能力元信息。`capabilities` 使用本服务定义的稳定能力值，不直接透传 provider 原始能力名；`input_media_types` 和 `output_media_types` 使用 MIME type。未来可以新增能力值或媒体类型，调用方应忽略未知值。
 

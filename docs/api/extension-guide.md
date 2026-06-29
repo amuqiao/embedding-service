@@ -60,15 +60,16 @@ workflow child node 应引用 `role="leaf"` 或 `role="root_or_leaf"` 的 execut
 
 1. 修改 `app/core/models.yaml`。
 2. 确认 `model_id` 是对外稳定 ID。
-3. 配置 `model_type`、`adapter`、provider、`provider_model`、`adapter_model`、能力标签、输入/输出媒体类型、`pricing_ref`、required env 和类型化元信息。
-4. `model_type` 只用于目录粗分类，当前取值为 `text`、`image`、`audio` 或 `video`；具体可执行任务由 `capabilities` 表达。
-5. `capabilities` 使用本服务稳定能力值；`input_media_types` 和 `output_media_types` 使用 MIME type。
-6. 使用 `limits` 和 `features` 声明公开类型化元信息；文本模型需要 `limits.context_window` 和 `features.supports_json_output`。
-7. 使用 `parameters.public` 声明允许 `/models` 展示的模型级可配置参数；没有公开参数时显式配置为空列表。图片模型可在这里声明数量、尺寸、背景、质量和输出格式等公开参数。
-8. 已有 adapter 支持的新模型优先只修改 `models.yaml` 和 `pricing.yaml`；新 provider 或新调用协议再新增 adapter。
-9. `provider_model` 是 provider 原始模型名；`adapter_model` 是传给 adapter 的模型标识。使用 LiteLLM adapter 时，`adapter_model` 通常是 `openai/<provider_model>`。
-10. 确保 `pricing_ref` 存在且与模型配置匹配。
-11. 补充或调整模型 registry 测试。
+3. 在模型顶层配置运行时字段：`adapter`、provider、`provider_model`、`adapter_model`、`pricing_ref`、required env 和内部调用参数。
+4. 在 `public` 块配置 `/models` 返回的公开投影：`name`、公开 provider 标签、`model_type`、能力标签、输入/输出媒体类型、`limits`、`features`、`parameters` 和 `notes`。
+5. `public.model_type` 只用于目录粗分类，当前取值为 `text`、`image`、`audio` 或 `video`；具体可执行任务由 `public.capabilities` 表达。
+6. `public.capabilities` 使用本服务稳定能力值；`public.input_media_types` 和 `public.output_media_types` 使用 MIME type。
+7. 使用 `public.limits` 和 `public.features` 声明公开类型化元信息；文本模型需要 `limits.context_window` 和 `features.supports_json_output`。
+8. 使用 `public.parameters` 声明允许 `/models` 展示的模型级可配置参数；没有公开参数时显式配置为空列表。图片模型可在这里声明数量、尺寸、背景、质量和输出格式等公开参数。
+9. 已有 adapter 支持的新模型优先只修改 `models.yaml` 和 `pricing.yaml`；新 provider 或新调用协议再新增 adapter。
+10. `provider_model` 是 provider 原始模型名；`adapter_model` 是传给 adapter 的模型标识。使用 LiteLLM adapter 时，`adapter_model` 通常是 `openai/<provider_model>`。
+11. 确保 `pricing_ref` 存在且与模型配置匹配。
+12. 补充或调整模型 registry 测试。
 
 Provider 密钥来自环境变量，不写入 YAML 或文档示例。
 

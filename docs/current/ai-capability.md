@@ -31,27 +31,30 @@ Job executor / real LLM job_type
 模型目录由 `app/core/models.yaml` 和 `app/core/model_registry.py` 管理。当前 enabled 模型必须声明：
 
 - `id`
-- `name`
-- `model_type`
 - `adapter`
 - `provider`
 - `provider_model`
 - `adapter_model`
 - `pricing_ref`
 - `enabled`
-- `capabilities`
-- `input_media_types`
-- `output_media_types`
-- `limits`
-- `features`
-- `parameters.public`
-- `notes`
 - `requires_env`
 - text 模型的 generation 参数
+- `public.name`
+- `public.provider`
+- `public.model_type`
+- `public.capabilities`
+- `public.input_media_types`
+- `public.output_media_types`
+- `public.limits`
+- `public.features`
+- `public.parameters`
+- `public.notes`
 
-`model_type` 是模型目录粗分类，当前支持 `text`、`image`、`audio` 和 `video`。`capabilities` 表达具体可执行能力，`model_type` 不绑定单一 capability 或输出 MIME type。当前真实 provider path 只覆盖文本生成；图片模型可以进入 catalog 展示，但必须由对应业务 `job_type` 和 adapter 调用链路决定是否可提交和执行。
+顶层字段是运行时服务配置；`public` 块是 `GET /models` 的唯一公开投影来源。修改 `provider_model`、`adapter_model`、`pricing_ref`、`requires_env` 或 `generation` 不应改变调用方看到的模型信息，除非同时显式修改 `public` 块。
 
-`limits` 和 `features` 是公开的类型化元信息。当前文本模型使用 `limits.context_window` 和 `features.supports_json_output`。`parameters.public` 是允许 `GET /models` 展示给调用方的模型级可配置参数 schema。当前内置文本模型没有公开模型级参数，因此配置为 `parameters.public: []`。`generation` 仍是 text provider 内部调用配置，不进入公开模型合同。
+`public.model_type` 是模型目录粗分类，当前支持 `text`、`image`、`audio` 和 `video`。`public.capabilities` 表达具体可执行能力，`model_type` 不绑定单一 capability 或输出 MIME type。当前真实 provider path 只覆盖文本生成；图片模型可以进入 catalog 展示，但必须由对应业务 `job_type` 和 adapter 调用链路决定是否可提交和执行。
+
+`public.limits` 和 `public.features` 是公开的类型化元信息。当前文本模型使用 `limits.context_window` 和 `features.supports_json_output`。`public.parameters` 是允许 `GET /models` 展示给调用方的模型级可配置参数 schema。当前内置文本模型没有公开模型级参数，因此配置为 `parameters: []`。`generation` 仍是 text provider 内部调用配置，不进入公开模型合同。
 
 `adapter` 指向模型调用 adapter，当前内置 `litellm` adapter 复用 LiteLLM 文本生成调用。`provider_model` 是 provider 原始模型名，用于 pricing 匹配和审计；`adapter_model` 是传给 adapter 的模型标识，LiteLLM adapter 当前使用 `openai/<provider_model>` 形式。缺少 required env 的模型不会出现在 `GET /models` 返回中。`GET /models` 只返回模型目录的公开投影，不暴露 `adapter`、`adapter_model`、`pricing_ref`、`requires_env`、`generation` 或 provider 内部参数。`GET /models?job_type=<job_type>` 仍使用同一个公开模型投影；当对应 `app/jobs/types/<job_type>/models.yaml` 存在时，响应会按任务级 `public_model_selection` 过滤并返回任务级默认模型。
 

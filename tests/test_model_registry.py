@@ -64,35 +64,36 @@ def _poster_hidden_model_config() -> str:
     return """\
 
   - id: custom-style-probe-model
-    name: Custom Style Probe Model
-    model_type: text
     adapter: litellm
     provider: openai
     provider_model: custom-style-probe-model
     adapter_model: openai/custom-style-probe-model
     pricing_ref: openai:custom-style-probe-model@2026-06-23
     enabled: true
-    capabilities:
-      - text_generation
-      - multimodal_text_generation
-    input_media_types:
-      - text/plain
-      - image/png
-    output_media_types:
-      - text/plain
-    limits:
-      context_window: 12345
-    features:
-      supports_json_output: true
-      supports_image_generation_tool: true
-    parameters:
-      public:
+    public:
+      name: Custom Style Probe Model
+      provider: openai
+      model_type: text
+      capabilities:
+        - text_generation
+        - multimodal_text_generation
+      input_media_types:
+        - text/plain
+        - image/png
+      output_media_types:
+        - text/plain
+      limits:
+        context_window: 12345
+      features:
+        supports_json_output: true
+        supports_image_generation_tool: true
+      parameters:
         - name: poster_hidden
           label: Poster hidden
           type: boolean
           required: false
           default: true
-    notes: ""
+      notes: ""
     requires_env:
       - TEST_POSTER_MODEL_KEY
     generation:
@@ -101,35 +102,36 @@ def _poster_hidden_model_config() -> str:
       drop_params: false
 
   - id: custom-image-model
-    name: Custom Image Model
-    model_type: image
     adapter: litellm
     provider: openai
     provider_model: custom-image-model
     adapter_model: openai/custom-image-model
     pricing_ref: openai:custom-image-model@2026-06-23
     enabled: true
-    capabilities:
-      - image_generation
-      - image_edit
-    input_media_types:
-      - text/plain
-      - image/png
-    output_media_types:
-      - image/png
-    limits:
-      max_output_count: 4
-    features:
-      supports_edit: true
-      native_transparency: false
-    parameters:
-      public:
+    public:
+      name: Custom Image Model
+      provider: openai
+      model_type: image
+      capabilities:
+        - image_generation
+        - image_edit
+      input_media_types:
+        - text/plain
+        - image/png
+      output_media_types:
+        - image/png
+      limits:
+        max_output_count: 4
+      features:
+        supports_edit: true
+        native_transparency: false
+      parameters:
         - name: poster_hidden
           label: Poster hidden
           type: boolean
           required: false
           default: true
-    notes: ""
+      notes: ""
     requires_env:
       - TEST_POSTER_MODEL_KEY
 """
@@ -141,33 +143,34 @@ def _write_model_config(path, requires_env: str = "OPENAI_API_KEY") -> None:
 version: "1"
 models:
   - id: custom-model
-    name: Custom Model
-    model_type: text
     adapter: litellm
     provider: openai
     provider_model: custom-model
     adapter_model: openai/custom-model
     pricing_ref: openai:custom-model@2026-06-23
     enabled: true
-    capabilities:
-      - text_generation
-    input_media_types:
-      - text/plain
-    output_media_types:
-      - text/plain
-    limits:
-      context_window: 12345
-    features:
-      supports_json_output: true
-    parameters:
-      public: []
-    notes: ""
     requires_env:
       - {requires_env}
     generation:
       temperature: 0.2
       num_retries: 1
       drop_params: false
+    public:
+      name: Custom Model
+      provider: OpenAI
+      model_type: text
+      capabilities:
+        - text_generation
+      input_media_types:
+        - text/plain
+      output_media_types:
+        - text/plain
+      limits:
+        context_window: 12345
+      features:
+        supports_json_output: true
+      parameters: []
+      notes: ""
 
 {_poster_hidden_model_config()}
 """,
@@ -216,6 +219,7 @@ def test_model_registry_loads_available_models_from_yaml(tmp_path, monkeypatch):
     assert response.default_model_id == "custom-model"
     assert [model.id for model in response.models] == ["custom-model"]
     assert response.models[0].capabilities == ["text_generation"]
+    assert response.models[0].provider == "OpenAI"
     assert response.models[0].input_media_types == ["text/plain"]
     assert response.models[0].output_media_types == ["text/plain"]
     assert response.models[0].model_type == "text"
@@ -224,6 +228,31 @@ def test_model_registry_loads_available_models_from_yaml(tmp_path, monkeypatch):
     assert response.models[0].parameters == []
     assert response.billing_enabled is None
     assert response.cost_estimate_available is None
+
+
+def test_model_registry_public_projection_is_decoupled_from_runtime_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "models.yaml"
+    _write_model_config(config_path)
+    config_text = (
+        config_path.read_text(encoding="utf-8")
+        .replace("provider_model: custom-model", "provider_model: custom-model-runtime-v2", 1)
+        .replace("adapter_model: openai/custom-model", "adapter_model: gateway/custom-model-runtime-v2", 1)
+        .replace("temperature: 0.2", "temperature: 0.9", 1)
+    )
+    config_path.write_text(config_text, encoding="utf-8")
+    test_settings = _build_settings(
+        OPENAI_API_KEY="test-key",
+        DEFAULT_MODEL_ID="custom-model",
+        MODEL_CONFIG_PATH=str(config_path),
+    )
+    monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
+
+    response = model_registry.list_models_response()
+
+    assert response.models[0].id == "custom-model"
+    assert response.models[0].name == "Custom Model"
+    assert response.models[0].provider == "OpenAI"
+    assert response.models[0].capabilities == ["text_generation"]
 
 
 def test_model_registry_exposes_billing_capability_when_enabled(tmp_path, monkeypatch):
@@ -307,10 +336,9 @@ def test_model_registry_exposes_public_model_parameters(tmp_path, monkeypatch):
     config_path = tmp_path / "models.yaml"
     _write_model_config(config_path)
     config_text = config_path.read_text(encoding="utf-8").replace(
-        "    parameters:\n      public: []",
+        "      parameters: []",
         """\
-    parameters:
-      public:
+      parameters:
         - name: size
           label: Size
           type: select
@@ -358,10 +386,9 @@ def test_model_registry_compares_select_values_by_json_type(tmp_path, monkeypatc
     config_path = tmp_path / "models.yaml"
     _write_model_config(config_path)
     config_text = config_path.read_text(encoding="utf-8").replace(
-        "    parameters:\n      public: []",
+        "      parameters: []",
         """\
-    parameters:
-      public:
+      parameters:
         - name: flag
           label: Flag
           type: select
@@ -393,29 +420,30 @@ def test_model_registry_supports_image_model_type_public_catalog(tmp_path, monke
 version: "1"
 models:
   - id: image-model
-    name: Image Model
-    model_type: image
     adapter: litellm
     provider: openai
     provider_model: image-model
     adapter_model: openai/image-model
     pricing_ref: openai:image-model@2026-06-23
     enabled: true
-    capabilities:
-      - image_generation
-    input_media_types:
-      - text/plain
-      - image/png
-    output_media_types:
-      - image/png
-      - image/webp
-    limits:
-      max_output_count: 4
-    features:
-      supports_edit: true
-      native_transparency: false
-    parameters:
-      public:
+    public:
+      name: Image Model
+      provider: OpenAI
+      model_type: image
+      capabilities:
+        - image_generation
+      input_media_types:
+        - text/plain
+        - image/png
+      output_media_types:
+        - image/png
+        - image/webp
+      limits:
+        max_output_count: 4
+      features:
+        supports_edit: true
+        native_transparency: false
+      parameters:
         - name: n
           label: Count
           type: integer
@@ -432,7 +460,7 @@ models:
             - png
             - jpeg
             - webp
-    notes: ""
+      notes: ""
     requires_env:
       - OPENAI_API_KEY
 """ + _poster_hidden_model_config(),
@@ -540,15 +568,15 @@ def test_model_registry_model_type_does_not_constrain_capabilities_or_output_med
     config_text = (
         config_path.read_text(encoding="utf-8")
         .replace("model_type: text", "model_type: audio", 1)
-        .replace("output_media_types:\n      - text/plain", "output_media_types:\n      - text/plain", 1)
+        .replace("output_media_types:\n        - text/plain", "output_media_types:\n        - text/plain", 1)
         .replace(
-            "limits:\n      context_window: 12345",
-            "limits:\n      max_input_seconds: 600",
+            "limits:\n        context_window: 12345",
+            "limits:\n        max_input_seconds: 600",
             1,
         )
         .replace(
-            "features:\n      supports_json_output: true",
-            "features:\n      supports_transcription: true",
+            "features:\n        supports_json_output: true",
+            "features:\n        supports_transcription: true",
             1,
         )
         .replace(
@@ -576,19 +604,21 @@ def test_model_registry_model_type_does_not_constrain_capabilities_or_output_med
 @pytest.mark.parametrize(
     ("parameters_block", "message"),
     [
-        ("parameters: []", "parameters as a YAML object"),
-        ("parameters: {}", "parameters.public as a YAML list"),
+        ("parameters: {}", "public.parameters as a YAML list"),
         (
             """\
 parameters:
-      public: []
-      runtime: {}""",
-            "parameters contains unknown fields",
+        - name: runtime
+          label: Runtime
+          type: boolean
+          required: false
+          default: false
+          runtime: {}""",
+            "unknown fields",
         ),
         (
             """\
 parameters:
-      public:
         - name: size
           label: Size
           type: select
@@ -601,7 +631,6 @@ parameters:
         (
             """\
 parameters:
-      public:
         - name: n
           label: Count
           type: integer
@@ -614,7 +643,6 @@ parameters:
         (
             """\
 parameters:
-      public:
         - name: n
           label: Count
           type: integer
@@ -627,7 +655,6 @@ parameters:
         (
             """\
 parameters:
-      public:
         - name: quality
           label: Quality
           type: select
@@ -640,7 +667,6 @@ parameters:
         (
             """\
 parameters:
-      public:
         - name: quality
           label: Quality
           type: select
@@ -654,7 +680,6 @@ parameters:
         (
             """\
 parameters:
-      public:
         - name: quality
           label: Quality
           type: select
@@ -666,7 +691,6 @@ parameters:
         (
             """\
 parameters:
-      public:
         - name: n
           label: Count
           type: integer
@@ -685,7 +709,7 @@ def test_model_registry_rejects_invalid_public_parameters(tmp_path, monkeypatch,
     config_path = tmp_path / "models.yaml"
     _write_model_config(config_path)
     config_text = config_path.read_text(encoding="utf-8").replace(
-        "parameters:\n      public: []",
+        "parameters: []",
         parameters_block,
     )
     config_path.write_text(config_text, encoding="utf-8")
@@ -705,12 +729,12 @@ def test_model_registry_rejects_invalid_public_parameters(tmp_path, monkeypatch,
     [
         ("model_type: text", "model_type: unknown", "model_type contains unknown value"),
         (
-            "limits:\n      context_window: 12345",
+            "limits:\n        context_window: 12345",
             "limits: {}",
             "limits.context_window",
         ),
         (
-            "features:\n      supports_json_output: true",
+            "features:\n        supports_json_output: true",
             "features: {}",
             "features.supports_json_output",
         ),
@@ -772,11 +796,11 @@ def test_model_registry_rejects_invalid_capability_or_media_contract(tmp_path, m
     _write_model_config(config_path)
     config_text = config_path.read_text(encoding="utf-8")
     if field == "capabilities":
-        config_text = config_text.replace("capabilities:\n      - text_generation", f"capabilities: {value}", 1)
+        config_text = config_text.replace("capabilities:\n        - text_generation", f"capabilities: {value}", 1)
     elif field == "input_media_types":
-        config_text = config_text.replace("input_media_types:\n      - text/plain", f"input_media_types: {value}", 1)
+        config_text = config_text.replace("input_media_types:\n        - text/plain", f"input_media_types: {value}", 1)
     else:
-        config_text = config_text.replace("output_media_types:\n      - text/plain", f"output_media_types: {value}", 1)
+        config_text = config_text.replace("output_media_types:\n        - text/plain", f"output_media_types: {value}", 1)
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
@@ -792,16 +816,16 @@ def test_model_registry_rejects_invalid_capability_or_media_contract(tmp_path, m
 @pytest.mark.parametrize(
     ("field", "block", "message"),
     [
-        ("capabilities", "    capabilities:\n      - text_generation\n", "capabilities"),
-        ("model_type", "    model_type: text\n", "model_type"),
+        ("capabilities", "      capabilities:\n        - text_generation\n", "capabilities"),
+        ("model_type", "      model_type: text\n", "model_type"),
         ("adapter", "    adapter: litellm\n", "adapter"),
         ("provider_model", "    provider_model: custom-model\n", "provider_model"),
         ("adapter_model", "    adapter_model: openai/custom-model\n", "adapter_model"),
-        ("input_media_types", "    input_media_types:\n      - text/plain\n", "input_media_types"),
-        ("output_media_types", "    output_media_types:\n      - text/plain\n", "output_media_types"),
-        ("limits", "    limits:\n      context_window: 12345\n", "limits"),
-        ("features", "    features:\n      supports_json_output: true\n", "features"),
-        ("parameters", "    parameters:\n      public: []\n", "parameters"),
+        ("input_media_types", "      input_media_types:\n        - text/plain\n", "input_media_types"),
+        ("output_media_types", "      output_media_types:\n        - text/plain\n", "output_media_types"),
+        ("limits", "      limits:\n        context_window: 12345\n", "limits"),
+        ("features", "      features:\n        supports_json_output: true\n", "features"),
+        ("parameters", "      parameters: []\n", "parameters"),
     ],
 )
 def test_model_registry_rejects_missing_capability_or_media_contract(tmp_path, monkeypatch, field, block, message):

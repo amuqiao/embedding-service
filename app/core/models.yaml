@@ -1,247 +1,250 @@
+# Top-level fields are runtime service configuration. Caller-facing metadata lives under public
+# and is the only source used by GET /models.
 version: "1"
-# Keep provider capability metadata aligned with the model itself. Do not add
-# capabilities only because a job type wants to use the model.
 models:
   - id: gpt-5.5
-    name: GPT-5.5
-    model_type: text
     adapter: litellm
     provider: openai
     provider_model: gpt-5.5
     adapter_model: openai/gpt-5.5
     pricing_ref: openai:gpt-5.5@2026-06-23
     enabled: true
-    capabilities:
-      - text_generation
-      - multimodal_text_generation
-    input_media_types:
-      - text/plain
-      - image/png
-      - image/jpeg
-      - image/webp
-    output_media_types:
-      - text/plain
-    limits:
-      context_window: 1050000
-    features:
-      supports_json_output: true
-      supports_image_generation_tool: true
-    parameters:
-      public: []
-    notes: "Default high-capability text generation model."
     requires_env:
       - OPENAI_API_KEY
     generation:
       temperature: 1.0
       num_retries: 0
       drop_params: true
-
+    public:
+      name: GPT-5.5
+      provider: openai
+      model_type: text
+      capabilities:
+        - text_generation
+        - multimodal_text_generation
+      input_media_types:
+        - text/plain
+        - image/png
+        - image/jpeg
+        - image/webp
+      output_media_types:
+        - text/plain
+      limits:
+        context_window: 1050000
+      features:
+        supports_json_output: true
+        supports_image_generation_tool: true
+      parameters: []
+      notes: Default high-capability text generation model.
   - id: gpt-5.4
-    name: GPT-5.4
-    model_type: text
     adapter: litellm
     provider: openai
     provider_model: gpt-5.4
     adapter_model: openai/gpt-5.4
     pricing_ref: openai:gpt-5.4@2026-06-23
     enabled: true
-    capabilities:
-      - text_generation
-    input_media_types:
-      - text/plain
-    output_media_types:
-      - text/plain
-    limits:
-      context_window: 1050000
-    features:
-      supports_json_output: true
-    parameters:
-      public: []
-    notes: ""
     requires_env:
       - OPENAI_API_KEY
     generation:
       temperature: 0.7
       num_retries: 0
       drop_params: true
-
+    public:
+      name: GPT-5.4
+      provider: openai
+      model_type: text
+      capabilities:
+        - text_generation
+      input_media_types:
+        - text/plain
+      output_media_types:
+        - text/plain
+      limits:
+        context_window: 1050000
+      features:
+        supports_json_output: true
+      parameters: []
+      notes: ''
   - id: gpt-5.4-mini
-    name: GPT-5.4 mini
-    model_type: text
     adapter: litellm
     provider: openai
     provider_model: gpt-5.4-mini
     adapter_model: openai/gpt-5.4-mini
     pricing_ref: openai:gpt-5.4-mini@2026-06-23
     enabled: true
-    capabilities:
-      - text_generation
-    input_media_types:
-      - text/plain
-    output_media_types:
-      - text/plain
-    limits:
-      context_window: 400000
-    features:
-      supports_json_output: true
-    parameters:
-      public: []
-    notes: ""
     requires_env:
       - OPENAI_API_KEY
     generation:
       temperature: 0.7
       num_retries: 0
       drop_params: true
-
+    public:
+      name: GPT-5.4 mini
+      provider: openai
+      model_type: text
+      capabilities:
+        - text_generation
+      input_media_types:
+        - text/plain
+      output_media_types:
+        - text/plain
+      limits:
+        context_window: 400000
+      features:
+        supports_json_output: true
+      parameters: []
+      notes: ''
   - id: gpt-5.4-nano
-    name: GPT-5.4 nano
-    model_type: text
     adapter: litellm
     provider: openai
     provider_model: gpt-5.4-nano
     adapter_model: openai/gpt-5.4-nano
     pricing_ref: openai:gpt-5.4-nano@2026-06-23
     enabled: true
-    capabilities:
-      - text_generation
-    input_media_types:
-      - text/plain
-    output_media_types:
-      - text/plain
-    limits:
-      context_window: 400000
-    features:
-      supports_json_output: true
-    parameters:
-      public: []
-    notes: ""
     requires_env:
       - OPENAI_API_KEY
     generation:
       temperature: 0.7
       num_retries: 0
       drop_params: true
-
+    public:
+      name: GPT-5.4 nano
+      provider: openai
+      model_type: text
+      capabilities:
+        - text_generation
+      input_media_types:
+        - text/plain
+      output_media_types:
+        - text/plain
+      limits:
+        context_window: 400000
+      features:
+        supports_json_output: true
+      parameters: []
+      notes: ''
   - id: gpt-4o
-    name: GPT-4o
-    model_type: text
     adapter: litellm
     provider: openai
     provider_model: gpt-4o
     adapter_model: openai/gpt-4o
     pricing_ref: openai:gpt-4o@2026-06-23
     enabled: true
-    capabilities:
-      - text_generation
-      - multimodal_text_generation
-    input_media_types:
-      - text/plain
-      - image/png
-      - image/jpeg
-      - image/webp
-    output_media_types:
-      - text/plain
-    limits:
-      context_window: 128000
-    features:
-      supports_json_output: true
-    parameters:
-      public: []
-    notes: "Compatibility model; default is gpt-5.5."
     requires_env:
       - OPENAI_API_KEY
     generation:
       temperature: 0.7
       num_retries: 0
       drop_params: true
-
+    public:
+      name: GPT-4o
+      provider: openai
+      model_type: text
+      capabilities:
+        - text_generation
+        - multimodal_text_generation
+      input_media_types:
+        - text/plain
+        - image/png
+        - image/jpeg
+        - image/webp
+      output_media_types:
+        - text/plain
+      limits:
+        context_window: 128000
+      features:
+        supports_json_output: true
+      parameters: []
+      notes: Compatibility model; default is gpt-5.5.
   - id: gpt-4o-mini
-    name: GPT-4o mini
-    model_type: text
     adapter: litellm
     provider: openai
     provider_model: gpt-4o-mini
     adapter_model: openai/gpt-4o-mini
     pricing_ref: openai:gpt-4o-mini@2026-06-23
     enabled: true
-    capabilities:
-      - text_generation
-    input_media_types:
-      - text/plain
-    output_media_types:
-      - text/plain
-    limits:
-      context_window: 128000
-    features:
-      supports_json_output: true
-    parameters:
-      public: []
-    notes: "Compatibility model; default is gpt-5.5."
     requires_env:
       - OPENAI_API_KEY
     generation:
       temperature: 0.7
       num_retries: 0
       drop_params: true
-
+    public:
+      name: GPT-4o mini
+      provider: openai
+      model_type: text
+      capabilities:
+        - text_generation
+      input_media_types:
+        - text/plain
+      output_media_types:
+        - text/plain
+      limits:
+        context_window: 128000
+      features:
+        supports_json_output: true
+      parameters: []
+      notes: Compatibility model; default is gpt-5.5.
   - id: gpt-4.1
-    name: GPT-4.1
-    model_type: text
     adapter: litellm
     provider: openai
     provider_model: gpt-4.1
     adapter_model: openai/gpt-4.1
     pricing_ref: openai:gpt-4.1@2026-06-23
     enabled: true
-    capabilities:
-      - text_generation
-    input_media_types:
-      - text/plain
-    output_media_types:
-      - text/plain
-    limits:
-      context_window: 1047576
-    features:
-      supports_json_output: true
-    parameters:
-      public: []
-    notes: "Compatibility model; default is gpt-5.5."
     requires_env:
       - OPENAI_API_KEY
     generation:
       temperature: 0.7
       num_retries: 0
       drop_params: true
-
+    public:
+      name: GPT-4.1
+      provider: openai
+      model_type: text
+      capabilities:
+        - text_generation
+      input_media_types:
+        - text/plain
+      output_media_types:
+        - text/plain
+      limits:
+        context_window: 1047576
+      features:
+        supports_json_output: true
+      parameters: []
+      notes: Compatibility model; default is gpt-5.5.
   - id: gpt-image-2
-    name: gpt-image-2
-    model_type: image
     adapter: litellm
     provider: openai
     provider_model: gpt-image-2
     adapter_model: openai/gpt-image-2
     pricing_ref: openai:gpt-image-2@2026-06-23
     enabled: true
-    capabilities:
-      - image_generation
-      - image_edit
-    input_media_types:
-      - text/plain
-      - image/png
-      - image/jpeg
-      - image/webp
-    output_media_types:
-      - image/png
-      - image/jpeg
-      - image/webp
-    limits:
-      max_output_count: 4
-    features:
-      native_transparency: false
-      supports_edit: true
-    parameters:
-      public:
+    requires_env:
+      - OPENAI_API_KEY
+    public:
+      name: gpt-image-2
+      provider: openai
+      model_type: image
+      capabilities:
+        - image_generation
+        - image_edit
+      input_media_types:
+        - text/plain
+        - image/png
+        - image/jpeg
+        - image/webp
+      output_media_types:
+        - image/png
+        - image/jpeg
+        - image/webp
+      limits:
+        max_output_count: 4
+      features:
+        native_transparency: false
+        supports_edit: true
+      parameters:
         - name: n
           label: 数量
           type: integer
@@ -288,6 +291,4 @@ models:
             - jpeg
             - webp
           default: png
-    notes: ""
-    requires_env:
-      - OPENAI_API_KEY
+      notes: ''
