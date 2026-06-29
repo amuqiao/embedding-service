@@ -25,6 +25,7 @@ FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默�
 `local` 可以与 `compose-deps` 组合使用，但不能与当前仓库下任何 `compose-full` 的 API / worker 混跑。切换到 `compose-full` 前先执行 `./scripts/dev.sh stop`；切回 `local` 前先执行 `./scripts/deploy.sh down compose-full`。
 
 生产 K8s 形态不由本仓库创建或管理资源。api / worker Pod 可继续使用 `start-api.sh` 和 `start-worker.sh` 作为启动入口；Pod 内连接检查和手动数据库迁移使用 `./scripts/k8s.sh`。
+运行镜像会包含 `scripts/` 目录，便于在 `compose-full` 容器或 K8s Pod 内执行 `./scripts/jobs.sh` 只读排障和 `./scripts/k8s.sh` 手动运维。`dev.sh`、`deploy.sh` 和 `verify.sh` 仍是宿主机侧开发、部署入口和质量门，不作为容器内稳定运维入口。
 
 `deploy.sh` 只管理 compose 部署入口：
 
