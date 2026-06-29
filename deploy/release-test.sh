@@ -26,9 +26,9 @@ fi
 # 这几条命令都在主项目 dev 目录执行。脚本内部会进入 tmp 发布目录处理 test。
 #
 # 推荐流程：
-#   1. ./scripts/deploy/release-test.sh          # dev 目录发起；tmp 副本准备 test 合并
+#   1. ./scripts/deploy/release-test.sh          # dev 目录发起；tmp 仓库准备 test 合并
 #   2. ./scripts/deploy/release-test.sh status   # 同时查看 dev 目录和 tmp 发布目录
-#   3. ./scripts/deploy/release-test.sh --push   # dev 目录发起；tmp 副本提交并推送 test
+#   3. ./scripts/deploy/release-test.sh --push   # dev 目录发起；tmp 仓库提交并推送 test
 #
 # 所有命令：
 #   ./scripts/deploy/release-test.sh             # 等同于 prepare
@@ -49,12 +49,12 @@ fi
 #   dev 代码 -> 合入 test -> CI 构建镜像 -> Kuboard 手动切镜像 -> 验证服务
 #
 # 本脚本只负责前两步 Git 流程。它不负责 Kuboard 切镜像，也不判断业务功能
-# 是否正确。为避免影响日常 dev 工作区，脚本会把主项目复制到 RELEASE_TMP_DIR
-# 指向的 tmp 发布目录，再在副本里切换 test、merge 和 push。tmp 发布目录出问题
+# 是否正确。为避免影响日常 dev 工作区，脚本会在 RELEASE_TMP_DIR 指向的
+# tmp 发布目录重建独立 Git 仓库，再在该仓库切换 test、merge 和 push。tmp 发布目录出问题
 # 可以删除重建；主项目目录不会被切换到 test，也不会进入 merge 状态。
 #
 # 目录职责：
-# - 主项目目录：只允许在 dev 分支执行；只做状态检查和复制来源。
+# - 主项目目录：只允许在 dev 分支执行；只做状态检查和来源分支发布前确认。
 # - tmp 发布目录：允许切换 test、merge origin/dev、commit 和 push origin test。
 #
 # 文件分层：
@@ -124,8 +124,8 @@ usage() {
   prepare
 
 动作说明：
-  prepare  检查主 dev，复制到 tmp，在 tmp 副本切到 test 并合入 origin/dev。
-  push     进入 tmp 副本，提交 prepare 产生的待发布 merge，并推送到 origin/test 触发 CI。
+  prepare  检查主 dev，重建 tmp 仓库，在 tmp 仓库切到 test 并合入 origin/dev。
+  push     进入 tmp 仓库，提交 prepare 产生的待发布 merge，并推送到 origin/test 触发 CI。
   --push   push 的别名，适合第二次执行时直接添加选项。
   status   同时输出主 dev 目录、tmp 发布目录状态，并给出 prepare/push 判断。
 
@@ -232,7 +232,7 @@ ensure_main_ready_for_prepare() {
   log_boundary "检查主项目 dev 目录"
   log "当前执行目录：$(pwd)"
   log "当前分支：${branch}"
-  log "说明：主项目目录只做检查和复制来源，不会切到 ${TARGET_BRANCH}。"
+  log "说明：主项目目录只做检查和来源分支发布前确认，不会切到 ${TARGET_BRANCH}。"
 
   [[ "$branch" == "dev" ]] ||
     stop_with_next_step "当前主开发目录必须在 dev 分支，实际是：${branch}" "切回 dev 后重新执行：git switch dev && ./scripts/deploy/release-test.sh"
@@ -267,6 +267,11 @@ ensure_main_ready_for_prepare() {
 ensure_remote_branch_exists() {
   local ref="$1"
   git rev-parse --verify --quiet "$ref" >/dev/null || die "找不到分支或引用：${ref}"
+}
+
+origin_remote_url() {
+  git remote get-url origin 2>/dev/null ||
+    die "当前仓库未配置 origin remote，无法准备 tmp 发布目录"
 }
 
 ensure_build_mode() {
@@ -366,12 +371,13 @@ assert_release_tmp_safe() {
 }
 
 prepare_release_copy() {
-  local main_root release_root release_parent
+  local main_root release_root release_parent origin_url
 
   ensure_main_repo
   main_root="$(pwd)"
   release_root="$(release_tmp_path)"
   release_parent="$(dirname "$release_root")"
+  origin_url="$(origin_remote_url)"
 
   log_boundary "准备 tmp 发布目录"
   log "主开发目录：${main_root}"
@@ -381,24 +387,18 @@ prepare_release_copy() {
   assert_release_tmp_safe "$main_root" "$release_root"
 
   run mkdir -p "$release_parent"
-  log "复制主项目到 tmp 发布目录。该目录可删除重建，不影响主项目。"
-  run rsync -a --delete --delete-excluded \
-    --include ".env.example" \
-    --exclude ".env" \
-    --exclude ".env.*" \
-    --exclude ".venv/" \
-    --exclude ".agents/" \
-    --exclude ".data/" \
-    --exclude "env_test/" \
-    --exclude "storage/objects/" \
-    --exclude "logs/" \
-    --exclude "*.pid" \
-    --exclude "__pycache__/" \
-    --exclude ".pytest_cache/" \
-    --exclude ".mypy_cache/" \
-    --exclude ".ruff_cache/" \
-    --exclude ".DS_Store" \
-    "${main_root}/" "${release_root}/"
+  if [[ -e "$release_root" ]]; then
+    if git -C "$release_root" rev-parse --show-toplevel >/dev/null 2>&1 &&
+      [[ -f "$(git -C "$release_root" rev-parse --git-path MERGE_HEAD)" ]]; then
+      stop_with_next_step "tmp 发布目录已经存在一个未完成的 merge，prepare 不会覆盖。" "先检查 tmp 发布目录；确认无误后执行：./scripts/deploy/release-test.sh --push"
+    fi
+
+    log "重建 tmp 发布目录。该目录可删除重建，不影响主项目。"
+    run rm -rf "$release_root"
+  fi
+
+  log "创建独立 tmp Git 仓库，不复制主项目 .git/objects。"
+  run git clone --origin origin --no-checkout "$origin_url" "$release_root"
 
   cd "$release_root"
   log_boundary "进入 tmp 发布目录处理 ${TARGET_BRANCH}"
