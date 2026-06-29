@@ -1008,6 +1008,20 @@ def test_k8s_cli_help_is_available_without_db():
     assert "migrate --confirm" in result.stdout
 
 
+def test_tools_cli_help_is_available_without_env_file():
+    result = subprocess.run(
+        ["./scripts/tools.sh", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "本地开发辅助工具入口" in result.stdout
+    assert "secret" in result.stdout
+    assert "无默认持久副作用" in result.stdout
+
+
 def test_shell_entrypoints_require_command_without_help():
     for script in (
         "./scripts/dev.sh",
@@ -1016,6 +1030,7 @@ def test_shell_entrypoints_require_command_without_help():
         "./scripts/k8s.sh",
         "./scripts/jobs.sh",
         "./scripts/real-flow.sh",
+        "./scripts/tools.sh",
     ):
         result = subprocess.run(
             [script],

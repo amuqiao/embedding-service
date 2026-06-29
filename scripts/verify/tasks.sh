@@ -50,6 +50,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/k8s.sh" \
     "$ROOT_DIR/scripts/jobs.sh" \
     "$ROOT_DIR/scripts/real-flow.sh" \
+    "$ROOT_DIR/scripts/tools.sh" \
     "$ROOT_DIR/scripts/verify/tasks.sh"
   do
     bash -n "$script"
@@ -72,6 +73,8 @@ run_cli_smoke() {
   event "OK" "jobs.sh" "help"
   "$ROOT_DIR/scripts/real-flow.sh" --help >/dev/null
   event "OK" "real-flow.sh" "help"
+  "$ROOT_DIR/scripts/tools.sh" --help >/dev/null
+  event "OK" "tools.sh" "help"
 }
 
 run_python_syntax() {
