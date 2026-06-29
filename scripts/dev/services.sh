@@ -158,6 +158,84 @@ wait_for_pid_exit() {
   done
 }
 
+service_residual_pids() {
+  local service="$1"
+  local pids
+  pids="$(local_service_pids "$service")" || return "$?"
+  printf "%s" "${pids//$'\n'/,}"
+}
+
+wait_for_service_residual_exit() {
+  local service="$1"
+  local timeout_seconds="$2"
+  local elapsed=0
+  local residual_pids
+
+  while true; do
+    residual_pids="$(service_residual_pids "$service")" || return "$?"
+    [[ -z "$residual_pids" ]] && return 0
+    if (( elapsed >= timeout_seconds )); then
+      return 1
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+}
+
+terminate_service_residuals() {
+  local service="$1"
+  local signal="$2"
+  local pids
+  local pid
+  local command
+
+  pids="$(local_service_pids "$service")" || return "$?"
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    if [[ "$service" == "worker" ]]; then
+      command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+      [[ -n "$command" ]] || continue
+      case "$command" in
+        *"/start-worker.sh"*|*"taskiq worker app.tasks.taskiq_app:broker"*|*"app.tasks.recovery_loop"*) ;;
+        *)
+          die "$service residual pid=${pid} is not a recognized worker process; command=${command:-unknown}. Stop it manually before continuing." 4
+          ;;
+      esac
+    fi
+    kill "-$signal" "$pid" 2>/dev/null || true
+  done <<< "$pids"
+}
+
+cleanup_service_residuals() {
+  local service="$1"
+  local reason="$2"
+  local residual_pids
+
+  residual_pids="$(service_residual_pids "$service")" || return "$?"
+  [[ -z "$residual_pids" ]] && return 0
+
+  event "WAITING" "$service" "residual pid=${residual_pids} reason=${reason}"
+  if wait_for_service_residual_exit "$service" 5; then
+    return 0
+  fi
+
+  residual_pids="$(service_residual_pids "$service")" || return "$?"
+  event "STOPPING" "$service" "residual pid=${residual_pids}"
+  terminate_service_residuals "$service" TERM
+  if wait_for_service_residual_exit "$service" 5; then
+    return 0
+  fi
+
+  residual_pids="$(service_residual_pids "$service")" || return "$?"
+  event "KILLING" "$service" "residual pid=${residual_pids}"
+  terminate_service_residuals "$service" KILL
+  sleep 1
+  residual_pids="$(service_residual_pids "$service")" || return "$?"
+  if [[ -n "$residual_pids" ]]; then
+    die "$service residual local processes are still running after cleanup: pid=${residual_pids}. Stop them manually before continuing." 4
+  fi
+}
+
 wait_for_container_health() {
   local service="$1"
   local timeout_seconds="$2"
@@ -342,6 +420,7 @@ start_application() {
 
 stop_service() {
   local service="$1"
+  local context="${2:-stop}"
   local pid_file
   local pid
   local residual_pids
@@ -351,10 +430,15 @@ stop_service() {
   pid="$(pid_of "$pid_file")"
 
   if [[ -z "$pid" ]]; then
-    residual_pids="$(local_service_pids "$service")" || return "$?"
-    residual_pids="${residual_pids//$'\n'/,}"
+    residual_pids="$(service_residual_pids "$service")" || return "$?"
     if [[ -n "$residual_pids" ]]; then
-      die "$service residual local processes are still running: pid=${residual_pids}. Stop them manually before continuing." 4
+      if [[ "$service" == "worker" && "$context" == "restart" ]]; then
+        cleanup_service_residuals "$service" "missing_pid_file"
+        event "STOPPED" "$service" "already stopped"
+        return
+      else
+        die "$service residual local processes are still running: pid=${residual_pids}. Stop them manually before continuing." 4
+      fi
     else
       event "STOPPED" "$service" "already stopped"
       return
@@ -364,13 +448,15 @@ stop_service() {
   if ! kill -0 "$pid" 2>/dev/null; then
     event "STALE" "$service" "removed pid=$pid"
     rm -f "$pid_file"
-    residual_pids="$(local_service_pids "$service")" || return "$?"
-    residual_pids="${residual_pids//$'\n'/,}"
+    residual_pids="$(service_residual_pids "$service")" || return "$?"
     if [[ -n "$residual_pids" ]]; then
-      die "$service residual local processes are still running: pid=${residual_pids}. Stop them manually before continuing." 4
-    else
-      return 0
+      if [[ "$service" == "worker" && "$context" == "restart" ]]; then
+        cleanup_service_residuals "$service" "stale_pid_file"
+      else
+        die "$service residual local processes are still running: pid=${residual_pids}. Stop them manually before continuing." 4
+      fi
     fi
+    return 0
   fi
 
   event "STOPPING" "$service" "pid=$pid"
@@ -388,10 +474,13 @@ stop_service() {
     fi
   fi
   rm -f "$pid_file"
-  residual_pids="$(local_service_pids "$service")" || return "$?"
-  residual_pids="${residual_pids//$'\n'/,}"
+  residual_pids="$(service_residual_pids "$service")" || return "$?"
   if [[ -n "$residual_pids" ]]; then
-    die "$service residual local processes are still running after stop: pid=${residual_pids}. Stop them manually before continuing." 4
+    if [[ "$service" == "worker" && "$context" == "restart" ]]; then
+      cleanup_service_residuals "$service" "after_stop"
+    else
+      die "$service residual local processes are still running after stop: pid=${residual_pids}. Stop them manually before continuing." 4
+    fi
   fi
   event "STOPPED" "$service" ""
 }
@@ -407,9 +496,10 @@ start_all() {
 }
 
 stop_all() {
+  local context="${1:-stop}"
   section "Application"
-  stop_service api
-  stop_service worker
+  stop_service api "$context"
+  stop_service worker "$context"
   stop_dependencies
 }
 
@@ -532,22 +622,23 @@ start_target() {
 
 stop_target() {
   local service="${1:-}"
+  local context="${2:-stop}"
   if [[ -z "$service" ]]; then
-    stop_all
+    stop_all "$context"
     return
   fi
   section "Application"
-  stop_service "$service"
+  stop_service "$service" "$context"
 }
 
 restart_target() {
   local service="${1:-}"
   if [[ -z "$service" ]]; then
-    stop_all
+    stop_all restart
     start_all
     return
   fi
-  stop_target "$service"
+  stop_target "$service" restart
   start_target "$service"
 }
 

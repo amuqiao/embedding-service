@@ -334,6 +334,264 @@ def test_dev_stop_service_returns_success_after_removing_stale_pid(tmp_path):
     assert not pid_file.exists()
 
 
+def test_dev_stop_worker_keeps_residual_fail_fast_outside_restart(tmp_path):
+    pid_file = tmp_path / "worker.pid"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                [
+                    "set -e",
+                    "source scripts/dev/services.sh >/dev/null",
+                    "service_pid_file() { printf '%s'; }" % pid_file,
+                    "local_service_pids() { printf '12345\\n'; }",
+                    "event() { :; }",
+                    "stop_service worker",
+                ]
+            ),
+        ],
+        cwd=ROOT_DIR,
+        env=_clean_root_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 4
+    assert "worker residual local processes are still running" in result.stderr
+
+
+def test_dev_restart_worker_waits_for_residual_processes_before_continuing(tmp_path):
+    pid_file = tmp_path / "worker.pid"
+    events_file = tmp_path / "events.txt"
+    calls_file = tmp_path / "calls.txt"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                [
+                    "set -e",
+                    "source scripts/dev/services.sh >/dev/null",
+                    "service_pid_file() { printf '%s'; }" % pid_file,
+                    "printf '0' > '%s'" % calls_file,
+                    (
+                        "local_service_pids() { "
+                        "calls=$(cat '%s'); "
+                        "calls=$((calls + 1)); "
+                        "printf '%%s' \"$calls\" > '%s'; "
+                        "if (( calls <= 2 )); then printf '12345\\n'; fi; "
+                        "}"
+                    ) % (calls_file, calls_file),
+                    "terminate_service_residuals() { echo unexpected residual kill >&2; exit 98; }",
+                    f"event() {{ printf '%s %s %s\\n' \"$1\" \"$2\" \"${{3:-}}\" >> '{events_file}'; }}",
+                    "stop_service worker restart",
+                ]
+            ),
+        ],
+        cwd=ROOT_DIR,
+        env=_clean_root_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    events = events_file.read_text(encoding="utf-8")
+    assert "WAITING worker residual pid=12345 reason=missing_pid_file" in events
+    assert "STOPPED worker already stopped" in events
+
+
+def test_dev_restart_worker_refuses_to_kill_unknown_residual_writer(tmp_path):
+    pid_file = tmp_path / "worker.pid"
+    calls_file = tmp_path / "calls.txt"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                [
+                    "set -e",
+                    "source scripts/dev/services.sh >/dev/null",
+                    "service_pid_file() { printf '%s'; }" % pid_file,
+                    "local_service_pids() { printf '12345\\n'; }",
+                    "wait_for_service_residual_exit() { return 1; }",
+                    "ps() { printf 'tail -f logs/worker.log\\n'; }",
+                    f"event() {{ printf '%s %s %s\\n' \"$1\" \"$2\" \"${{3:-}}\" >> '{calls_file}'; }}",
+                    "stop_service worker restart",
+                ]
+            ),
+        ],
+        cwd=ROOT_DIR,
+        env=_clean_root_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 4
+    assert "not a recognized worker process" in result.stderr
+
+
+def test_dev_restart_worker_ignores_residual_pid_that_exits_before_ps(tmp_path):
+    pid_file = tmp_path / "worker.pid"
+    signals_file = tmp_path / "signals.txt"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                [
+                    "set -e",
+                    "source scripts/dev/services.sh >/dev/null",
+                    "service_pid_file() { printf '%s'; }" % pid_file,
+                    "local_service_pids() { printf '12345\\n'; }",
+                    "wait_for_service_residual_exit() { return 1; }",
+                    "ps() { :; }",
+                    f"kill() {{ printf '%s %s\\n' \"$1\" \"$2\" >> '{signals_file}'; }}",
+                    "event() { :; }",
+                    "stop_service worker restart",
+                ]
+            ),
+        ],
+        cwd=ROOT_DIR,
+        env=_clean_root_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 4
+    assert "not a recognized worker process" not in result.stderr
+    assert not signals_file.exists()
+    assert "after cleanup" in result.stderr
+
+
+def test_dev_restart_worker_stale_pid_file_enters_residual_cleanup(tmp_path):
+    pid_file = tmp_path / "worker.pid"
+    events_file = tmp_path / "events.txt"
+    pid_file.write_text("999999\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                [
+                    "set -e",
+                    "source scripts/dev/services.sh >/dev/null",
+                    "service_pid_file() { printf '%s'; }" % pid_file,
+                    "kill() { return 1; }",
+                    "local_service_pids() { printf '23456\\n'; }",
+                    "wait_for_service_residual_exit() { return 0; }",
+                    f"event() {{ printf '%s %s %s\\n' \"$1\" \"$2\" \"${{3:-}}\" >> '{events_file}'; }}",
+                    "stop_service worker restart",
+                ]
+            ),
+        ],
+        cwd=ROOT_DIR,
+        env=_clean_root_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert not pid_file.exists()
+    events = events_file.read_text(encoding="utf-8")
+    assert "STALE worker removed pid=999999" in events
+    assert "WAITING worker residual pid=23456 reason=stale_pid_file" in events
+
+
+def test_dev_restart_worker_after_stop_cleans_recognized_residual_process(tmp_path):
+    pid_file = tmp_path / "worker.pid"
+    events_file = tmp_path / "events.txt"
+    term_file = tmp_path / "term.txt"
+    wait_calls_file = tmp_path / "wait-calls.txt"
+    pid_file.write_text("999999\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                [
+                    "set -e",
+                    "source scripts/dev/services.sh >/dev/null",
+                    "service_pid_file() { printf '%s'; }" % pid_file,
+                    f"kill() {{ if [[ \"$1\" == '-0' ]]; then return 0; fi; printf '%s %s\\n' \"$1\" \"$2\" >> '{term_file}'; }}",
+                    "wait_for_pid_exit() { return 0; }",
+                    "local_service_pids() { printf '23456\\n'; }",
+                    "printf '0' > '%s'" % wait_calls_file,
+                    (
+                        "wait_for_service_residual_exit() { "
+                        "calls=$(cat '%s'); "
+                        "calls=$((calls + 1)); "
+                        "printf '%%s' \"$calls\" > '%s'; "
+                        "(( calls >= 2 )); "
+                        "}"
+                    ) % (wait_calls_file, wait_calls_file),
+                    "ps() { printf '/Users/admin/Downloads/Code/fastapi-best-ai-architecture/start-worker.sh\\n'; }",
+                    f"event() {{ printf '%s %s %s\\n' \"$1\" \"$2\" \"${{3:-}}\" >> '{events_file}'; }}",
+                    "stop_service worker restart",
+                ]
+            ),
+        ],
+        cwd=ROOT_DIR,
+        env=_clean_root_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "-TERM 23456" in term_file.read_text(encoding="utf-8")
+    events = events_file.read_text(encoding="utf-8")
+    assert "WAITING worker residual pid=23456 reason=after_stop" in events
+    assert "STOPPING worker residual pid=23456" in events
+
+
+def test_dev_restart_worker_escalates_residual_cleanup_to_kill(tmp_path):
+    pid_file = tmp_path / "worker.pid"
+    signals_file = tmp_path / "signals.txt"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                [
+                    "set -e",
+                    "source scripts/dev/services.sh >/dev/null",
+                    "service_pid_file() { printf '%s'; }" % pid_file,
+                    "local_service_pids() { printf '34567\\n'; }",
+                    "wait_for_service_residual_exit() { return 1; }",
+                    "ps() { printf 'taskiq worker app.tasks.taskiq_app:broker --workers 1\\n'; }",
+                    f"kill() {{ printf '%s %s\\n' \"$1\" \"$2\" >> '{signals_file}'; }}",
+                    "event() { :; }",
+                    "stop_service worker restart",
+                ]
+            ),
+        ],
+        cwd=ROOT_DIR,
+        env=_clean_root_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 4
+    signals = signals_file.read_text(encoding="utf-8")
+    assert "-TERM 34567" in signals
+    assert "-KILL 34567" in signals
+    assert "after cleanup" in result.stderr
+
+
 def test_dev_worker_service_command_injects_root_env(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
