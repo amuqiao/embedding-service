@@ -584,7 +584,7 @@ load = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "asyncpg", specifier = ">=0.29.0" },
-    { name = "fastapi", specifier = ">=0.111.0" },
+    { name = "fastapi", specifier = "==0.136.3" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "litellm", specifier = ">=1.83.14" },
     { name = "numpy", specifier = ">=1.26.0" },
