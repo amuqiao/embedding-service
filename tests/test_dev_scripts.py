@@ -607,6 +607,53 @@ def test_dev_worker_service_command_injects_root_env(tmp_path):
     assert "start-worker.sh" in command
 
 
+def test_start_worker_without_recovery_loop_does_not_require_python(tmp_path):
+    script = tmp_path / "start-worker.sh"
+    script.write_text((ROOT_DIR / "start-worker.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    script.chmod(0o755)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "dirname",
+        "#!/bin/sh\n"
+        "case \"$1\" in\n"
+        "  */*) printf '%s\\n' \"${1%/*}\" ;;\n"
+        "  *) printf '.\\n' ;;\n"
+        "esac\n",
+    )
+    _write_fake_command(
+        fake_bin,
+        "taskiq",
+        "#!/bin/sh\n"
+        "printf 'taskiq %s\\n' \"$*\"\n"
+        "exit 0\n",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "PATH": str(fake_bin),
+            "WORKER_RECOVERY_LOOP": "false",
+            "WORKER_CONCURRENCY": "1",
+            "WORKER_LOGLEVEL": "INFO",
+        }
+    )
+
+    result = subprocess.run(
+        [str(script)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "taskiq worker app.tasks.taskiq_app:broker" in result.stdout
+    assert "python not found" not in result.stderr
+
+
 def test_compose_wrapper_injects_root_env_file_values(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(

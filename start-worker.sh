@@ -28,7 +28,17 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 if [ "$WORKER_RECOVERY_LOOP" = "true" ]; then
-  "$ROOT_DIR/.venv/bin/python" -m app.tasks.recovery_loop &
+  if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
+    PYTHON="$ROOT_DIR/.venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    PYTHON="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON="$(command -v python)"
+  else
+    echo "ERROR: python not found; cannot start worker recovery loop" >&2
+    exit 1
+  fi
+  "$PYTHON" -m app.tasks.recovery_loop &
   RECOVERY_PID="$!"
 fi
 

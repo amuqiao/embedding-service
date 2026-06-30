@@ -16,6 +16,7 @@ from app.services.job_runtime import (
     build_runtime_snapshot,
     configured_output_target,
     payload_hash,
+    runtime_fields_from_job,
     write_runtime_json,
     workflow_plan_from_job,
 )
@@ -463,6 +464,21 @@ async def _create_child_job(
         if not isinstance(prompt_payload, dict):
             raise ValidationAppError("INVALID_INPUT", "child job_type runtime fields must include prompt_payload")
         _validate_prompt(job_type, prompt_payload)
+    root_runtime_fields = runtime_fields_from_job(root_job)
+    root_system_fields = root_runtime_fields.get("_system")
+    trigger_request_id = (
+        root_system_fields.get("trigger_request_id")
+        if isinstance(root_system_fields, dict) and isinstance(root_system_fields.get("trigger_request_id"), str)
+        else None
+    )
+    if trigger_request_id:
+        runtime_fields = {
+            **runtime_fields,
+            "_system": {
+                **(runtime_fields.get("_system") if isinstance(runtime_fields.get("_system"), dict) else {}),
+                "trigger_request_id": trigger_request_id,
+            },
+        }
 
     timeout_seconds = int(getattr(handler, "timeout_seconds", 300))
     child_id = uuid.uuid4()

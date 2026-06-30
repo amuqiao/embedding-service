@@ -30,6 +30,21 @@ class _FakeDB:
         self.refreshed.append(obj)
 
 
+def _runtime_ref_for_job(job_type: str, params: dict[str, object], runtime_fields: dict[str, object]) -> dict[str, object]:
+    return {
+        "storage": "db_inline",
+        "type": "json",
+        "name": "runtime",
+        "payload": {
+            "schema_version": 1,
+            "job_type": job_type,
+            "job_params_hash": payload_hash(params),
+            "runtime_fields": runtime_fields,
+            "output_target": {"type": "oss_prefix", "oss_bucket": "bucket", "oss_prefix": "root/", "oss_region": "region"},
+        },
+    }
+
+
 def _running_add_job() -> Job:
     attempt_id = uuid.uuid4()
     params = {"a": 2, "b": 3}
@@ -95,6 +110,86 @@ def test_should_retry_attempt_respects_attempt_retry_policy():
     assert task_jobs._should_retry_attempt(transient_retry, {"code": "JOB_TIMEOUT"}) is True
     assert task_jobs._should_retry_attempt(transient_retry, {"code": "MODEL_CALL_FAILED"}) is False
     assert task_jobs._should_retry_attempt(transient_retry, {"code": "AI_LEDGER_UPDATE_FAILED"}) is False
+
+
+@pytest.mark.asyncio
+async def test_create_child_job_propagates_only_trigger_request_id_and_preserves_child_runtime(monkeypatch):
+    class RuntimeHandler:
+        timeout_seconds = 300
+
+        def normalize_job_params(self, job_params):
+            return job_params
+
+        def validate_normalized_job_params(self, job_params):
+            pass
+
+        def runtime_job_fields(self, job_params):
+            return {
+                "child_field": "child-value",
+                "_system": {"child_only": "keep-me"},
+            }
+
+        def effective_retry_policy(self):
+            return SimpleNamespace(for_purpose=lambda _purpose: None)
+
+    root_params = {"workflow": True}
+    root_job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="client-workflow-1",
+        job_type="test.workflow",
+        status="running",
+        progress_percent=5,
+        progress_stage="running",
+        priority="normal",
+        job_params_hash=payload_hash(root_params),
+        runtime_ref=_runtime_ref_for_job(
+            "test.workflow",
+            root_params,
+            {"_system": {"trigger_request_id": "req-root-1", "root_only": "do-not-copy"}},
+        ),
+        created_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
+    )
+    created: dict[str, object] = {}
+
+    async def fake_create(_db, **kwargs):
+        created.update(kwargs)
+        return Job(
+            id=kwargs["job_id"],
+            caller_id=kwargs["caller_id"],
+            job_type=kwargs["job_type"],
+            status="queued",
+            progress_percent=0,
+            priority=kwargs["priority"],
+            root_job_id=kwargs["root_job_id"],
+            workflow_node_key=kwargs["workflow_node_key"],
+            created_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 6, 20, 10, 0, tzinfo=UTC),
+        )
+
+    async def fake_create_initial_attempt(_db, child, *, timeout_seconds, purpose=None, retry_policy=None):
+        return SimpleNamespace(id=uuid.uuid4())
+
+    monkeypatch.setattr("app.workflows.orchestrator.get_job_executor", lambda _job_type: RuntimeHandler())
+    monkeypatch.setattr("app.workflows.orchestrator.get_template", lambda _job_type: None)
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.create", fake_create)
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.create_initial_attempt", fake_create_initial_attempt)
+
+    await _create_child_job(
+        _FakeDB(),
+        root_job=root_job,
+        node={"key": "child-1", "job_type": "custom_child", "job_params": {"value": 1}},
+    )
+
+    runtime_ref = created["runtime_ref"]
+    assert isinstance(runtime_ref, dict)
+    runtime_fields = runtime_ref["payload"]["runtime_fields"]
+    assert runtime_fields["child_field"] == "child-value"
+    assert runtime_fields["_system"] == {
+        "child_only": "keep-me",
+        "trigger_request_id": "req-root-1",
+    }
 
 
 @pytest.mark.asyncio
@@ -488,7 +583,7 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
                 "schema_version": 1,
                 "job_type": "test.workflow",
                 "job_params_hash": payload_hash(root_params),
-                "runtime_fields": {},
+                "runtime_fields": {"_system": {"trigger_request_id": "req-root-1"}},
                 "output_target": {
                     "type": "oss_prefix",
                     "oss_bucket": "bucket",
@@ -581,6 +676,8 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
         assert kwargs["workflow_node_key"] == "first"
         assert kwargs["client_request_id"] is None
         assert kwargs["callback_url"] is None
+        runtime_payload = kwargs["runtime_ref"]["payload"]
+        assert runtime_payload["runtime_fields"]["_system"]["trigger_request_id"] == "req-root-1"
         child = Job(
             id=uuid.uuid4(),
             caller_id=kwargs["caller_id"],
