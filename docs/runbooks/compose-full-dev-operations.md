@@ -94,7 +94,8 @@ docker compose --profile app exec api /app/scripts/jobs.sh types
 排查单个 Job：
 
 ```bash
-docker compose --profile app exec api /app/scripts/jobs.sh show <job_id>
+docker compose --profile app exec api /app/scripts/jobs.sh job <job_id>
+docker compose --profile app exec api /app/scripts/jobs.sh workflow <job_id>
 docker compose --profile app exec api /app/scripts/jobs.sh inspect <job_id>
 docker compose --profile app exec api /app/scripts/jobs.sh timeline <job_id> --limit 50
 ```

@@ -24,34 +24,34 @@ LOG_TIMESTAMP_RE = re.compile(r"^(?P<timestamp>[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{
 LIST_HELP_EPILOG = """\b
 示例：
   ./scripts/jobs.sh list --status running --since 24h --limit 20
-  ./scripts/jobs.sh list --status queued,running --caller-id default --json
+  ./scripts/jobs.sh list --scope family --status queued,running --caller-id default
+  ./scripts/jobs.sh list --scope child --status failed --json
 """
 
 SHOW_HELP_EPILOG = """\b
 示例：
-  ./scripts/jobs.sh show <job_id>
+  ./scripts/jobs.sh job <job_id>
   ./scripts/jobs.sh show <job_id> --json
 """
 
 INSPECT_HELP_EPILOG = """\b
 示例：
   ./scripts/jobs.sh inspect <job_id>
-  ./scripts/jobs.sh inspect <job_id> --include-children
+  ./scripts/jobs.sh workflow <job_id>
   ./scripts/jobs.sh inspect <job_id> --events-limit 50 --json
-  ./scripts/jobs.sh inspect <job_id> --include-children --json
 """
 
 PAYLOAD_HELP_EPILOG = """\b
 示例：
   ./scripts/jobs.sh payload <job_id>
   ./scripts/jobs.sh payload <job_id> --json
-  ./scripts/jobs.sh payload <job_id> --include-children --json
+  ./scripts/jobs.sh workflow <job_id> --json
 """
 
 DIAGNOSE_HELP_EPILOG = """\b
 示例：
   ./scripts/jobs.sh diagnose <job_id>
-  ./scripts/jobs.sh diagnose <job_id> --include-children
+  ./scripts/jobs.sh workflow <job_id>
   ./scripts/jobs.sh diagnose <job_id> --older-than 1m
   ./scripts/jobs.sh diagnose <job_id> --json
 """
@@ -77,6 +77,7 @@ CALLBACKS_HELP_EPILOG = """\b
 STUCK_HELP_EPILOG = """\b
 示例：
   ./scripts/jobs.sh stuck --older-than 10m --caller-id default
+  ./scripts/jobs.sh stuck --scope root --older-than 10m
   ./scripts/jobs.sh stuck --older-than 10m --caller-id default --json
 """
 
@@ -102,6 +103,26 @@ DOCTOR_HELP_EPILOG = """\b
 示例：
   ./scripts/jobs.sh doctor --since 10m
   ./scripts/jobs.sh doctor --since 10m --caller-id default --json
+"""
+
+OVERVIEW_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh
+  ./scripts/jobs.sh overview --since 10m
+  ./scripts/jobs.sh overview --since 20m --caller-id default --json
+"""
+
+JOB_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh job <job_id>
+  ./scripts/jobs.sh job <job_id> --json
+"""
+
+WORKFLOW_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh workflow <job_id>
+  ./scripts/jobs.sh workflow <child_job_id> --json
+  ./scripts/jobs.sh workflow <job_id> --events-limit 100
 """
 
 LATENCY_HELP_EPILOG = """\b
@@ -131,7 +152,10 @@ HELP_EPILOG = """\b
 \b
 命令说明：
   list       查看最近 Job 摘要，支持状态、类型、调用方、时间窗口和 limit 过滤。
-  show       查看单个 Job 权威状态。
+  overview   默认总览；综合 root 业务摘要、family 执行风险和 global gate 水位。
+  job        查看单个 Job 轻量状态。
+  workflow   查看 workflow root 与 children；可传 root 或 child job_id。
+  show       查看单个 Job 权威状态；保留为轻量状态旧入口。
   inspect    聚合查看单个 Job、attempt、callback 和最近 timeline。
   payload    查看单个 Job 的入参、runtime、结果和错误 payload。
   diagnose   诊断单个 Job 的 attempt、dispatch、callback、dead-letter 和 claim 风险。
@@ -159,9 +183,20 @@ HELP_EPILOG = """\b
   错误原因输出到 stderr。
 
 \b
+Scope：
+  root         外部业务 Job；list、summary、latency 和 capacity window 默认使用。
+  child        workflow internal child Job。
+  family       先按 root 条件选业务请求，再包含这些 root 及 children；drain、pressure 和 stuck 默认用于执行风险排障。
+  all          不加 lineage 条件；仅用于显式底层排查。
+  global_gate  capacity current 的全局 active 门禁口径。
+
+\b
 常用示例：
+  ./scripts/jobs.sh
   ./scripts/jobs.sh list --status running --since 24h --limit 20
-  ./scripts/jobs.sh show <job_id>
+  ./scripts/jobs.sh list --scope family --status running --since 30m
+  ./scripts/jobs.sh job <job_id>
+  ./scripts/jobs.sh workflow <job_id>
   ./scripts/jobs.sh payload <job_id> --json
   ./scripts/jobs.sh summary --since 10m
   ./scripts/jobs.sh types
@@ -189,6 +224,7 @@ app = typer.Typer(
     help="Job 只读查询与排障入口。",
     epilog=HELP_EPILOG,
     no_args_is_help=False,
+    invoke_without_command=True,
     add_completion=False,
     rich_markup_mode=None,
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -211,6 +247,13 @@ LimitOption = Annotated[
         min=1,
         max=1000,
         help="返回条数，范围 1 到 1000。",
+    ),
+]
+ScopeOption = Annotated[
+    str,
+    typer.Option(
+        "--scope",
+        help="Job 记录范围：root、child、family 或 all；默认按命令选择最常用口径。",
     ),
 ]
 
@@ -264,9 +307,18 @@ def parse_latency_group_by(value: str) -> str:
     return value
 
 
+def parse_record_scope(value: str) -> str:
+    if value not in queries.VALID_RECORD_SCOPES:
+        raise ValueError("无效 scope：" + value + "；可选值：" + ", ".join(sorted(queries.VALID_RECORD_SCOPES)))
+    return value
+
+
 def _jobs_columns() -> list[tuple[str, str]]:
     return [
         ("job_id", "job_id"),
+        ("record_scope", "scope"),
+        ("root_job_id", "root_job_id"),
+        ("workflow_node_key", "node"),
         ("status", "status"),
         ("job_type", "job_type"),
         ("caller_id", "caller"),
@@ -1104,7 +1156,7 @@ def _diagnose_job(
                     "info",
                     "workflow",
                     "job_waiting_children_unchecked",
-                    "running Job 没有 active attempt；如它是 workflow root，请用 --include-children 查看 child 状态。",
+                    "running Job 没有 active attempt；如它是 workflow root，请用 workflow 命令查看 child 状态。",
                 )
         else:
             add("critical", "job", "active_attempt_missing", "queued Job 缺少 active_attempt_id，worker 无法领取。")
@@ -1269,7 +1321,7 @@ def _diagnose_job(
     if signals & {"callback_dead_letter", "callback_lease_expired", "callback_due"}:
         next_checks.append(f"./scripts/jobs.sh callbacks {job_id}")
     if signals & {"job_waiting_children", "workflow_child_failed", "child_dispatch_dead_letter", "job_waiting_children_unchecked"}:
-        next_checks.append(f"./scripts/jobs.sh inspect {job_id} --include-children --events-limit 50")
+        next_checks.append(f"./scripts/jobs.sh workflow {job_id} --events-limit 50")
     if status in {"critical", "warning"}:
         next_checks.append("docker compose logs --tail=100 postgres")
 
@@ -1402,6 +1454,12 @@ def _render_result(*, section: str, target: str, rows: list[dict], columns: list
     formatters.print_table(rows, columns)
 
 
+def _render_jobs_result(*, rows: list[dict], record_scope: str) -> None:
+    formatters.section("Jobs")
+    formatters.event("OK", "jobs", f"count={len(rows)} scope={record_scope}")
+    formatters.print_table(rows, _jobs_columns())
+
+
 def _retry_policy_summary(spec: dict[str, Any]) -> str:
     retry_policy = spec.get("retry_policy")
     if not isinstance(retry_policy, dict):
@@ -1475,10 +1533,18 @@ def _summary_payload(
     window: timedelta,
     job_type: str | None,
     caller_id: str | None,
+    record_scope: str,
     summary_payload: dict[str, Any],
 ) -> dict[str, Any]:
     return {
-        "scope": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id},
+        "scope": {
+            "since": since,
+            "seconds": window.total_seconds(),
+            "job_type": job_type,
+            "caller_id": caller_id,
+            "record_scope": record_scope,
+            "query_scopes": summary_payload.get("query_scopes") or {},
+        },
         **summary_payload,
     }
 
@@ -1493,7 +1559,7 @@ def _summary_next_checks(scope: dict[str, Any], *, no_jobs_found: bool) -> list[
     checks = [
         f"./scripts/jobs.sh list --since {scope['since']}{filter_text} --limit 20",
         f"./scripts/jobs.sh drain --since {scope['since']}{filter_text}",
-        "./scripts/jobs.sh show <job_id>",
+        "./scripts/jobs.sh job <job_id>",
     ]
     if no_jobs_found:
         checks.insert(0, f"扩大 --since 窗口后重试，例如 ./scripts/jobs.sh doctor --since 1h{filter_text}")
@@ -1579,14 +1645,23 @@ def _diagnose_summary(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _fetch_summary_payload(*, since: str, job_type: str | None, caller_id: str | None) -> dict[str, Any]:
+def _fetch_summary_payload(
+    *,
+    since: str,
+    job_type: str | None,
+    caller_id: str | None,
+    record_scope: str = "root",
+) -> dict[str, Any]:
     window, since_at = _since_window(since)
+    execution_scope = "family" if record_scope == "root" else record_scope
     raw_payload = _with_connection(
         lambda conn: queries.summary(
             conn,
             job_type=job_type,
             caller_id=caller_id,
             since=since_at,
+            record_scope=record_scope,
+            execution_scope=execution_scope,
         )
     )
     return _summary_payload(
@@ -1594,6 +1669,7 @@ def _fetch_summary_payload(*, since: str, job_type: str | None, caller_id: str |
         window=window,
         job_type=job_type,
         caller_id=caller_id,
+        record_scope=record_scope,
         summary_payload=raw_payload,
     )
 
@@ -1692,9 +1768,9 @@ def _drain_payload(
         + (f" --caller-id {caller_id}" if caller_id else "")
     )
     active_list_command = (
-        f"./scripts/jobs.sh list --status queued,running{filters} --limit 20"
+        f"./scripts/jobs.sh list --status queued,running --scope family{filters} --limit 20"
         if current_active > window_active
-        else f"./scripts/jobs.sh list --status queued,running --since {since}{filters} --limit 20"
+        else f"./scripts/jobs.sh list --status queued,running --scope family --since {since}{filters} --limit 20"
     )
     return {
         "scope": {
@@ -1702,6 +1778,7 @@ def _drain_payload(
             "older_than": older_than,
             "job_type": job_type,
             "caller_id": caller_id,
+            "query_scopes": raw_payload.get("query_scopes") or {},
         },
         **raw_payload,
         "status": status,
@@ -1711,7 +1788,7 @@ def _drain_payload(
             f"./scripts/jobs.sh capacity --since {since}{filters}",
             f"./scripts/jobs.sh stuck --older-than {older_than} --since {since}{filters}",
             active_list_command,
-            f"./scripts/jobs.sh list --status failed --since {since}{filters} --limit 20",
+            f"./scripts/jobs.sh list --status failed --scope family --since {since}{filters} --limit 20",
         ],
     }
 
@@ -2172,7 +2249,7 @@ def _pressure_payload(
         "samples": {"active": active_samples, "failed": failed_samples},
         "next_checks": [
             f"./scripts/jobs.sh drain --since {since} --older-than {older_than}{filters} --strict",
-            f"./scripts/jobs.sh list --status failed --since {since}{filters} --limit 20",
+            f"./scripts/jobs.sh list --status failed --scope family --since {since}{filters} --limit 20",
             f"./scripts/jobs.sh stuck --since {since} --older-than {older_than}{filters} --limit 20",
             f"./scripts/jobs.sh latency --since {since}{filters} --group-by job_type",
             "./scripts/dev.sh status",
@@ -2244,6 +2321,234 @@ def _render_pressure(payload: dict[str, Any]) -> None:
         print(f"- {item}")
 
 
+def _overview_raw_payload(
+    conn,
+    *,
+    since: str,
+    window: timedelta,
+    since_at: datetime,
+    older_than: str,
+    older_than_delta: timedelta,
+    job_type: str | None,
+    caller_id: str | None,
+    max_active_jobs: int | None,
+    sample_limit: int,
+) -> dict[str, Any]:
+    summary_payload = queries.summary(conn, job_type=job_type, caller_id=caller_id, since=since_at)
+    capacity_payload = queries.capacity(
+        conn,
+        job_type=job_type,
+        caller_id=caller_id,
+        since=since_at,
+        window_seconds=window.total_seconds(),
+    )
+    if max_active_jobs is not None and max_active_jobs > 0:
+        capacity_payload["estimated"]["active_ratio"] = int(capacity_payload["current"].get("active_jobs") or 0) / max_active_jobs
+        capacity_payload["estimated"]["headroom"] = max_active_jobs - int(capacity_payload["current"].get("active_jobs") or 0)
+    else:
+        capacity_payload["estimated"]["active_ratio"] = None
+        capacity_payload["estimated"]["headroom"] = None
+    return {
+        "stuck_limit": sample_limit,
+        "summary": _summary_payload(
+            since=since,
+            window=window,
+            job_type=job_type,
+            caller_id=caller_id,
+            record_scope="root",
+            summary_payload=summary_payload,
+        ),
+        "capacity": {
+            "scope": {
+                "current": "global_gate",
+                "window": {
+                    "record_scope": "root",
+                    "since": since,
+                    "seconds": window.total_seconds(),
+                    "job_type": job_type,
+                    "caller_id": caller_id,
+                },
+            },
+            "max_active_jobs": max_active_jobs,
+            "current": capacity_payload["current"],
+            "window": capacity_payload["window"],
+            "estimated": capacity_payload["estimated"],
+        },
+        "latency": queries.latency(conn, job_type=job_type, caller_id=caller_id, since=since_at, group_by="all"),
+        "stuck": queries.stuck(
+            conn,
+            older_than=older_than_delta,
+            limit=sample_limit,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+        ),
+        "failure_groups": queries.failure_groups(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            limit=sample_limit,
+        ),
+        "active_samples": queries.list_jobs(
+            conn,
+            statuses=["queued", "running"],
+            job_type=job_type,
+            caller_id=caller_id,
+            client_request_id=None,
+            since=since_at,
+            limit=sample_limit,
+            record_scope="family",
+        ),
+        "failed_samples": queries.list_jobs(
+            conn,
+            statuses=["failed"],
+            job_type=job_type,
+            caller_id=caller_id,
+            client_request_id=None,
+            since=since_at,
+            limit=sample_limit,
+            record_scope="family",
+        ),
+    }
+
+
+def _overview_payload(
+    *,
+    since: str,
+    older_than: str,
+    job_type: str | None,
+    caller_id: str | None,
+    max_active_jobs: int | None,
+    sample_limit: int,
+) -> dict[str, Any]:
+    window, since_at = _since_window(since)
+    try:
+        older_than_delta = parse_duration(older_than)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    raw_payload = _with_connection(
+        lambda conn: _overview_raw_payload(
+            conn,
+            since=since,
+            window=window,
+            since_at=since_at,
+            older_than=older_than,
+            older_than_delta=older_than_delta,
+            job_type=job_type,
+            caller_id=caller_id,
+            max_active_jobs=max_active_jobs,
+            sample_limit=sample_limit,
+        )
+    )
+    return _pressure_payload(
+        since=since,
+        older_than=older_than,
+        job_type=job_type,
+        caller_id=caller_id,
+        max_active_jobs=max_active_jobs,
+        queue_wait_warning_seconds=30.0,
+        run_warning_seconds=60.0,
+        payload=raw_payload,
+    )
+
+
+def _render_overview(payload: dict[str, Any]) -> None:
+    scope = payload["scope"]
+    formatters.section("Job Overview")
+    formatters.event(
+        payload["status"].upper(),
+        "overview",
+        f"since={scope['since']} root_scope=root risk_scope=family current_scope=global_gate",
+    )
+    bottleneck_rows = [
+        {
+            "severity": item["severity"],
+            "area": item["area"],
+            "signal": item["signal"],
+            "message": item["message"],
+        }
+        for item in payload["bottlenecks"][:5]
+    ]
+    formatters.section("Top Findings")
+    formatters.print_table(bottleneck_rows, _pressure_bottleneck_columns(), empty_message="no findings")
+    formatters.section("Root Job Summary")
+    formatters.print_table([payload["summary"].get("jobs") or {}], _summary_job_columns())
+    formatters.section("Global Active Gate")
+    formatters.print_table([payload["capacity"].get("current") or {}], _capacity_current_columns())
+    formatters.section("Family Risk Sample")
+    stuck = payload["stuck"]
+    formatters.event("OK", "stuck", f"sample_count={stuck['sample_count']} truncated={stuck['truncated']}")
+    formatters.print_table(stuck["sample"], _stuck_columns(), empty_message="no stuck records")
+    formatters.section("Next Checks")
+    for item in payload["next_checks"]:
+        print(f"- {item}")
+
+
+def _run_overview(
+    *,
+    since: str,
+    older_than: str,
+    job_type: str | None,
+    caller_id: str | None,
+    max_active_jobs: int | None,
+    sample_limit: int,
+    json_output: bool,
+) -> None:
+    limit = max_active_jobs if max_active_jobs is not None else _env_max_active_jobs()
+    payload = _overview_payload(
+        since=since,
+        older_than=older_than,
+        job_type=job_type,
+        caller_id=caller_id,
+        max_active_jobs=limit,
+        sample_limit=sample_limit,
+    )
+    if json_output:
+        formatters.print_json(payload)
+        return
+    _render_overview(payload)
+
+
+@app.callback()
+def main(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        _run_overview(
+            since="10m",
+            older_than="1m",
+            job_type=None,
+            caller_id=None,
+            max_active_jobs=None,
+            sample_limit=10,
+            json_output=False,
+        )
+
+
+@app.command(help="查看 Job 总览；默认等同于 jobs.sh 无参。", epilog=OVERVIEW_HELP_EPILOG)
+def overview(
+    since: Annotated[str, typer.Option("--since", help="诊断窗口，例如 10m。")] = "10m",
+    older_than: Annotated[str, typer.Option("--older-than", help="stuck 判定窗口，例如 1m。")] = "1m",
+    job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
+    caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    max_active_jobs: Annotated[
+        int | None,
+        typer.Option("--max-active-jobs", min=0, help="用于计算水位比例；默认读取环境或 .env。"),
+    ] = None,
+    sample_limit: Annotated[int, typer.Option("--sample-limit", min=1, max=100, help="样本条数。")] = 10,
+    json_output: JsonOption = False,
+) -> None:
+    _run_overview(
+        since=since,
+        older_than=older_than,
+        job_type=job_type,
+        caller_id=caller_id,
+        max_active_jobs=max_active_jobs,
+        sample_limit=sample_limit,
+        json_output=json_output,
+    )
+
+
 @app.command("list", help="查看最近 Job 摘要。", epilog=LIST_HELP_EPILOG)
 def list_jobs(
     status: Annotated[
@@ -2260,12 +2565,14 @@ def list_jobs(
         str | None,
         typer.Option("--since", help="只查看指定时间窗口内创建的 Job，例如 24h。"),
     ] = None,
+    record_scope: ScopeOption = "root",
     limit: LimitOption = 20,
     json_output: JsonOption = False,
 ) -> None:
     try:
         statuses = parse_statuses(status)
         since_delta = parse_optional_duration(since)
+        parsed_scope = parse_record_scope(record_scope)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
@@ -2280,12 +2587,13 @@ def list_jobs(
             client_request_id=client_request_id,
             since=since_at,
             limit=limit,
+            record_scope=parsed_scope,
         )
     )
     if json_output:
-        formatters.print_json({"jobs": rows})
+        formatters.print_json({"scope": {"record_scope": parsed_scope, "since": since, "job_type": job_type, "caller_id": caller_id}, "jobs": rows})
         return
-    _render_result(section="Jobs", target="jobs", rows=rows, columns=_jobs_columns())
+    _render_jobs_result(rows=rows, record_scope=parsed_scope)
 
 
 @app.command(help="查看单个 Job 权威状态。", epilog=SHOW_HELP_EPILOG)
@@ -2301,6 +2609,11 @@ def show(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
     formatters.event("OK", "job", f"job_id={job_id}")
     formatters.print_table([_job_inspect_row(job)], _job_inspect_columns())
     _render_job_detail_sections(job)
+
+
+@app.command("job", help="查看单个 Job 轻量状态。", epilog=JOB_HELP_EPILOG)
+def job_status(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
+    show(job_id=job_id, json_output=json_output)
 
 
 @app.command(help="聚合查看单个 Job。", epilog=INSPECT_HELP_EPILOG)
@@ -2428,6 +2741,82 @@ def diagnose(
     _render_diagnosis_human(payload["diagnosis"])
 
 
+def _root_job_id_for(job: dict[str, Any]) -> str:
+    root_job_id = job.get("root_job_id")
+    return str(root_job_id or job.get("id"))
+
+
+def _workflow_payload(conn, job_id: str, *, events_limit: int) -> dict[str, Any] | None:
+    source_job = queries.get_job(conn, job_id)
+    if source_job is None:
+        return None
+    root_job_id = _root_job_id_for(source_job)
+    root_job = queries.get_job(conn, root_job_id)
+    if root_job is None:
+        return None
+    payload = {
+        "source_job": source_job,
+        "root_job": root_job,
+        "children": queries.child_jobs(conn, root_job_id),
+        "attempts": queries.attempts(conn, root_job_id),
+        "callbacks": queries.callbacks(conn, root_job_id),
+        "timeline": queries.timeline(conn, root_job_id, limit=events_limit),
+    }
+    diagnosis_input = {
+        "job": root_job,
+        "children": payload["children"],
+        "attempts": payload["attempts"],
+        "callbacks": payload["callbacks"],
+        "timeline": payload["timeline"],
+    }
+    payload["diagnosis"] = _diagnose_job(diagnosis_input, include_children=True)
+    return payload
+
+
+def _render_workflow_human(payload: dict[str, Any]) -> None:
+    source_job = payload["source_job"]
+    root_job = payload["root_job"]
+    children = payload["children"]
+    formatters.section("Workflow")
+    formatters.event(
+        "OK",
+        "workflow",
+        "root_job_id=%s source_job_id=%s children=%s"
+        % (root_job.get("id"), source_job.get("id"), len(children)),
+    )
+    formatters.section("Root Job")
+    formatters.print_table([_job_inspect_row(root_job)], _job_inspect_columns())
+    _render_diagnosis_human(payload["diagnosis"], title="Workflow Diagnosis")
+    formatters.section("Workflow Children")
+    formatters.print_table(children, _child_job_columns(), empty_message="no workflow children")
+    formatters.section("Root Attempts")
+    formatters.print_table(payload["attempts"], _attempt_columns(), empty_message="no root attempts")
+    if payload["callbacks"]:
+        formatters.section("Root Callbacks")
+        formatters.print_table(payload["callbacks"], _callback_columns(), empty_message="no root callbacks")
+    formatters.section("Root Timeline")
+    formatters.print_table(payload["timeline"], _timeline_columns(), empty_message="no root events")
+
+
+@app.command(help="查看 workflow root 与 children；可传 root 或 child job_id。", epilog=WORKFLOW_HELP_EPILOG)
+def workflow(
+    job_id: JobIdArgument,
+    events_limit: Annotated[
+        int,
+        typer.Option("--events-limit", min=1, max=1000, help="展示的 root 最近事件条数。"),
+    ] = 50,
+    json_output: JsonOption = False,
+) -> None:
+    payload = _with_connection(lambda conn: _workflow_payload(conn, job_id, events_limit=events_limit))
+    if payload is None:
+        print(f"ERROR: job not found: {job_id}", file=sys.stderr)
+        raise typer.Exit(3)
+    if json_output:
+        formatters.print_json(payload)
+        return
+    _render_workflow_human(payload)
+
+
 def _run_related_collection(
     job_id: str,
     *,
@@ -2508,12 +2897,14 @@ def stuck(
         str | None,
         typer.Option("--since", help="只扫描指定时间窗口内创建的 Job，例如 30m。"),
     ] = None,
+    record_scope: ScopeOption = "family",
     limit: LimitOption = 50,
     json_output: JsonOption = False,
 ) -> None:
     try:
         older_than_delta = parse_duration(older_than)
         since_delta = parse_optional_duration(since)
+        parsed_scope = parse_record_scope(record_scope)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
@@ -2527,6 +2918,7 @@ def stuck(
             job_type=job_type,
             caller_id=caller_id,
             since=since_at,
+            record_scope=parsed_scope,
         )
     )
     if json_output:
@@ -2537,6 +2929,7 @@ def stuck(
                     "since": since,
                     "job_type": job_type,
                     "caller_id": caller_id,
+                    "record_scope": parsed_scope,
                 },
                 "items": rows,
             }
@@ -2561,11 +2954,13 @@ def drain(
         bool,
         typer.Option("--strict", help="未排空时返回 exit 4，适合压测自动化脚本。"),
     ] = False,
+    record_scope: ScopeOption = "family",
     json_output: JsonOption = False,
 ) -> None:
     window, since_at = _since_window(since)
     try:
         older_than_delta = parse_duration(older_than)
+        parsed_scope = parse_record_scope(record_scope)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
@@ -2576,6 +2971,7 @@ def drain(
             caller_id=caller_id,
             since=since_at,
             older_than=older_than_delta,
+            record_scope=parsed_scope,
         )
     )
     payload = _drain_payload(
@@ -2662,15 +3058,17 @@ def pressure(
             "stuck_limit": sample_limit,
             "summary": _summary_payload(
                 since=since,
-                window=window,
-                job_type=job_type,
-                caller_id=caller_id,
-                summary_payload=summary_payload,
-            ),
+            window=window,
+            job_type=job_type,
+            caller_id=caller_id,
+            record_scope="root",
+            summary_payload=summary_payload,
+        ),
             "capacity": {
                 "scope": {
-                    "current": "global",
+                    "current": "global_gate",
                     "window": {
+                        "record_scope": "root",
                         "since": since,
                         "seconds": window.total_seconds(),
                         "job_type": job_type,
@@ -2688,6 +3086,7 @@ def pressure(
                 caller_id=caller_id,
                 since=since_at,
                 group_by="all",
+                record_scope="root",
             ),
             "stuck": queries.stuck(
                 conn,
@@ -2696,6 +3095,7 @@ def pressure(
                 job_type=job_type,
                 caller_id=caller_id,
                 since=since_at,
+                record_scope="family",
             ),
             "failure_groups": queries.failure_groups(
                 conn,
@@ -2703,6 +3103,7 @@ def pressure(
                 caller_id=caller_id,
                 since=since_at,
                 limit=sample_limit,
+                record_scope="family",
             ),
             "active_samples": queries.list_jobs(
                 conn,
@@ -2712,6 +3113,7 @@ def pressure(
                 client_request_id=None,
                 since=since_at,
                 limit=sample_limit,
+                record_scope="family",
             ),
             "failed_samples": queries.list_jobs(
                 conn,
@@ -2721,6 +3123,7 @@ def pressure(
                 client_request_id=None,
                 since=since_at,
                 limit=sample_limit,
+                record_scope="family",
             ),
         }
 
@@ -2751,9 +3154,15 @@ def summary(
         str,
         typer.Option("--since", help="只统计指定时间窗口内创建的 Job，例如 10m。"),
     ] = "10m",
+    record_scope: ScopeOption = "root",
     json_output: JsonOption = False,
 ) -> None:
-    payload = _fetch_summary_payload(since=since, job_type=job_type, caller_id=caller_id)
+    try:
+        parsed_scope = parse_record_scope(record_scope)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    payload = _fetch_summary_payload(since=since, job_type=job_type, caller_id=caller_id, record_scope=parsed_scope)
     if json_output:
         formatters.print_json(payload)
         return
@@ -2770,7 +3179,7 @@ def doctor(
     ] = "10m",
     json_output: JsonOption = False,
 ) -> None:
-    summary_payload = _fetch_summary_payload(since=since, job_type=job_type, caller_id=caller_id)
+    summary_payload = _fetch_summary_payload(since=since, job_type=job_type, caller_id=caller_id, record_scope="root")
     payload = _diagnose_summary(summary_payload)
     if json_output:
         formatters.print_json(payload)
@@ -2790,10 +3199,12 @@ def latency(
         str,
         typer.Option("--group-by", help="分组字段：all、job_type、caller_id 或 status。"),
     ] = "job_type",
+    record_scope: ScopeOption = "root",
     json_output: JsonOption = False,
 ) -> None:
     try:
         group = parse_latency_group_by(group_by)
+        parsed_scope = parse_record_scope(record_scope)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
@@ -2805,12 +3216,13 @@ def latency(
             caller_id=caller_id,
             since=since_at,
             group_by=group,
+            record_scope=parsed_scope,
         )
     )
     if json_output:
         formatters.print_json(
             {
-                "scope": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id},
+                "scope": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id, "record_scope": parsed_scope},
                 "group_by": group,
                 "latency": rows,
             }
@@ -2831,9 +3243,15 @@ def capacity(
         int | None,
         typer.Option("--max-active-jobs", min=0, help="用于计算水位比例；默认读取环境或 .env。"),
     ] = None,
+    record_scope: ScopeOption = "root",
     json_output: JsonOption = False,
 ) -> None:
     window, since_at = _since_window(since)
+    try:
+        parsed_scope = parse_record_scope(record_scope)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
     limit = max_active_jobs if max_active_jobs is not None else _env_max_active_jobs()
     payload = _with_connection(
         lambda conn: queries.capacity(
@@ -2842,6 +3260,7 @@ def capacity(
             caller_id=caller_id,
             since=since_at,
             window_seconds=window.total_seconds(),
+            window_scope=parsed_scope,
         )
     )
     if limit is not None and limit > 0:
@@ -2852,15 +3271,15 @@ def capacity(
         payload["estimated"]["headroom"] = None
     payload = {
         "scope": {
-            "current": "global",
-            "window": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id},
+            "current": "global_gate",
+            "window": {"record_scope": parsed_scope, "since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id},
         },
         "max_active_jobs": limit,
         "current": payload["current"],
         "window": payload["window"],
         "estimated": payload["estimated"],
         "notes": {
-            "current_active_jobs": "全局实时门禁口径：queued + running 且 active_attempt_id 非空。",
+            "current_active_jobs": "全局实时门禁口径：queued + running 且 active_attempt_id 非空，包含 root 与 child。",
             "accepted_submit_rps": "使用窗口内 first_created_at 到 newest_created_at 的 observed span 估算；没有跨度时退回 --since 秒数。",
             "active_jobs_needed_upper_bound": "使用窗口 accepted_submit_rps * lifecycle_p95_seconds 得到的上界估算；workflow root 等待子任务时间会让它偏保守；terminal_jobs 少于 accepted_jobs 时仍应等待排空后再采信。",
         },

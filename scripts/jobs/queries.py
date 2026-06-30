@@ -5,6 +5,8 @@ from typing import Any
 
 from psycopg2.extensions import connection
 
+VALID_RECORD_SCOPES = {"root", "child", "all", "family"}
+
 
 def _fetch_all(conn: connection, sql: str, params: dict[str, Any]) -> list[dict]:
     with conn.cursor() as cursor:
@@ -25,6 +27,57 @@ def _status_clause(statuses: list[str], table_alias: str) -> tuple[str, dict[str
     return f"AND {table_alias}.status = ANY(%(statuses)s)", {"statuses": statuses}
 
 
+def _lineage_scope_clause(table_alias: str, record_scope: str) -> str:
+    if record_scope == "all":
+        return ""
+    if record_scope == "root":
+        return f"""
+AND {table_alias}.root_job_id IS NULL
+AND {table_alias}.workflow_node_key IS NULL
+AND {table_alias}.client_request_id IS NOT NULL
+"""
+    if record_scope == "child":
+        return f"""
+AND {table_alias}.root_job_id IS NOT NULL
+AND {table_alias}.workflow_node_key IS NOT NULL
+AND {table_alias}.client_request_id IS NULL
+"""
+    if record_scope == "family":
+        raise ValueError("family scope requires root seed filters")
+    raise ValueError("invalid record_scope: " + record_scope)
+
+
+def _family_scope_clause(
+    *,
+    table_alias: str,
+    job_type: str | None,
+    caller_id: str | None,
+    client_request_id: str | None,
+    since: datetime | None,
+) -> tuple[str, dict[str, Any]]:
+    clauses = [
+        "root.deleted_at IS NULL",
+        "root.root_job_id IS NULL",
+        "root.workflow_node_key IS NULL",
+        "root.client_request_id IS NOT NULL",
+        f"({table_alias}.id = root.id OR {table_alias}.root_job_id = root.id)",
+    ]
+    params: dict[str, Any] = {}
+    if job_type is not None:
+        clauses.append("root.job_type = %(job_type)s")
+        params["job_type"] = job_type
+    if caller_id is not None:
+        clauses.append("root.caller_id = %(caller_id)s")
+        params["caller_id"] = caller_id
+    if client_request_id is not None:
+        clauses.append("root.client_request_id = %(client_request_id)s")
+        params["client_request_id"] = client_request_id
+    if since is not None:
+        clauses.append("root.created_at >= %(since)s")
+        params["since"] = since
+    return "AND EXISTS (\n  SELECT 1\n  FROM job_aggregates root\n  WHERE " + "\n    AND ".join(clauses) + "\n)", params
+
+
 def _common_filters(
     *,
     table_alias: str,
@@ -33,6 +86,7 @@ def _common_filters(
     caller_id: str | None,
     client_request_id: str | None,
     since: datetime | None,
+    record_scope: str = "all",
 ) -> tuple[str, dict[str, Any]]:
     clauses: list[str] = []
     params: dict[str, Any] = {}
@@ -40,6 +94,21 @@ def _common_filters(
     if status_sql:
         clauses.append(status_sql)
         params.update(status_params)
+    if record_scope == "family":
+        family_sql, family_params = _family_scope_clause(
+            table_alias=table_alias,
+            job_type=job_type,
+            caller_id=caller_id,
+            client_request_id=client_request_id,
+            since=since,
+        )
+        clauses.append(family_sql)
+        params.update(family_params)
+        return "\n".join(clauses), params
+
+    lineage_sql = _lineage_scope_clause(table_alias, record_scope)
+    if lineage_sql:
+        clauses.append(lineage_sql)
     if job_type is not None:
         clauses.append(f"AND {table_alias}.job_type = %(job_type)s")
         params["job_type"] = job_type
@@ -61,6 +130,7 @@ def _scope_filters(
     job_type: str | None,
     caller_id: str | None,
     since: datetime | None = None,
+    record_scope: str = "all",
 ) -> tuple[str, dict[str, Any]]:
     return _common_filters(
         table_alias=table_alias,
@@ -69,6 +139,7 @@ def _scope_filters(
         caller_id=caller_id,
         client_request_id=None,
         since=since,
+        record_scope=record_scope,
     )
 
 
@@ -81,6 +152,7 @@ def list_jobs(
     client_request_id: str | None,
     since: datetime | None,
     limit: int,
+    record_scope: str = "root",
 ) -> list[dict]:
     filters, params = _common_filters(
         table_alias="j",
@@ -89,6 +161,7 @@ def list_jobs(
         caller_id=caller_id,
         client_request_id=client_request_id,
         since=since,
+        record_scope=record_scope,
     )
     params["limit"] = limit
     return _fetch_all(
@@ -96,6 +169,9 @@ def list_jobs(
         f"""
         SELECT
           j.id::text AS job_id,
+          CASE WHEN j.root_job_id IS NULL THEN 'root' ELSE 'child' END AS record_scope,
+          j.root_job_id::text AS root_job_id,
+          j.workflow_node_key,
           j.status,
           j.job_type,
           j.caller_id,
@@ -233,8 +309,30 @@ def summary(
     job_type: str | None,
     caller_id: str | None,
     since: datetime | None,
+    record_scope: str = "root",
+    execution_scope: str = "family",
 ) -> dict[str, Any]:
-    filters, params = _scope_filters(table_alias="j", job_type=job_type, caller_id=caller_id, since=since)
+    filters, params = _scope_filters(
+        table_alias="j",
+        job_type=job_type,
+        caller_id=caller_id,
+        since=since,
+        record_scope=record_scope,
+    )
+    execution_filters, execution_params = _scope_filters(
+        table_alias="j",
+        job_type=job_type,
+        caller_id=caller_id,
+        since=since,
+        record_scope=execution_scope,
+    )
+    callback_filters, callback_params = _scope_filters(
+        table_alias="j",
+        job_type=job_type,
+        caller_id=caller_id,
+        since=since,
+        record_scope="root",
+    )
     job_counts = _fetch_one(
         conn,
         f"""
@@ -292,9 +390,9 @@ def summary(
         FROM job_execution_attempts a
         JOIN job_aggregates j ON j.id = a.job_id
         WHERE j.deleted_at IS NULL
-        {filters}
+        {execution_filters}
         """,
-        params,
+        execution_params,
     ) or {}
     dispatch = _fetch_one(
         conn,
@@ -315,9 +413,9 @@ def summary(
         JOIN job_aggregates j ON j.id = a.job_id
         WHERE j.deleted_at IS NULL
           AND d.task_name = 'jobs.run_attempt'
-        {filters}
+        {execution_filters}
         """,
-        params,
+        execution_params,
     ) or {}
     callbacks_row = _fetch_one(
         conn,
@@ -337,11 +435,18 @@ def summary(
         FROM callback_outbox c
         JOIN job_aggregates j ON j.id = c.job_id
         WHERE j.deleted_at IS NULL
-        {filters}
+        {callback_filters}
         """,
-        params,
+        callback_params,
     ) or {}
     return {
+        "query_scopes": {
+            "jobs": record_scope,
+            "by_job_type": record_scope,
+            "attempts": execution_scope,
+            "dispatch": execution_scope,
+            "callbacks": "root",
+        },
         "jobs": job_counts,
         "by_job_type": by_job_type,
         "attempts": attempts,
@@ -357,8 +462,15 @@ def latency(
     caller_id: str | None,
     since: datetime | None,
     group_by: str,
+    record_scope: str = "root",
 ) -> list[dict]:
-    filters, params = _scope_filters(table_alias="j", job_type=job_type, caller_id=caller_id, since=since)
+    filters, params = _scope_filters(
+        table_alias="j",
+        job_type=job_type,
+        caller_id=caller_id,
+        since=since,
+        record_scope=record_scope,
+    )
     group_expr = {
         "job_type": "j.job_type",
         "caller_id": "j.caller_id",
@@ -413,8 +525,15 @@ def failure_groups(
     caller_id: str | None,
     since: datetime | None,
     limit: int,
+    record_scope: str = "family",
 ) -> list[dict]:
-    filters, params = _scope_filters(table_alias="j", job_type=job_type, caller_id=caller_id, since=since)
+    filters, params = _scope_filters(
+        table_alias="j",
+        job_type=job_type,
+        caller_id=caller_id,
+        since=since,
+        record_scope=record_scope,
+    )
     params["limit"] = limit
     return _fetch_all(
         conn,
@@ -447,12 +566,14 @@ def capacity(
     caller_id: str | None,
     since: datetime,
     window_seconds: float,
+    window_scope: str = "root",
 ) -> dict[str, Any]:
     window_filters, window_params = _scope_filters(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
         since=since,
+        record_scope=window_scope,
     )
     active = _fetch_one(
         conn,
@@ -504,6 +625,7 @@ def capacity(
     )
     return {
         "current": active,
+        "query_scopes": {"current": "global_gate", "window": window_scope},
         "window": window
         | {
             "window_seconds": window_seconds,
@@ -587,9 +709,16 @@ def stuck(
     job_type: str | None = None,
     caller_id: str | None = None,
     since: datetime | None = None,
+    record_scope: str = "family",
 ) -> list[dict]:
     cutoff = datetime.now(timezone.utc) - older_than
-    scope_filters, scope_params = _scope_filters(table_alias="j", job_type=job_type, caller_id=caller_id, since=since)
+    scope_filters, scope_params = _scope_filters(
+        table_alias="j",
+        job_type=job_type,
+        caller_id=caller_id,
+        since=since,
+        record_scope=record_scope,
+    )
     return _fetch_all(
         conn,
         """
@@ -680,13 +809,20 @@ def drain_status(
     caller_id: str | None,
     since: datetime,
     older_than: timedelta,
+    record_scope: str = "family",
 ) -> dict[str, Any]:
-    current_filters, current_params = _scope_filters(table_alias="j", job_type=job_type, caller_id=caller_id)
+    current_filters, current_params = _scope_filters(
+        table_alias="j",
+        job_type=job_type,
+        caller_id=caller_id,
+        record_scope=record_scope,
+    )
     window_filters, window_params = _scope_filters(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
         since=since,
+        record_scope=record_scope,
     )
     current = _fetch_one(
         conn,
@@ -736,8 +872,10 @@ def drain_status(
         job_type=job_type,
         caller_id=caller_id,
         since=since,
+        record_scope=record_scope,
     )
     return {
+        "query_scopes": {"current": record_scope, "window": record_scope, "stuck": record_scope},
         "current": current,
         "window": window,
         "stuck": {

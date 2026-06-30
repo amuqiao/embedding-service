@@ -22,13 +22,13 @@ API 接单
 
 ```text
 接单是否被挡住?
-  -> capacity / summary
+  -> overview / capacity / summary
 
 Job 是否积压?
-  -> summary / list
+  -> overview / summary / list
 
 单个 Job 卡在哪里?
-  -> diagnose / inspect / timeline / attempts / callbacks
+  -> job / workflow / diagnose / inspect / timeline / attempts / callbacks
 
 是否存在卡住的 lease 或 outbox?
   -> stuck
@@ -40,19 +40,33 @@ Job 是否积压?
   -> types
 ```
 
+排障口径固定分三层理解：
+
+```text
+root
+  外部业务 Job；list、summary、latency 和 capacity window 默认使用。
+
+family
+  先按 root 条件选中业务请求，再包含这些 root 及其 children；
+  drain、pressure、stuck 和 workflow 风险排查默认使用。
+
+global_gate
+  capacity current 的全局 active 门禁口径，包含 root 与 child。
+```
+
 最常用的排查顺序：
 
 ```text
-1. pressure 在压测后汇总 HTTP、capacity、latency、stuck、failed 和 API log，先判断瓶颈方向
-2. drain 判断压测前后是否已经排空，未排空时不要开始下一档
-3. doctor 在非压测场景下先判断当前窗口是否需要处理，以及下一步查什么
-4. summary 看 Job、attempt、dispatch、callback 概览
-5. capacity 看 MAX_ACTIVE_JOBS 当前水位
-6. latency 看 queue/run/lifecycle p95
-7. list 找具体异常 Job
-8. diagnose 快速判断单个 Job 的 claim / dispatch / callback 风险
-9. inspect 深挖单个 Job 原始证据
-10. stuck 查 lease/outbox 卡住
+1. jobs.sh 无参 overview 先看 root 业务摘要、family 执行风险和 global gate 水位
+2. pressure 在压测后汇总 HTTP、capacity、latency、stuck、failed 和 API log，判断瓶颈方向
+3. drain 判断压测前后是否已经排空，未排空时不要开始下一档
+4. summary 看 root Job 业务计数和 family 执行计数
+5. capacity 看 MAX_ACTIVE_JOBS 全局水位和 root 窗口估算
+6. latency 看 root queue/run/lifecycle p95
+7. list 找具体 root Job 样本；需要内部执行样本时加 --scope family
+8. job 查看单个 Job 轻量状态
+9. workflow 用任意 root/child job_id 展开 root + children
+10. inspect / diagnose / timeline / attempts / callbacks 深挖单 Job 原始证据
 ```
 
 ## 使用前提
@@ -62,6 +76,7 @@ Job 是否积压?
 ```bash
 ./scripts/dev.sh status
 ./scripts/jobs.sh --help
+./scripts/jobs.sh
 ```
 
 `jobs.sh` 需要能连接 PostgreSQL：
@@ -76,9 +91,10 @@ DB_SSL        可选；false/0/no/off 且 DATABASE_URL 未显式配置 sslmode �
 `--json` 适合脚本、AI 或运维平台解析：
 
 ```bash
+./scripts/jobs.sh --json
 ./scripts/jobs.sh summary --since 10m --json
-./scripts/jobs.sh doctor --since 10m --json
-./scripts/jobs.sh diagnose <job_id> --json
+./scripts/jobs.sh job <job_id> --json
+./scripts/jobs.sh workflow <job_id> --json
 ```
 
 默认输出面向人读，会主动压缩 payload、分 section 展示结论和下一步命令。`--json` 输出稳定结构，stdout 只包含 JSON，适合自动化解析；不要用人读表格做脚本解析。
@@ -87,6 +103,7 @@ DB_SSL        可选；false/0/no/off 且 DATABASE_URL 未显式配置 sslmode �
 
 | 命令 | 用途 | 常用场景 |
 | --- | --- | --- |
+| 无参 / `overview` | 汇总 root 业务摘要、family 执行风险和 global gate 水位 | 排障第一屏 |
 | `pressure` | 聚合压测窗口并给出瓶颈方向 | 每一档 Locust 压测后首选 |
 | `doctor` | 对 summary 结果做诊断并给下一步命令 | 新维护人员或不确定从哪里查时先用 |
 | `diagnose` | 诊断单个 Job 的 attempt、dispatch、callback、dead-letter 和 claim 风险 | 已有 `job_id`，需要快速判断卡在哪里 |
@@ -94,8 +111,10 @@ DB_SSL        可选；false/0/no/off 且 DATABASE_URL 未显式配置 sslmode �
 | `summary` | 汇总 Job、attempt、dispatch、callback 状态 | 看当前窗口的关键计数和水位 |
 | `capacity` | 查看全局 active 水位和窗口估算 | 判断是否接近 `MAX_ACTIVE_JOBS` |
 | `latency` | 按维度统计生命周期耗时 | 判断慢在排队、执行还是整体生命周期 |
-| `list` | 查看最近 Job 摘要 | 找异常 Job 样本 |
-| `show` | 查看单个 Job 权威状态 | 只需要 Job 当前事实 |
+| `list` | 查看最近 root Job 摘要；可用 `--scope family/child/all` 切换 | 找异常 Job 样本 |
+| `job` | 查看单个 Job 轻量状态 | 只需要 Job 当前事实 |
+| `workflow` | 用任意 root/child job_id 展开 root + children | workflow root 等 child、child 卡住或失败 |
+| `show` | 查看单个 Job 权威状态旧入口 | 保留兼容，优先用 `job` |
 | `inspect` | 聚合查看单个 Job、diagnosis、attempt、callback、timeline | 单 Job 深挖首选 |
 | `timeline` | 查看 Job 事件流 | 追状态流转 |
 | `attempts` | 查看执行 attempt | 查 worker、lease、失败阶段 |
@@ -390,19 +409,39 @@ success_rate 低
 ```bash
 ./scripts/jobs.sh list --status queued,running --since 30m --limit 20
 ./scripts/jobs.sh list --status failed --since 24h --limit 20
+./scripts/jobs.sh list --scope family --status queued,running --since 30m --limit 20
 ./scripts/jobs.sh list --caller-id locust-load --since 10m --limit 20
 ./scripts/jobs.sh list --client-request-id <client_request_id>
 ```
 
-`list` 适合找样本，不适合深挖。拿到 `job_id` 后先用 `diagnose` 判断风险，再用 `inspect` 深挖原始证据。
+`list` 默认只展示外部业务 root Job。排查 workflow 内部执行时，用 `--scope family` 查看匹配 root 及其 children；只想看 internal child 时用 `--scope child`。
 
-### 2. 先看单 Job 诊断结论
+`list` 适合找样本，不适合深挖。拿到 `job_id` 后，先用 `job <job_id>` 看轻量状态；如果它属于 workflow 或怀疑 root 等 child，用 `workflow <job_id>` 展开整条 root + children。
 
-已经拿到 `job_id` 时，先用 `diagnose` 看脚本给出的风险分类：
+### 2. 先看轻量状态
+
+```bash
+./scripts/jobs.sh job <job_id>
+./scripts/jobs.sh job <job_id> --json
+```
+
+`job` 只看单个 Job 当前事实，不展开 workflow，不拉完整 payload。它适合确认状态、类型、进度、callback 状态和基础时间字段。
+
+### 3. 展开 workflow
+
+```bash
+./scripts/jobs.sh workflow <job_id>
+./scripts/jobs.sh workflow <job_id> --json
+```
+
+`workflow` 可以传 root job id，也可以传 child job id。脚本会自动解析 root，并展示 root、children、root attempts、root callbacks、root timeline 和 workflow diagnosis。
+
+### 4. 看单 Job 诊断结论
+
+已经拿到 `job_id` 时，可以用 `diagnose` 看脚本给出的单 Job 风险分类：
 
 ```bash
 ./scripts/jobs.sh diagnose <job_id>
-./scripts/jobs.sh diagnose <job_id> --include-children
 ./scripts/jobs.sh diagnose <job_id> --older-than 1m
 ./scripts/jobs.sh diagnose <job_id> --json
 ```
@@ -413,8 +452,9 @@ success_rate 低
 |---|---|---|
 | `doctor --since 10m` | 一个时间窗口内的整体 Job / dispatch / callback 计数 | 人工巡检、压测外的全局判断 |
 | `diagnose <job_id>` | 单个 Job 的 attempt、dispatch、callback、claim 风险 | 已有异常 Job 样本后的快速定位 |
+| `workflow <job_id>` | 一个 workflow family 的 root + children | 已知或怀疑问题在 workflow child |
 
-默认情况下，`diagnose` 和 `inspect` 一样只看 root job 的证据。排查 workflow root 等待 child 的问题时，显式加 `--include-children`。
+默认情况下，`diagnose` 和 `inspect` 只看传入的单个 Job。排查 workflow root 等待 child 或 child 执行失败时，优先使用 `workflow <job_id>`。
 
 `--older-than` 控制“刚发布 / 刚到期”的状态什么时候从 `info` 升为 `warning`，默认是 `1m`。这能避免刚入队、刚 dispatch、刚到期重试的正常瞬时窗口被当成异常。
 
@@ -449,14 +489,13 @@ diagnosis.next_checks[]
 | `running_attempt_lease_expired` | running attempt lease 已过期 | 查 worker 心跳和 recovery |
 | `callback_due` | callback 到期等待投递或重试 | 短时间内看作 `info`；超过 `--older-than` 后查 callback worker 和目标服务 |
 | `callback_dead_letter` | callback 投递已 dead-letter | Job 终态不受影响，但回调没有送达 |
-| `job_waiting_children` | workflow root 正在等待 child | 用 `inspect --include-children` 查看 child |
-| `workflow_child_failed` | workflow child 已 failed | inspect failed child 的 attempt/error |
+| `job_waiting_children` | workflow root 正在等待 child | 用 `workflow <job_id>` 查看 child |
+| `workflow_child_failed` | workflow child 已 failed | 用 `workflow <job_id>` 找 child，再 inspect failed child 的 attempt/error |
 
-### 3. 聚合查看单个 Job 原始证据
+### 5. 聚合查看单个 Job 原始证据
 
 ```bash
 ./scripts/jobs.sh inspect <job_id>
-./scripts/jobs.sh inspect <job_id> --include-children
 ./scripts/jobs.sh inspect <job_id> --events-limit 50 --json
 ```
 
@@ -468,15 +507,14 @@ diagnosis  单 Job 风险摘要；人读输出中展示为 Diagnosis section，J
 attempts   执行尝试
 callbacks  callback outbox
 timeline   按 created_at 升序返回的 JobEvent，受 events-limit 限制
-children   只有传入 --include-children 时返回 workflow internal child jobs
 ```
 
-默认人读输出适合维护人员扫读，会隐藏或压缩长 payload。`--json` 会保留完整 `job`、`attempts`、`callbacks`、`timeline` 和 `diagnosis`，适合复制给 AI 或自动化工具继续分析。`inspect` 的 `diagnosis` 也遵循 root-only 默认；只有加 `--include-children` 时才把 child Job 状态纳入诊断。
+默认人读输出适合维护人员扫读，会隐藏或压缩长 payload。`--json` 会保留完整 `job`、`attempts`、`callbacks`、`timeline` 和 `diagnosis`，适合复制给 AI 或自动化工具继续分析。`inspect` 只看传入的单个 Job；workflow family 视图使用 `workflow <job_id>`。
 
-### 4. 只查某一类证据
+### 6. 只查某一类证据
 
 ```bash
-./scripts/jobs.sh show <job_id>
+./scripts/jobs.sh job <job_id>
 ./scripts/jobs.sh timeline <job_id> --limit 50
 ./scripts/jobs.sh attempts <job_id>
 ./scripts/jobs.sh callbacks <job_id>
@@ -735,10 +773,10 @@ tests/test_dev_scripts.py
 
 ```bash
 ./scripts/jobs.sh --help
+./scripts/jobs.sh
 ./scripts/jobs.sh types
 
 ./scripts/jobs.sh pressure --since 10m --caller-id default --max-active-jobs <当前值> --locust-prefix .run/load/<run-prefix> --api-log logs/api.log
-./scripts/jobs.sh doctor --since 10m
 ./scripts/jobs.sh drain --since 30m --caller-id default
 ./scripts/jobs.sh drain --since 30m --caller-id default --strict --json
 ./scripts/jobs.sh summary --since 10m
@@ -747,7 +785,10 @@ tests/test_dev_scripts.py
 
 ./scripts/jobs.sh list --status queued,running --since 30m --limit 20
 ./scripts/jobs.sh list --status failed --since 24h --limit 20
+./scripts/jobs.sh list --scope family --status queued,running --since 30m --limit 20
 
+./scripts/jobs.sh job <job_id>
+./scripts/jobs.sh workflow <job_id>
 ./scripts/jobs.sh inspect <job_id> --events-limit 50
 ./scripts/jobs.sh timeline <job_id> --limit 100
 ./scripts/jobs.sh attempts <job_id>

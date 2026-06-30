@@ -215,16 +215,19 @@ OSS_PUBLIC_ENDPOINT=
 Job 只读排障由 `jobs.sh` 承接：
 
 ```bash
-./scripts/jobs.sh doctor --since 10m
+./scripts/jobs.sh
+./scripts/jobs.sh overview --since 10m
 ./scripts/jobs.sh list --status running --since 24h --limit 20
-./scripts/jobs.sh show <job_id>
+./scripts/jobs.sh list --scope family --status running --since 30m --limit 20
+./scripts/jobs.sh job <job_id>
+./scripts/jobs.sh workflow <job_id>
 ./scripts/jobs.sh inspect <job_id>
 ./scripts/jobs.sh timeline <job_id> --limit 50
 ./scripts/jobs.sh stuck --older-than 10m
 ./scripts/jobs.sh types --json
 ```
 
-`jobs.sh` 只执行只读查询，不创建 Job、不取消、不重试、不补偿、不重放 callback。默认输出面向人读，`--json` 输出纯 JSON，适合 AI、CI 或运维平台解析。`verify.sh check` 只校验 `jobs.sh --help` 和 Python 语法，不连接数据库。
+`jobs.sh` 只执行只读查询，不创建 Job、不取消、不重试、不补偿、不重放 callback。无参默认输出 Job overview；`list` 默认只看外部业务 root Job，排查 workflow 执行风险时用 `--scope family` 或 `workflow <job_id>`。默认输出面向人读，`--json` 输出纯 JSON，适合 AI、CI 或运维平台解析。`verify.sh check` 只校验 `jobs.sh --help` 和 Python 语法，不连接数据库。
 
 脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/jobs.sh` 调度 `scripts/jobs/` 中的只读 Job 排障能力，`scripts/deploy.sh` 只调度 compose 部署能力，`scripts/k8s.sh` 只提供 Pod 内连接检查和 Alembic 运维入口，`scripts/tools.sh` 只提供无默认持久副作用的本地开发辅助工具。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。本地脚本变量、应用配置和 compose 编排变量统一从根目录 `.env` 或运行时环境读取；不再维护 `scripts/.env`。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
 

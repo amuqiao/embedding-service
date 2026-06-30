@@ -90,9 +90,10 @@
 只读排障使用 `jobs.sh`，不要直接写修复脚本作为默认流程：
 
 ```bash
-./scripts/jobs.sh doctor --since 10m
+./scripts/jobs.sh
 ./scripts/jobs.sh list --status running --since 24h --limit 20
-./scripts/jobs.sh show <job_id>
+./scripts/jobs.sh job <job_id>
+./scripts/jobs.sh workflow <job_id>
 ./scripts/jobs.sh inspect <job_id>
 ./scripts/jobs.sh timeline <job_id> --limit 50
 ./scripts/jobs.sh stuck --older-than 10m

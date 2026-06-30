@@ -17,7 +17,7 @@
 | [`current/job-load-testing.md`](current/job-load-testing.md) | Job 发布、查询和完整异步流程的 Locust 压测选型、执行、指标和评估方法 |
 | [`current/job-load-test-plan.md`](current/job-load-test-plan.md) | Job 压测的分阶段执行命令、浏览器实时查看和离线报告查看方法 |
 | [`runbooks/compose-full-dev-operations.md`](runbooks/compose-full-dev-operations.md) | 开发环境使用 `compose-full` 启动服务后，查看状态、容器内排障脚本和日志的操作手册 |
-| [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` 查询 Job 状态、定位异步任务问题和常见排障顺序 |
+| [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` overview、root/family scope、Job/workflow 查询和常见排障顺序 |
 | [`runbooks/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/MAX_ACTIVE_JOBS%20估算与生产调优.md) | `MAX_ACTIVE_JOBS` 估算、K8s 生产调优顺序和 PostgreSQL/Redis 瓶颈判断 |
 | [`runbooks/lifespan.md`](runbooks/lifespan.md) | API、worker、recovery 生命周期与运行期资源放置边界 |
 | [`runbooks/local-postgres-database-name.md`](runbooks/local-postgres-database-name.md) | 本地项目数据库名变更后，PostgreSQL volume 旧库与 `.env` 新库不一致的排障和修复 |
