@@ -712,3 +712,19 @@ def test_worker_startup_validates_model_catalog(monkeypatch):
     task_jobs._ensure_workflows_registered()
 
     assert called == {"model_catalog": True}
+
+
+def test_worker_runtime_bootstrap_registers_job_types_for_callback_ack_validation():
+    from app.jobs import registry as job_registry
+    from app.services.callbacks import validate_callback_response_payload
+    from app.tasks.runtime import ensure_worker_runtime_initialized
+
+    job_registry.clear_for_tests()
+
+    with pytest.raises(KeyError, match="poster_title_image"):
+        validate_callback_response_payload({"accepted": True}, job_type="poster_title_image")
+
+    ensure_worker_runtime_initialized()
+
+    envelope = validate_callback_response_payload({"accepted": True}, job_type="poster_title_image")
+    assert envelope.accepted is True

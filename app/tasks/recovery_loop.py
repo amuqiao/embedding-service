@@ -6,12 +6,14 @@ import time
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.tasks.recovery import run_recovery
+from app.tasks.runtime import ensure_worker_runtime_initialized
 
 logger = logging.getLogger(__name__)
 
 
 def main() -> None:
     configure_logging()
+    ensure_worker_runtime_initialized()
     while True:
         try:
             result = run_recovery()

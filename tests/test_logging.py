@@ -88,12 +88,20 @@ def test_recovery_loop_main_configures_stdout_logging_before_loop(monkeypatch, i
     from app.tasks import recovery_loop
 
     stream = io.StringIO()
+    calls = []
     monkeypatch.setattr(logging_module.sys, "stdout", stream)
-    monkeypatch.setattr(recovery_loop, "run_recovery", lambda: (_ for _ in ()).throw(KeyboardInterrupt))
+    monkeypatch.setattr(recovery_loop, "ensure_worker_runtime_initialized", lambda: calls.append("bootstrap"))
+
+    def stop_after_first_recovery():
+        calls.append("recover")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(recovery_loop, "run_recovery", stop_after_first_recovery)
 
     with pytest.raises(KeyboardInterrupt):
         recovery_loop.main()
 
+    assert calls == ["bootstrap", "recover"]
     assert len(isolated_root_logger.handlers) == 1
     handler = isolated_root_logger.handlers[0]
     assert isinstance(handler, logging.StreamHandler)

@@ -514,6 +514,136 @@ async def test_recovery_delivers_due_callbacks(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_recovery_due_callback_uses_initialized_job_type_registry(monkeypatch):
+    from app.jobs import registry as job_registry
+    from app.models.job import Job
+    from app.tasks.runtime import ensure_worker_runtime_initialized
+
+    job_registry.clear_for_tests()
+    ensure_worker_runtime_initialized()
+
+    due_job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="poster_title_image",
+        status="succeeded",
+        callback_url="https://example.com/callback",
+        callback_events=["job.succeeded"],
+    )
+    callback_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
+    outbox = SimpleNamespace(
+        id=callback_id,
+        lease_token=lease_token,
+        payload={
+            "event": "job.succeeded",
+            "job": {
+                "job_id": str(due_job.id),
+                "job_type": due_job.job_type,
+                "job_status": due_job.status,
+                "callback": {"status": "retrying", "attempt": 0},
+            },
+        },
+        callback_url=due_job.callback_url,
+        delivery_attempts=0,
+        last_error=None,
+        next_attempt_at=None,
+    )
+    recorded: dict[str, object] = {}
+
+    class _CallbackDB:
+        async def commit(self):
+            pass
+
+    class _Response:
+        status_code = 200
+        headers = {"Content-Type": "application/json"}
+        text = '{"accepted":true,"msg":null,"details":{}}'
+
+    class _Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, content, headers):
+            recorded["callback_url"] = url
+            recorded["callback_body"] = content
+            return _Response()
+
+    async def due_callbacks(*_args, **_kwargs):
+        return [due_job]
+
+    async def fake_with_db(coro):
+        return await coro(_CallbackDB())
+
+    async def fake_get_job_or_404(_db, job_id):
+        assert job_id == due_job.id
+        return due_job
+
+    async def fake_mark_callback_delivering(_db, job_id, *, now, max_attempts, next_retry_at):
+        assert job_id == due_job.id
+        assert max_attempts > 0
+        return due_job, outbox
+
+    async def fake_mark_callback_result(
+        _db,
+        job_id,
+        *,
+        status,
+        last_error,
+        next_retry_at,
+        max_attempts,
+        delivery_attempts,
+        last_response,
+        callback_id,
+        lease_token,
+    ):
+        recorded["result"] = {
+            "job_id": job_id,
+            "status": status,
+            "last_error": last_error,
+            "next_retry_at": next_retry_at,
+            "max_attempts": max_attempts,
+            "delivery_attempts": delivery_attempts,
+            "last_response": last_response,
+            "callback_id": callback_id,
+            "lease_token": lease_token,
+        }
+
+    _patch_common_recovery(monkeypatch)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_due_callbacks", due_callbacks)
+    monkeypatch.setattr("app.tasks.jobs._with_db", fake_with_db)
+    monkeypatch.setattr("app.tasks.jobs.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.tasks.jobs.JobRepo.mark_callback_delivering", fake_mark_callback_delivering)
+    monkeypatch.setattr("app.tasks.jobs.JobRepo.mark_callback_result", fake_mark_callback_result)
+    monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
+    monkeypatch.setattr(
+        "app.core.callback_security.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(None, None, None, "", ("93.184.216.34", 443))],
+    )
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["callbacks"] == 1
+    assert recorded["callback_url"] == due_job.callback_url
+    assert recorded["result"]["status"] == "delivered"
+    assert recorded["result"]["last_error"] is None
+    assert recorded["result"]["delivery_attempts"] == 1
+    assert recorded["result"]["last_response"] == {
+        "format": "ack",
+        "valid": True,
+        "accepted": True,
+        "msg": None,
+        "details": {},
+    }
+
+
+@pytest.mark.asyncio
 async def test_recovery_reconciles_stale_pending_ai_call_logs(monkeypatch):
     recorded: dict[str, object] = {}
 
