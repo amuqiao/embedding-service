@@ -22,34 +22,34 @@ HTTP_STATUS_RE = re.compile(r"HTTP (?P<status>[0-9]{3})")
 LOG_TIMESTAMP_RE = re.compile(r"^(?P<timestamp>[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}),")
 
 LIST_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh list --status running --since 24h --limit 20
   ./scripts/jobs.sh list --scope family --status queued,running --caller-id default
   ./scripts/jobs.sh list --scope child --status failed --json
 """
 
 SHOW_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh job <job_id>
   ./scripts/jobs.sh show <job_id> --json
 """
 
 INSPECT_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh inspect <job_id>
   ./scripts/jobs.sh workflow <job_id>
   ./scripts/jobs.sh inspect <job_id> --events-limit 50 --json
 """
 
 PAYLOAD_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh payload <job_id>
   ./scripts/jobs.sh payload <job_id> --json
   ./scripts/jobs.sh workflow <job_id> --json
 """
 
 DIAGNOSE_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh diagnose <job_id>
   ./scripts/jobs.sh workflow <job_id>
   ./scripts/jobs.sh diagnose <job_id> --older-than 1m
@@ -57,88 +57,88 @@ DIAGNOSE_HELP_EPILOG = """\b
 """
 
 TIMELINE_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh timeline <job_id> --limit 50
   ./scripts/jobs.sh timeline <job_id> --json
 """
 
 ATTEMPTS_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh attempts <job_id>
   ./scripts/jobs.sh attempts <job_id> --json
 """
 
 CALLBACKS_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh callbacks <job_id>
   ./scripts/jobs.sh callbacks <job_id> --json
 """
 
 STUCK_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh stuck --older-than 10m --caller-id default
   ./scripts/jobs.sh stuck --scope root --older-than 10m
   ./scripts/jobs.sh stuck --older-than 10m --caller-id default --json
 """
 
 DRAIN_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh drain --since 30m --caller-id default
   ./scripts/jobs.sh drain --since 30m --caller-id default --strict
 """
 
 PRESSURE_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh pressure --since 20m --caller-id default --max-active-jobs 1000
   ./scripts/jobs.sh pressure --since 20m --caller-id default --max-active-jobs 1000 --locust-prefix .run/load/<run>
 """
 
 SUMMARY_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh summary --since 10m
   ./scripts/jobs.sh summary --since 10m --caller-id default --json
 """
 
 DOCTOR_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh doctor --since 10m
   ./scripts/jobs.sh doctor --since 10m --caller-id default --json
 """
 
 OVERVIEW_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh
   ./scripts/jobs.sh overview --since 10m
   ./scripts/jobs.sh overview --since 20m --caller-id default --json
 """
 
 JOB_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh job <job_id>
   ./scripts/jobs.sh job <job_id> --json
 """
 
 WORKFLOW_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh workflow <job_id>
   ./scripts/jobs.sh workflow <child_job_id> --json
   ./scripts/jobs.sh workflow <job_id> --events-limit 100
 """
 
 LATENCY_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh latency --since 30m --group-by job_type
   ./scripts/jobs.sh latency --since 30m --group-by status --json
 """
 
 CAPACITY_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh capacity --since 10m --caller-id default --max-active-jobs 1000
   ./scripts/jobs.sh capacity --since 10m --json
 """
 
 TYPES_HELP_EPILOG = """\b
-示例：
+常用示例：
   ./scripts/jobs.sh types
   ./scripts/jobs.sh types --all
   ./scripts/jobs.sh types --json
@@ -150,29 +150,12 @@ HELP_EPILOG = """\b
   本入口只执行只读查询，不提供创建、取消、重试、补偿或 callback 重放能力。
 
 \b
-命令说明：
-  list       查看最近 Job 摘要，支持状态、类型、调用方、时间窗口和 limit 过滤。
-  overview   默认总览；综合 root 业务摘要、family 执行风险和 global gate 水位。
-  job        查看单个 Job 轻量状态。
-  workflow   查看 workflow root 与 children；可传 root 或 child job_id。
-  show       查看单个 Job 权威状态；保留为轻量状态旧入口。
-  inspect    聚合查看单个 Job、attempt、callback 和最近 timeline。
-  payload    查看单个 Job 的入参、runtime、结果和错误 payload。
-  diagnose   诊断单个 Job 的 attempt、dispatch、callback、dead-letter 和 claim 风险。
-  timeline   查看 lifecycle job events。
-  attempts   查看 lifecycle attempts。
-  callbacks  查看 lifecycle callback outbox。
-  stuck      扫描疑似卡住的 Job、attempt 或 callback lease。
-  drain      判断压测前后 Job 是否已经排空。
-  pressure   汇总压测窗口并判断瓶颈方向。
-  summary    汇总 Job、attempt、dispatch 和 callback 当前状态。
-  doctor     基于 summary 数据给出维护人员排障摘要和下一步检查。
-  latency    按 job_type / caller / status 统计 Job 生命周期耗时。
-  capacity   查看 MAX_ACTIVE_JOBS 当前水位和窗口容量估算。
-  types      查看当前注册的 job_type。
+默认行为：
+  ./scripts/jobs.sh 等同于 overview，默认查看最近 10m，stuck 判定窗口 1m，样本条数 10。
+  list 默认只查看 root Job，返回 20 条；完整过滤参数请运行 ./scripts/jobs.sh list -h。
 
 \b
-环境变量：
+配置与环境变量：
   DATABASE_URL    DB 查询必填；可通过运行环境或根目录 .env 注入。
   DB_SSL          可选；false/0/no/off 时为 psycopg2 URL 追加 sslmode=disable。
 
@@ -183,7 +166,8 @@ HELP_EPILOG = """\b
   错误原因输出到 stderr。
 
 \b
-Scope：
+关键概念：
+  Scope 表示 Job 记录范围：
   root         外部业务 Job；list、summary、latency 和 capacity window 默认使用。
   child        workflow internal child Job。
   family       先按 root 条件选业务请求，再包含这些 root 及 children；drain、pressure 和 stuck 默认用于执行风险排障。
@@ -194,10 +178,8 @@ Scope：
 常用示例：
   ./scripts/jobs.sh
   ./scripts/jobs.sh list --status running --since 24h --limit 20
-  ./scripts/jobs.sh list --scope family --status running --since 30m
   ./scripts/jobs.sh job <job_id>
   ./scripts/jobs.sh workflow <job_id>
-  ./scripts/jobs.sh payload <job_id> --json
   ./scripts/jobs.sh summary --since 10m
   ./scripts/jobs.sh types
 
@@ -207,7 +189,7 @@ Scope：
   ./scripts/jobs.sh <command> -h
 
 \b
-保护边界：
+副作用与保护边界：
   只读查询不修改 DB，不触发真实业务调用，不投递消息，不重试 Job，不重放 callback。
   单个 job_id 不存在时返回非 0；列表、summary 和 doctor 的空结果会在成功输出中明确说明。
 

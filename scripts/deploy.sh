@@ -42,10 +42,8 @@ usage() {
   down compose-full     停止 compose 全量服务。
   status compose-full   查看 compose 全量服务状态。
 
-配置加载优先级：
-  运行时显式环境变量 > docker-compose.yml environment > ENV_FILE 指定文件 > .env > 应用默认值
-
-环境变量：
+配置与环境变量：
+  加载优先级：运行时显式环境变量 > docker-compose.yml environment > ENV_FILE 指定文件 > .env > 应用默认值。
   ENV_FILE                 可选，指定 compose 使用的 env 文件，默认 .env。
   COMPOSE_PROJECT_NAME     可选，覆盖 compose project 名。
   TEMPLATE_NAME            可选，作为默认 compose project 名来源。
@@ -54,7 +52,7 @@ usage() {
   stdout: check 结果、compose 状态、启动/停止结果。
   stderr: 缺少文件、非法 mode、Docker Compose / Docker CLI 错误或 project 名冲突。
 
-幂等性和副作用：
+副作用与保护边界：
   check 不启动服务；会通过 Docker CLI 读取 Docker compose 容器 label 检查 project 名是否被其他目录占用。
   up 会先检查 ENV_FILE 和 project 名冲突，再创建或更新 compose 服务。
   down 使用 compose stop，停止服务但不删除 volume。
@@ -71,6 +69,72 @@ Exit Codes:
   2  缺少 command、非法 mode、缺少必要文件或 Docker Compose 不可用
   4  compose project 名已被其他目录占用
 EOF
+}
+
+command_usage() {
+  local name="$1"
+  case "$name" in
+    modes)
+      cat <<EOF
+用法：
+  ./scripts/deploy.sh modes
+  ./scripts/deploy.sh modes -h|--help
+
+作用域：
+  展示 deploy.sh 管理的 compose 部署模式。
+
+常用示例：
+  ./scripts/deploy.sh modes
+EOF
+      ;;
+    check)
+      cat <<EOF
+用法：
+  ./scripts/deploy.sh check
+  ./scripts/deploy.sh check -h|--help
+
+作用域：
+  校验部署入口、Dockerfile、compose 配置和 compose project 名冲突。
+
+副作用与保护边界：
+  不启动服务；会通过 Docker CLI 读取 compose 容器 label。
+
+常用示例：
+  ./scripts/deploy.sh check
+EOF
+      ;;
+    up|down|status)
+      local effect
+      case "$name" in
+        up) effect="创建或更新 docker compose 服务。" ;;
+        down) effect="使用 compose stop 停止服务但不删除 volume。" ;;
+        status) effect="只读查看 compose 服务状态。" ;;
+      esac
+      cat <<EOF
+用法：
+  ./scripts/deploy.sh ${name} <compose-deps|compose-full>
+  ./scripts/deploy.sh ${name} -h|--help
+
+作用域：
+  ${effect}
+
+配置与环境变量：
+  ENV_FILE 默认 .env。
+  COMPOSE_PROJECT_NAME 可覆盖 compose project 名。
+
+副作用与保护边界：
+  compose-full 会拒绝与 ./scripts/dev.sh 管理的本地 api/worker 混跑。
+
+常用示例：
+  ./scripts/deploy.sh ${name} compose-deps
+  ./scripts/deploy.sh ${name} compose-full
+EOF
+      ;;
+    *)
+      usage >&2
+      return 2
+      ;;
+  esac
 }
 
 require_file() {
@@ -162,7 +226,6 @@ status_full() {
 }
 
 command="${1:-}"
-mode="${2:-}"
 
 case "$command" in
   --help|-h|help)
@@ -173,12 +236,19 @@ case "$command" in
     exit 2
     ;;
   modes)
+    shift
+    if args_include_help "$@"; then command_usage "$command"; exit $?; fi
     show_modes
     ;;
   check)
+    shift
+    if args_include_help "$@"; then command_usage "$command"; exit $?; fi
     check_deploy
     ;;
   up)
+    shift
+    if args_include_help "$@"; then command_usage "$command"; exit $?; fi
+    mode="${1:-}"
     case "$mode" in
       compose-deps) up_deps ;;
       compose-full) up_full ;;
@@ -186,6 +256,9 @@ case "$command" in
     esac
     ;;
   down)
+    shift
+    if args_include_help "$@"; then command_usage "$command"; exit $?; fi
+    mode="${1:-}"
     case "$mode" in
       compose-deps) down_deps ;;
       compose-full) down_full ;;
@@ -193,6 +266,9 @@ case "$command" in
     esac
     ;;
   status)
+    shift
+    if args_include_help "$@"; then command_usage "$command"; exit $?; fi
+    mode="${1:-}"
     case "$mode" in
       compose-deps) status_deps ;;
       compose-full) status_full ;;

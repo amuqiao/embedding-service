@@ -193,17 +193,15 @@ HELP_EPILOG = f"""\b
   本入口允许真实 LLM 调用，可能产生费用；不会被 ./scripts/verify.sh check 默认执行。
 
 \b
-命令说明：
-  llm-job-billing   创建 job_real_llm_echo，触发真实 LLM，并查询 /jobs/{{job_id}}/billing。
-  llm-job-double-billing   创建 job_real_llm_double_echo，触发两次真实 LLM，并查询汇总 billing。
-  oss-upload-image  上传本地图片到阿里云 OSS，返回 URL Ref。
-  poster-title-image   创建 poster_title_image，触发真实 gpt-image-2 标题图生成，并查询结果和 billing。
-  doctor            只解析并打印 real-flow 上下文，不上传、不提交 Job、不产生费用。
-
-\b
-环境变量：
+配置与环境变量：
   .env: API_HOST / API_PORT / SERVICE_API_PREFIX / SERVICE_API_KEY / DISABLE_HTTP_AUTH_HEADER / DISABLE_CALLER_ID_HEADER / DEFAULT_MODEL_ID。
   --env-file 可以显式指定配置文件路径；运行时环境变量仍优先于 env 文件。
+
+\b
+输出：
+  默认输出真实流程摘要和关键证据。
+  --json 输出 summary 和原始 HTTP envelope responses，stdout 只包含 JSON。
+  错误原因输出到 stderr。
 
 \b
 常用示例：
@@ -221,8 +219,8 @@ HELP_EPILOG = f"""\b
   ./scripts/real-flow.sh poster-title-image -h
 
 \b
-保护边界：
-  必须显式传入 --confirm-cost。
+副作用与保护边界：
+  真实模型 Job 命令必须显式传入 --confirm-cost。
   oss-upload-image 必须显式传入 --confirm-upload。
   poster-title-image 在 STORAGE_BACKEND=aliyun_oss 且使用本地参考图时也必须传入 --confirm-upload。
   非本机 --api-url 必须显式传入 --allow-remote-api。

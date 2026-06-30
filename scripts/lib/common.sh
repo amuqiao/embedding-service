@@ -34,6 +34,18 @@ die() {
   exit "${2:-1}"
 }
 
+args_include_help() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      -h|--help)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 require_command() {
   local name="$1"
   local hint="$2"

@@ -48,7 +48,11 @@ usage() {
   migrate --confirm   对当前 DATABASE_URL 执行 alembic upgrade head。
   help                显示帮助。
 
-安全约束：
+输出：
+  stdout: 连接串解析结果、连通性证据、Alembic 输出和 OSS URL Ref。
+  stderr: 非 Pod 环境、缺少依赖、缺少配置、连接失败或迁移失败详情。
+
+副作用与保护边界：
   migrate 是写库动作，必须显式传入 --confirm。
   生产多副本部署时，只应在一个 Pod 内执行一次 migrate。
   执行迁移前应确认当前 Pod 运行的是要发布的代码版本。
@@ -62,7 +66,6 @@ usage() {
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check redis
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check oss --confirm
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh current
-  kubectl exec -it <api-pod> -- ./scripts/k8s.sh heads
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh migrate --confirm
 
 Exit Codes:
@@ -70,6 +73,100 @@ Exit Codes:
   1  check 连接串解析、认证、连通性或 Alembic 查询失败。
   2  缺少 command、非法参数、未在 K8s Pod 内执行或缺少 Python/Alembic。
 EOF
+}
+
+command_usage() {
+  local name="$1"
+  local target="${2:-}"
+  case "$name:$target" in
+    check:)
+      cat <<EOF
+用法：
+  ./scripts/k8s.sh check
+  ./scripts/k8s.sh check <postgres|redis|oss> [--confirm]
+  ./scripts/k8s.sh check -h|--help
+
+作用域：
+  聚合执行 PostgreSQL、Redis、Alembic current 和 heads 无副作用检查。
+
+副作用与保护边界：
+  check 不包含 check oss，也不会执行 migrate。
+  check postgres / redis 会输出明文连接串和密码。
+
+常用示例：
+  kubectl exec -it <api-pod> -- ./scripts/k8s.sh check
+  kubectl exec -it <api-pod> -- ./scripts/k8s.sh check postgres
+  kubectl exec -it <api-pod> -- ./scripts/k8s.sh check redis
+EOF
+      ;;
+    check:postgres|check:redis)
+      cat <<EOF
+用法：
+  ./scripts/k8s.sh check ${target}
+  ./scripts/k8s.sh check ${target} -h|--help
+
+作用域：
+  检查 ${target} 连接串解析结果和连通性。
+
+副作用与保护边界：
+  会输出明文连接串和密码，只应在受控终端中执行。
+
+常用示例：
+  kubectl exec -it <api-pod> -- ./scripts/k8s.sh check ${target}
+EOF
+      ;;
+    check:oss)
+      cat <<EOF
+用法：
+  ./scripts/k8s.sh check oss --confirm
+  ./scripts/k8s.sh check oss -h|--help
+
+作用域：
+  检查 OSS 配置，并执行临时对象 PUT / GET / HEAD。
+
+副作用与保护边界：
+  远程写入动作，必须显式传入 --confirm。
+  会留下对象，需要按输出 key 手动清理或配置生命周期清理。
+
+常用示例：
+  kubectl exec -it <api-pod> -- ./scripts/k8s.sh check oss --confirm
+EOF
+      ;;
+    current:|heads:|history:)
+      cat <<EOF
+用法：
+  ./scripts/k8s.sh ${name}
+  ./scripts/k8s.sh ${name} -h|--help
+
+作用域：
+  查看 Alembic ${name} 信息。
+
+常用示例：
+  kubectl exec -it <api-pod> -- ./scripts/k8s.sh ${name}
+EOF
+      ;;
+    migrate:)
+      cat <<EOF
+用法：
+  ./scripts/k8s.sh migrate --confirm
+  ./scripts/k8s.sh migrate -h|--help
+
+作用域：
+  对当前 DATABASE_URL 执行 alembic upgrade head。
+
+副作用与保护边界：
+  写库动作，必须显式传入 --confirm。
+  生产多副本部署时，只应在一个 Pod 内执行一次。
+
+常用示例：
+  kubectl exec -it <api-pod> -- ./scripts/k8s.sh migrate --confirm
+EOF
+      ;;
+    *)
+      usage >&2
+      return 2
+      ;;
+  esac
 }
 
 require_k8s_pod() {
@@ -450,22 +547,33 @@ case "$command" in
     ;;
   check)
     shift
+    if args_include_help "$@"; then
+      case "${1:-}" in
+        -h|--help) command_usage check ;;
+        *) command_usage check "${1:-}" ;;
+      esac
+      exit $?
+    fi
     run_check "$@"
     ;;
   current)
     shift
+    if args_include_help "$@"; then command_usage current; exit $?; fi
     run_current "$@"
     ;;
   heads)
     shift
+    if args_include_help "$@"; then command_usage heads; exit $?; fi
     run_heads "$@"
     ;;
   history)
     shift
+    if args_include_help "$@"; then command_usage history; exit $?; fi
     run_history "$@"
     ;;
   migrate)
     shift
+    if args_include_help "$@"; then command_usage migrate; exit $?; fi
     run_migrate "$@"
     ;;
   *)

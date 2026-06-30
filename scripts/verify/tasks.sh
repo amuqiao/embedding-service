@@ -62,6 +62,39 @@ run_script_syntax() {
   done
 }
 
+assert_generated_commands_help() {
+  local name="$1"
+  local entry="$2"
+  shift 2
+  local command
+  local duplicate_count=0
+  local manual_section
+  local output
+
+  output="$("$entry" --help)"
+  if [[ "$output" != *"Commands:"* ]]; then
+    echo "ERROR: $name help must include generated Commands." >&2
+    return 1
+  fi
+  if [[ "$output" == *"命令说明："* ]]; then
+    echo "ERROR: $name help must not duplicate generated Commands with 手写命令说明。" >&2
+    return 1
+  fi
+  manual_section="$(printf '%s\n' "$output" | awk '
+    /^  (作用域|默认行为|环境变量|配置与环境变量|输出|关键概念|常用示例|进阶用法|保护边界|副作用与保护边界)：/ || /^  Exit Codes:/ { in_manual = 1 }
+    in_manual { print }
+  ')"
+  for command in "$@"; do
+    if printf '%s\n' "$manual_section" | grep -Eq "^[[:space:]]+${command}[[:space:]]{2,}"; then
+      duplicate_count=$((duplicate_count + 1))
+    fi
+  done
+  if (( duplicate_count >= 2 )); then
+    echo "ERROR: $name help must not repeat generated command catalog in manual sections." >&2
+    return 1
+  fi
+}
+
 run_cli_smoke() {
   section "CLI"
   # help smoke 只验证入口可用，不重复打印完整 help，避免 check 输出噪声。
@@ -73,9 +106,11 @@ run_cli_smoke() {
   event "OK" "deploy.sh" "help"
   "$ROOT_DIR/scripts/k8s.sh" --help >/dev/null
   event "OK" "k8s.sh" "help"
-  "$ROOT_DIR/scripts/jobs.sh" --help >/dev/null
+  assert_generated_commands_help "jobs.sh" "$ROOT_DIR/scripts/jobs.sh" \
+    overview list show job inspect payload diagnose workflow timeline attempts callbacks stuck drain pressure summary doctor latency capacity types
   event "OK" "jobs.sh" "help"
-  "$ROOT_DIR/scripts/real-flow.sh" --help >/dev/null
+  assert_generated_commands_help "real-flow.sh" "$ROOT_DIR/scripts/real-flow.sh" \
+    doctor llm-job-billing llm-job-double-billing oss-upload-image poster-title-image
   event "OK" "real-flow.sh" "help"
   "$ROOT_DIR/scripts/tools.sh" --help >/dev/null
   event "OK" "tools.sh" "help"
@@ -83,6 +118,29 @@ run_cli_smoke() {
   event "OK" "release-test.sh" "help"
   "$ROOT_DIR/deploy/release-master.sh" --help >/dev/null
   event "OK" "release-master.sh" "help"
+
+  "$ROOT_DIR/scripts/dev.sh" start --help >/dev/null
+  "$ROOT_DIR/scripts/dev.sh" start api --help >/dev/null
+  "$ROOT_DIR/scripts/dev.sh" migrate --help >/dev/null
+  "$ROOT_DIR/scripts/deploy.sh" up --help >/dev/null
+  "$ROOT_DIR/scripts/deploy.sh" up compose-full --help >/dev/null
+  "$ROOT_DIR/scripts/k8s.sh" check --help >/dev/null
+  "$ROOT_DIR/scripts/k8s.sh" check oss --help >/dev/null
+  "$ROOT_DIR/scripts/k8s.sh" check oss --confirm --help >/dev/null
+  "$ROOT_DIR/scripts/k8s.sh" migrate --confirm --help >/dev/null
+  "$ROOT_DIR/scripts/verify.sh" migration-roundtrip --help >/dev/null
+  "$ROOT_DIR/scripts/verify.sh" migration-roundtrip ignored --help >/dev/null
+  "$ROOT_DIR/scripts/verify.sh" env-config --help >/dev/null
+  "$ROOT_DIR/scripts/tools.sh" secret --help >/dev/null
+  "$ROOT_DIR/scripts/jobs.sh" list --help >/dev/null
+  "$ROOT_DIR/scripts/real-flow.sh" doctor --help >/dev/null
+  "$ROOT_DIR/scripts/real-flow.sh" llm-job-billing --confirm-cost --help >/dev/null
+  "$ROOT_DIR/scripts/real-flow.sh" oss-upload-image --confirm-upload --help >/dev/null
+  "$ROOT_DIR/deploy/release-test.sh" prepare --help >/dev/null
+  "$ROOT_DIR/deploy/release-test.sh" --push --help >/dev/null
+  "$ROOT_DIR/deploy/release-master.sh" prepare --help >/dev/null
+  "$ROOT_DIR/deploy/release-master.sh" --push --help >/dev/null
+  event "OK" "subcommands" "help"
 }
 
 run_release_flow_smoke() {

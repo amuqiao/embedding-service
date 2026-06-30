@@ -20,6 +20,10 @@ usage() {
   当前仓库的小型本地开发辅助工具入口。只放无默认持久副作用、与服务生命周期无关的工具。
   不负责启动服务、运行验证、部署、Job 查询、真实模型流程或生产运维。
 
+运行环境：
+  Requires: Bash
+  Dependencies: Python 标准库。
+
 命令：
   secret              生成 URL-safe 随机 secret，适合 SERVICE_API_KEY 这类 Bearer token。
   env-url             生成 DATABASE_URL 或 REDIS_URL，并默认输出解析摘要。
@@ -28,6 +32,10 @@ usage() {
 输出：
   stdout: 子命令结果；secret 只输出生成值；env-url 输出可复制到 .env 的 env 行和注释摘要。
   stderr: 非法命令、非法参数或缺少依赖。
+
+副作用与保护边界：
+  默认不读取 .env，不写文件，不访问网络。
+  secret 只生成随机值；env-url 只生成 URL 文本和解析摘要。
 
 常用示例：
   ./scripts/tools.sh secret
@@ -64,12 +72,12 @@ secret_usage() {
   stdout: 只输出生成后的 secret。
   stderr: 非法参数或缺少 Python。
 
-注意：
+副作用与保护边界：
   - 本命令不读取或修改 .env。
   - 本命令不访问网络、不写文件。
   - APP_ENV=test/prd 时，SERVICE_API_KEY 必须不是占位值，且长度至少 16 个字符。
 
-示例：
+常用示例：
   ./scripts/tools.sh secret
   ./scripts/tools.sh secret --prefix prd_
 
@@ -110,14 +118,14 @@ env_url_usage() {
           摘要不输出解码后的原始密码，只显示 password_present。
   stderr: 非法参数或缺少 Python。
 
-注意：
+副作用与保护边界：
   - 生成时始终执行 URL encode，不提供 --no-encode。
   - PostgreSQL 固定输出 async URL：postgresql+asyncpg://...
   - 本命令不输出 SYNC_DATABASE_URL；该值在项目内由代码派生。
   - 推荐使用 --password-stdin，避免密码进入 shell history。
   - Redis 无密码时不要传 --password；使用 Redis ACL username 时必须同时传密码。
 
-示例：
+常用示例：
   printf '%s' 'raw-password' | ./scripts/tools.sh env-url postgres \\
     --username test_cms_poster_title_user \\
     --host postgres.fortress \\

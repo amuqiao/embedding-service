@@ -69,13 +69,17 @@ release_usage() {
   本脚本只负责 Git 发布流：检查 ${REQUIRED_LOCAL_BRANCH}，在独立 tmp 仓库合入 ${SOURCE_REF} 到 ${TARGET_BRANCH}，再按显式 push 推送。
   不负责 Kuboard 切镜像、业务验证、生产部署、远程数据库、K8s 或云平台资源。
 
+运行环境：
+  Requires: Bash, Git。
+  Dependencies: 可访问 origin 远端；push 阶段需要当前身份有目标分支推送权限。
+
 命令：
   prepare  检查主 ${REQUIRED_LOCAL_BRANCH}，重建 tmp 仓库，在 tmp 仓库切到 ${TARGET_BRANCH} 并合入 ${SOURCE_REF}。
   push     进入 tmp 仓库，提交 prepare 产生的待发布 merge，并推送到 origin/${TARGET_BRANCH} 触发 CI。
   --push   push 的别名，适合第二次执行时直接添加选项。
   status   同时输出主 ${REQUIRED_LOCAL_BRANCH} 目录、tmp 发布目录状态，并给出 prepare/push 判断。
 
-关键配置：
+配置与环境变量：
   SOURCE_REF       要合入 ${TARGET_ENV_LABEL} 的来源分支，默认：${SOURCE_REF}
   TARGET_BRANCH   ${TARGET_ENV_LABEL} 发版分支，默认：${TARGET_BRANCH}
   RELEASE_TMP_DIR  tmp 发布目录，默认：../tmp/<repo-name>-${RELEASE_TMP_NAME}
@@ -84,7 +88,11 @@ release_usage() {
                    os -> [build:os]，生成运行环境镜像，通常由运维使用
   COMMIT_MESSAGE  push 阶段使用的提交信息，必须包含对应构建标记。
 
-幂等性和副作用：
+输出：
+  stdout: 发布阶段、Git 检查结果、下一步建议和 push 结果。
+  stderr: 参数错误、Git 前置条件失败、merge 冲突或 push 失败详情。
+
+副作用与保护边界：
   prepare 只会删除并重建带脚本 marker 的安全 tmp 发布目录；主项目目录不会被切分支、merge、commit 或 push。
   push 只在 tmp 发布目录存在未提交 merge 且 source/target 远端引用未变化时提交并推送。
   缺少远端分支、dirty 工作区、冲突、缺失 prepare meta、远端引用变化都会 fail-fast。
@@ -101,6 +109,18 @@ Exit Codes:
   1  Git 发布前置条件、merge、检查或 push 失败
   2  参数或脚本配置错误
 EOF
+}
+
+release_args_include_help() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      -h|--help)
+        return 0
+        ;;
+    esac
+  done
+  return 1
 }
 
 release_repo_root() {
@@ -755,6 +775,10 @@ release_flow_main() {
   local action="${1:-prepare}"
 
   release_validate_config
+  if release_args_include_help "$@"; then
+    release_usage
+    return 0
+  fi
   case "$action" in
     prepare)
       release_prepare

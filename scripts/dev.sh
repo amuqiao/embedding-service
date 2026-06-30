@@ -44,7 +44,7 @@ usage() {
   ports [port ...]    扫描本地可用端口，支持 --ports、端口范围和 --format json。
   help                显示帮助。
 
-环境变量：
+配置与环境变量：
   ENV_FILE                    可选，指定本地入口读取的 env 文件，默认 .env。
   DEV_API_RELOAD              可选，true 时 api 使用 uvicorn --reload。
   WATCHFILES_FORCE_POLLING    可选，reload 文件监听是否强制 polling。
@@ -60,14 +60,12 @@ usage() {
   PID:  ${RUN_DIR}/api.pid, ${RUN_DIR}/worker.pid
   日志: ${LOG_DIR}/api.log, ${LOG_DIR}/worker.log
 
-保护边界：
+副作用与保护边界：
   应用配置、本地端口、compose 项目名和 worker 启动参数统一写入 .env。
   生命周期和迁移动作会拒绝非本地 DATABASE_URL / REDIS_URL。
   local 本地 api/worker 会拒绝与 compose-full 的 api/worker 混跑；切换前先执行 ./scripts/deploy.sh down compose-full。
   未知 service 会直接报错。
   启动 api 前会检查端口 ${API_PORT} 是否已被其他进程占用。
-
-幂等性和副作用：
   bootstrap 缺文件时创建 .env，已存在则保留。
   start 重复执行不会重复启动已运行的 api/worker。
   stop 对已停止服务输出 STOPPED，不视为失败。
@@ -86,6 +84,117 @@ Exit Codes:
 EOF
 }
 
+command_usage() {
+  local name="$1"
+  case "$name" in
+    bootstrap)
+      cat <<EOF
+用法：
+  ./scripts/dev.sh bootstrap
+  ./scripts/dev.sh bootstrap -h|--help
+
+作用域：
+  缺少 .env 时从 .env.example 创建，并执行 uv sync。
+
+副作用与保护边界：
+  已存在 .env 时保留原文件。
+  会安装或同步 Python 依赖。
+
+常用示例：
+  ./scripts/dev.sh bootstrap
+EOF
+      ;;
+    start|stop|restart|status)
+      local effect
+      local boundary
+      local config_note
+      case "$name" in
+        start)
+          effect="启动服务；不传 service 时启动依赖、执行迁移、启动 api 和 worker。"
+          boundary="会启动本地进程并可能执行迁移。"
+          config_note="会校验本地 DATABASE_URL / REDIS_URL，并拒绝和 compose-full API/worker 混跑。"
+          ;;
+        stop)
+          effect="停止服务；不传 service 时停止 api、worker、postgres 和 redis。"
+          boundary="会停止本地进程和本地依赖服务。"
+          config_note="读取 ENV_FILE 以定位本地依赖和运行目录。"
+          ;;
+        restart)
+          effect="重启服务；不传 service 时重启完整本地服务栈。"
+          boundary="会先停止再启动本地进程，并可能执行迁移。"
+          config_note="会校验本地 DATABASE_URL / REDIS_URL，并拒绝和 compose-full API/worker 混跑。"
+          ;;
+        status)
+          effect="只读查看状态；不传 service 时展示依赖、api、worker 和健康检查。"
+          boundary="只读查询状态，不修改服务状态。"
+          config_note="读取 ENV_FILE 以定位本地依赖和健康检查地址。"
+          ;;
+      esac
+      cat <<EOF
+用法：
+  ./scripts/dev.sh ${name} [api|worker]
+  ./scripts/dev.sh ${name} -h|--help
+
+作用域：
+  ${effect}
+
+配置与环境变量：
+  ENV_FILE 默认 .env。
+  ${config_note}
+
+副作用与保护边界：
+  ${boundary}
+
+常用示例：
+  ./scripts/dev.sh ${name}
+  ./scripts/dev.sh ${name} api
+  ./scripts/dev.sh ${name} worker
+EOF
+      ;;
+    logs)
+      cat <<EOF
+用法：
+  ./scripts/dev.sh logs <api|worker>
+  ./scripts/dev.sh logs -h|--help
+
+作用域：
+  跟随查看本地 api 或 worker 日志。
+
+输出：
+  stdout: logs/<service>.log 内容，Ctrl-C 退出。
+
+常用示例：
+  ./scripts/dev.sh logs api
+  ./scripts/dev.sh logs worker
+EOF
+      ;;
+    migrate)
+      cat <<EOF
+用法：
+  ./scripts/dev.sh migrate
+  ./scripts/dev.sh migrate -h|--help
+
+作用域：
+  对本地开发数据库执行 Alembic 迁移。
+
+副作用与保护边界：
+  写入本地 DATABASE_URL 指向的数据库。
+  会拒绝明显非本地 DATABASE_URL。
+
+常用示例：
+  ./scripts/dev.sh migrate
+EOF
+      ;;
+    ports)
+      scan_ports -h
+      ;;
+    *)
+      usage >&2
+      return 2
+      ;;
+  esac
+}
+
 command="${1:-}"
 case "$command" in
   --help|-h|help)
@@ -96,24 +205,38 @@ case "$command" in
     exit 2
     ;;
   bootstrap)
+    shift
+    if args_include_help "$@"; then command_usage "$command"; exit $?; fi
     bootstrap
     ;;
   start)
-    start_target "${2:-}"
+    shift
+    if args_include_help "$@"; then command_usage "$command"; exit $?; fi
+    start_target "${1:-}"
     ;;
   stop)
-    stop_target "${2:-}"
+    shift
+    if args_include_help "$@"; then command_usage "$command"; exit $?; fi
+    stop_target "${1:-}"
     ;;
   restart)
-    restart_target "${2:-}"
+    shift
+    if args_include_help "$@"; then command_usage "$command"; exit $?; fi
+    restart_target "${1:-}"
     ;;
   status)
-    status_target "${2:-}"
+    shift
+    if args_include_help "$@"; then command_usage "$command"; exit $?; fi
+    status_target "${1:-}"
     ;;
   logs)
-    follow_logs "${2:-}"
+    shift
+    if args_include_help "$@"; then command_usage "$command"; exit $?; fi
+    follow_logs "${1:-}"
     ;;
   migrate)
+    shift
+    if args_include_help "$@"; then command_usage "$command"; exit $?; fi
     migrate
     ;;
   ports)
