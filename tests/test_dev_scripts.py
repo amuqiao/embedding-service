@@ -1321,9 +1321,24 @@ def test_k8s_cli_help_is_available_without_db():
     assert "check postgres" in result.stdout
     assert "check redis" in result.stdout
     assert "check oss --confirm" in result.stdout
+    assert "PUT / GET / HEAD" in result.stdout
+    assert "PUT / GET / HEAD / DELETE" not in result.stdout
     assert "current" in result.stdout
     assert "heads" in result.stdout
     assert "migrate --confirm" in result.stdout
+
+
+def test_k8s_check_oss_prints_url_ref_without_delete_requirement():
+    script = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
+    oss_check = script.split("run_check_oss() {", 1)[1].split("\n}\n\nrun_check()", 1)[0]
+
+    assert "cpp_oss_url_ref_from_output_object" in oss_check
+    assert "OSS_TEST_PUBLIC_URL" in oss_check
+    assert "OSS_TEST_INTERNAL_URL" in oss_check
+    assert "OSS_TEST_CONTENT_TYPE" in oss_check
+    assert "OSS_TEST_SHA256" in oss_check
+    assert ".delete_object(" not in oss_check
+    assert "delete_checked=false" in oss_check
 
 
 def test_k8s_check_oss_requires_confirm_before_remote_write():
@@ -1341,6 +1356,7 @@ def test_k8s_check_oss_requires_confirm_before_remote_write():
 
     assert result.returncode == 2
     assert "check oss requires --confirm" in result.stderr
+    assert "deletes" not in result.stderr
     assert "OSS_ACCESS_KEY" not in result.stdout
     assert "OSS_ACCESS_KEY" not in result.stderr
 
