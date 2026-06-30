@@ -39,6 +39,9 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
 
 \b
   # 推荐：先上传参考图得到 URL Ref JSON，再用 URL Ref 创建 Job。
+  mkdir -p .run
+
+\b
   ./scripts/real-flow.sh oss-upload-image \\
     --env-file env_test/.env \\
     --confirm-upload \\
@@ -121,6 +124,68 @@ items-json 最小格式：
   --download-outputs 默认保存到 .data/real-flow/poster-title-image/<job_id>/<item_id>-<language>/。
 """
 
+DOCTOR_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/real-flow.sh doctor
+  ./scripts/real-flow.sh doctor --json
+
+\b
+  ./scripts/real-flow.sh doctor \\
+    --env-file env_test/.env \\
+    --allow-remote-api \\
+    --api-url http://test-cms-poster-title.epubgame.com \\
+    --json
+"""
+
+LLM_JOB_BILLING_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/real-flow.sh llm-job-billing --confirm-cost --model-id gpt-5.4-mini
+  ./scripts/real-flow.sh llm-job-billing --confirm-cost --input-text "用一句话回复：计费验证成功" --json
+
+\b
+  ./scripts/real-flow.sh llm-job-billing \\
+    --allow-remote-api \\
+    --env-file env_test/.env \\
+    --api-url http://test-cms-poster-title.epubgame.com \\
+    --confirm-cost \\
+    --json
+"""
+
+LLM_JOB_DOUBLE_BILLING_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini
+  ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini --json
+
+\b
+  ./scripts/real-flow.sh llm-job-double-billing \\
+    --allow-remote-api \\
+    --env-file env_test/.env \\
+    --api-url http://test-cms-poster-title.epubgame.com \\
+    --confirm-cost \\
+    --json
+"""
+
+OSS_UPLOAD_IMAGE_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/real-flow.sh oss-upload-image \\
+    --confirm-upload \\
+    --image .data/title/英语.png \\
+    --signed-url-expires-seconds 3600 \\
+    --json
+
+\b
+  mkdir -p .run
+
+\b
+  ./scripts/real-flow.sh oss-upload-image \\
+    --confirm-upload \\
+    --image .data/title/英语.png \\
+    --json-ref-only > .run/reference-image.json
+
+\b
+  ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png --emit-poster-args
+"""
+
 
 HELP_EPILOG = f"""\b
 作用域：
@@ -142,16 +207,17 @@ HELP_EPILOG = f"""\b
 
 \b
 常用示例：
+  ./scripts/real-flow.sh doctor
   ./scripts/real-flow.sh llm-job-billing --confirm-cost --model-id gpt-5.4-mini
-  ./scripts/real-flow.sh llm-job-billing --confirm-cost --input-text "用一句话回复：计费验证成功" --json
-  ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini --json
-  ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png --signed-url-expires-seconds 3600 --json
-  ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png --json-ref-only
+  ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini
+  ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png
   ./scripts/real-flow.sh poster-title-image --confirm-cost --reference .data/title/英语.png --language es --title-text "Cuando el amor se alejo" --json
 
 \b
 进阶用法：
-  poster-title-image 的本地参考图、多 item JSON、OSS URL Ref 和输出下载示例：
+  各子命令的参数组合、确认参数、远端环境和 JSON 输出示例请查看：
+  ./scripts/real-flow.sh <command> -h
+  poster-title-image 的本地参考图、多 item JSON、OSS URL Ref 和输出下载示例请查看：
   ./scripts/real-flow.sh poster-title-image -h
 
 \b
@@ -189,7 +255,7 @@ def main(ctx: typer.Context) -> None:
         raise typer.Exit(2)
 
 
-@app.command("doctor", help="只解析 real-flow 上下文，不上传、不提交 Job、不产生费用。")
+@app.command("doctor", help="只解析 real-flow 上下文，不上传、不提交 Job、不产生费用。", epilog=DOCTOR_HELP_EPILOG)
 def doctor_command(
     api_url: Annotated[
         str | None,
@@ -241,7 +307,7 @@ def doctor_command(
         raise typer.Exit(2)
 
 
-@app.command("llm-job-billing", help="真实调用 LLM，并查询 Job billing。")
+@app.command("llm-job-billing", help="真实调用 LLM，并查询 Job billing。", epilog=LLM_JOB_BILLING_HELP_EPILOG)
 def llm_job_billing_command(
     confirm_cost: Annotated[
         bool,
@@ -319,7 +385,11 @@ def llm_job_billing_command(
         raise typer.Exit(exc.exit_code) from exc
 
 
-@app.command("llm-job-double-billing", help="真实调用两次 LLM，并查询同一 Job 的汇总 billing。")
+@app.command(
+    "llm-job-double-billing",
+    help="真实调用两次 LLM，并查询同一 Job 的汇总 billing。",
+    epilog=LLM_JOB_DOUBLE_BILLING_HELP_EPILOG,
+)
 def llm_job_double_billing_command(
     confirm_cost: Annotated[
         bool,
@@ -401,7 +471,7 @@ def llm_job_double_billing_command(
         raise typer.Exit(exc.exit_code) from exc
 
 
-@app.command("oss-upload-image", help="上传本地图片到阿里云 OSS，并输出 URL Ref。")
+@app.command("oss-upload-image", help="上传本地图片到阿里云 OSS，并输出 URL Ref。", epilog=OSS_UPLOAD_IMAGE_HELP_EPILOG)
 def oss_upload_image_command(
     confirm_upload: Annotated[
         bool,
@@ -625,4 +695,4 @@ def poster_title_image_command(
 
 
 if __name__ == "__main__":
-    app()
+    app(prog_name="./scripts/real-flow.sh")
