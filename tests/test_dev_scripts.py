@@ -1332,7 +1332,7 @@ def test_k8s_check_oss_prints_url_ref_without_delete_requirement():
     script = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
     oss_check = script.split("run_check_oss() {", 1)[1].split("\n}\n\nrun_check()", 1)[0]
 
-    assert "cpp_oss_url_ref_from_output_object" in oss_check
+    assert "oss_url_ref_from_output_object" in oss_check
     assert "OSS_TEST_PUBLIC_URL" in oss_check
     assert "OSS_TEST_INTERNAL_URL" in oss_check
     assert "OSS_TEST_CONTENT_TYPE" in oss_check

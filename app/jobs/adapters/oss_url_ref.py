@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+from collections.abc import Collection, Mapping
+from typing import Any
+from urllib.parse import quote, unquote, urlsplit
+
+from app.core.exceptions import AppError
+from app.integrations.object_storage import CanonicalObjectRef, bare_sha256
+from app.integrations.object_storage.aliyun_url import parse_aliyun_oss_url
+from app.jobs.adapters.cpp_oss_url_ref import (
+    canonical_ref_from_cpp_oss_url_ref,
+    cpp_oss_url_ref_from_output_object,
+)
+
+
+def canonical_ref_from_oss_url_ref(
+    payload: Mapping[str, Any],
+    *,
+    allowed_buckets: Collection[str] | None = None,
+    allowed_regions: Collection[str] | None = None,
+    allowed_content_types: Collection[str] | None = None,
+    public_endpoint: str | None = None,
+) -> CanonicalObjectRef:
+    normalized_public_endpoint = normalize_public_endpoint(public_endpoint)
+    if normalized_public_endpoint and _url_host(_required_str(payload, "public_url")) == normalized_public_endpoint:
+        return _canonical_ref_from_public_endpoint_url_ref(
+            payload,
+            public_endpoint=normalized_public_endpoint,
+            allowed_buckets=allowed_buckets,
+            allowed_regions=allowed_regions,
+            allowed_content_types=allowed_content_types,
+        )
+    return canonical_ref_from_cpp_oss_url_ref(
+        payload,
+        allowed_buckets=allowed_buckets,
+        allowed_regions=allowed_regions,
+        allowed_content_types=allowed_content_types,
+    )
+
+
+def oss_url_ref_from_output_object(
+    *,
+    bucket: str,
+    region: str,
+    key: str,
+    content_type: str,
+    content_hash: str,
+    public_endpoint: str | None = None,
+) -> dict[str, str]:
+    normalized_public_endpoint = normalize_public_endpoint(public_endpoint)
+    if not normalized_public_endpoint:
+        return cpp_oss_url_ref_from_output_object(
+            bucket=bucket,
+            region=region,
+            key=key,
+            content_type=content_type,
+            content_hash=content_hash,
+        )
+
+    encoded_key = quote(key.lstrip("/"), safe="/")
+    return {
+        "public_url": f"https://{normalized_public_endpoint}/{encoded_key}",
+        "internal_url": f"https://{bucket}.oss-{region}-internal.aliyuncs.com/{encoded_key}",
+        "content_type": content_type,
+        "sha256": bare_sha256(content_hash),
+    }
+
+
+def normalize_public_endpoint(value: str | None) -> str:
+    return (value or "").strip().removeprefix("https://").removeprefix("http://").strip("/").lower()
+
+
+def _canonical_ref_from_public_endpoint_url_ref(
+    payload: Mapping[str, Any],
+    *,
+    public_endpoint: str,
+    allowed_buckets: Collection[str] | None,
+    allowed_regions: Collection[str] | None,
+    allowed_content_types: Collection[str] | None,
+) -> CanonicalObjectRef:
+    public_url = _required_str(payload, "public_url")
+    internal_url = _required_str(payload, "internal_url")
+    content_type = _required_str(payload, "content_type")
+    sha256 = _required_bare_sha256(payload)
+
+    public_key = _parse_public_endpoint_key(public_url, public_endpoint=public_endpoint)
+    internal_location = parse_aliyun_oss_url(internal_url)
+    if not internal_location.internal:
+        raise AppError("INVALID_INPUT", "internal_url must use an internal OSS endpoint")
+    if public_key != internal_location.key:
+        raise AppError("INVALID_INPUT", "public_url and internal_url must reference the same OSS object")
+    _validate_allowed("OSS bucket", internal_location.bucket, allowed_buckets)
+    _validate_allowed("OSS region", internal_location.region, allowed_regions)
+    _validate_allowed("content_type", content_type, allowed_content_types)
+
+    return CanonicalObjectRef(
+        provider="aliyun_oss",
+        bucket=internal_location.bucket,
+        region=internal_location.region,
+        key=internal_location.key,
+        content_type=content_type,
+        content_hash=f"sha256:{sha256}",
+    )
+
+
+def _parse_public_endpoint_key(url: str, *, public_endpoint: str) -> str:
+    parsed = urlsplit(url.strip())
+    if parsed.scheme != "https":
+        raise AppError("INVALID_INPUT", "OSS URL must use https")
+    if parsed.query or parsed.fragment:
+        raise AppError("INVALID_INPUT", "OSS URL must not contain query string or fragment")
+    if parsed.username or parsed.password or parsed.port is not None:
+        raise AppError("INVALID_INPUT", "OSS URL must not contain credentials or port")
+    if (parsed.hostname or "").lower() != public_endpoint:
+        raise AppError("INVALID_INPUT", "public_url host does not match OSS public endpoint")
+    key = unquote(parsed.path.lstrip("/"))
+    if not key:
+        raise AppError("INVALID_INPUT", "OSS URL object key is missing")
+    if any(part == ".." for part in key.split("/")):
+        raise AppError("INVALID_INPUT", "OSS URL object key contains illegal path traversal")
+    return key
+
+
+def _url_host(url: str) -> str:
+    parsed = urlsplit(url.strip())
+    if parsed.username or parsed.password or parsed.port is not None:
+        raise AppError("INVALID_INPUT", "OSS URL must not contain credentials or port")
+    return (parsed.hostname or "").lower()
+
+
+def _required_str(payload: Mapping[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise AppError("INVALID_INPUT", f"{key} is required")
+    return value.strip()
+
+
+def _required_bare_sha256(payload: Mapping[str, Any]) -> str:
+    value = _required_str(payload, "sha256")
+    if value.startswith("sha256:"):
+        raise AppError("INVALID_INPUT", "sha256 must be 64 lowercase hex characters")
+    return bare_sha256(value)
+
+
+def _validate_allowed(label: str, value: str, allowed: Collection[str] | None) -> None:
+    if allowed is None:
+        return
+    if value not in set(allowed):
+        raise AppError("INVALID_INPUT", f"{label} is not allowed")

@@ -38,7 +38,23 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
     --json
 
 \b
-  # 已有 OSS URL Ref：不 stage 本地图片，直接把四字段作为 reference_image。
+  # 推荐：先上传参考图得到 URL Ref JSON，再用 URL Ref 创建 Job。
+  ./scripts/real-flow.sh oss-upload-image \\
+    --env-file env_test/.env \\
+    --confirm-upload \\
+    --image .data/title/英语.png \\
+    --json-ref-only > .run/reference-image.json
+
+\b
+  ./scripts/real-flow.sh poster-title-image \\
+    --confirm-cost \\
+    --reference-url-ref-json .run/reference-image.json \\
+    --language es \\
+    --title-text "Cuando el amor se alejo" \\
+    --json
+
+\b
+  # 已有 OSS URL Ref：不 stage 本地图片，也可以直接传四字段。
   ./scripts/real-flow.sh poster-title-image \\
     --confirm-cost \\
     --language es \\
@@ -52,6 +68,21 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
 \b
   # STORAGE_BACKEND=aliyun_oss 且传本地参考图时，需要显式确认上传。
   ./scripts/real-flow.sh poster-title-image \\
+    --confirm-cost \\
+    --confirm-upload \\
+    --reference .data/title/英语.png \\
+    --language es \\
+    --title-text "Cuando el amor se alejo" \\
+    --download-outputs \\
+    --json
+
+\b
+  # 远端测试环境：必须显式允许远端 API；SERVICE_API_KEY 优先从 --env-file 或运行时环境读取。
+  ./scripts/real-flow.sh poster-title-image \\
+    --allow-remote-api \\
+    --env-file env_test/.env \\
+    --api-url http://test-cms-poster-title.epubgame.com \\
+    --x-ai-service-caller-id default \\
     --confirm-cost \\
     --confirm-upload \\
     --reference .data/title/英语.png \\
@@ -102,10 +133,12 @@ HELP_EPILOG = f"""\b
   llm-job-double-billing   创建 job_real_llm_double_echo，触发两次真实 LLM，并查询汇总 billing。
   oss-upload-image  上传本地图片到阿里云 OSS，返回 URL Ref。
   poster-title-image   创建 poster_title_image，触发真实 gpt-image-2 标题图生成，并查询结果和 billing。
+  doctor            只解析并打印 real-flow 上下文，不上传、不提交 Job、不产生费用。
 
 \b
 环境变量：
   .env: API_HOST / API_PORT / SERVICE_API_PREFIX / SERVICE_API_KEY / DISABLE_HTTP_AUTH_HEADER / DISABLE_CALLER_ID_HEADER / DEFAULT_MODEL_ID。
+  --env-file 可以显式指定配置文件路径；运行时环境变量仍优先于 env 文件。
 
 \b
 常用示例：
@@ -113,6 +146,7 @@ HELP_EPILOG = f"""\b
   ./scripts/real-flow.sh llm-job-billing --confirm-cost --input-text "用一句话回复：计费验证成功" --json
   ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini --json
   ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png --signed-url-expires-seconds 3600 --json
+  ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png --json-ref-only
   ./scripts/real-flow.sh poster-title-image --confirm-cost --reference .data/title/英语.png --language es --title-text "Cuando el amor se alejo" --json
 
 \b
@@ -125,6 +159,9 @@ HELP_EPILOG = f"""\b
   必须显式传入 --confirm-cost。
   oss-upload-image 必须显式传入 --confirm-upload。
   poster-title-image 在 STORAGE_BACKEND=aliyun_oss 且使用本地参考图时也必须传入 --confirm-upload。
+  非本机 --api-url 必须显式传入 --allow-remote-api。
+  远端测试 OSS 配置优先通过 --env-file 指向测试环境配置文件。
+  --service-api-key 会出现在 shell history 和进程参数中；共享机器或 CI 优先通过 SERVICE_API_KEY 环境变量注入。
   只通过公开 HTTP API 创建 Job、轮询状态和查询 billing，不直接改数据库，不重试历史 Job。
 
 \b
@@ -152,6 +189,58 @@ def main(ctx: typer.Context) -> None:
         raise typer.Exit(2)
 
 
+@app.command("doctor", help="只解析 real-flow 上下文，不上传、不提交 Job、不产生费用。")
+def doctor_command(
+    api_url: Annotated[
+        str | None,
+        typer.Option("--api-url", help="API 基础 URL；默认从 env 文件的 API_URL 或 API_HOST/API_PORT 推导。"),
+    ] = None,
+    env_file: Annotated[
+        str | None,
+        typer.Option("--env-file", help="显式配置文件路径；默认读取仓库根目录 .env，运行时环境变量优先。"),
+    ] = None,
+    allow_remote_api: Annotated[
+        bool,
+        typer.Option("--allow-remote-api", help="允许解析非本机 API URL；doctor 不会发 HTTP 请求。"),
+    ] = False,
+    service_api_key: Annotated[
+        str | None,
+        typer.Option("--service-api-key", help="仅用于判断鉴权来源；doctor 不会打印 token。"),
+    ] = None,
+    caller_id: Annotated[
+        str,
+        typer.Option("--caller-id", "--x-ai-service-caller-id", help="X-AI-Service-Caller-ID。"),
+    ] = "real-flow-cli",
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="输出机器可读上下文。"),
+    ] = False,
+) -> None:
+    try:
+        context = llm_job_billing.resolve_runtime_context(
+            env_file=env_file,
+            api_url=api_url,
+            allow_remote_api=allow_remote_api,
+            caller_id=caller_id,
+            service_api_key=service_api_key,
+        )
+    except llm_job_billing.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+    if json_output:
+        from scripts.jobs import formatters
+
+        formatters.print_json(context.summary)
+        if not context.summary["ready"]:
+            raise typer.Exit(2)
+        return
+    typer.echo("Real Flow Context")
+    for key, value in context.summary.items():
+        typer.echo(f"{key}={value}")
+    if not context.summary["ready"]:
+        raise typer.Exit(2)
+
+
 @app.command("llm-job-billing", help="真实调用 LLM，并查询 Job billing。")
 def llm_job_billing_command(
     confirm_cost: Annotated[
@@ -160,7 +249,19 @@ def llm_job_billing_command(
     ] = False,
     api_url: Annotated[
         str | None,
-        typer.Option("--api-url", help="本地 API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导。"),
+        typer.Option("--api-url", help="API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导，远端 URL 必须配合 --allow-remote-api。"),
+    ] = None,
+    env_file: Annotated[
+        str | None,
+        typer.Option("--env-file", help="显式配置文件路径；默认读取仓库根目录 .env，运行时环境变量优先。"),
+    ] = None,
+    allow_remote_api: Annotated[
+        bool,
+        typer.Option("--allow-remote-api", help="允许 --api-url 或 API_URL 指向非本机地址；用于显式测试远端环境。"),
+    ] = False,
+    service_api_key: Annotated[
+        str | None,
+        typer.Option("--service-api-key", help="覆盖 SERVICE_API_KEY，作为 Authorization: Bearer token 发送。"),
     ] = None,
     model_id: Annotated[
         str | None,
@@ -176,7 +277,7 @@ def llm_job_billing_command(
     ] = "用一句话确认真实 LLM 计费链路可用。",
     caller_id: Annotated[
         str,
-        typer.Option("--caller-id", help="X-AI-Service-Caller-ID。"),
+        typer.Option("--caller-id", "--x-ai-service-caller-id", help="X-AI-Service-Caller-ID。"),
     ] = "real-flow-cli",
     timeout_seconds: Annotated[
         int,
@@ -209,6 +310,9 @@ def llm_job_billing_command(
             poll_interval_seconds=poll_interval_seconds,
             client_request_id=client_request_id,
             json_output=json_output,
+            allow_remote_api=allow_remote_api,
+            service_api_key=service_api_key,
+            env_file=env_file,
         )
     except llm_job_billing.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
@@ -223,7 +327,19 @@ def llm_job_double_billing_command(
     ] = False,
     api_url: Annotated[
         str | None,
-        typer.Option("--api-url", help="本地 API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导。"),
+        typer.Option("--api-url", help="API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导，远端 URL 必须配合 --allow-remote-api。"),
+    ] = None,
+    env_file: Annotated[
+        str | None,
+        typer.Option("--env-file", help="显式配置文件路径；默认读取仓库根目录 .env，运行时环境变量优先。"),
+    ] = None,
+    allow_remote_api: Annotated[
+        bool,
+        typer.Option("--allow-remote-api", help="允许 --api-url 或 API_URL 指向非本机地址；用于显式测试远端环境。"),
+    ] = False,
+    service_api_key: Annotated[
+        str | None,
+        typer.Option("--service-api-key", help="覆盖 SERVICE_API_KEY，作为 Authorization: Bearer token 发送。"),
     ] = None,
     model_id: Annotated[
         str | None,
@@ -243,7 +359,7 @@ def llm_job_double_billing_command(
     ] = "第二次调用：用另一句话确认同一 Job 的多次 LLM 计费可汇总。",
     caller_id: Annotated[
         str,
-        typer.Option("--caller-id", help="X-AI-Service-Caller-ID。"),
+        typer.Option("--caller-id", "--x-ai-service-caller-id", help="X-AI-Service-Caller-ID。"),
     ] = "real-flow-cli",
     timeout_seconds: Annotated[
         int,
@@ -276,6 +392,9 @@ def llm_job_double_billing_command(
             poll_interval_seconds=poll_interval_seconds,
             client_request_id=client_request_id,
             json_output=json_output,
+            allow_remote_api=allow_remote_api,
+            service_api_key=service_api_key,
+            env_file=env_file,
         )
     except llm_job_billing.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
@@ -288,6 +407,10 @@ def oss_upload_image_command(
         bool,
         typer.Option("--confirm-upload", help="确认本命令会上传文件到阿里云 OSS。"),
     ] = False,
+    env_file: Annotated[
+        str | None,
+        typer.Option("--env-file", help="显式配置文件路径；默认读取仓库根目录 .env，运行时环境变量优先。"),
+    ] = None,
     image: Annotated[
         str | None,
         typer.Option("--image", help="需要上传的本地图片路径；必须显式传入。"),
@@ -312,10 +435,21 @@ def oss_upload_image_command(
         bool,
         typer.Option("--json", help="输出机器可读上传结果和 URL Ref。"),
     ] = False,
+    json_ref_only: Annotated[
+        bool,
+        typer.Option("--json-ref-only", help="只输出 reference_image 可直接使用的 URL Ref JSON。"),
+    ] = False,
+    emit_poster_args: Annotated[
+        bool,
+        typer.Option("--emit-poster-args", help="输出可复制到 poster-title-image 的 --reference-* 参数。"),
+    ] = False,
 ) -> None:
     try:
         if image is None:
             raise oss_image_upload.FlowError("OSS image upload requires --image", exit_code=2)
+        output_flags = sum([json_output, json_ref_only, emit_poster_args])
+        if output_flags > 1:
+            raise oss_image_upload.FlowError("--json, --json-ref-only and --emit-poster-args are mutually exclusive", exit_code=2)
         oss_image_upload.run(
             confirm_upload=confirm_upload,
             image=image,
@@ -323,7 +457,8 @@ def oss_upload_image_command(
             key=key,
             key_prefix=key_prefix,
             signed_url_expires_seconds=signed_url_expires_seconds,
-            json_output=json_output,
+            output_mode="url-ref-json" if json_ref_only else "poster-args" if emit_poster_args else "json" if json_output else "table",
+            env_file=env_file,
         )
     except oss_image_upload.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
@@ -346,7 +481,19 @@ def poster_title_image_command(
     ] = False,
     api_url: Annotated[
         str | None,
-        typer.Option("--api-url", help="本地 API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导。"),
+        typer.Option("--api-url", help="API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导，远端 URL 必须配合 --allow-remote-api。"),
+    ] = None,
+    env_file: Annotated[
+        str | None,
+        typer.Option("--env-file", help="显式配置文件路径；默认读取仓库根目录 .env，运行时环境变量优先。"),
+    ] = None,
+    allow_remote_api: Annotated[
+        bool,
+        typer.Option("--allow-remote-api", help="允许 --api-url 或 API_URL 指向非本机地址；用于显式测试远端环境。"),
+    ] = False,
+    service_api_key: Annotated[
+        str | None,
+        typer.Option("--service-api-key", help="覆盖 SERVICE_API_KEY，作为 Authorization: Bearer token 发送。"),
     ] = None,
     reference_image: Annotated[
         str | None,
@@ -363,6 +510,10 @@ def poster_title_image_command(
     reference_public_url: Annotated[
         str | None,
         typer.Option("--reference-public-url", help="已有 OSS URL Ref 的 public_url；传入后不会 stage 本地文件。"),
+    ] = None,
+    reference_url_ref_json: Annotated[
+        str | None,
+        typer.Option("--reference-url-ref-json", help="读取 oss-upload-image --json 或 --json-ref-only 输出，作为 reference_image。传 - 表示 stdin。"),
     ] = None,
     reference_internal_url: Annotated[
         str | None,
@@ -406,7 +557,7 @@ def poster_title_image_command(
     ] = 1,
     caller_id: Annotated[
         str,
-        typer.Option("--caller-id", help="X-AI-Service-Caller-ID。"),
+        typer.Option("--caller-id", "--x-ai-service-caller-id", help="X-AI-Service-Caller-ID。"),
     ] = "real-flow-cli",
     timeout_seconds: Annotated[
         int,
@@ -444,6 +595,7 @@ def poster_title_image_command(
             api_url=api_url,
             items_json=items_json,
             reference_image=reference_image,
+            reference_url_ref_json=reference_url_ref_json,
             reference_public_url=reference_public_url,
             reference_internal_url=reference_internal_url,
             reference_sha256=reference_sha256,
@@ -463,6 +615,9 @@ def poster_title_image_command(
             download_outputs=download_outputs,
             output_dir=output_dir,
             signed_url_expires_seconds=signed_url_expires_seconds,
+            allow_remote_api=allow_remote_api,
+            service_api_key=service_api_key,
+            env_file=env_file,
         )
     except poster_title_image.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)

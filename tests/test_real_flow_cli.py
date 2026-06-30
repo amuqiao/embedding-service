@@ -79,7 +79,7 @@ def test_poster_title_image_cli_requires_explicit_reference(tmp_path, monkeypatc
     result = runner.invoke(app, ["poster-title-image", "--confirm-cost"])
 
     assert result.exit_code == 2
-    assert "requires --reference or explicit OSS URL Ref options" in result.stderr
+    assert "requires --reference, --reference-url-ref-json, or explicit OSS URL Ref options" in result.stderr
 
 
 def test_poster_title_image_cli_accepts_reference_alias(monkeypatch):
@@ -107,6 +107,299 @@ def test_poster_title_image_cli_accepts_reference_alias(monkeypatch):
     assert result.exit_code == 0
     assert captured["reference_image"] == ".data/title/标题2.png"
     assert captured["confirm_cost"] is True
+
+
+def test_poster_title_image_cli_accepts_reference_url_ref_json(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(poster_title_image, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "poster-title-image",
+            "--confirm-cost",
+            "--reference-url-ref-json",
+            ".run/reference-image.json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["reference_url_ref_json"] == ".run/reference-image.json"
+    assert captured["reference_image"] is None
+
+
+def test_real_flow_doctor_prints_resolved_context(tmp_path, monkeypatch):
+    for name in [
+        "API_URL",
+        "SERVICE_API_KEY",
+        "STORAGE_BACKEND",
+        "OSS_BUCKET",
+        "OSS_REGION",
+        "OSS_PROJECT_ROOT",
+        "OSS_PUBLIC_ENDPOINT",
+    ]:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    env_dir = tmp_path / "env_test"
+    env_dir.mkdir()
+    (env_dir / ".env").write_text(
+        "\n".join(
+            [
+                "API_URL=http://test.example.com",
+                "SERVICE_API_KEY=file-token",
+                "STORAGE_BACKEND=aliyun_oss",
+                "OSS_BUCKET=bucket-a",
+                "OSS_REGION=cn-hangzhou",
+                "OSS_PROJECT_ROOT=project-a/",
+                "OSS_PUBLIC_ENDPOINT=cdn.example.com",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "doctor",
+            "--env-file",
+            "env_test/.env",
+            "--allow-remote-api",
+            "--x-ai-service-caller-id",
+            "default",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["api_url"] == "http://test.example.com"
+    assert payload["api_url_source"] == "env_file"
+    assert payload["service_api_key_source"] == "env_file"
+    assert payload["caller_id"] == "default"
+    assert payload["storage_backend"] == "aliyun_oss"
+    assert payload["oss_public_endpoint"] == "cdn.example.com"
+    assert payload["ready"] is True
+    assert payload["problems"] == []
+
+
+def test_real_flow_doctor_rejects_missing_service_api_key(tmp_path, monkeypatch):
+    for name in ["API_URL", "SERVICE_API_KEY", "DISABLE_HTTP_AUTH_HEADER"]:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text("API_URL=http://127.0.0.1:8100\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["doctor", "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["ready"] is False
+    assert payload["problems"] == ["SERVICE_API_KEY is required unless DISABLE_HTTP_AUTH_HEADER=true"]
+
+
+def test_llm_job_billing_cli_accepts_remote_api_and_auth_options(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(llm_job_billing, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "llm-job-billing",
+            "--allow-remote-api",
+            "--api-url",
+            "http://test-cms-poster-title.epubgame.com",
+            "--env-file",
+            "env_test/.env",
+            "--service-api-key",
+            "test-token",
+            "--x-ai-service-caller-id",
+            "default",
+            "--confirm-cost",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["allow_remote_api"] is True
+    assert captured["api_url"] == "http://test-cms-poster-title.epubgame.com"
+    assert captured["env_file"] == "env_test/.env"
+    assert captured["service_api_key"] == "test-token"
+    assert captured["caller_id"] == "default"
+
+
+def test_llm_job_double_billing_cli_accepts_remote_api_and_auth_options(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(llm_job_billing, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "llm-job-double-billing",
+            "--allow-remote-api",
+            "--api-url",
+            "http://test-cms-poster-title.epubgame.com",
+            "--env-file",
+            "env_test/.env",
+            "--service-api-key",
+            "test-token",
+            "--x-ai-service-caller-id",
+            "default",
+            "--confirm-cost",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["allow_remote_api"] is True
+    assert captured["api_url"] == "http://test-cms-poster-title.epubgame.com"
+    assert captured["env_file"] == "env_test/.env"
+    assert captured["service_api_key"] == "test-token"
+    assert captured["caller_id"] == "default"
+
+
+def test_poster_title_image_cli_accepts_remote_api_and_auth_options(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(poster_title_image, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "poster-title-image",
+            "--allow-remote-api",
+            "--api-url",
+            "http://test-cms-poster-title.epubgame.com",
+            "--env-file",
+            "env_test/.env",
+            "--service-api-key",
+            "test-token",
+            "--x-ai-service-caller-id",
+            "default",
+            "--confirm-cost",
+            "--confirm-upload",
+            "--reference",
+            ".data/title/标题2.png",
+            "--language",
+            "es",
+            "--title-text",
+            "Cuando el amor se alejo",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["allow_remote_api"] is True
+    assert captured["api_url"] == "http://test-cms-poster-title.epubgame.com"
+    assert captured["env_file"] == "env_test/.env"
+    assert captured["service_api_key"] == "test-token"
+    assert captured["caller_id"] == "default"
+
+
+def test_poster_title_image_cli_keeps_legacy_caller_id_option(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(poster_title_image, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "poster-title-image",
+            "--confirm-cost",
+            "--reference",
+            ".data/title/标题2.png",
+            "--caller-id",
+            "legacy-caller",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["caller_id"] == "legacy-caller"
+
+
+def test_oss_upload_image_cli_accepts_env_file(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(oss_image_upload, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "oss-upload-image",
+            "--confirm-upload",
+            "--env-file",
+            "env_test/.env",
+            "--image",
+            ".data/title/标题2.png",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["env_file"] == "env_test/.env"
+    assert captured["image"] == ".data/title/标题2.png"
+    assert captured["output_mode"] == "table"
+
+
+def test_oss_upload_image_cli_supports_url_ref_json_output(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(oss_image_upload, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "oss-upload-image",
+            "--confirm-upload",
+            "--image",
+            ".data/title/标题2.png",
+            "--json-ref-only",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["output_mode"] == "url-ref-json"
+
+
+def test_oss_upload_image_cli_supports_poster_args_output(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(oss_image_upload, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "oss-upload-image",
+            "--confirm-upload",
+            "--image",
+            ".data/title/标题2.png",
+            "--emit-poster-args",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["output_mode"] == "poster-args"
 
 
 def test_oss_upload_image_cli_requires_confirm_upload():
@@ -330,6 +623,7 @@ def test_poster_title_image_run_supports_items_json_with_multiple_references(tmp
         api_url=None,
         items_json=str(items_path),
         reference_image=poster_title_image.DEFAULT_REFERENCE_IMAGE,
+        reference_url_ref_json=None,
         reference_public_url=None,
         reference_internal_url=None,
         reference_sha256=None,
@@ -425,7 +719,7 @@ def test_oss_image_upload_builds_url_ref_with_fake_client(tmp_path, monkeypatch)
     result = oss_image_upload.upload_image(
         image="reference.png",
         content_type=None,
-        app_env={"OSS_OUTPUT_PREFIX": "outputs"},
+        app_env={"OSS_OUTPUT_PREFIX": "outputs", "OSS_PUBLIC_ENDPOINT": "aigc-datas.epubgame.com"},
         key="inputs/reference.png",
         signed_url_expires_seconds=1800,
         client=FakeClient(),
@@ -445,7 +739,7 @@ def test_oss_image_upload_builds_url_ref_with_fake_client(tmp_path, monkeypatch)
     assert result["signed_url"] == "https://signed.example.com/project-a/inputs/reference.png?Signature=sig"
     assert result["signed_url_expires_seconds"] == 1800
     assert result["url_ref"] == {
-        "public_url": "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/inputs/reference.png",
+        "public_url": "https://aigc-datas.epubgame.com/project-a/inputs/reference.png",
         "internal_url": "https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/inputs/reference.png",
         "content_type": "image/png",
         "sha256": oss_image_upload.bare_sha256(b"png-reference"),
@@ -500,6 +794,55 @@ def test_real_flow_headers_use_auth_and_caller_id(monkeypatch):
     assert headers["X-AI-Service-Caller-ID"] == "caller-1"
 
 
+def test_real_flow_headers_use_explicit_service_key(monkeypatch):
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+
+    headers = llm_job_billing.build_headers(
+        {
+            "SERVICE_API_KEY": "env-secret",
+            "DISABLE_HTTP_AUTH_HEADER": "false",
+            "DISABLE_CALLER_ID_HEADER": "false",
+        },
+        caller_id="caller-1",
+        service_api_key="cli-secret",
+    )
+
+    assert headers["Authorization"] == "Bearer cli-secret"
+    assert headers["X-AI-Service-Caller-ID"] == "caller-1"
+
+
+def test_real_flow_load_app_env_uses_explicit_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    env_dir = tmp_path / "env_test"
+    env_dir.mkdir()
+    (env_dir / ".env").write_text("API_URL=http://test.example.com\nSERVICE_API_KEY=file-token\n", encoding="utf-8")
+
+    values = llm_job_billing.load_app_env("env_test/.env")
+
+    assert values["API_URL"] == "http://test.example.com"
+    assert values["SERVICE_API_KEY"] == "file-token"
+
+
+def test_real_flow_load_app_env_rejects_missing_explicit_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+
+    with pytest.raises(llm_job_billing.FlowError) as exc:
+        llm_job_billing.load_app_env("env_test/.env")
+
+    assert exc.value.exit_code == 2
+    assert "env file not found" in str(exc.value)
+
+
+def test_real_flow_env_value_prefers_runtime_env(monkeypatch):
+    monkeypatch.setenv("SERVICE_API_KEY", "runtime-token")
+
+    value = llm_job_billing.env_value("SERVICE_API_KEY", {"SERVICE_API_KEY": "file-token"})
+
+    assert value == "runtime-token"
+
+
 def test_real_flow_resolves_api_url_from_root_env():
     api_url = llm_job_billing.resolved_api_url(None, {"API_HOST": "127.0.0.1", "API_PORT": "18200"})
 
@@ -512,6 +855,16 @@ def test_real_flow_rejects_non_local_api_url():
 
     assert exc.value.exit_code == 2
     assert "only targets local API URLs" in str(exc.value)
+
+
+def test_real_flow_accepts_remote_api_url_when_explicitly_allowed():
+    api_url = llm_job_billing.resolved_api_url(
+        "https://api.example.com",
+        {},
+        allow_remote_api=True,
+    )
+
+    assert api_url == "https://api.example.com"
 
 
 @pytest.mark.parametrize("api_url", ["https://127.example.com", "https://127.0.0.1.nip.io"])
@@ -599,6 +952,86 @@ def test_real_flow_run_uses_http_job_and_billing_flow(tmp_path, monkeypatch):
     assert calls[0]["payload"]["job_params"]["model_id"] == "gpt-5.4-mini"
     assert calls[1]["method"] == "GET"
     assert calls[1]["url"] == "http://127.0.0.1:18200/api/v1/ai-jobs/jobs/job-1/billing"
+
+
+def test_real_flow_run_uses_env_file_for_remote_api_and_service_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("DEFAULT_MODEL_ID", raising=False)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    env_dir = tmp_path / "env_test"
+    env_dir.mkdir()
+    (env_dir / ".env").write_text(
+        "\n".join(
+            [
+                "API_URL=http://test-cms-poster-title.epubgame.com",
+                "SERVICE_API_KEY=file-secret",
+                "DISABLE_HTTP_AUTH_HEADER=false",
+                "DISABLE_CALLER_ID_HEADER=false",
+                "DEFAULT_MODEL_ID=gpt-5.4-mini",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    def fake_request_json(url, *, method, headers, payload=None, timeout_seconds=10):
+        calls.append({"url": url, "method": method, "headers": headers, "payload": payload})
+        if method == "POST":
+            return {"code": "0", "data": {"job": {"job_id": "job-remote", "job_status": "queued"}}}
+        return {
+            "code": "0",
+            "data": {
+                "billing": {
+                    "status": "estimated",
+                    "currency": "USD",
+                    "total_cost_amount": "0.00000100",
+                    "usage_units": {},
+                    "pricing_refs": [],
+                    "ai_call_count": 1,
+                    "billable_call_count": 1,
+                    "failed_call_count": 0,
+                    "diagnostic_reason": None,
+                    "finalized_at": None,
+                }
+            },
+        }
+
+    monkeypatch.setattr(llm_job_billing, "request_json", fake_request_json)
+    monkeypatch.setattr(
+        llm_job_billing,
+        "poll_job_envelope",
+        lambda **kwargs: {
+            "code": "0",
+            "data": {"job": {"job_id": "job-remote", "job_status": "succeeded", "job_type": "job_real_llm_echo"}},
+        },
+    )
+
+    llm_job_billing.run(
+        confirm_cost=True,
+        job_type="job_real_llm_echo",
+        api_url=None,
+        model_id=None,
+        input_text="hello",
+        instruction="reply once",
+        second_instruction=None,
+        caller_id="default",
+        timeout_seconds=1,
+        poll_interval_seconds=0.1,
+        client_request_id="client-remote",
+        json_output=True,
+        allow_remote_api=True,
+        service_api_key=None,
+        env_file="env_test/.env",
+    )
+
+    assert calls[0]["url"] == "http://test-cms-poster-title.epubgame.com/api/v1/ai-jobs/jobs"
+    assert calls[0]["headers"]["Authorization"] == "Bearer file-secret"
+    assert calls[0]["headers"]["X-AI-Service-Caller-ID"] == "default"
+    assert calls[1]["url"] == "http://test-cms-poster-title.epubgame.com/api/v1/ai-jobs/jobs/job-remote/billing"
 
 
 def test_real_flow_run_uses_double_job_type(tmp_path, monkeypatch):
@@ -751,6 +1184,7 @@ def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, c
         api_url=None,
         items_json=None,
         reference_image=poster_title_image.DEFAULT_REFERENCE_IMAGE,
+        reference_url_ref_json=None,
         reference_public_url=None,
         reference_internal_url=None,
         reference_sha256=None,
@@ -886,6 +1320,7 @@ def test_poster_title_image_downloads_all_output_artifacts(tmp_path, monkeypatch
         api_url=None,
         items_json=None,
         reference_image=poster_title_image.DEFAULT_REFERENCE_IMAGE,
+        reference_url_ref_json=None,
         reference_public_url=None,
         reference_internal_url=None,
         reference_sha256=None,
@@ -994,6 +1429,66 @@ def test_poster_title_image_download_uses_signed_url_when_public_url_is_private(
     assert artifacts[0]["image_inspection"]["passed"] is True
     assert artifacts[0]["image_inspection"]["result"]["alpha"]["transparent_background"] is True
     assert (tmp_path / artifacts[0]["local_path"]).read_bytes() == data
+
+
+def test_poster_title_image_download_signed_fallback_supports_cdn_public_url(tmp_path, monkeypatch):
+    clear_storage_env(monkeypatch)
+    monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
+    app_env = {
+        "STORAGE_BACKEND": "aliyun_oss",
+        "OSS_BUCKET": "bucket-a",
+        "OSS_REGION": "cn-hangzhou",
+        "OSS_ACCESS_KEY_ID": "id",
+        "OSS_ACCESS_KEY_SECRET": "secret",
+        "OSS_PROJECT_ROOT": "project-a",
+        "OSS_PUBLIC_ENDPOINT": "cdn.example.com",
+    }
+    data = _transparent_png_bytes()
+    calls = []
+
+    def fake_download_url(url, *, timeout_seconds=30):
+        calls.append(url)
+        if "Signature=" not in url:
+            raise poster_title_image.FlowError("download failed: status=403", exit_code=4)
+        return data
+
+    monkeypatch.setattr(poster_title_image, "_download_url", fake_download_url)
+
+    artifacts = poster_title_image.download_output_artifacts(
+        job={
+            "job_id": "poster-job-cdn",
+            "job_result": {
+                "items": [
+                    {
+                        "item_id": "es",
+                        "language": "es",
+                        "images": [
+                            {
+                                "object": {
+                                    "public_url": "https://cdn.example.com/project-a/poster-job-cdn/es/title-layer.png",
+                                    "internal_url": (
+                                        "https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/"
+                                        "project-a/poster-job-cdn/es/title-layer.png"
+                                    ),
+                                    "content_type": "image/png",
+                                    "sha256": poster_title_image._bare_sha256(data),
+                                }
+                            }
+                        ],
+                    }
+                ]
+            },
+        },
+        app_env=app_env,
+        output_dir=".data/downloaded-poster-title",
+        signed_url_expires_seconds=60,
+    )
+
+    assert calls[0] == "https://cdn.example.com/project-a/poster-job-cdn/es/title-layer.png"
+    assert "Signature=" in calls[1]
+    assert "/project-a/poster-job-cdn/es/title-layer.png?" in calls[1]
+    assert artifacts[0]["sha256_verified"] is True
+    assert artifacts[0]["download_method"] == "signed_url"
 
 
 def test_poster_title_image_download_rejects_non_transparent_background(tmp_path, monkeypatch):
@@ -1131,6 +1626,7 @@ def test_real_flow_run_uploads_poster_reference_when_aliyun_oss_enabled(tmp_path
         api_url=None,
         items_json=None,
         reference_image=str(reference_path),
+        reference_url_ref_json=None,
         reference_public_url=None,
         reference_internal_url=None,
         reference_sha256=None,
@@ -1164,7 +1660,8 @@ def test_poster_title_image_aliyun_upload_requires_confirmation(tmp_path, monkey
 
     with pytest.raises(poster_title_image.FlowError, match="--confirm-upload"):
         poster_title_image.resolve_reference_image(
-            reference_image="reference.png",
+            reference_image=str(source),
+            reference_url_ref_json=None,
             reference_public_url=None,
             reference_internal_url=None,
             reference_sha256=None,
@@ -1190,6 +1687,7 @@ def test_poster_title_image_explicit_url_ref_does_not_upload(monkeypatch):
 
     resolution = poster_title_image.resolve_reference_image(
         reference_image=None,
+        reference_url_ref_json=None,
         reference_public_url=uploaded_ref["public_url"],
         reference_internal_url=uploaded_ref["internal_url"],
         reference_sha256=uploaded_ref["sha256"],
@@ -1202,12 +1700,106 @@ def test_poster_title_image_explicit_url_ref_does_not_upload(monkeypatch):
     assert resolution.uploaded_image is None
 
 
+def test_poster_title_image_reference_url_ref_json_accepts_upload_output(tmp_path, monkeypatch):
+    clear_storage_env(monkeypatch)
+    monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
+    uploaded_ref = {
+        "public_url": "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.png",
+        "internal_url": "https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.png",
+        "content_type": "image/png",
+        "sha256": "c" * 64,
+    }
+    source = tmp_path / "upload-output.json"
+    source.write_text(json.dumps({"url_ref": uploaded_ref}), encoding="utf-8")
+
+    resolution = poster_title_image.resolve_reference_image(
+        reference_image=None,
+        reference_url_ref_json="upload-output.json",
+        reference_public_url=None,
+        reference_internal_url=None,
+        reference_sha256=None,
+        reference_content_type=None,
+        app_env={"STORAGE_BACKEND": "aliyun_oss"},
+        confirm_upload=False,
+    )
+
+    assert resolution.ref == uploaded_ref
+    assert resolution.uploaded_image is None
+
+
+def test_poster_title_image_reference_url_ref_json_accepts_plain_ref(tmp_path, monkeypatch):
+    clear_storage_env(monkeypatch)
+    monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
+    uploaded_ref = {
+        "public_url": "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.png",
+        "internal_url": "https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.png",
+        "content_type": "image/png",
+        "sha256": "d" * 64,
+    }
+    source = tmp_path / "reference.json"
+    source.write_text(json.dumps(uploaded_ref), encoding="utf-8")
+
+    resolved = poster_title_image.reference_image_from_url_ref_json("reference.json")
+
+    assert resolved == uploaded_ref
+
+
+def test_poster_title_image_reference_url_ref_json_rejects_empty_fields(tmp_path, monkeypatch):
+    clear_storage_env(monkeypatch)
+    monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
+    source = tmp_path / "reference.json"
+    source.write_text(
+        json.dumps(
+            {
+                "public_url": "",
+                "internal_url": "https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.png",
+                "content_type": "image/png",
+                "sha256": "d" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(poster_title_image.FlowError, match="public_url"):
+        poster_title_image.reference_image_from_url_ref_json("reference.json")
+
+
+def test_poster_title_image_rejects_mixed_reference_sources(tmp_path, monkeypatch):
+    clear_storage_env(monkeypatch)
+    monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
+    source = tmp_path / "reference.json"
+    source.write_text(
+        json.dumps(
+            {
+                "public_url": "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.png",
+                "internal_url": "https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.png",
+                "content_type": "image/png",
+                "sha256": "d" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(poster_title_image.FlowError, match="exactly one"):
+        poster_title_image.resolve_reference_image(
+            reference_image="reference.png",
+            reference_url_ref_json="reference.json",
+            reference_public_url=None,
+            reference_internal_url=None,
+            reference_sha256=None,
+            reference_content_type=None,
+            app_env={"STORAGE_BACKEND": "local"},
+            confirm_upload=False,
+        )
+
+
 def test_poster_title_image_explicit_url_ref_rejects_jpeg_content_type(monkeypatch):
     clear_storage_env(monkeypatch)
 
     with pytest.raises(poster_title_image.FlowError, match="image/png"):
         poster_title_image.resolve_reference_image(
-            reference_image="reference.png",
+            reference_image=None,
+            reference_url_ref_json=None,
             reference_public_url="https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.jpg",
             reference_internal_url="https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.jpg",
             reference_sha256="c" * 64,
@@ -1248,13 +1840,14 @@ def test_real_flow_run_ignores_env_reference_url_ref_by_default(tmp_path, monkey
         f"POSTER_TITLE_IMAGE_REFERENCE_SHA256={'c' * 64}",
     )
 
-    with pytest.raises(poster_title_image.FlowError, match="requires --reference or explicit OSS URL Ref options"):
+    with pytest.raises(poster_title_image.FlowError, match="requires --reference, --reference-url-ref-json, or explicit OSS URL Ref options"):
         poster_title_image.run(
             confirm_cost=True,
             confirm_upload=False,
             api_url=None,
             items_json=None,
             reference_image=None,
+            reference_url_ref_json=None,
             reference_public_url=None,
             reference_internal_url=None,
             reference_sha256=None,
@@ -1326,6 +1919,7 @@ def test_poster_title_image_keeps_uploaded_reference_when_create_response_is_unk
             api_url=None,
             items_json=None,
             reference_image=str(reference_path),
+            reference_url_ref_json=None,
             reference_public_url=None,
             reference_internal_url=None,
             reference_sha256=None,
@@ -1408,6 +2002,7 @@ def test_poster_title_image_cleans_uploaded_reference_when_failure_happens_befor
             api_url=None,
             items_json=None,
             reference_image=str(reference_path),
+            reference_url_ref_json=None,
             reference_public_url=None,
             reference_internal_url=None,
             reference_sha256=None,

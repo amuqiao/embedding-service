@@ -21,8 +21,8 @@ from app.integrations.image import (
 )
 from app.integrations.object_storage import sha256_digest
 from app.integrations.storage import storage
-from app.jobs.adapters.cpp_oss_url_ref import canonical_ref_from_cpp_oss_url_ref, cpp_oss_url_ref_from_output_object
 from app.jobs.adapters.http_url_input import read_http_url_bytes
+from app.jobs.adapters.oss_url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
 from app.jobs.base import JobExecutor
 from app.jobs.model_selection import (
     poster_title_image_generation_allowed_model_ids,
@@ -155,11 +155,12 @@ def _raise_reference_invalid_if_applicable(exc: AppError) -> None:
 
 def _validate_reference_ref_payload(reference_image: Any) -> None:
     try:
-        canonical_ref_from_cpp_oss_url_ref(
+        canonical_ref_from_oss_url_ref(
             reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image,
             allowed_buckets=settings.job.poster_title_image_allowed_oss_buckets,
             allowed_regions=settings.job.poster_title_image_allowed_oss_regions,
             allowed_content_types=TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
+            public_endpoint=settings.storage.oss_public_endpoint or None,
         )
     except AppError as exc:
         _raise_reference_invalid_if_applicable(exc)
@@ -169,11 +170,12 @@ def _validate_reference_ref_payload(reference_image: Any) -> None:
 def _load_reference_image_from_ref(reference_image: Any) -> ImageInput:
     payload = reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image
     try:
-        ref = canonical_ref_from_cpp_oss_url_ref(
+        ref = canonical_ref_from_oss_url_ref(
             payload,
             allowed_buckets=settings.job.poster_title_image_allowed_oss_buckets,
             allowed_regions=settings.job.poster_title_image_allowed_oss_regions,
             allowed_content_types=TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
+            public_endpoint=settings.storage.oss_public_endpoint or None,
         )
     except AppError as exc:
         _raise_reference_invalid_if_applicable(exc)
@@ -708,12 +710,13 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
                 content_hash=written["content_hash"],
                 bytes=len(image_bytes),
             )
-            obj = cpp_oss_url_ref_from_output_object(
+            obj = oss_url_ref_from_output_object(
                 bucket=str(written["oss_bucket"]),
                 region=str(written["oss_region"]),
                 key=str(written["oss_key"]),
                 content_type="image/png",
                 content_hash=str(written["content_hash"]),
+                public_endpoint=settings.storage.oss_public_endpoint or None,
             )
             images.append(PosterTitleImageImage(object=PosterTitleImageObject.model_validate(obj)))
         elapsed_ms = int((time.monotonic() - started) * 1000)

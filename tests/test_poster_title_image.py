@@ -220,6 +220,7 @@ def test_poster_title_image_rejects_items_above_config(monkeypatch):
                 poster_title_image_generation_default_model_id="gpt-image-2",
                 poster_title_image_generation_allowed_model_ids=("gpt-image-2",),
             ),
+            storage=SimpleNamespace(oss_public_endpoint=""),
         ),
     )
     params = _params_for_item_count(_url_ref("reference/title.png", b"x"), 2, language="en")
@@ -253,6 +254,7 @@ def test_poster_title_image_rejects_draw_count_above_config(monkeypatch):
                 poster_title_image_generation_default_model_id="gpt-image-2",
                 poster_title_image_generation_allowed_model_ids=("gpt-image-2",),
             ),
+            storage=SimpleNamespace(oss_public_endpoint=""),
         ),
     )
     params = _params(_url_ref("reference/title.png", b"x"))
@@ -283,6 +285,7 @@ def test_poster_title_image_accepts_configured_reference_oss_allowlist(monkeypat
                 poster_title_image_generation_default_model_id="gpt-image-2",
                 poster_title_image_generation_allowed_model_ids=("gpt-image-2",),
             ),
+            storage=SimpleNamespace(oss_public_endpoint=""),
         ),
     )
     params = _params(
@@ -559,7 +562,8 @@ def test_poster_title_image_reference_read_uses_public_url_not_output_storage(mo
             job=SimpleNamespace(
                 poster_title_image_allowed_oss_buckets=("cpp-rs-dev",),
                 poster_title_image_allowed_oss_regions=("ap-southeast-1",),
-            )
+            ),
+            storage=SimpleNamespace(oss_public_endpoint=""),
         ),
     )
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", NoReadStorage())
@@ -569,6 +573,36 @@ def test_poster_title_image_reference_read_uses_public_url_not_output_storage(mo
 
     assert result.data == data
     assert result.content_type == "image/png"
+    assert calls == [(ref["public_url"], {"max_bytes": TRANSPARENT_REFERENCE_MAX_BYTES})]
+
+
+def test_poster_title_image_reference_accepts_configured_cdn_public_url(monkeypatch):
+    from app.jobs.types.poster_title_image.executor import _load_reference_image_from_ref
+
+    data = _transparent_reference_png_bytes()
+    ref = _url_ref("reference/title.png", data, bucket="cpp-rs-dev", region="ap-southeast-1")
+    ref["public_url"] = "https://aigc-datas.epubgame.com/reference/title.png"
+    calls = []
+
+    def fake_read_http_url_bytes(url, **kwargs):
+        calls.append((url, kwargs))
+        return data
+
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.settings",
+        SimpleNamespace(
+            job=SimpleNamespace(
+                poster_title_image_allowed_oss_buckets=("cpp-rs-dev",),
+                poster_title_image_allowed_oss_regions=("ap-southeast-1",),
+            ),
+            storage=SimpleNamespace(oss_public_endpoint="aigc-datas.epubgame.com"),
+        ),
+    )
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor.read_http_url_bytes", fake_read_http_url_bytes)
+
+    result = _load_reference_image_from_ref(ref)
+
+    assert result.data == data
     assert calls == [(ref["public_url"], {"max_bytes": TRANSPARENT_REFERENCE_MAX_BYTES})]
 
 
@@ -674,6 +708,13 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_provider_model", lambda: "gpt-5.5")
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
     monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.settings",
+        SimpleNamespace(
+            job=settings.job,
+            storage=SimpleNamespace(oss_public_endpoint="aigc-datas.epubgame.com"),
+        ),
+    )
+    monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.generate_image_with_ledger",
         fake_generate_image_with_ledger,
     )
@@ -706,7 +747,8 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     assert item["status"] == "succeeded"
     obj = item["images"][0]["object"]
     assert opened_urls == [reference_ref["public_url"]]
-    assert obj["public_url"].startswith(f"https://{output_bucket}.oss-{output_region}.aliyuncs.com/")
+    assert obj["public_url"].startswith("https://aigc-datas.epubgame.com/")
+    assert obj["internal_url"].startswith(f"https://{output_bucket}.oss-{output_region}-internal.aliyuncs.com/")
     assert obj["content_type"] == "image/png"
     assert len(recorded) == 1
     assert recorded[0]["model_id"] == "gpt-image-2"

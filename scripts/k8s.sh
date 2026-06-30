@@ -283,7 +283,7 @@ import time
 
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
 from app.integrations.object_storage import sha256_digest
-from app.jobs.adapters.cpp_oss_url_ref import cpp_oss_url_ref_from_output_object
+from app.jobs.adapters.oss_url_ref import oss_url_ref_from_output_object
 
 
 TEST_CONTENT = b"fastapi-best-ai-architecture k8s oss connectivity check\n"
@@ -340,12 +340,13 @@ key = "/".join(part for part in (output_prefix, "k8s-check", f"check-{int(time.t
 object_key = client.object_key(key)
 print(f"OSS_TEST_KEY={object_key}")
 content_hash = sha256_digest(TEST_CONTENT)
-url_ref = cpp_oss_url_ref_from_output_object(
+url_ref = oss_url_ref_from_output_object(
     bucket=config.bucket,
     region=config.region,
     key=object_key,
     content_type=TEST_CONTENT_TYPE,
     content_hash=content_hash,
+    public_endpoint=public_endpoint or None,
 )
 print(f"OSS_TEST_PUBLIC_URL={url_ref['public_url']}")
 print(f"OSS_TEST_INTERNAL_URL={url_ref['internal_url']}")

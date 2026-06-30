@@ -1,51 +1,177 @@
-# poster-title-image 真实流程本地验证 Runbook
+# poster-title-image 真实流程验证 Runbook
 
-本文说明如何在本地实测 `./scripts/real-flow.sh poster-title-image`，以及如何理解等待、参考图、输出下载、图片检测和常见失败。
+本文说明如何用 `./scripts/real-flow.sh` 验证 `poster_title_image`，覆盖本地开发和远端测试环境。推荐心智模型是：先检查配置，再准备 `reference_image` URL Ref，最后创建真实 Job。
 
-## 先理解这条命令
+## 先理解这件事
 
-`poster-title-image` 不是“提交 Job 后立刻退出”的命令。它是一个同步验证入口，会：
+`poster-title-image` 是真实业务流程验证入口，不是单纯的 HTTP 请求示例。它会创建真实 `poster_title_image` Job，等待 worker 执行到终态，查询 billing，并按需下载输出图做本地检测。
 
-1. 准备参考图。
-2. 调用本地 API 创建真实 `poster_title_image` Job。
-3. 等 worker 执行到终态。
-4. 查询 billing。
-5. 按需下载输出图并做本地检测。
-6. 输出 summary 和原始 HTTP envelope。
+完整链路是：
+
+```text
+配置检查
+  |
+  v
+准备 reference_image URL Ref
+  |
+  v
+POST /api/v1/ai-jobs/jobs
+  |
+  v
+轮询 Job 终态
+  |
+  v
+查询 billing
+  |
+  v
+可选下载输出图并校验 sha256 / 透明背景
+```
 
 所以命令不会立即返回是正常的。默认最长等待 `900s`，每 `2s` 轮询一次，直到 Job 进入 `succeeded` 或 `failed`。
 
-这条命令会触发真实模型调用，必须显式传 `--confirm-cost`。
+这条链路会触发真实模型调用，必须显式传 `--confirm-cost`。涉及上传本地图片到 OSS 时，必须显式传 `--confirm-upload`。
 
-## 前置条件
+## 选择验证模式
 
-启动本地服务并执行迁移：
+优先按目标选择路径：
+
+| 目标 | 推荐路径 | 说明 |
+|---|---|---|
+| 验证远端测试环境 | `doctor` -> `oss-upload-image --json-ref-only` -> `poster-title-image --reference-url-ref-json` | 最接近调用方传 URL Ref 的真实形态，问题定位最清楚。 |
+| 本地开发快速验证 | `poster-title-image --reference 本地图片` | 适合本地 API/worker 联调。 |
+| 复现调用方入参 | `poster-title-image --reference-url-ref-json` 或手动四字段 | 避免本地上传路径影响判断。 |
+
+旧的“一条 `poster-title-image` 命令里直接传本地 `--reference` 并上传到 OSS”仍可用，但不作为远端测试推荐路径。远端测试更推荐先单独上传得到 URL Ref，再用 URL Ref 创建 Job。
+
+## 推荐流程：远端测试环境
+
+远端测试环境建议拆成三步。这样每一步失败时都能明确定位问题，不需要在一个长命令里猜是配置、上传、URL Ref 还是 Job 创建失败。
+
+### 1. 检查 real-flow 上下文
+
+```bash
+./scripts/real-flow.sh doctor \
+  --env-file env_test/.env \
+  --allow-remote-api \
+  --api-url http://test-cms-poster-title.epubgame.com \
+  --json
+```
+
+重点看：
+
+```json
+{
+  "ready": true,
+  "problems": [],
+  "api_url_source": "cli",
+  "service_api_key_source": "env_file",
+  "storage_backend": "aliyun_oss",
+  "oss_bucket": "aigc-datas",
+  "oss_region": "us-west-1",
+  "oss_public_endpoint": "aigc-datas.epubgame.com"
+}
+```
+
+判断规则：
+
+- `ready=true` 且 `problems=[]` 才继续。
+- `service_api_key_source=env_file` 表示 `SERVICE_API_KEY` 已从 `env_test/.env` 加载，不需要在命令前再写 `SERVICE_API_KEY=...`。
+- 如果是 `service_api_key_source=runtime_env`，说明当前 shell 的环境变量覆盖了 `env_test/.env`。
+- `api_url_source=cli` 是因为命令里显式传了 `--api-url`，这是预期行为。
+
+### 2. 上传参考图并生成 URL Ref
+
+```bash
+mkdir -p .run
+
+./scripts/real-flow.sh oss-upload-image \
+  --env-file env_test/.env \
+  --confirm-upload \
+  --image .data/title/True_Heiress_Never_Lies.png \
+  --json-ref-only > .run/reference-image.json
+```
+
+检查输出文件：
+
+```bash
+cat .run/reference-image.json
+```
+
+期望结构：
+
+```json
+{
+  "public_url": "https://aigc-datas.epubgame.com/test-cms-poster-title/ai-jobs/...",
+  "internal_url": "https://aigc-datas.oss-us-west-1-internal.aliyuncs.com/test-cms-poster-title/ai-jobs/...",
+  "content_type": "image/png",
+  "sha256": "..."
+}
+```
+
+这里 `public_url` 应使用 CDN 域名，`internal_url` 仍是 OSS 内网地址。服务端当前读取参考图使用 `public_url`。
+
+### 3. 使用 URL Ref 创建真实 Job
+
+```bash
+./scripts/real-flow.sh poster-title-image \
+  --allow-remote-api \
+  --env-file env_test/.env \
+  --api-url http://test-cms-poster-title.epubgame.com \
+  --x-ai-service-caller-id default \
+  --confirm-cost \
+  --reference-url-ref-json .run/reference-image.json \
+  --language es \
+  --title-text "Cuando el amor se alejo" \
+  --download-outputs \
+  --json
+```
+
+如果 `SERVICE_API_KEY` 不在 `env_test/.env`，优先在执行前通过当前 shell 会话、密钥管理器或 CI secret 注入。共享机器不要把真实 token 直接写进命令行。
+
+```bash
+export SERVICE_API_KEY='<测试环境 API token>'
+```
+
+只有一次性临时排查、且确认 shell history 不会记录敏感值时，才使用内联环境变量前缀：
+
+```bash
+SERVICE_API_KEY='<测试环境 API token>' \
+./scripts/real-flow.sh poster-title-image \
+  --allow-remote-api \
+  --env-file env_test/.env \
+  --api-url http://test-cms-poster-title.epubgame.com \
+  --x-ai-service-caller-id default \
+  --confirm-cost \
+  --reference-url-ref-json .run/reference-image.json \
+  --language es \
+  --title-text "Cuando el amor se alejo" \
+  --download-outputs \
+  --json
+```
+
+共享机器或 CI 不建议使用内联环境变量或命令行 `--service-api-key`，因为它们可能进入 shell history、CI 日志或进程参数。
+
+## 本地开发流程
+
+本地验证前启动依赖、API 和 worker：
 
 ```bash
 ./scripts/dev.sh restart
-```
-
-查看服务状态：
-
-```bash
 ./scripts/dev.sh status
 ```
 
-如果刚改过迁移或 Job workflow，至少确认：
+如果刚改过迁移、Job workflow 或对象存储逻辑，先跑：
 
 ```bash
 ./scripts/verify.sh check
 ./scripts/verify.sh migration-roundtrip
 ```
 
-## 最小实测命令
-
-使用本地参考图：
+本地最小命令：
 
 ```bash
 ./scripts/real-flow.sh poster-title-image \
   --confirm-cost \
-  --confirm-upload \
   --reference .data/title/True_Heiress_Never_Lies.png \
   --language es \
   --title-text "Cuando el amor se alejo" \
@@ -55,31 +181,81 @@
   --json
 ```
 
-指定本地参考图：
+如果本地配置也是 `STORAGE_BACKEND=aliyun_oss`，并且传的是本地 `--reference` 图片，需要额外加：
 
 ```bash
-./scripts/real-flow.sh poster-title-image \
-  --confirm-cost \
-  --reference .data/title/Silent_Heart_Stolen_Love.png \
-  --language ja \
-  --title-text "愛が終わりを告げたとき" \
-  --download-outputs \
-  --json
+--confirm-upload
 ```
 
-生成后下载输出图，并把下载检测结果写入 summary：
+## 可选旧路径：一条命令上传并创建 Job
+
+如果你只是临时验证远端测试环境，也可以在 `poster-title-image` 里直接传本地图片，让脚本先上传参考图再创建 Job：
 
 ```bash
 ./scripts/real-flow.sh poster-title-image \
+  --allow-remote-api \
+  --env-file env_test/.env \
+  --api-url http://test-cms-poster-title.epubgame.com \
+  --x-ai-service-caller-id default \
   --confirm-cost \
-  --reference .data/title/英语.png \
+  --confirm-upload \
+  --reference .data/title/True_Heiress_Never_Lies.png \
   --language es \
   --title-text "Cuando el amor se alejo" \
   --download-outputs \
   --json
 ```
 
-## 构建 items-json 示例
+这个路径步骤更少，但排障边界更粗：上传、URL Ref 构造、Job 创建和轮询都混在一条命令里。遇到 400 或 500 时，优先切回推荐三步流程。
+
+## reference_image 来源
+
+`poster-title-image` 最终传给 API 的参考图固定是 URL Ref：
+
+```json
+{
+  "public_url": "...",
+  "internal_url": "...",
+  "content_type": "image/png",
+  "sha256": "..."
+}
+```
+
+推荐来源有三种，只能选一种，混用会直接报错：
+
+| 来源 | 适用场景 | 命令 |
+|---|---|---|
+| 本地图片 | 本地开发最快 | `--reference .data/title/xxx.png` |
+| 上传后复用 URL Ref JSON | 远端测试推荐 | `--reference-url-ref-json .run/reference-image.json` |
+| 手动四字段 URL Ref | 调用方已给完整对象引用 | `--reference-public-url ... --reference-internal-url ... --reference-content-type image/png --reference-sha256 ...` |
+
+`--reference-url-ref-json` 可以读取两种结构：
+
+```json
+{
+  "public_url": "...",
+  "internal_url": "...",
+  "content_type": "image/png",
+  "sha256": "..."
+}
+```
+
+或 `oss-upload-image --json` 的完整输出：
+
+```json
+{
+  "url_ref": {
+    "public_url": "...",
+    "internal_url": "...",
+    "content_type": "image/png",
+    "sha256": "..."
+  }
+}
+```
+
+参考图必须是透明背景 PNG 标题图层，不是完整海报图。
+
+## items-json 多语种流程
 
 当一次要生成多个语种或多套标题时，使用 `--items-json`。传入 `--items-json` 后，脚本会忽略单 item 的 `--reference`、`--language`、`--title-text`、`--item-id` 等参数，改用 JSON 文件里的 `items[]`。
 
@@ -88,7 +264,7 @@
 - `item_id`：同一个 Job 内唯一；首字符必须是字母或数字，后续只允许字母、数字、`.`、`_`、`-`。
 - `language`：必须来自共享业务语种目录；同一个 Job 内允许重复。
 - `title_text`：要渲染到标题图里的目标文案。
-- `reference`：参考标题图，可以是本地图片，也可以是完整 OSS URL Ref。
+- `reference`：参考标题图，可以是本地图片、URL Ref JSON 文件，也可以是完整 URL Ref 四字段。
 
 可选字段：
 
@@ -97,10 +273,11 @@
 - `quality`：默认使用命令行 `--quality`。
 - `draw_count`：默认使用命令行 `--draw-count`，范围是 `1` 到 `4`。
 
-可复制示例：
+本地图片示例：
 
 ```bash
 mkdir -p .data/title
+
 cat > .data/title/poster-items.json <<'JSON'
 {
   "items": [
@@ -129,7 +306,7 @@ cat > .data/title/poster-items.json <<'JSON'
 JSON
 ```
 
-执行多 item 真实流程：
+执行：
 
 ```bash
 ./scripts/real-flow.sh poster-title-image \
@@ -140,7 +317,7 @@ JSON
   --json
 ```
 
-如果不同语种要使用不同参考图，可以在每个 item 里指定不同本地图片：
+URL Ref JSON 示例：
 
 ```json
 {
@@ -150,24 +327,14 @@ JSON
       "language": "es",
       "title_text": "Cuando el amor se alejo",
       "reference": {
-        "image": ".data/title/es-reference.png",
-        "content_type": "image/png"
-      }
-    },
-    {
-      "item_id": "ja",
-      "language": "ja",
-      "title_text": "愛が終わりを告げたとき",
-      "reference": {
-        "image": ".data/title/ja-reference.png",
-        "content_type": "image/png"
+        "url_ref_json": ".run/reference-image.json"
       }
     }
   ]
 }
 ```
 
-如果 item 使用已有 OSS URL Ref，`reference` 可以直接写四字段：
+完整 URL Ref 四字段示例：
 
 ```json
 {
@@ -177,8 +344,8 @@ JSON
       "language": "es",
       "title_text": "Cuando el amor se alejo",
       "reference": {
-        "public_url": "https://bucket.oss-region.aliyuncs.com/path/title.png",
-        "internal_url": "https://bucket.oss-region-internal.aliyuncs.com/path/title.png",
+        "public_url": "https://aigc-datas.epubgame.com/test-cms-poster-title/ai-jobs/reference.png",
+        "internal_url": "https://aigc-datas.oss-us-west-1-internal.aliyuncs.com/test-cms-poster-title/ai-jobs/reference.png",
         "content_type": "image/png",
         "sha256": "<64位小写sha256>"
       }
@@ -186,42 +353,6 @@ JSON
   ]
 }
 ```
-
-`STORAGE_BACKEND=aliyun_oss` 且 item 里使用本地 `reference.image` 时，也需要在执行命令中加 `--confirm-upload`。
-
-## 参考图如何进入 API 参数
-
-脚本最终会把参考图转成 API 需要的 `reference_image` URL Ref：
-
-```json
-{
-  "public_url": "...",
-  "internal_url": "...",
-  "content_type": "image/png",
-  "sha256": "..."
-}
-```
-
-参考图只能通过两种显式方式进入脚本：
-
-```text
-方式 1：--reference / --reference-image 指定本地图片
-  -> STORAGE_BACKEND=local 时 stage 到本地对象存储
-  -> STORAGE_BACKEND=aliyun_oss 时必须传 --confirm-upload，脚本上传到 OSS
-
-方式 2：--reference-public-url / --reference-internal-url / --reference-content-type / --reference-sha256
-  -> 调用方显式提供已有 OSS URL Ref 四字段
-  -> 脚本只拼接 API payload，不 stage 或上传本地图片
-```
-
-本地图片处理规则：
-
-- `STORAGE_BACKEND=local`：脚本把本地图片 stage 到 `LOCAL_OBJECT_STORAGE_PATH`，再生成 URL Ref。
-- `STORAGE_BACKEND=aliyun_oss`：脚本会上传本地图片到 OSS，必须额外传 `--confirm-upload`。
-- 传完整 OSS URL Ref 时，不会 stage 或上传本地图片。
-- 脚本不从 env 文件读取默认参考图 URL Ref。真实流程验证必须在命令参数或 `items-json` 中显式声明参考图来源，避免不同调用方式走不同逻辑链。
-
-参考图必须是透明背景 PNG 标题图层，不是完整海报图。
 
 ## --download-outputs 做什么
 
@@ -249,7 +380,7 @@ JSON
 .data/real-flow/poster-title-image/<job_id>/<item_id>-<language>/
 ```
 
-图片检测复用 `./scripts/verify.sh image-inspect` 的核心逻辑，等价于对下载后的本地图片要求：
+图片检测复用 `./scripts/verify.sh image-inspect` 的核心逻辑，等价于：
 
 ```bash
 ./scripts/verify.sh image-inspect <local_path> --require-transparent-background
@@ -290,70 +421,60 @@ JSON
 
 如果没有传 `--download-outputs`，脚本不会下载图片，也不会生成 `artifacts` 或下载图片检测汇总。
 
-## 完整执行流程
-
-客户端脚本流程：
-
-```text
-你执行 real-flow.sh
-  |
-  v
-读取 .env
-  |
-  v
-解析本地 API 地址、鉴权 header、参考图来源
-  |
-  v
-准备 reference_image
-  |
-  +-- 已有 OSS URL Ref：直接使用
-  |
-  +-- STORAGE_BACKEND=local：stage 本地图片到本地对象存储
-  |
-  +-- STORAGE_BACKEND=aliyun_oss：需要 --confirm-upload，上传本地图片到 OSS
-  |
-  v
-POST /api/v1/ai-jobs/jobs
-  |
-  v
-轮询 GET /jobs/{job_id}
-  |
-  +-- queued / running：等待后继续轮询
-  |
-  +-- failed：查询 billing，输出 JSON，exit 4
-  |
-  +-- succeeded：查询 billing
-         |
-         +-- 有 --download-outputs：下载、校验 sha256、检测透明背景
-         |
-         v
-       输出 JSON，exit 0
-```
-
-服务端 workflow：
-
-```text
-root Job: poster_title_image
-  |
-  v
-style probe 子 Job
-  - 读取参考图
-  - 调用 multimodal/text 模型分析标题字形风格
-  |
-  v
-generate item 子 Job
-  - 使用 language 和 title_text 生成标题图
-  - 调用 gpt-image-2
-  - 后处理透明背景
-  - 写入对象存储
-  |
-  v
-join 子 Job
-  - 汇总每个 item 的结果
-  - root Job 标记 succeeded / failed
-```
-
 ## 常见问题
+
+### doctor ready=false
+
+先看 `problems`。常见原因：
+
+- `SERVICE_API_KEY` 未配置，且 `DISABLE_HTTP_AUTH_HEADER=false`。
+- `STORAGE_BACKEND=aliyun_oss` 时缺少 `OSS_BUCKET`、`OSS_REGION`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET` 或 `OSS_PROJECT_ROOT`。
+
+如果 `--api-url` 指向远端但没有传 `--allow-remote-api`，`doctor` 会在解析 URL 阶段直接 exit 2，而不是输出 `ready=false`。
+
+### poster title image reference invalid
+
+这是 API 创建 Job 阶段的参考图校验失败，还没有进入 worker 下载图片。优先检查远端 API Pod 是否和本地配置一致。
+
+在 API Pod 内执行：
+
+```bash
+grep -n "public_endpoint=settings.storage.oss_public_endpoint" /mnt/app/jobs/types/poster_title_image/executor.py
+test -f /mnt/app/jobs/adapters/oss_url_ref.py && echo "has oss_url_ref adapter"
+```
+
+再检查运行时配置：
+
+```bash
+python - <<'PY'
+from app.core.config import settings
+
+print("OSS_PUBLIC_ENDPOINT=", repr(settings.storage.oss_public_endpoint))
+print("allowed_buckets=", settings.job.poster_title_image_allowed_oss_buckets)
+print("allowed_regions=", settings.job.poster_title_image_allowed_oss_regions)
+PY
+```
+
+判断：
+
+- 没有 `oss_url_ref.py`：远端 API 镜像代码没更新。
+- `OSS_PUBLIC_ENDPOINT` 为空：远端没有注入 CDN 域名配置。
+- `allowed_buckets` 缺 `aigc-datas`：远端白名单没更新。
+- `allowed_regions` 缺 `us-west-1`：远端白名单没更新。
+
+如果 `public_url` 是 CDN 域名，远端服务端必须支持 `OSS_PUBLIC_ENDPOINT`，否则会把 CDN 地址当成普通 OSS public endpoint 解析并拒绝。
+
+### public_url 403 或不可读
+
+worker 当前读取参考图使用 `public_url`。如果 Job 已创建但 worker 报 `reference image public_url is not readable`，说明 URL 可被 API 接受，但实际 HTTP 读取失败。
+
+处理方向：
+
+- 确认 `public_url` 使用可公开读取的 CDN 地址。
+- 确认 CDN 已回源到对应 bucket 和前缀。
+- 确认该对象路径对 CDN 可读。
+
+`internal_url` 用于保留对象身份和内网访问地址，不代表 worker 一定会优先读取它。
 
 ### 命令为什么不会立即返回
 
@@ -378,7 +499,7 @@ join 子 Job
 ./scripts/jobs.sh list --status queued,running --since 10m
 ```
 
-### 报 job scope\_id must equal job\_id
+### 报 job scope_id must equal scope_job_id
 
 这是旧应用层校验不支持 workflow 子 Job 记账到 root Job 的表现。
 
@@ -390,7 +511,7 @@ join 子 Job
 
 确认本地服务加载了支持 `scope_job_id` 的代码后再重跑真实流程。
 
-### 报 ck\_ai\_call\_ledger\_entries\_job\_scope\_context
+### 报 ck_ai_call_ledger_entries_job_scope_context
 
 这是数据库约束仍停留在旧规则：`scope_id = job_id::text`。workflow 子 Job 现在会写：
 
@@ -427,7 +548,7 @@ job_id   = child_job_id
 ./scripts/verify.sh image-inspect <local_path> --require-transparent-background
 ```
 
-### STORAGE\_BACKEND=aliyun\_oss 时为什么需要 --confirm-upload
+### STORAGE_BACKEND=aliyun_oss 时为什么需要 --confirm-upload
 
 传本地 `--reference` 且对象存储是 `aliyun_oss` 时，脚本会把参考图上传到 OSS。为了避免误上传，必须显式传：
 
@@ -435,26 +556,16 @@ job_id   = child_job_id
 --confirm-upload
 ```
 
-如果不想上传，改用完整 OSS URL Ref：
-
-```bash
-./scripts/real-flow.sh poster-title-image \
-  --confirm-cost \
-  --reference-public-url "https://bucket.oss-region.aliyuncs.com/path/title.png" \
-  --reference-internal-url "https://bucket.oss-region-internal.aliyuncs.com/path/title.png" \
-  --reference-content-type image/png \
-  --reference-sha256 "<64位小写sha256>" \
-  --language es \
-  --title-text "Cuando el amor se alejo" \
-  --json
-```
+如果不想上传，先用 `oss-upload-image --json-ref-only` 生成 URL Ref，再用 `--reference-url-ref-json` 创建 Job。
 
 ## 维护规则
 
 修改 `poster-title-image` 真实流程后，同步检查本文：
 
-- CLI 参数是否变化。
-- 参考图显式传入方式和下载目录是否变化。
+- `doctor` 输出字段是否变化。
+- `oss-upload-image --json-ref-only` 输出结构是否变化。
+- `poster-title-image --reference-url-ref-json` 行为是否变化。
+- 远端测试环境推荐命令是否仍能直接复制执行。
 - `summary` 字段是否变化。
 - `--download-outputs` 的下载、sha256 校验和图片检测语义是否变化。
 - 常见失败是否仍是当前实现事实。

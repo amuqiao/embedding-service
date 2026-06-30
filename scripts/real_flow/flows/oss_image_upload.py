@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import shlex
 import time
 import uuid
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Any
 
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
 from app.integrations.object_storage import sha256_digest
-from app.jobs.adapters.cpp_oss_url_ref import cpp_oss_url_ref_from_output_object
+from app.jobs.adapters.oss_url_ref import oss_url_ref_from_output_object
 from scripts.jobs import formatters
 from scripts.real_flow.flows import llm_job_billing
 
@@ -17,6 +18,7 @@ FlowError = llm_job_billing.FlowError
 ROOT_DIR = llm_job_billing.ROOT_DIR
 ALLOWED_IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
 DEFAULT_UPLOAD_PREFIX = "real-flow/uploads/images"
+OUTPUT_MODES = {"table", "json", "url-ref-json", "poster-args"}
 
 
 def _resolve_repo_path(value: str) -> Path:
@@ -104,12 +106,13 @@ def upload_image(
         raise FlowError(f"failed to upload image to Aliyun OSS or generate signed URL: {exc}", exit_code=4) from exc
 
     content_hash = sha256_digest(data)
-    url_ref = cpp_oss_url_ref_from_output_object(
+    url_ref = oss_url_ref_from_output_object(
         bucket=config.bucket,
         region=config.region,
         key=object_key,
         content_type=resolved_content_type,
         content_hash=content_hash,
+        public_endpoint=llm_job_billing.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
     )
     return {
         "provider": "aliyun_oss",
@@ -157,12 +160,15 @@ def run(
     key: str | None,
     key_prefix: str | None,
     signed_url_expires_seconds: int,
-    json_output: bool,
+    output_mode: str = "table",
+    env_file: str | None = None,
 ) -> None:
     if not confirm_upload:
         raise FlowError("OSS image upload requires --confirm-upload", exit_code=2)
+    if output_mode not in OUTPUT_MODES:
+        raise FlowError(f"output mode must be one of {sorted(OUTPUT_MODES)}, got {output_mode!r}", exit_code=2)
 
-    app_env = llm_job_billing.load_env_file(ROOT_DIR / ".env")
+    app_env = llm_job_billing.load_app_env(env_file, root_dir=ROOT_DIR)
     result = upload_image(
         image=image,
         content_type=content_type,
@@ -172,8 +178,26 @@ def run(
         signed_url_expires_seconds=signed_url_expires_seconds,
     )
 
-    if json_output:
+    if output_mode == "json":
         formatters.print_json(result)
+    elif output_mode == "url-ref-json":
+        formatters.print_json(result["url_ref"])
+    elif output_mode == "poster-args":
+        ref = result["url_ref"]
+        print(
+            " ".join(
+                [
+                    "--reference-public-url",
+                    shlex.quote(str(ref["public_url"])),
+                    "--reference-internal-url",
+                    shlex.quote(str(ref["internal_url"])),
+                    "--reference-content-type",
+                    shlex.quote(str(ref["content_type"])),
+                    "--reference-sha256",
+                    shlex.quote(str(ref["sha256"])),
+                ]
+            )
+        )
     else:
         formatters.section("Aliyun OSS Image Upload")
         formatters.event("OK", "upload", f"bucket={result['bucket']} region={result['region']} key={result['key']}")

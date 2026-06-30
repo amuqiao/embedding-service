@@ -36,7 +36,7 @@
 
 ### OSS URL Ref
 
-CPP 传入参考图、AI 服务返回生成图片时都使用 `OSS URL Ref`。AI 服务读取输入时使用 `public_url`；调用方读取输出时可以使用 `public_url` 或按自身网络选择 `internal_url`。
+CPP 传入参考图、AI 服务返回生成图片时都使用 `OSS URL Ref`。AI 服务读取输入时使用 `public_url`；调用方读取输出时可以使用 `public_url` 或按自身网络选择 `internal_url`。`public_url` 可以是 OSS 官方公网域名，也可以是服务端配置的 CDN/public endpoint。
 
 ```json
 {
@@ -51,7 +51,7 @@ CPP 传入参考图、AI 服务返回生成图片时都使用 `OSS URL Ref`。AI
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---:|---:|---|
-| `public_url` | string | 是 | 公网 HTTPS OSS URL |
+| `public_url` | string | 是 | 公网 HTTPS OSS URL 或服务端配置的 CDN/public endpoint URL |
 | `internal_url` | string | 是 | 内网 HTTPS OSS internal URL |
 | `content_type` | string | 是 | MIME type，例如 `image/png`、`image/jpeg`、`image/webp` |
 | `sha256` | string | 是 | 同一个 OSS object 原始内容的小写 64 位 hex SHA-256，不带 `sha256:` 前缀 |
@@ -60,7 +60,7 @@ OSS 责任边界：
 
 - URL 必须使用 `https`，不允许任何 query string 或 fragment，也不允许携带访问密钥或临时签名参数。
 - `public_url` 和 `internal_url` 必须指向同一个 OSS object；如果 bucket、object path 或等价对象身份不一致，服务返回 `INVALID_INPUT`。
-- URL host 必须命中服务端配置的 OSS allowlist；不允许把该字段作为任意 URL 下载入口。
+- URL host 必须命中 OSS 官方公网域名，或命中服务端配置的当前 bucket/project 专用 CDN/public endpoint；不允许把该字段作为任意 URL 下载入口。
 - AI 服务读取输入对象时使用 `public_url`；`internal_url` 仍必须提供，并用于校验它和 `public_url` 指向同一个 OSS object。
 - AI 服务读取输入对象后必须校验 MIME、大小和 `sha256`；校验失败返回 `INVALID_INPUT`。
 - `sha256` 是对象原始内容的 hash，不是 URL 字符串的 hash；同一个 object 的 `public_url` 和 `internal_url` 共用一个 `sha256`。

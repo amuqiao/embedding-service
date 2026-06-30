@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -16,7 +17,7 @@ from app.integrations.image import (
     TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
     validate_transparent_reference_image,
 )
-from app.integrations.object_storage.aliyun_url import parse_aliyun_oss_url
+from app.jobs.adapters.oss_url_ref import canonical_ref_from_oss_url_ref
 from scripts.jobs import formatters
 from scripts.real_flow.flows import llm_job_billing, oss_image_upload
 from scripts.verify import image_inspect
@@ -57,6 +58,13 @@ def _required_str(value: Any, *, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise FlowError(f"items_json item.{field} is required", exit_code=2)
     return value
+
+
+def _required_mapping_str(ref: dict[str, Any], key: str, *, label: str) -> str:
+    value = ref.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise FlowError(f"{label} field {key} is required", exit_code=2)
+    return value.strip()
 
 
 def _optional_str(raw_item: dict[str, Any], field: str, default: str) -> str:
@@ -130,6 +138,50 @@ def explicit_reference_image(
     }
 
 
+def _reference_ref_from_mapping(
+    ref: dict[str, Any],
+    *,
+    label: str,
+    content_type_override: str | None = None,
+) -> dict[str, str]:
+    missing = [key for key in ("public_url", "internal_url", "sha256") if key not in ref]
+    if missing:
+        raise FlowError(f"{label} missing required field(s): {', '.join(missing)}", exit_code=2)
+    explicit = explicit_reference_image(
+        public_url=_required_mapping_str(ref, "public_url", label=label),
+        internal_url=_required_mapping_str(ref, "internal_url", label=label),
+        sha256=_required_mapping_str(ref, "sha256", label=label),
+        content_type=content_type_override or (
+            _required_mapping_str(ref, "content_type", label=label) if ref.get("content_type") is not None else None
+        ),
+    )
+    if explicit is None:
+        raise FlowError(f"{label} must contain a complete URL Ref", exit_code=2)
+    return explicit
+
+
+def reference_image_from_url_ref_json(path: str, *, content_type: str | None = None) -> dict[str, str]:
+    if path == "-":
+        raw_text = sys.stdin.read()
+        source_label = "stdin"
+    else:
+        source = _resolve_repo_path(path)
+        if not source.is_file():
+            raise FlowError(f"reference URL Ref JSON not found: {source}", exit_code=2)
+        raw_text = source.read_text(encoding="utf-8")
+        source_label = str(source)
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise FlowError(f"reference URL Ref JSON is invalid JSON: {exc}", exit_code=2) from exc
+    if not isinstance(payload, dict):
+        raise FlowError(f"reference URL Ref JSON must be an object: {source_label}", exit_code=2)
+    ref = payload.get("url_ref") if isinstance(payload.get("url_ref"), dict) else payload
+    if not isinstance(ref, dict):
+        raise FlowError("reference URL Ref JSON must contain url_ref object or URL Ref fields", exit_code=2)
+    return _reference_ref_from_mapping(ref, label="reference URL Ref JSON", content_type_override=content_type)
+
+
 def stage_local_reference_image(
     *,
     reference_image: str,
@@ -175,6 +227,7 @@ def stage_local_reference_image(
 def resolve_reference_image(
     *,
     reference_image: str | None,
+    reference_url_ref_json: str | None,
     reference_public_url: str | None,
     reference_internal_url: str | None,
     reference_sha256: str | None,
@@ -182,6 +235,14 @@ def resolve_reference_image(
     app_env: dict[str, str],
     confirm_upload: bool,
 ) -> ReferenceImageResolution:
+    explicit_source = any([reference_public_url, reference_internal_url, reference_sha256])
+    source_count = sum([explicit_source, reference_url_ref_json is not None, reference_image is not None])
+    if source_count > 1:
+        raise FlowError(
+            "poster title image reference source must be exactly one of --reference, "
+            "--reference-url-ref-json, or explicit --reference-* options",
+            exit_code=2,
+        )
     explicit = explicit_reference_image(
         public_url=reference_public_url,
         internal_url=reference_internal_url,
@@ -190,9 +251,13 @@ def resolve_reference_image(
     )
     if explicit is not None:
         return ReferenceImageResolution(ref=explicit)
+    if reference_url_ref_json is not None:
+        return ReferenceImageResolution(
+            ref=reference_image_from_url_ref_json(reference_url_ref_json, content_type=reference_content_type)
+        )
     if reference_image is None:
         raise FlowError(
-            "poster title image flow requires --reference or explicit OSS URL Ref options",
+            "poster title image flow requires --reference, --reference-url-ref-json, or explicit OSS URL Ref options",
             exit_code=2,
         )
     storage_backend = llm_job_billing.env_value("STORAGE_BACKEND", app_env) or "local"
@@ -266,19 +331,27 @@ def _resolve_item_reference(
     app_env: dict[str, str],
     confirm_upload: bool,
 ) -> ReferenceImageResolution:
-    if {"public_url", "internal_url", "sha256"}.issubset(reference):
-        explicit = explicit_reference_image(
-            public_url=str(reference.get("public_url")),
-            internal_url=str(reference.get("internal_url")),
-            sha256=str(reference.get("sha256")),
-            content_type=str(reference.get("content_type")) if reference.get("content_type") is not None else None,
+    explicit_source = any(key in reference for key in ("public_url", "internal_url", "sha256"))
+    source_count = sum([explicit_source, "url_ref_json" in reference, "image" in reference])
+    if source_count != 1:
+        raise FlowError(
+            "items_json item.reference must use exactly one of URL Ref fields, url_ref_json, or image",
+            exit_code=2,
         )
-        assert explicit is not None
-        return ReferenceImageResolution(ref=explicit)
+    if explicit_source:
+        return ReferenceImageResolution(ref=_reference_ref_from_mapping(reference, label="items_json item.reference"))
+    if "url_ref_json" in reference:
+        return ReferenceImageResolution(
+            ref=reference_image_from_url_ref_json(
+                _required_str(reference.get("url_ref_json"), field="reference.url_ref_json"),
+                content_type=str(reference.get("content_type")) if reference.get("content_type") is not None else None,
+            )
+        )
     image = _required_str(reference.get("image"), field="reference.image")
     content_type = reference.get("content_type")
     return resolve_reference_image(
         reference_image=image,
+        reference_url_ref_json=None,
         reference_public_url=None,
         reference_internal_url=None,
         reference_sha256=None,
@@ -416,23 +489,26 @@ def _download_url(url: str, *, timeout_seconds: int = 30) -> bytes:
         raise FlowError(f"download failed: {exc.reason}", exit_code=4) from exc
 
 
-def _local_storage_path(*, app_env: dict[str, str], output: dict[str, Any]) -> Path:
-    public_url = output.get("public_url")
-    if not isinstance(public_url, str):
-        raise FlowError("output object public_url is required for local download", exit_code=4)
+def _canonical_output_ref(*, app_env: dict[str, str], output: dict[str, Any]):
     try:
-        location = parse_aliyun_oss_url(public_url)
+        return canonical_ref_from_oss_url_ref(
+            output,
+            public_endpoint=llm_job_billing.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
+        )
     except AppError as exc:
-        raise FlowError(f"output public_url is not a supported OSS URL: {exc.message}", exit_code=4) from exc
+        raise FlowError(f"output object is not a supported OSS URL Ref: {exc.message}", exit_code=4) from exc
 
+
+def _local_storage_path(*, app_env: dict[str, str], output: dict[str, Any]) -> Path:
+    ref = _canonical_output_ref(app_env=app_env, output=output)
     storage_root = _resolve_repo_path(
         llm_job_billing.env_value("LOCAL_OBJECT_STORAGE_PATH", app_env) or "storage/objects"
     )
     root_resolved = storage_root.resolve()
-    bucket_root = (storage_root / location.bucket).resolve()
+    bucket_root = (storage_root / ref.bucket).resolve()
     if bucket_root != root_resolved and root_resolved not in bucket_root.parents:
         raise FlowError("output OSS bucket resolves outside LOCAL_OBJECT_STORAGE_PATH", exit_code=4)
-    path = (bucket_root / location.key).resolve()
+    path = (bucket_root / ref.key).resolve()
     if path != bucket_root and bucket_root not in path.parents:
         raise FlowError("output OSS object path escapes bucket root", exit_code=4)
     return path
@@ -451,22 +527,15 @@ def _signed_download_url(
     output: dict[str, Any],
     expires_seconds: int,
 ) -> str:
-    public_url = output.get("public_url")
-    if not isinstance(public_url, str):
-        raise FlowError("output object public_url is required for signed download", exit_code=4)
-    try:
-        location = parse_aliyun_oss_url(public_url)
-    except AppError as exc:
-        raise FlowError(f"output public_url is not a supported OSS URL: {exc.message}", exit_code=4) from exc
-
+    ref = _canonical_output_ref(app_env=app_env, output=output)
     config = oss_image_upload.load_aliyun_oss_config(app_env)
-    if location.bucket != config.bucket or location.region != config.region:
+    if ref.bucket != config.bucket or ref.region != config.region:
         raise FlowError(
             "output OSS URL does not match configured OSS_BUCKET/OSS_REGION",
             exit_code=4,
         )
     try:
-        return AliyunOSSClient(config).signed_get_url(location.key, expires_seconds=expires_seconds)
+        return AliyunOSSClient(config).signed_get_url(ref.key, expires_seconds=expires_seconds)
     except AliyunOSSError as exc:
         raise FlowError(f"failed to generate signed output URL: {exc}", exit_code=4) from exc
 
@@ -637,6 +706,7 @@ def run(
     api_url: str | None,
     items_json: str | None,
     reference_image: str | None,
+    reference_url_ref_json: str | None,
     reference_public_url: str | None,
     reference_internal_url: str | None,
     reference_sha256: str | None,
@@ -656,14 +726,17 @@ def run(
     output_dir: str = DEFAULT_OUTPUT_DIR,
     signed_url_expires_seconds: int = 3600,
     model_id: str | None = None,
+    allow_remote_api: bool = False,
+    service_api_key: str | None = None,
+    env_file: str | None = None,
 ) -> None:
     if not confirm_cost:
         raise FlowError("poster title image flow requires --confirm-cost", exit_code=2)
-    app_env = llm_job_billing.load_env_file(ROOT_DIR / ".env")
-    base_url = llm_job_billing.resolved_api_url(api_url, app_env)
+    app_env = llm_job_billing.load_app_env(env_file, root_dir=ROOT_DIR)
+    base_url = llm_job_billing.resolved_api_url(api_url, app_env, allow_remote_api=allow_remote_api)
     api_prefix = (llm_job_billing.env_value("SERVICE_API_PREFIX", app_env) or llm_job_billing.DEFAULT_API_PREFIX).rstrip("/")
     jobs_url = f"{base_url}{api_prefix}/jobs"
-    headers = llm_job_billing.build_headers(app_env, caller_id=caller_id)
+    headers = llm_job_billing.build_headers(app_env, caller_id=caller_id, service_api_key=service_api_key)
     resolutions: list[ReferenceImageResolution] = []
     create_attempted = False
     job_id: str | None = None
@@ -682,6 +755,7 @@ def run(
         else:
             resolution = resolve_reference_image(
                 reference_image=reference_image,
+                reference_url_ref_json=reference_url_ref_json,
                 reference_public_url=reference_public_url,
                 reference_internal_url=reference_internal_url,
                 reference_sha256=reference_sha256,
