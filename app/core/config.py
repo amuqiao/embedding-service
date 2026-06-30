@@ -550,8 +550,6 @@ class Settings(BaseSettings):
                 raise ValueError("release APP_ENV must not allow insecure callbacks")
             if self.storage.backend == "local":
                 raise ValueError("release APP_ENV must not use STORAGE_BACKEND=local")
-            if self.broker.kind == "redis_list":
-                raise ValueError("release APP_ENV must use TASKIQ_BROKER_KIND=redis_stream")
             if _looks_like_placeholder_secret(self.security.api_key) or len(self.security.api_key) < 16:
                 raise ValueError("release APP_ENV requires a non-placeholder SERVICE_API_KEY with at least 16 characters")
             if (
@@ -574,9 +572,6 @@ class Settings(BaseSettings):
             _log.warning(
                 "insecure HTTP auth/caller header disable flag enabled; use local development only"
             )
-
-        if self.broker.kind == "redis_list" and not _looks_like_local_service_url(self.broker.redis_url):
-            raise ValueError("TASKIQ_BROKER_KIND=redis_list is local development only; use redis_stream")
 
         delivery_timeout = self.callback.delivery_timeout_seconds
         if delivery_timeout >= self.callback.retry_delay_seconds:

@@ -252,7 +252,8 @@ recovery_loop 常驻运行
 ```text
 APP_ENV=test/prd
   -> 启用发布模式配置校验
-  -> 拒绝本地对象存储、redis_list broker、关闭鉴权、占位密钥等不安全配置
+  -> 拒绝本地对象存储、关闭鉴权、占位密钥等不安全配置
+  -> 允许 TASKIQ_BROKER_KIND=redis_stream 或 redis_list；Redis 5 环境应使用 redis_list
 
 APP_ENV 不会决定：
   -> 是否启用 FastAPI lifespan

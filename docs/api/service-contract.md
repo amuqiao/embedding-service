@@ -33,7 +33,7 @@ Authorization: Bearer <service-key>
 
 本地可以通过 `DISABLE_HTTP_AUTH_HEADER=true` 关闭 Bearer 校验；可以通过 `DISABLE_CALLER_ID_HEADER=true` 忽略 `X-AI-Service-Caller-ID` 并统一使用 `default` caller。`Settings` 会要求 DB/Redis 指向 loopback；本地 `dev.sh` / `start-api.sh` 启动入口还会要求 `API_HOST` 是 loopback。绕过这些启动入口时，调用方必须自行保证 API 不绑定公开地址。
 
-`APP_ENV=test` 和 `APP_ENV=prd` 是发布模式，启动时会拒绝本地绕过认证、insecure callback、本地对象存储、`redis_list` broker 和明显占位的密钥。`.env.dev`、`.env.test` 和 `.env.prd` 不属于项目维护文件；是否使用这些本地自管文件由 `ENV_FILE` 或平台环境变量显式决定，服务不会根据 `APP_ENV` 自动加载。
+`APP_ENV=test` 和 `APP_ENV=prd` 是发布模式，启动时会拒绝本地绕过认证、insecure callback、本地对象存储和明显占位的密钥。`TASKIQ_BROKER_KIND` 可显式选择 `redis_stream` 或 `redis_list`；其中 `redis_stream` 需要 Redis 6.2+ 的 `XAUTOCLAIM` 命令，Redis 5 环境应使用 `redis_list`。`.env.dev`、`.env.test` 和 `.env.prd` 不属于项目维护文件；是否使用这些本地自管文件由 `ENV_FILE` 或平台环境变量显式决定，服务不会根据 `APP_ENV` 自动加载。
 
 ## 创建 Job
 

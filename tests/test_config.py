@@ -211,7 +211,7 @@ def test_security_header_disable_flags_require_local_service_urls():
         )
 
 
-def test_redis_list_broker_is_local_development_only():
+def test_redis_list_broker_is_allowed_for_local_and_remote_redis():
     local = _build_settings(
         REDIS_URL="redis://127.0.0.1:26379/0",
         TASKIQ_BROKER_KIND="redis_list",
@@ -219,11 +219,11 @@ def test_redis_list_broker_is_local_development_only():
 
     assert local.broker.kind == "redis_list"
 
-    with pytest.raises(ValidationError, match="redis_list is local development only"):
-        _build_settings(
-            REDIS_URL="redis://redis:6379/0",
-            TASKIQ_BROKER_KIND="redis_list",
-        )
+    remote_list = _build_settings(
+        REDIS_URL="redis://redis:6379/0",
+        TASKIQ_BROKER_KIND="redis_list",
+    )
+    assert remote_list.broker.kind == "redis_list"
 
     remote_stream = _build_settings(
         REDIS_URL="redis://redis:6379/0",
@@ -257,6 +257,16 @@ def test_release_app_env_accepts_production_grade_config():
     assert settings.storage.backend == "aliyun_oss"
 
 
+def test_release_app_env_accepts_redis_list_broker():
+    test_settings = _build_settings(**_release_settings_kwargs(APP_ENV="test", TASKIQ_BROKER_KIND="redis_list"))
+    prd_settings = _build_settings(**_release_settings_kwargs(APP_ENV="prd", TASKIQ_BROKER_KIND="redis_list"))
+
+    assert test_settings.runtime.is_release_env is True
+    assert test_settings.broker.kind == "redis_list"
+    assert prd_settings.runtime.is_release_env is True
+    assert prd_settings.broker.kind == "redis_list"
+
+
 def test_release_app_env_uses_same_rules_for_test_and_prd():
     test_settings = _build_settings(**_release_settings_kwargs(APP_ENV="test"))
     prd_settings = _build_settings(**_release_settings_kwargs(APP_ENV="prd"))
@@ -272,7 +282,6 @@ def test_release_app_env_uses_same_rules_for_test_and_prd():
         ({"DISABLE_CALLER_ID_HEADER": True}, "must not disable HTTP auth"),
         ({"ALLOW_INSECURE_CALLBACKS": True}, "must not allow insecure callbacks"),
         ({"STORAGE_BACKEND": "local"}, "must not use STORAGE_BACKEND=local"),
-        ({"TASKIQ_BROKER_KIND": "redis_list"}, "must use TASKIQ_BROKER_KIND=redis_stream"),
         ({"SERVICE_API_KEY": "<替换为随机 token>"}, "SERVICE_API_KEY"),
         ({"SERVICE_API_KEY": "short"}, "SERVICE_API_KEY"),
         ({"CALLBACK_SIGNING_SECRET": "<替换为随机 32 字节 hex>"}, "CALLBACK_SIGNING_SECRET"),
