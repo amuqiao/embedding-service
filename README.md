@@ -24,7 +24,7 @@ FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默�
 
 `local` 可以与 `compose-deps` 组合使用，但不能与当前仓库下任何 `compose-full` 的 API / worker 混跑。切换到 `compose-full` 前先执行 `./scripts/dev.sh stop`；切回 `local` 前先执行 `./scripts/deploy.sh down compose-full`。
 
-生产 K8s 形态不由本仓库创建或管理资源。api / worker Pod 可继续使用 `start-api.sh` 和 `start-worker.sh` 作为启动入口；Pod 内连接检查和手动数据库迁移使用 `./scripts/k8s.sh`。
+生产 K8s 形态不由本仓库创建或管理资源。api / worker Pod 可继续使用 `start-api.sh` 和 `start-worker.sh` 作为启动入口；Pod 内连接检查、OSS 显式检查、Alembic 状态查询和手动数据库迁移使用 `./scripts/k8s.sh`。
 运行镜像会包含 `scripts/` 目录，便于在 `compose-full` 容器或 K8s Pod 内执行 `./scripts/jobs.sh` 只读排障和 `./scripts/k8s.sh` 手动运维。`dev.sh`、`deploy.sh` 和 `verify.sh` 仍是宿主机侧开发、部署入口和质量门，不作为容器内稳定运维入口。
 
 `deploy.sh` 只管理 compose 部署入口：
@@ -39,18 +39,19 @@ FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默�
 ./scripts/deploy.sh down compose-full
 ```
 
-K8s Pod 内运维入口只在已经部署的 Pod 中执行，不调用 `kubectl`，不创建 Job / Pod / Secret / ConfigMap。它使用当前 Pod 注入的 `DATABASE_URL` / `REDIS_URL` 检查外部 PostgreSQL / Redis，并使用 `DATABASE_URL` 执行 Alembic 迁移：
+K8s Pod 内运维入口只在已经部署的 Pod 中执行，不调用 `kubectl`，不创建 Job / Pod / Secret / ConfigMap。它使用当前 Pod 注入的 `DATABASE_URL` / `REDIS_URL` 检查外部 PostgreSQL / Redis，查询 Alembic 当前库版本和代码 head，并使用 `DATABASE_URL` 执行 Alembic 迁移：
 
 ```bash
 ./scripts/k8s.sh check
 ./scripts/k8s.sh check postgres
 ./scripts/k8s.sh check redis
+./scripts/k8s.sh check oss --confirm
 ./scripts/k8s.sh current
 ./scripts/k8s.sh heads
 ./scripts/k8s.sh migrate --confirm
 ```
 
-`check` 是聚合命令，会依次执行 `check postgres` 和 `check redis`；单项检查便于只验证某一个外部连接。检查命令会打印完整连接串、编码密码和解码密码，便于核对生产连接串中特殊字符是否正确 URL 编码。`migrate` 是写库动作，必须显式传入 `--confirm`。生产多副本部署时，只应在一个 Pod 内执行一次迁移，并在执行前确认该 Pod 运行的是要发布的代码版本。
+`check` 是无副作用聚合命令，会依次执行 `check postgres`、`check redis`、`current` 和 `heads`；单项检查便于只验证某一个外部连接或状态。检查命令会打印完整连接串、编码密码和解码密码，便于核对生产连接串中特殊字符是否正确 URL 编码。`check oss --confirm` 是远程写入检查，会创建临时对象，不包含在默认 `check` 中。`migrate` 是写库动作，必须显式传入 `--confirm`。生产多副本部署时，只应在一个 Pod 内执行一次迁移，并在执行前确认该 Pod 运行的是要发布的代码版本。
 
 配置加载优先级：
 
@@ -234,7 +235,7 @@ Job 只读排障由 `jobs.sh` 承接：
 - `scripts/dev.sh` 只管理本地服务生命周期和本地开发端口探测；模板级一次性验证放在 `scripts/verify.sh`。
 - 业务/供应商扩展示例放在 `examples/business/`，不进入 `scripts/` 稳定命令面。
 - `scripts/deploy.sh` 只管理 `compose-deps` 和 `compose-full`，不管理 `local` 本地服务生命周期。
-- `scripts/k8s.sh` 只在 K8s Pod 内检查 PostgreSQL / Redis 连接、查询或执行 Alembic 迁移，不管理 K8s 资源，不替代发布编排。
+- `scripts/k8s.sh` 只在 K8s Pod 内检查 PostgreSQL / Redis 连接、单独显式检查 OSS、查询或执行 Alembic 迁移，不管理 K8s 资源，不替代发布编排。
 - `scripts/tools.sh` 只放无默认持久副作用的小型开发辅助工具，不读取或修改 `.env`。
 - 不新增 silent fallback、默认吞错或跨职责兼容别名；命令不满足前置条件时应直接报错。
 - `local` 与 `compose-full` 的 API / worker 运行模式必须互斥；脚本发现混跑或残留进程时应 fail-fast 或在 status 中明确告警。

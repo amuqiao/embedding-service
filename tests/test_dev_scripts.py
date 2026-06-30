@@ -1369,6 +1369,8 @@ def test_k8s_cli_help_is_available_without_db():
     assert "check postgres" in result.stdout
     assert "check redis" in result.stdout
     assert "check oss --confirm" in result.stdout
+    assert "current 和 heads 无副作用检查" in result.stdout
+    assert "check 是无副作用一键检查" in result.stdout
     assert "PUT / GET / HEAD" in result.stdout
     assert "PUT / GET / HEAD / DELETE" not in result.stdout
     assert "current" in result.stdout
@@ -1387,6 +1389,79 @@ def test_k8s_check_oss_prints_url_ref_without_delete_requirement():
     assert "OSS_TEST_SHA256" in oss_check
     assert ".delete_object(" not in oss_check
     assert "delete_checked=false" in oss_check
+
+
+def test_k8s_default_check_stays_side_effect_free():
+    script = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
+    default_check = script.split('    "")', 1)[1].split("      ;;\n    postgres)", 1)[0]
+
+    assert "run_check_postgres" in default_check
+    assert "run_check_redis" in default_check
+    assert "run_current" in default_check
+    assert "run_heads" in default_check
+    assert "run_check_oss" not in default_check
+    assert "run_migrate" not in default_check
+
+
+def test_k8s_default_check_runs_only_side_effect_free_targets(tmp_path):
+    script_dir = tmp_path / "scripts"
+    lib_dir = script_dir / "lib"
+    bin_dir = tmp_path / "bin"
+    lib_dir.mkdir(parents=True)
+    bin_dir.mkdir()
+    (tmp_path / "calls.log").write_text("", encoding="utf-8")
+    (script_dir / "k8s.sh").write_text((ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    (script_dir / "k8s.sh").chmod(0o755)
+    (lib_dir / "common.sh").write_text(
+        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    _write_fake_command(
+        bin_dir,
+        "python3",
+        f"""#!/usr/bin/env bash
+cat >/dev/null
+printf 'python3\\n' >> {tmp_path / "calls.log"}
+""",
+    )
+    _write_fake_command(
+        bin_dir,
+        "alembic",
+        f"""#!/usr/bin/env bash
+printf 'alembic %s\\n' "$*" >> {tmp_path / "calls.log"}
+""",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "KUBERNETES_SERVICE_HOST": "127.0.0.1",
+            "DATABASE_URL": "postgresql://user:pass@db.example:5432/app",
+            "REDIS_URL": "redis://:pass@redis.example:6379/0",
+            "PATH": f"{bin_dir}:/bin:/usr/bin",
+        }
+    )
+
+    result = subprocess.run(
+        ["./scripts/k8s.sh", "check"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    calls = (tmp_path / "calls.log").read_text(encoding="utf-8").splitlines()
+    assert calls == [
+        "python3",
+        "python3",
+        "python3",
+        "alembic current",
+        "python3",
+        "alembic heads",
+    ]
+    assert "OSS" not in result.stdout
+    assert "upgrade" not in result.stdout
 
 
 def test_k8s_check_oss_requires_confirm_before_remote_write():

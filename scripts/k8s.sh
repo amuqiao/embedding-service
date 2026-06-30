@@ -31,14 +31,14 @@ usage() {
   不替代 CI/CD 发布编排。
 
 运行环境：
-  Requires: Bash, Python；Alembic 状态和迁移命令还需要 Alembic。
+  Requires: Bash, Python；check、current、heads、history 和 migrate 还需要 Alembic。
   必须在 K8s Pod 内执行，且环境变量 KUBERNETES_SERVICE_HOST 必须存在。
-  check postgres / redis 会打印完整 DATABASE_URL / REDIS_URL、编码密码和解码密码，输出包含敏感信息。
+  check 会打印完整 DATABASE_URL / REDIS_URL、编码密码和解码密码，输出包含敏感信息。
   check oss 会向 OSS 写入、读取、HEAD 一个临时对象并打印 URL Ref；默认不打印 OSS secret。
-  current / heads / history / migrate 必须注入应用 DATABASE_URL。
+  check / current / heads / history / migrate 必须注入应用 DATABASE_URL。
 
 命令：
-  check               聚合执行 check postgres 和 check redis。
+  check               聚合执行 PostgreSQL、Redis、Alembic current 和 heads 无副作用检查。
   check postgres      检查 DATABASE_URL 解析结果，并执行 PostgreSQL SELECT 1。
   check redis         检查 REDIS_URL 解析结果，并执行 Redis PING。
   check oss --confirm 检查 OSS 配置，并执行临时对象 PUT / GET / HEAD。
@@ -52,7 +52,8 @@ usage() {
   migrate 是写库动作，必须显式传入 --confirm。
   生产多副本部署时，只应在一个 Pod 内执行一次 migrate。
   执行迁移前应确认当前 Pod 运行的是要发布的代码版本。
-  check postgres / redis 会输出明文连接串和密码，只应在受控终端中执行。
+  check 和 check postgres / redis 会输出明文连接串和密码，只应在受控终端中执行。
+  check 是无副作用一键检查，不包含 check oss，也不会执行 migrate。
   check oss 是远程写入动作，必须显式传入 --confirm；会留下对象，需要按输出 key 手动清理或配置生命周期清理。
 
 常用示例：
@@ -66,7 +67,7 @@ usage() {
 
 Exit Codes:
   0  成功
-  1  check 连接串解析、认证或连通性失败。
+  1  check 连接串解析、认证、连通性或 Alembic 查询失败。
   2  缺少 command、非法参数、未在 K8s Pod 内执行或缺少 Python/Alembic。
 EOF
 }
@@ -375,6 +376,12 @@ run_check() {
         status=1
       fi
       if ! run_check_redis; then
+        status=1
+      fi
+      if ! run_current; then
+        status=1
+      fi
+      if ! run_heads; then
         status=1
       fi
       return "$status"

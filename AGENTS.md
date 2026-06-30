@@ -38,7 +38,7 @@
 
 `docker-compose.yml environment` 只放容器网络地址、容器内端口和容器内路径等运行形态覆盖；业务配置、密钥、模型参数和限制参数来自 env 文件或运行时注入。
 
-本项目不维护生产部署、远程数据库重置、K8s 资源、云平台 Secrets 或 CI/CD 发布流水线。已部署 Pod 内的 PostgreSQL / Redis 连接检查和手动 Alembic 迁移入口是 `./scripts/k8s.sh`，只使用当前 Pod 注入的应用环境变量。
+本项目不维护生产部署、远程数据库重置、K8s 资源、云平台 Secrets 或 CI/CD 发布流水线。已部署 Pod 内的 PostgreSQL / Redis 连接检查、OSS 显式检查、Alembic 状态查询和手动 Alembic 迁移入口是 `./scripts/k8s.sh`，只使用当前 Pod 注入的应用环境变量。
 
 ## 开发入口
 
