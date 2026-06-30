@@ -41,6 +41,13 @@ INSPECT_HELP_EPILOG = """\b
   ./scripts/jobs.sh inspect <job_id> --include-children --json
 """
 
+PAYLOAD_HELP_EPILOG = """\b
+示例：
+  ./scripts/jobs.sh payload <job_id>
+  ./scripts/jobs.sh payload <job_id> --json
+  ./scripts/jobs.sh payload <job_id> --include-children --json
+"""
+
 DIAGNOSE_HELP_EPILOG = """\b
 示例：
   ./scripts/jobs.sh diagnose <job_id>
@@ -126,6 +133,7 @@ HELP_EPILOG = """\b
   list       查看最近 Job 摘要，支持状态、类型、调用方、时间窗口和 limit 过滤。
   show       查看单个 Job 权威状态。
   inspect    聚合查看单个 Job、attempt、callback 和最近 timeline。
+  payload    查看单个 Job 的入参、runtime、结果和错误 payload。
   diagnose   诊断单个 Job 的 attempt、dispatch、callback、dead-letter 和 claim 风险。
   timeline   查看 lifecycle job events。
   attempts   查看 lifecycle attempts。
@@ -154,6 +162,7 @@ HELP_EPILOG = """\b
 常用示例：
   ./scripts/jobs.sh list --status running --since 24h --limit 20
   ./scripts/jobs.sh show <job_id>
+  ./scripts/jobs.sh payload <job_id> --json
   ./scripts/jobs.sh summary --since 10m
   ./scripts/jobs.sh types
 
@@ -589,6 +598,15 @@ def _job_summary(job: dict) -> dict[str, Any]:
         "job_type": job.get("job_type"),
         "caller_id": job.get("caller_id"),
         "client_request_id": job.get("client_request_id"),
+        "progress_percent": job.get("progress_percent"),
+        "progress_stage": job.get("progress_stage"),
+        "callback_status": job.get("callback_status"),
+        "attempt_status": job.get("attempt_status"),
+        "dispatch_status": job.get("dispatch_status"),
+        "publish_attempts": job.get("publish_attempts"),
+        "worker_id": job.get("worker_id"),
+        "lease_expires_at": job.get("lease_expires_at"),
+        "duration": job.get("duration"),
         "progress": {
             "percent": job.get("progress_percent"),
             "stage": job.get("progress_stage"),
@@ -602,6 +620,36 @@ def _job_summary(job: dict) -> dict[str, Any]:
         },
         "created_at": job.get("created_at"),
         "queued_at": job.get("queued_at"),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "updated_at": job.get("updated_at"),
+    }
+
+
+def _payload_job_summary(job: dict) -> dict[str, Any]:
+    return {
+        "job_id": str(job.get("id") or job.get("job_id")),
+        "root_job_id": job.get("root_job_id"),
+        "workflow_node_key": job.get("workflow_node_key"),
+        "status": job.get("status"),
+        "job_type": job.get("job_type"),
+        "caller_id": job.get("caller_id"),
+        "client_request_id": job.get("client_request_id"),
+        "progress_percent": job.get("progress_percent"),
+        "progress_stage": job.get("progress_stage"),
+        "callback_status": job.get("callback_status"),
+        "attempt_status": job.get("attempt_status"),
+        "dispatch_status": job.get("dispatch_status"),
+        "publish_attempts": job.get("publish_attempts"),
+        "worker_id": job.get("worker_id"),
+        "lease_expires_at": job.get("lease_expires_at"),
+        "duration": job.get("duration"),
+        "progress": {
+            "percent": job.get("progress_percent"),
+            "stage": job.get("progress_stage"),
+            "text": job.get("progress_text"),
+        },
+        "created_at": job.get("created_at"),
         "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),
         "updated_at": job.get("updated_at"),
@@ -630,13 +678,20 @@ def _runtime_payload(job: dict) -> dict[str, Any]:
     return {}
 
 
+def _job_params_payload(job: dict) -> dict[str, Any] | None:
+    job_params_ref = job.get("job_params_ref")
+    if isinstance(job_params_ref, dict) and isinstance(job_params_ref.get("payload"), dict):
+        return job_params_ref["payload"]
+    return None
+
+
 def _workflow_plan(job: dict) -> dict[str, Any]:
     plan = _runtime_payload(job).get("workflow_plan")
     return plan if isinstance(plan, dict) else {}
 
 
 def _job_param_items(job: dict) -> list[dict[str, Any]]:
-    params = job.get("job_params")
+    params = _job_params_payload(job)
     if not isinstance(params, dict):
         return []
     items = params.get("items")
@@ -881,7 +936,7 @@ def _canonical_result_summary(canonical_result: Any) -> dict[str, Any] | None:
 
 def _inspect_payload_summary(job: dict) -> dict[str, Any]:
     return {
-        "job_params": formatters.trim_payload(job.get("job_params"), max_items=4, max_string_length=160),
+        "job_params": formatters.trim_payload(_job_params_payload(job), max_items=4, max_string_length=160),
         "metadata": formatters.trim_payload(job.get("metadata"), max_items=8, max_string_length=160),
         "runtime_ref": _runtime_ref_summary(job.get("runtime_ref")),
         "result": formatters.trim_payload(job.get("result"), max_items=4, max_string_length=160),
@@ -899,6 +954,72 @@ def _inspect_payload_summary(job: dict) -> dict[str, Any]:
             max_string_length=160,
         ),
     }
+
+
+def _payload_evidence(job: dict) -> dict[str, Any]:
+    return {
+        "job_id": str(job.get("id") or job.get("job_id")),
+        "root_job_id": job.get("root_job_id"),
+        "workflow_node_key": job.get("workflow_node_key"),
+        "status": job.get("status"),
+        "job_type": job.get("job_type"),
+        "caller_id": job.get("caller_id"),
+        "client_request_id": job.get("client_request_id"),
+        "metadata": job.get("metadata"),
+        "job_params": _job_params_payload(job),
+        "job_params_ref": job.get("job_params_ref"),
+        "job_params_hash": job.get("job_params_hash"),
+        "runtime_ref": job.get("runtime_ref"),
+        "result": job.get("result"),
+        "canonical_result": job.get("canonical_result"),
+        "error": job.get("error"),
+    }
+
+
+def _payload_sections(evidence: dict[str, Any]) -> list[tuple[str, Any]]:
+    return [
+        ("Job Params", evidence.get("job_params")),
+        ("Job Params Ref", evidence.get("job_params_ref")),
+        ("Runtime Ref", evidence.get("runtime_ref")),
+        ("Result", evidence.get("result")),
+        ("Canonical Result", evidence.get("canonical_result")),
+        ("Error", evidence.get("error")),
+    ]
+
+
+def _print_payload_value(value: Any) -> None:
+    if value is None:
+        print("null")
+        return
+    formatters.print_json(value)
+
+
+def _render_payload_human(payload: dict[str, Any], *, include_children: bool) -> None:
+    job = payload["job"]
+    formatters.section("Job Payload")
+    formatters.event(
+        "OK",
+        "job",
+        f"job_id={job['job_id']} status={job.get('status') or '-'} job_type={job.get('job_type') or '-'}",
+    )
+    formatters.print_table([job], _job_inspect_columns())
+    for section_name, value in _payload_sections(payload["payload"]):
+        formatters.section(section_name)
+        _print_payload_value(value)
+    if include_children:
+        children = payload.get("children") or []
+        formatters.section("Children Payloads")
+        formatters.event("OK", "children", f"count={len(children)}")
+        if not children:
+            print("no workflow children")
+            return
+        for child in children:
+            child_job = child["job"]
+            formatters.section(f"Child {child_job['job_id']}")
+            formatters.print_table([child_job], _child_job_columns())
+            for section_name, value in _payload_sections(child["payload"]):
+                formatters.section(section_name)
+                _print_payload_value(value)
 
 
 def _as_aware_utc(value: Any) -> datetime | None:
@@ -2218,6 +2339,43 @@ def inspect(
         formatters.print_json(payload)
         return
     _render_inspect_human(payload, include_children=include_children)
+
+
+@app.command(help="查看单个 Job 的入参、runtime、结果和错误 payload。", epilog=PAYLOAD_HELP_EPILOG)
+def payload(
+    job_id: JobIdArgument,
+    include_children: Annotated[
+        bool,
+        typer.Option("--include-children", help="包含 workflow internal child jobs 的入参和结果 payload。"),
+    ] = False,
+    json_output: JsonOption = False,
+) -> None:
+    def action(conn):
+        job = queries.get_job(conn, job_id)
+        if job is None:
+            return None
+        result = {
+            "job": _payload_job_summary(job),
+            "payload": _payload_evidence(job),
+        }
+        if include_children:
+            result["children"] = [
+                {
+                    "job": _payload_job_summary(child),
+                    "payload": _payload_evidence(child),
+                }
+                for child in queries.child_jobs(conn, job_id)
+            ]
+        return result
+
+    result = _with_connection(action)
+    if result is None:
+        print(f"ERROR: job not found: {job_id}", file=sys.stderr)
+        raise typer.Exit(3)
+    if json_output:
+        formatters.print_json(result)
+        return
+    _render_payload_human(result, include_children=include_children)
 
 
 @app.command(help="诊断单个 Job 的 attempt、dispatch、callback 和 claim 风险。", epilog=DIAGNOSE_HELP_EPILOG)

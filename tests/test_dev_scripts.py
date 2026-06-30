@@ -1337,6 +1337,7 @@ def test_jobs_cli_help_is_available_without_db():
     assert "summary" in result.stdout
     assert "latency" in result.stdout
     assert "capacity" in result.stdout
+    assert "payload" in result.stdout
 
 
 def test_real_flow_cli_help_is_available_without_api():
@@ -2120,14 +2121,19 @@ def test_jobs_show_default_is_human_readable(monkeypatch):
             "progress_percent": 100,
             "progress_stage": "completed",
             "callback_status": "not_configured",
-            "job_params": {
-                "items": [
-                    {
-                        "item_id": "es",
-                        "language": "es",
-                        "title_text": "Cuando el amor se alejo",
-                    }
-                ]
+            "job_params_ref": {
+                "storage": "db_inline",
+                "type": "json",
+                "name": "job_params",
+                "payload": {
+                    "items": [
+                        {
+                            "item_id": "es",
+                            "language": "es",
+                            "title_text": "Cuando el amor se alejo",
+                        }
+                    ]
+                },
             },
             "result": {"batch_summary": {"total": 1, "succeeded": 1, "failed": 0, "running": 0, "pending": 0}},
         },
@@ -2143,7 +2149,149 @@ def test_jobs_show_default_is_human_readable(monkeypatch):
     assert "== Result Summary ==" in human.stdout
     assert '"payload_summary"' not in human.stdout
     assert json_result.exit_code == 0
-    assert json.loads(json_result.stdout)["job"]["job_params"]["items"][0]["title_text"] == "Cuando el amor se alejo"
+    assert json.loads(json_result.stdout)["job"]["job_params_ref"]["payload"]["items"][0]["title_text"] == "Cuando el amor se alejo"
+
+
+def test_jobs_payload_outputs_job_params_runtime_and_result(monkeypatch):
+    root_job = {
+        "id": "root-job-1",
+        "status": "succeeded",
+        "job_type": "poster_title_image",
+        "caller_id": "default",
+        "client_request_id": "request-1",
+        "progress_percent": 100,
+        "progress_stage": "completed",
+        "callback_status": "delivered",
+        "job_params_ref": {
+            "storage": "db_inline",
+            "type": "json",
+            "name": "job_params",
+            "payload": {
+                "items": [
+                    {
+                        "item_id": "es",
+                        "language": "es",
+                        "title_text": "Cuando el amor se alejo",
+                    }
+                ]
+            },
+        },
+        "job_params_hash": "sha256:params",
+        "runtime_ref": {
+            "storage": "db_inline",
+            "type": "json",
+            "name": "runtime",
+            "payload": {"job_type": "poster_title_image", "job_params_hash": "sha256:params"},
+        },
+        "result": {"items": [{"item_id": "es", "status": "succeeded"}]},
+        "canonical_result": {"job_type": "poster_title_image", "items": [{"item_id": "es"}]},
+        "error": None,
+    }
+    child_job = {
+        "job_id": "child-job-1",
+        "root_job_id": "root-job-1",
+        "workflow_node_key": "generate.0",
+        "status": "succeeded",
+        "job_type": "poster_title_image_generate_item",
+        "caller_id": "default",
+        "client_request_id": None,
+        "progress_percent": 100,
+        "progress_stage": "completed",
+        "attempt_status": "succeeded",
+        "dispatch_status": "published",
+        "publish_attempts": 1,
+        "worker_id": "worker-1",
+        "lease_expires_at": "2026-06-30T12:00:00+00:00",
+        "started_at": "2026-06-30T11:59:00+00:00",
+        "job_params_ref": {
+            "storage": "db_inline",
+            "type": "json",
+            "name": "job_params",
+            "payload": {"item": {"item_id": "es", "language": "es"}},
+        },
+        "result": {"item_id": "es", "status": "succeeded"},
+    }
+    child_calls = []
+
+    def fake_with_connection(action):
+        monkeypatch.setattr(queries, "get_job", lambda _conn, _job_id: root_job)
+
+        def fake_child_jobs(_conn, _root_job_id):
+            child_calls.append("child_jobs")
+            return [child_job]
+
+        monkeypatch.setattr(queries, "child_jobs", fake_child_jobs)
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    without_children = RUNNER.invoke(jobs_cli_app, ["payload", "root-job-1", "--json"])
+    with_children = RUNNER.invoke(jobs_cli_app, ["payload", "root-job-1", "--include-children", "--json"])
+
+    assert without_children.exit_code == 0
+    assert with_children.exit_code == 0
+    assert child_calls == ["child_jobs"]
+    payload = json.loads(with_children.stdout)
+    assert payload["payload"]["job_params"]["items"][0]["title_text"] == "Cuando el amor se alejo"
+    assert payload["payload"]["runtime_ref"]["payload"]["job_params_hash"] == "sha256:params"
+    assert payload["payload"]["result"]["items"][0]["status"] == "succeeded"
+    assert payload["payload"]["canonical_result"]["job_type"] == "poster_title_image"
+    assert payload["job"]["progress_percent"] == 100
+    assert payload["job"]["progress"]["stage"] == "completed"
+    assert "children" not in json.loads(without_children.stdout)
+    assert payload["children"][0]["job"]["client_request_id"] is None
+    assert payload["children"][0]["job"]["workflow_node_key"] == "generate.0"
+    assert payload["children"][0]["job"]["attempt_status"] == "succeeded"
+    assert payload["children"][0]["job"]["started_at"] == "2026-06-30T11:59:00+00:00"
+    assert payload["children"][0]["payload"]["job_params"]["item"]["item_id"] == "es"
+
+
+def test_jobs_payload_default_is_human_readable(monkeypatch):
+    def fake_with_connection(action):
+        monkeypatch.setattr(
+            queries,
+            "get_job",
+            lambda _conn, _job_id: {
+                "id": "root-job-1",
+                "status": "failed",
+                "job_type": "job_test_echo",
+                "caller_id": "default",
+                "progress_percent": 75,
+                "progress_stage": "execute",
+                "callback_status": "not_configured",
+                "job_params_ref": {"storage": "db_inline", "payload": {"message": "hello"}},
+                "runtime_ref": {"storage": "db_inline", "payload": {"job_type": "job_test_echo"}},
+                "result": None,
+                "canonical_result": None,
+                "error": {"code": "BOOM"},
+            },
+        )
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["payload", "root-job-1"])
+
+    assert result.exit_code == 0
+    assert "== Job Payload ==" in result.stdout
+    assert "== Job Params ==" in result.stdout
+    assert "== Runtime Ref ==" in result.stdout
+    assert "== Result ==" in result.stdout
+    assert "== Error ==" in result.stdout
+    assert "75" in result.stdout
+    assert "execute" in result.stdout
+    assert "not_configured" in result.stdout
+    assert '"message": "hello"' in result.stdout
+    assert '"code": "BOOM"' in result.stdout
+
+
+def test_jobs_payload_not_found_returns_3(monkeypatch):
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", lambda action: None)
+
+    result = RUNNER.invoke(jobs_cli_app, ["payload", "missing-job", "--json"])
+
+    assert result.exit_code == 3
+    assert "job not found: missing-job" in result.stderr
 
 
 def test_jobs_capacity_default_is_human_readable(monkeypatch):
@@ -2943,6 +3091,11 @@ def test_jobs_child_jobs_query_filters_internal_children(monkeypatch):
     assert "FROM job_aggregates j" in sql
     assert "j.root_job_id = %(root_job_id)s" in sql
     assert "j.workflow_node_key IS NOT NULL" in sql
+    assert "j.client_request_id" in sql
+    assert "j.job_params_ref" in sql
+    assert "j.runtime_ref" in sql
+    assert "j.canonical_result" in sql
+    assert "j.started_at" in sql
     assert "ORDER BY j.created_at ASC" in sql
     assert captured_params[0] == {"root_job_id": "root-job-1"}
 
