@@ -23,6 +23,7 @@ _CALLBACK_JOB_RESULT_UNSET = object()
 class CallbackDeliveryResult(BaseModel):
     status: str
     attempts: int = 0
+    http_status: int | None = None
     last_error: dict | None = None
     response: dict[str, Any] | None = None
 
@@ -160,7 +161,7 @@ def _callback_response_summary(
         return {
             "format": "ack",
             "valid": False,
-            "error": str(exc)[:500],
+            "error": str(exc),
         }
     return {
         "format": "ack",
@@ -213,6 +214,8 @@ async def deliver_callback(
         )
     delays = [0]
     attempts = 0
+    last_http_status: int | None = None
+    last_response: dict[str, Any] | None = None
     last_error: dict | None = None
     async with httpx.AsyncClient(timeout=settings.callback.timeout_seconds) as client:
         for attempt, delay in enumerate(delays):
@@ -227,12 +230,14 @@ async def deliver_callback(
             try:
                 attempts += 1
                 response = await client.post(url, content=body, headers=headers)
+                last_http_status = response.status_code
                 response_summary = _callback_response_summary(
                     status_code=response.status_code,
                     response_headers=response.headers,
                     response_text=response.text,
                     callback_body=callback_body,
                 )
+                last_response = response_summary
                 if 200 <= response.status_code < 300:
                     if response_summary.get("format") == "ack" and not response_summary.get("valid"):
                         last_error = {
@@ -266,6 +271,7 @@ async def deliver_callback(
                     return CallbackDeliveryResult(
                         status="delivered",
                         attempts=attempts,
+                        http_status=response.status_code,
                         response=response_summary,
                     )
                 last_error = {
@@ -289,4 +295,10 @@ async def deliver_callback(
                     attempt + 1, job.id, exc,
                 )
     logger.error("all callback attempts exhausted for job %s url=%s", job.id, url)
-    return CallbackDeliveryResult(status="failed", attempts=attempts, last_error=last_error)
+    return CallbackDeliveryResult(
+        status="failed",
+        attempts=attempts,
+        http_status=last_http_status,
+        last_error=last_error,
+        response=last_response,
+    )

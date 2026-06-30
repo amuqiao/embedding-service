@@ -1397,6 +1397,7 @@ class JobRepo:
         next_retry_at: datetime | None,
         max_attempts: int,
         delivery_attempts: int = 1,
+        last_http_status: int | None = None,
         last_response: dict[str, Any] | None = None,
         callback_id: uuid.UUID | None = None,
         lease_token: uuid.UUID | None = None,
@@ -1432,6 +1433,7 @@ class JobRepo:
             outbox.last_attempt_at = now
         outbox.lease_token = None
         outbox.lease_expires_at = None
+        outbox.last_http_status = last_http_status
         outbox.last_error = last_error
         outbox.last_response = last_response
         outbox.updated_at = now

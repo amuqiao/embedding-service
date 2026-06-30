@@ -2003,6 +2003,49 @@ def test_jobs_job_entrypoint_outputs_single_job_status(monkeypatch):
     assert payload["job"]["status"] == "succeeded"
 
 
+def test_jobs_callbacks_json_outputs_full_callback_response_evidence(monkeypatch):
+    contract_error = "callback response Content-Type must be application/json; " + "x" * 120
+    monkeypatch.setattr(queries, "get_job", lambda _conn, _job_id: {"id": "job-1", "status": "succeeded"})
+    monkeypatch.setattr(
+        queries,
+        "callbacks",
+        lambda _conn, _job_id: [
+            {
+                "id": "callback-1",
+                "status": "dead_letter",
+                "last_http_status": 200,
+                "last_response": {
+                    "format": "ack",
+                    "valid": False,
+                    "error": contract_error,
+                },
+                "last_error": {
+                    "code": "CALLBACK_RESPONSE_CONTRACT_INVALID",
+                    "response": {
+                        "format": "ack",
+                        "valid": False,
+                        "error": contract_error,
+                    },
+                },
+            }
+        ],
+    )
+
+    def fake_with_connection(action):
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["callbacks", "job-1", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    callback = payload["callbacks"][0]
+    assert callback["last_http_status"] == 200
+    assert callback["last_response"]["error"] == contract_error
+    assert callback["last_error"]["response"]["error"] == contract_error
+
+
 def test_jobs_workflow_entrypoint_accepts_child_job_id(monkeypatch):
     calls: dict[str, list[str]] = {"get_job": [], "child_jobs": []}
 

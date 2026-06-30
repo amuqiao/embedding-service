@@ -599,6 +599,7 @@ async def test_recovery_due_callback_uses_initialized_job_type_registry(monkeypa
         next_retry_at,
         max_attempts,
         delivery_attempts,
+        last_http_status,
         last_response,
         callback_id,
         lease_token,
@@ -610,6 +611,7 @@ async def test_recovery_due_callback_uses_initialized_job_type_registry(monkeypa
             "next_retry_at": next_retry_at,
             "max_attempts": max_attempts,
             "delivery_attempts": delivery_attempts,
+            "last_http_status": last_http_status,
             "last_response": last_response,
             "callback_id": callback_id,
             "lease_token": lease_token,
@@ -632,6 +634,7 @@ async def test_recovery_due_callback_uses_initialized_job_type_registry(monkeypa
     assert result["callbacks"] == 1
     assert recorded["callback_url"] == due_job.callback_url
     assert recorded["result"]["status"] == "delivered"
+    assert recorded["result"]["last_http_status"] == 200
     assert recorded["result"]["last_error"] is None
     assert recorded["result"]["delivery_attempts"] == 1
     assert recorded["result"]["last_response"] == {

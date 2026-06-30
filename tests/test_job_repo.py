@@ -1039,6 +1039,7 @@ async def test_mark_callback_result_counts_only_actual_http_attempts():
         next_retry_at=datetime.now(UTC) + timedelta(seconds=60),
         max_attempts=3,
         delivery_attempts=1,
+        last_http_status=503,
         last_response={"format": "ack", "valid": False},
         callback_id=outbox.id,
         lease_token=lease_token,
@@ -1048,6 +1049,7 @@ async def test_mark_callback_result_counts_only_actual_http_attempts():
     assert outbox.delivery_attempts == 1
     assert outbox.first_attempt_at is not None
     assert outbox.last_attempt_at is not None
+    assert outbox.last_http_status == 503
     assert outbox.last_response == {"format": "ack", "valid": False}
 
 

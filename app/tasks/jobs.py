@@ -304,6 +304,7 @@ async def deliver_callback_for_job(job_id: uuid.UUID) -> bool:
             next_retry_at=next_retry_at,
             max_attempts=settings.callback.max_delivery_attempts,
             delivery_attempts=result.attempts,
+            last_http_status=result.http_status,
             last_response=result.response,
             callback_id=outbox.id,
             lease_token=outbox.lease_token,

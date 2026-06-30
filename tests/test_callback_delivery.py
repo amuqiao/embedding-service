@@ -505,7 +505,9 @@ async def test_deliver_callback_tries_once_on_http_failure(monkeypatch):
     assert attempts == 1
     assert result.status == "failed"
     assert result.attempts == 1
+    assert result.http_status == 503
     assert result.last_error["code"] == "CALLBACK_HTTP_ERROR"
+    assert result.response == result.last_error["response"]
     assert result.last_error["response"] == {
         "format": "ack",
         "valid": True,
@@ -603,6 +605,7 @@ async def test_deliver_callback_records_ack_response_summary(monkeypatch):
     result = await deliver_callback(_job())
 
     assert result.status == "delivered"
+    assert result.http_status == 200
     assert result.response == {
         "format": "ack",
         "valid": True,
@@ -658,9 +661,11 @@ async def test_deliver_callback_rejects_invalid_success_ack_contract(
 
     assert result.status == "failed"
     assert result.attempts == 1
+    assert result.http_status == status_code
     assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
     assert result.last_error["response"]["format"] == "ack"
     assert result.last_error["response"]["valid"] is False
+    assert result.response == result.last_error["response"]
     assert expected_error in result.last_error["response"]["error"]
 
 
@@ -690,7 +695,9 @@ async def test_deliver_callback_rejects_negative_ack_response(monkeypatch):
 
     assert result.status == "failed"
     assert result.attempts == 1
+    assert result.http_status == 200
     assert result.last_error["code"] == "CALLBACK_ACK_REJECTED"
+    assert result.response == result.last_error["response"]
     assert result.last_error["response"] == {
         "format": "ack",
         "valid": True,
@@ -702,6 +709,8 @@ async def test_deliver_callback_rejects_negative_ack_response(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_deliver_callback_uses_job_type_ack_validator(monkeypatch):
+    validation_error = "domain ack rejected: " + "x" * 600
+
     class _Response:
         status_code = 200
         headers = _ACK_HEADERS
@@ -725,7 +734,7 @@ async def test_deliver_callback_uses_job_type_ack_validator(monkeypatch):
             return result
 
         def validate_callback_response(self, response):
-            raise ValueError("domain ack rejected")
+            raise ValueError(validation_error)
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
     monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _RejectingHandler())
@@ -735,7 +744,7 @@ async def test_deliver_callback_uses_job_type_ack_validator(monkeypatch):
     assert result.status == "failed"
     assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
     assert result.last_error["response"]["valid"] is False
-    assert "domain ack rejected" in result.last_error["response"]["error"]
+    assert result.last_error["response"]["error"] == validation_error
 
 
 @pytest.mark.asyncio
@@ -883,6 +892,7 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
         return CallbackDeliveryResult(
             status="failed",
             attempts=1,
+            http_status=503,
             last_error={"code": "CALLBACK_HTTP_ERROR", "status_code": 503},
             response={"format": "ack", "valid": False},
         )
@@ -896,6 +906,7 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
         next_retry_at,
         max_attempts,
         delivery_attempts,
+        last_http_status,
         last_response,
         callback_id,
         lease_token,
@@ -907,6 +918,7 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
             "next_retry_at": next_retry_at,
             "max_attempts": max_attempts,
             "delivery_attempts": delivery_attempts,
+            "last_http_status": last_http_status,
             "last_response": last_response,
             "callback_id": callback_id,
             "lease_token": lease_token,
@@ -928,6 +940,7 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
     assert recorded["result"]["next_retry_at"] is not None
     assert recorded["result"]["callback_id"] == callback_id
     assert recorded["result"]["delivery_attempts"] == 1
+    assert recorded["result"]["last_http_status"] == 503
     assert recorded["result"]["last_response"] == {"format": "ack", "valid": False}
     assert recorded["result"]["lease_token"] == lease_token
     assert job.status == "succeeded"

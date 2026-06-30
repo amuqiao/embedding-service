@@ -668,7 +668,7 @@ def callbacks(conn: connection, job_id: str) -> list[dict]:
         SELECT c.id::text, c.job_id::text, c.event_id::text, c.event_type,
                c.status, c.delivery_attempts, c.next_attempt_at,
                c.lease_token::text, c.lease_expires_at, c.last_http_status,
-               c.last_error, c.first_attempt_at, c.last_attempt_at,
+               c.last_response, c.last_error, c.first_attempt_at, c.last_attempt_at,
                c.delivered_at, c.dead_lettered_at, c.created_at, c.updated_at
         FROM callback_outbox c
         JOIN job_aggregates j ON j.id = c.job_id
