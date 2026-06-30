@@ -2,7 +2,7 @@
 # k8s.sh - K8s Pod 内手动运维入口
 #
 # 运行环境：Bash；需要在已注入应用环境变量的 K8s Pod 内执行。
-# 作用域：只提供 Pod 内连接检查、Alembic 迁移和迁移状态查询。
+# 作用域：只提供 Pod 内连接检查、OSS 连通性检查、Alembic 迁移和迁移状态查询。
 # 约束：不创建或管理 Kubernetes 资源，不调用 kubectl，不管理 API/worker 生命周期。
 # 输出：按生产排障需要打印完整连接串和解析结果；Alembic 输出透传。
 
@@ -21,8 +21,8 @@ usage() {
 
 作用域：
   本脚本是 K8s Pod 内手动运维入口。
-  进入已部署的 api 或 worker Pod 后，使用同一份应用代码和同一组环境变量连接外部数据库。
-  只负责 PostgreSQL / Redis 连接检查、Alembic 迁移状态查询和手动执行迁移。
+  进入已部署的 api 或 worker Pod 后，使用同一份应用代码和同一组环境变量连接外部依赖。
+  只负责 PostgreSQL / Redis / OSS 连接检查、Alembic 迁移状态查询和手动执行迁移。
 
 不负责：
   不创建 Job、Pod、Deployment、Secret、ConfigMap。
@@ -33,13 +33,15 @@ usage() {
 运行环境：
   Requires: Bash, Python；Alembic 状态和迁移命令还需要 Alembic。
   必须在 K8s Pod 内执行，且环境变量 KUBERNETES_SERVICE_HOST 必须存在。
-  check 会打印完整 DATABASE_URL / REDIS_URL、编码密码和解码密码，输出包含敏感信息。
+  check postgres / redis 会打印完整 DATABASE_URL / REDIS_URL、编码密码和解码密码，输出包含敏感信息。
+  check oss 会向 OSS 写入、读取、HEAD 并删除一个临时对象；默认不打印 OSS secret。
   current / heads / history / migrate 必须注入应用 DATABASE_URL。
 
 命令：
   check               聚合执行 check postgres 和 check redis。
   check postgres      检查 DATABASE_URL 解析结果，并执行 PostgreSQL SELECT 1。
   check redis         检查 REDIS_URL 解析结果，并执行 Redis PING。
+  check oss --confirm 检查 OSS 配置，并执行临时对象 PUT / GET / HEAD / DELETE。
   current             查看当前数据库 Alembic revision。
   heads               查看代码中的 Alembic head revision。
   history             查看 Alembic revision 历史。
@@ -50,12 +52,14 @@ usage() {
   migrate 是写库动作，必须显式传入 --confirm。
   生产多副本部署时，只应在一个 Pod 内执行一次 migrate。
   执行迁移前应确认当前 Pod 运行的是要发布的代码版本。
-  check 会输出明文连接串和密码，只应在受控终端中执行。
+  check postgres / redis 会输出明文连接串和密码，只应在受控终端中执行。
+  check oss 是远程写入动作，必须显式传入 --confirm；失败时可能留下对象，需要按输出 key 手动清理。
 
 常用示例：
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check postgres
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check redis
+  kubectl exec -it <api-pod> -- ./scripts/k8s.sh check oss --confirm
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh current
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh heads
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh migrate --confirm
@@ -267,6 +271,86 @@ print(f"OK redis ping={ping}")
 PY
 }
 
+run_check_oss() {
+  [[ "${1:-}" == "--confirm" ]] || die "check oss requires --confirm because it writes and deletes a temporary OSS object" 2
+  shift
+  require_no_args "check oss" "$@"
+  prepare_check_runtime
+  section "OSS"
+  "$PYTHON_BIN" <<'PY'
+import os
+import time
+
+from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
+
+
+TEST_CONTENT = b"fastapi-best-ai-architecture k8s oss connectivity check\n"
+
+
+def require_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise SystemExit(f"{name} is required")
+    return value
+
+
+storage_backend = require_env("STORAGE_BACKEND")
+if storage_backend != "aliyun_oss":
+    raise SystemExit("STORAGE_BACKEND must be aliyun_oss for check oss")
+
+bucket = require_env("OSS_BUCKET")
+region = require_env("OSS_REGION")
+access_key_id = require_env("OSS_ACCESS_KEY_ID")
+access_key_secret = require_env("OSS_ACCESS_KEY_SECRET")
+project_root = require_env("OSS_PROJECT_ROOT")
+public_endpoint = os.getenv("OSS_PUBLIC_ENDPOINT", "")
+endpoint = os.getenv("OSS_ENDPOINT", "") or public_endpoint or f"oss-{region}.aliyuncs.com"
+endpoint_style = "custom_domain" if public_endpoint and endpoint == public_endpoint else "virtual_host"
+
+client = AliyunOSSClient(
+    AliyunOSSConfig(
+        bucket=bucket,
+        region=region,
+        access_key_id=access_key_id,
+        access_key_secret=access_key_secret,
+        project_root=project_root,
+        endpoint=endpoint,
+        endpoint_style=endpoint_style,
+        scheme="https",
+    )
+)
+
+config = client.config
+print(f"OSS_BACKEND={storage_backend}")
+print(f"OSS_BUCKET={config.bucket}")
+print(f"OSS_REGION={config.region}")
+print(f"OSS_PROJECT_ROOT={config.normalized_project_root}")
+output_prefix = os.getenv("OSS_OUTPUT_PREFIX", "ai-jobs").strip().strip("/")
+print(f"OSS_OUTPUT_PREFIX={output_prefix or '-'}")
+print(f"OSS_ENDPOINT={config.normalized_endpoint}")
+print(f"OSS_ENDPOINT_STYLE={config.endpoint_style}")
+print(f"OSS_PUBLIC_ENDPOINT={public_endpoint or '-'}")
+print(f"OSS_ACCESS_KEY_ID_present={'true' if access_key_id else 'false'}")
+print(f"OSS_ACCESS_KEY_SECRET_present={'true' if access_key_secret else 'false'}")
+
+key = "/".join(part for part in (output_prefix, "k8s-check", f"check-{int(time.time())}.txt") if part)
+object_key = client.object_key(key)
+print(f"OSS_TEST_KEY={object_key}")
+
+try:
+    client.put_object(key, TEST_CONTENT, content_type="text/plain; charset=utf-8")
+    body = client.get_object(key)
+    if body != TEST_CONTENT:
+        raise RuntimeError("GET body does not match uploaded content")
+    headers = client.head_object(key)
+    client.delete_object(key)
+except (AliyunOSSError, RuntimeError) as exc:
+    raise SystemExit(f"OSS check failed: {exc}") from exc
+
+print(f"OK oss key={object_key} bytes={len(body)} content_length={headers.get('Content-Length', '-')} deleted=true")
+PY
+}
+
 run_check() {
   local target="${1:-}"
   case "$target" in
@@ -288,8 +372,12 @@ run_check() {
       shift
       run_check_redis "$@"
       ;;
+    oss)
+      shift
+      run_check_oss "$@"
+      ;;
     *)
-      die "check target must be postgres or redis" 2
+      die "check target must be postgres, redis, or oss" 2
       ;;
   esac
 }

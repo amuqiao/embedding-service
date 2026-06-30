@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tools.sh - 本地无副作用工具入口
 #
-# 运行环境：Bash；secret 子命令需要 Python 标准库。
+# 运行环境：Bash；secret/env-url 子命令需要 Python 标准库。
 # 作用域：提供与服务生命周期、部署、验证和 Job 排障无关的小型开发辅助工具。
 # 约束：默认不读取 .env，不写文件，不访问网络；stdout 保持可复制的结果。
 
@@ -22,16 +22,20 @@ usage() {
 
 命令：
   secret              生成 URL-safe 随机 secret，适合 SERVICE_API_KEY 这类 Bearer token。
+  env-url             生成 DATABASE_URL 或 REDIS_URL，并默认输出解析摘要。
   help                显示帮助。
 
 输出：
-  stdout: 子命令结果；secret 只输出生成值，方便复制到 .env 或 Secret Manager。
+  stdout: 子命令结果；secret 只输出生成值；env-url 输出可复制到 .env 的 env 行和注释摘要。
   stderr: 非法命令、非法参数或缺少依赖。
 
 常用示例：
   ./scripts/tools.sh secret
   ./scripts/tools.sh secret --prefix prd_
+  printf '%s' 'raw-password' | ./scripts/tools.sh env-url postgres --username app_user --host postgres.fortress --database app_db --password-stdin
+  printf '%s' 'raw-password' | ./scripts/tools.sh env-url redis --host 192.168.0.5 --port 6390 --db 8 --password-stdin
   ./scripts/tools.sh secret -h
+  ./scripts/tools.sh env-url -h
 
 Exit Codes:
   0  成功
@@ -73,6 +77,83 @@ Exit Codes:
   0  成功
   2  非法参数或缺少 Python
 EOF
+}
+
+env_url_usage() {
+  cat <<EOF
+用法：
+  ./scripts/tools.sh env-url postgres --username USER --host HOST --database DB (--password-stdin | --password PASSWORD) [--port PORT]
+  ./scripts/tools.sh env-url redis --host HOST [--password-stdin | --password PASSWORD] [--username USER] [--port PORT] [--db DB]
+  ./scripts/tools.sh env-url -h|--help
+
+说明：
+  生成本项目 .env 使用的 DATABASE_URL 或 REDIS_URL。
+  本命令不读取或修改 .env，不访问网络，只把原始连接参数拼成标准 URL 并输出解析摘要。
+
+固定编码规则：
+  PostgreSQL:
+    - username: URL encode
+    - password: URL encode
+    - database name: URL encode
+    - host: 不 encode
+    - port: 不 encode
+  Redis:
+    - username: 使用 Redis ACL 时 URL encode
+    - password: 配置时 URL encode
+    - db: 数字，不 encode
+    - host: 不 encode
+    - port: 不 encode
+
+输出：
+  stdout: 第一行是可复制到 .env 的 DATABASE_URL=... 或 REDIS_URL=...。
+          后续解析摘要以 # 开头，复制到 .env 时仍是注释。
+          摘要不输出解码后的原始密码，只显示 password_present。
+  stderr: 非法参数或缺少 Python。
+
+注意：
+  - 生成时始终执行 URL encode，不提供 --no-encode。
+  - PostgreSQL 固定输出 async URL：postgresql+asyncpg://...
+  - 本命令不输出 SYNC_DATABASE_URL；该值在项目内由代码派生。
+  - 推荐使用 --password-stdin，避免密码进入 shell history。
+  - Redis 无密码时不要传 --password；使用 Redis ACL username 时必须同时传密码。
+
+示例：
+  printf '%s' 'raw-password' | ./scripts/tools.sh env-url postgres \\
+    --username test_cms_poster_title_user \\
+    --host postgres.fortress \\
+    --port 5432 \\
+    --database test-cms-poster-title \\
+    --password-stdin
+
+  printf '%s' 'raw-password' | ./scripts/tools.sh env-url redis \\
+    --host 192.168.0.5 \\
+    --port 6390 \\
+    --db 8 \\
+    --password-stdin
+
+Exit Codes:
+  0  成功
+  2  非法参数或缺少 Python
+EOF
+}
+
+run_env_url() {
+  local python_bin
+
+  if [[ $# -eq 0 ]]; then
+    env_url_usage >&2
+    return 2
+  fi
+
+  case "${1:-}" in
+    -h|--help)
+      env_url_usage
+      return 0
+      ;;
+  esac
+
+  python_bin="$(resolve_python_bin)"
+  "$python_bin" "$ROOT_DIR/scripts/tools/env_url.py" "$@"
 }
 
 run_secret() {
@@ -133,6 +214,10 @@ case "$command" in
   secret)
     shift
     run_secret "$@"
+    ;;
+  env-url)
+    shift
+    run_env_url "$@"
     ;;
   *)
     usage >&2

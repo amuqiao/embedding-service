@@ -1320,9 +1320,29 @@ def test_k8s_cli_help_is_available_without_db():
     assert "K8s Pod 内手动运维入口" in result.stdout
     assert "check postgres" in result.stdout
     assert "check redis" in result.stdout
+    assert "check oss --confirm" in result.stdout
     assert "current" in result.stdout
     assert "heads" in result.stdout
     assert "migrate --confirm" in result.stdout
+
+
+def test_k8s_check_oss_requires_confirm_before_remote_write():
+    env = os.environ.copy()
+    env["KUBERNETES_SERVICE_HOST"] = "127.0.0.1"
+
+    result = subprocess.run(
+        ["./scripts/k8s.sh", "check", "oss"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "check oss requires --confirm" in result.stderr
+    assert "OSS_ACCESS_KEY" not in result.stdout
+    assert "OSS_ACCESS_KEY" not in result.stderr
 
 
 def test_tools_cli_help_is_available_without_env_file():

@@ -31,6 +31,22 @@ def test_tools_secret_help_describes_generated_secret():
     assert ".env" in result.stdout
 
 
+def test_tools_env_url_help_describes_fixed_encoding_rules():
+    result = subprocess.run(
+        ["./scripts/tools.sh", "env-url", "--help"],
+        cwd=ROOT_DIR,
+        env=_env(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "DATABASE_URL" in result.stdout
+    assert "REDIS_URL" in result.stdout
+    assert "生成时始终执行 URL encode" in result.stdout
+    assert "不提供 --no-encode" in result.stdout
+
+
 def test_tools_secret_generates_urlsafe_token_only_on_stdout():
     result = subprocess.run(
         ["./scripts/tools.sh", "secret"],
@@ -45,6 +61,174 @@ def test_tools_secret_generates_urlsafe_token_only_on_stdout():
     assert result.stderr == ""
     assert TOKEN_RE.fullmatch(token)
     assert len(token) >= 32
+
+
+def test_tools_env_url_postgres_encodes_components_and_prints_parse_summary():
+    result = subprocess.run(
+        [
+            "./scripts/tools.sh",
+            "env-url",
+            "postgres",
+            "--username",
+            "test:user",
+            "--host",
+            "postgres.fortress",
+            "--port",
+            "5432",
+            "--database",
+            "test/cms poster-title",
+            "--password-stdin",
+        ],
+        cwd=ROOT_DIR,
+        env=_env(),
+        input="abc@123#x/y",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    lines = result.stdout.splitlines()
+    assert result.stderr == ""
+    assert lines[0] == (
+        "DATABASE_URL=postgresql+asyncpg://"
+        "test%3Auser:abc%40123%23x%2Fy@postgres.fortress:5432/test%2Fcms%20poster-title"
+    )
+    assert "# DATABASE_URL_username_decoded=test:user" in lines
+    assert "# DATABASE_URL_password_present=true" in lines
+    assert "abc@123#x/y" not in result.stdout
+    assert "# DATABASE_URL_database_decoded=test/cms poster-title" in lines
+    assert "# URL encode rule: encode username/password/path component; do not encode host/port." in lines
+
+
+def test_tools_env_url_redis_encodes_acl_user_password_and_db():
+    result = subprocess.run(
+        [
+            "./scripts/tools.sh",
+            "env-url",
+            "redis",
+            "--username",
+            "acl:user",
+            "--host",
+            "192.168.0.5",
+            "--port",
+            "6390",
+            "--db",
+            "8",
+            "--password-stdin",
+        ],
+        cwd=ROOT_DIR,
+        env=_env(),
+        input="p@ss/word",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    lines = result.stdout.splitlines()
+    assert result.stderr == ""
+    assert lines[0] == "REDIS_URL=redis://acl%3Auser:p%40ss%2Fword@192.168.0.5:6390/8"
+    assert "# REDIS_URL_username_decoded=acl:user" in lines
+    assert "# REDIS_URL_password_present=true" in lines
+    assert "p@ss/word" not in result.stdout
+    assert "# REDIS_URL_db_decoded=8" in lines
+
+
+def test_tools_env_url_redis_supports_no_password_url():
+    result = subprocess.run(
+        [
+            "./scripts/tools.sh",
+            "env-url",
+            "redis",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "26379",
+        ],
+        cwd=ROOT_DIR,
+        env=_env(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    lines = result.stdout.splitlines()
+    assert result.stderr == ""
+    assert lines[0] == "REDIS_URL=redis://127.0.0.1:26379/0"
+    assert "# REDIS_URL_username_encoded=-" in lines
+    assert "# REDIS_URL_password_present=false" in lines
+    assert "# REDIS_URL_db_decoded=0" in lines
+
+
+def test_tools_env_url_redis_acl_username_requires_password():
+    result = subprocess.run(
+        [
+            "./scripts/tools.sh",
+            "env-url",
+            "redis",
+            "--username",
+            "acl-user",
+            "--host",
+            "127.0.0.1",
+        ],
+        cwd=ROOT_DIR,
+        env=_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "--username requires --password-stdin or --password" in result.stderr
+
+
+def test_tools_env_url_rejects_conflicting_password_sources():
+    result = subprocess.run(
+        [
+            "./scripts/tools.sh",
+            "env-url",
+            "redis",
+            "--host",
+            "127.0.0.1",
+            "--password",
+            "one",
+            "--password-stdin",
+        ],
+        cwd=ROOT_DIR,
+        env=_env(),
+        input="two",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "--password cannot be combined with --password-stdin" in result.stderr
+
+
+def test_tools_env_url_rejects_empty_password_from_stdin():
+    result = subprocess.run(
+        [
+            "./scripts/tools.sh",
+            "env-url",
+            "postgres",
+            "--username",
+            "app",
+            "--host",
+            "postgres.fortress",
+            "--database",
+            "app",
+            "--password-stdin",
+        ],
+        cwd=ROOT_DIR,
+        env=_env(),
+        input="",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "password must not be empty" in result.stderr
 
 
 def test_tools_secret_prefix_prepends_literal_prefix():

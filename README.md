@@ -164,6 +164,7 @@ OSS_PUBLIC_ENDPOINT=
 ./scripts/dev.sh migrate
 ./scripts/dev.sh ports --format json --ports 3000,5173,8000-8010
 ./scripts/tools.sh secret --prefix prd_
+./scripts/tools.sh env-url postgres -h
 ./scripts/dev.sh --help
 ```
 

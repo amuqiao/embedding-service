@@ -116,12 +116,14 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/real_flow/flows/__init__.py" \
     "$ROOT_DIR/scripts/real_flow/flows/llm_job_billing.py" \
     "$ROOT_DIR/scripts/real_flow/flows/oss_image_upload.py" \
-    "$ROOT_DIR/scripts/real_flow/flows/poster_title_image.py"
+    "$ROOT_DIR/scripts/real_flow/flows/poster_title_image.py" \
+    "$ROOT_DIR/scripts/tools/env_url.py"
   event "OK" "dev/check_ports.py" "py_compile"
   event "OK" "verify/*.py" "py_compile"
   event "OK" "load/*.py" "py_compile"
   event "OK" "jobs/*.py" "py_compile"
   event "OK" "real_flow/*.py" "py_compile"
+  event "OK" "tools/*.py" "py_compile"
 }
 
 run_alembic_revision_check() {
