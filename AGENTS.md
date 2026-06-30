@@ -58,8 +58,11 @@
 ./scripts/verify.sh workflow-smoke
 ./scripts/verify.sh check
 ./scripts/deploy.sh check
+./scripts/jobs.sh --help
 ./scripts/k8s.sh --help
 ```
+
+`scripts/` 维护 6 类稳定入口，职责互不重叠：`dev.sh` 本地服务生命周期、`verify.sh` 一次性验证、`deploy.sh` compose 部署形态、`k8s.sh` 已部署 Pod 内手动运维、`jobs.sh` Job 只读查询与排障、`real-flow.sh` 手动真实模型/对象存储流程验证、`tools.sh` 无默认持久副作用的本地开发辅助工具。完整命令以各脚本 `-h` 输出和 `scripts/README.md` 为准。
 
 `start`、`stop`、`restart`、`status` 支持指定服务：
 
@@ -142,7 +145,7 @@
 - 命令、路径、配置键、协议名、接口路径、类名和包名保留英文原文。
 - README 只写稳定入口和必要背景；临时排查记录不要写入 README。
 - 当前只在 `docs/README.md` 维护一份文档地图；顶层 `README.md` 只保留稳定文档入口，不重复维护完整索引。
-- 核心长期文档按 `docs/current/`、`docs/api/`、`docs/plans/` 分层维护：current 写当前事实，api 写对外合同和扩展入口，plans 写未来计划。
+- 核心长期文档按 `docs/current/`、`docs/api/`、`docs/plans/`、`docs/runbooks/` 分层维护：current 写当前事实，api 写对外合同和扩展入口，plans 写未来计划，runbooks 写可重复执行的排障手册。
 - `docs/archived/` 只保存历史设计和旧计划，不能作为当前事实源或默认阅读路径。
 - 默认不要读取、引用或基于 `docs/archived/` 推导当前实现；只有用户明确要求追溯历史设计、恢复旧方案或检查归档内容时，才允许读取该目录。
 - 子目录默认不维护 README；只有当单个子目录中文档数量明显增多，且确实需要目录级边界规则时，才考虑新增子目录 README。
