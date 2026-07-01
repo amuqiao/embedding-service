@@ -30,8 +30,6 @@ def _resolve_repo_path(value: str) -> Path:
 
 def image_content_type(path: Path, explicit: str | None) -> str:
     value = explicit or mimetypes.guess_type(path.name)[0] or ""
-    if value == "image/jpg":
-        value = "image/jpeg"
     if value not in ALLOWED_IMAGE_CONTENT_TYPES:
         raise FlowError(f"image content type must be one of {sorted(ALLOWED_IMAGE_CONTENT_TYPES)}, got {value!r}", exit_code=2)
     return value

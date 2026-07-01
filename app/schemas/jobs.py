@@ -376,7 +376,7 @@ class OssUrlRef(StrictBaseModel):
 class PosterTitleImageReferenceImage(StrictBaseModel):
     public_url: str = Field(min_length=1)
     internal_url: str = Field(min_length=1)
-    content_type: Literal["image/png"]
+    content_type: Literal["image/png", "image/jpeg", "image/webp"]
     sha256: str
 
     @field_validator("sha256")

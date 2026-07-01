@@ -577,6 +577,8 @@ def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry
             )
 
     if model_selection.has_model_selection_config(model_selection.POSTER_TITLE_IMAGE_JOB_TYPE):
+        from app.integrations.image import POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES
+
         poster_selection = model_selection.get_poster_title_image_model_selection()
         for model_id in poster_selection.public_model_selection.allowed_model_ids:
             generation_model = model_by_id[model_id]
@@ -584,6 +586,14 @@ def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry
                 raise RuntimeError("poster_title_image public_model_selection must reference image models")
             if "image_edit" not in generation_model.capabilities:
                 raise RuntimeError("poster_title_image public_model_selection must support image_edit")
+            missing_generation_media_types = sorted(
+                POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES - set(generation_model.input_media_types)
+            )
+            if missing_generation_media_types:
+                raise RuntimeError(
+                    "poster_title_image public_model_selection must support reference image input media types: "
+                    + ", ".join(missing_generation_media_types)
+                )
         style_probe_model = next(
             (model for model in enabled_models if model.id == poster_selection.style_probe_model_id),
             None,
@@ -598,7 +608,13 @@ def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry
             raise RuntimeError(
                 "poster_title_image internal_models.style_probe.model_id must support multimodal_text_generation"
             )
-        if "image/png" not in style_probe_model.input_media_types:
-            raise RuntimeError("poster_title_image internal_models.style_probe.model_id must support image/png input")
+        missing_style_probe_media_types = sorted(
+            POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES - set(style_probe_model.input_media_types)
+        )
+        if missing_style_probe_media_types:
+            raise RuntimeError(
+                "poster_title_image internal_models.style_probe.model_id must support reference image input media types: "
+                + ", ".join(missing_style_probe_media_types)
+            )
         if style_probe_model.features.get("supports_image_generation_tool") is not True:
             raise RuntimeError("poster_title_image internal_models.style_probe.model_id must support image_generation tool")

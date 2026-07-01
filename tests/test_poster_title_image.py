@@ -1,6 +1,7 @@
 import io
 import logging
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -12,13 +13,15 @@ from app.core.exceptions import AppError
 from app.core.logging import LogEvent
 from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
 from app.integrations.image import (
-    TRANSPARENT_REFERENCE_MAX_BYTES,
-    TRANSPARENT_REFERENCE_MAX_WIDTH,
+    POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
+    POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES,
+    POSTER_TITLE_IMAGE_REFERENCE_MAX_WIDTH,
+    POSTER_TITLE_IMAGE_REFERENCE_POLICY,
     remove_green_background,
     transparent_title_layer_from_green_screen_bytes,
     transparent_title_layer_from_green_screen_file,
     transparent_title_layer_from_green_screen_oss_url,
-    validate_transparent_reference_image,
+    validate_image_bytes,
 )
 from app.integrations.object_storage import bare_sha256, sha256_digest
 from app.integrations.storage import LocalObjectStorage
@@ -56,6 +59,26 @@ def _transparent_reference_png_bytes(size=(40, 40), accent=(255, 0, 0, 255)) -> 
     return buf.getvalue()
 
 
+def _jpeg_bytes() -> bytes:
+    image = Image.new("RGB", (40, 40), (255, 255, 255))
+    for x in range(16, 24):
+        for y in range(16, 24):
+            image.putpixel((x, y), (255, 0, 0))
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def _webp_bytes() -> bytes:
+    image = Image.new("RGB", (40, 40), (255, 255, 255))
+    for x in range(16, 24):
+        for y in range(16, 24):
+            image.putpixel((x, y), (255, 0, 0))
+    buf = io.BytesIO()
+    image.save(buf, format="WEBP")
+    return buf.getvalue()
+
+
 def _transparent_palette_png_bytes() -> bytes:
     image = Image.new("P", (40, 40), 0)
     palette = [0, 0, 0, 255, 0, 0] + [0, 0, 0] * 254
@@ -77,13 +100,20 @@ def _allowed_reference_region() -> str:
     return settings.job.poster_title_image_allowed_oss_regions[0]
 
 
-def _url_ref(key: str, data: bytes, *, bucket: str | None = None, region: str | None = None) -> dict:
+def _url_ref(
+    key: str,
+    data: bytes,
+    *,
+    bucket: str | None = None,
+    region: str | None = None,
+    content_type: str = "image/png",
+) -> dict:
     bucket = bucket or _allowed_reference_bucket()
     region = region or _allowed_reference_region()
     return {
         "public_url": f"https://{bucket}.oss-{region}.aliyuncs.com/{key}",
         "internal_url": f"https://{bucket}.oss-{region}-internal.aliyuncs.com/{key}",
-        "content_type": "image/png",
+        "content_type": content_type,
         "sha256": bare_sha256(sha256_digest(data)),
     }
 
@@ -152,9 +182,14 @@ def test_poster_title_image_params_apply_delivery_contract_constraints():
     with pytest.raises(ValueError, match="model_id"):
         PosterTitleImageParams.model_validate(invalid)
 
+    jpeg_ref = _url_ref("reference/title.jpg", b"x", content_type="image/jpeg")
+    webp_ref = _url_ref("reference/title.webp", b"x", content_type="image/webp")
+    PosterTitleImageParams.model_validate(_params(jpeg_ref))
+    PosterTitleImageParams.model_validate(_params(webp_ref))
+
     invalid = _params(ref)
-    invalid["items"][0]["reference_image"]["content_type"] = "image/jpeg"
-    with pytest.raises(ValueError, match="image/png"):
+    invalid["items"][0]["reference_image"]["content_type"] = "image/gif"
+    with pytest.raises(ValueError, match="content_type"):
         PosterTitleImageParams.model_validate(invalid)
 
     invalid = _params(ref)
@@ -447,7 +482,7 @@ def test_style_probe_response_model_supports_reference_image_input():
     model_id = poster_title_image_style_probe_model_id()
     result = ModelGate().resolve_multimodal_text(
         model_id,
-        required_media_types={"image/png"},
+        required_media_types=POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
     )
 
     assert result.resolved_model.model_id == model_id
@@ -501,37 +536,42 @@ def test_transparent_title_layer_postprocess_supports_bytes_file_and_oss_url(tmp
         assert result.getpixel((20, 20))[3] == 255
 
 
-def test_validate_transparent_reference_image_requires_real_format_and_transparent_background():
-    data = _transparent_reference_png_bytes()
+def test_validate_image_bytes_requires_real_format_and_matching_content_type():
+    data = _png_bytes()
 
-    result = validate_transparent_reference_image(data, content_type="image/png")
+    result = validate_image_bytes(data, content_type="image/png", policy=POSTER_TITLE_IMAGE_REFERENCE_POLICY)
 
     assert result.width == 40
     assert result.height == 40
     assert result.content_type == "image/png"
 
     with pytest.raises(AppError, match="content_type"):
-        validate_transparent_reference_image(data, content_type="image/webp")
+        validate_image_bytes(data, content_type="image/webp", policy=POSTER_TITLE_IMAGE_REFERENCE_POLICY)
 
-    with pytest.raises(AppError, match="transparent"):
-        validate_transparent_reference_image(_png_bytes(), content_type="image/png")
+    with pytest.raises(AppError, match="decodable"):
+        validate_image_bytes(b"not an image", content_type="image/png", policy=POSTER_TITLE_IMAGE_REFERENCE_POLICY)
 
 
-def test_validate_transparent_reference_image_accepts_palette_png_and_rejects_webp_content_type():
-    palette_png = validate_transparent_reference_image(
+def test_validate_image_bytes_accepts_png_jpeg_and_webp():
+    palette_png = validate_image_bytes(
         _transparent_palette_png_bytes(),
         content_type="image/png",
+        policy=POSTER_TITLE_IMAGE_REFERENCE_POLICY,
     )
+    jpeg = validate_image_bytes(_jpeg_bytes(), content_type="image/jpeg", policy=POSTER_TITLE_IMAGE_REFERENCE_POLICY)
+    webp = validate_image_bytes(_webp_bytes(), content_type="image/webp", policy=POSTER_TITLE_IMAGE_REFERENCE_POLICY)
 
-    assert palette_png.content_type == "image/png"
-    with pytest.raises(AppError, match="image/png"):
-        validate_transparent_reference_image(_transparent_reference_png_bytes(), content_type="image/webp")
+    assert [palette_png.content_type, jpeg.content_type, webp.content_type] == [
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+    ]
 
 
-def test_poster_title_image_reference_validation_uses_business_error(monkeypatch):
+def test_poster_title_image_reference_image_validation_uses_business_error(monkeypatch):
     from app.jobs.types.poster_title_image.executor import _load_reference_image_from_ref
 
-    data = _png_bytes()
+    data = b"not an image"
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.read_http_url_bytes", lambda *_args, **_kwargs: data)
 
     with pytest.raises(AppError) as exc:
@@ -573,7 +613,7 @@ def test_poster_title_image_reference_read_uses_public_url_not_output_storage(mo
 
     assert result.data == data
     assert result.content_type == "image/png"
-    assert calls == [(ref["public_url"], {"max_bytes": TRANSPARENT_REFERENCE_MAX_BYTES})]
+    assert calls == [(ref["public_url"], {"max_bytes": POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES})]
 
 
 def test_poster_title_image_reference_accepts_configured_cdn_public_url(monkeypatch):
@@ -603,35 +643,29 @@ def test_poster_title_image_reference_accepts_configured_cdn_public_url(monkeypa
     result = _load_reference_image_from_ref(ref)
 
     assert result.data == data
-    assert calls == [(ref["public_url"], {"max_bytes": TRANSPARENT_REFERENCE_MAX_BYTES})]
+    assert calls == [(ref["public_url"], {"max_bytes": POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES})]
 
 
-def test_validate_transparent_reference_image_rejects_oversized_dimensions(monkeypatch):
-    monkeypatch.setattr(
-        "app.integrations.image.reference_validation.TRANSPARENT_REFERENCE_MAX_WIDTH",
-        32,
-    )
+def test_validate_image_bytes_rejects_oversized_dimensions():
+    policy = replace(POSTER_TITLE_IMAGE_REFERENCE_POLICY, max_width=32)
 
     with pytest.raises(AppError) as exc:
-        validate_transparent_reference_image(_transparent_reference_png_bytes(), content_type="image/png")
+        validate_image_bytes(_transparent_reference_png_bytes(), content_type="image/png", policy=policy)
 
     assert exc.value.code == "INPUT_TOO_LARGE"
     assert exc.value.details["max_width"] == 32
 
 
-def test_validate_transparent_reference_image_rejects_oversized_bytes(monkeypatch):
-    monkeypatch.setattr(
-        "app.integrations.image.reference_validation.TRANSPARENT_REFERENCE_MAX_BYTES",
-        1,
-    )
+def test_validate_image_bytes_rejects_oversized_bytes():
+    policy = replace(POSTER_TITLE_IMAGE_REFERENCE_POLICY, max_bytes=1)
 
     with pytest.raises(AppError) as exc:
-        validate_transparent_reference_image(_transparent_reference_png_bytes(), content_type="image/png")
+        validate_image_bytes(_transparent_reference_png_bytes(), content_type="image/png", policy=policy)
 
     assert exc.value.code == "INPUT_TOO_LARGE"
     assert exc.value.details["max_bytes"] == 1
-    assert TRANSPARENT_REFERENCE_MAX_BYTES == 20 * 1024 * 1024
-    assert TRANSPARENT_REFERENCE_MAX_WIDTH == 4096
+    assert POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES == 20 * 1024 * 1024
+    assert POSTER_TITLE_IMAGE_REFERENCE_MAX_WIDTH == 4096
 
 
 def test_poster_title_image_missing_default_prompt_is_runtime_config_error(monkeypatch):

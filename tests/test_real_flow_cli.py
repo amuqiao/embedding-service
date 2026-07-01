@@ -37,6 +37,16 @@ def _transparent_png_bytes() -> bytes:
     return buf.getvalue()
 
 
+def _jpeg_bytes() -> bytes:
+    image = Image.new("RGB", (40, 40), (255, 255, 255))
+    for x in range(16, 24):
+        for y in range(16, 24):
+            image.putpixel((x, y), (255, 0, 0))
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG")
+    return buf.getvalue()
+
+
 def clear_storage_env(monkeypatch):
     for key in STORAGE_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
@@ -414,6 +424,16 @@ def test_oss_upload_image_cli_requires_explicit_image():
 
     assert result.exit_code == 2
     assert "OSS image upload requires --image" in result.stderr
+
+
+def test_oss_image_upload_accepts_standard_jpeg_mime_and_rejects_jpg_alias(tmp_path):
+    image_path = tmp_path / "reference.jpg"
+    image_path.write_bytes(_jpeg_bytes())
+
+    assert oss_image_upload.image_content_type(image_path, None) == "image/jpeg"
+
+    with pytest.raises(llm_job_billing.FlowError, match="image/jpg"):
+        oss_image_upload.image_content_type(image_path, "image/jpg")
 
 
 def test_real_flow_builds_job_payload_for_real_llm_job():
@@ -1793,20 +1813,21 @@ def test_poster_title_image_rejects_mixed_reference_sources(tmp_path, monkeypatc
         )
 
 
-def test_poster_title_image_explicit_url_ref_rejects_jpeg_content_type(monkeypatch):
+def test_poster_title_image_explicit_url_ref_accepts_jpeg_content_type(monkeypatch):
     clear_storage_env(monkeypatch)
 
-    with pytest.raises(poster_title_image.FlowError, match="image/png"):
-        poster_title_image.resolve_reference_image(
-            reference_image=None,
-            reference_url_ref_json=None,
-            reference_public_url="https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.jpg",
-            reference_internal_url="https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.jpg",
-            reference_sha256="c" * 64,
-            reference_content_type="image/jpeg",
-            app_env={"STORAGE_BACKEND": "aliyun_oss"},
-            confirm_upload=False,
-        )
+    result = poster_title_image.resolve_reference_image(
+        reference_image=None,
+        reference_url_ref_json=None,
+        reference_public_url="https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.jpg",
+        reference_internal_url="https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/reference.jpg",
+        reference_sha256="c" * 64,
+        reference_content_type="image/jpeg",
+        app_env={"STORAGE_BACKEND": "aliyun_oss"},
+        confirm_upload=False,
+    )
+
+    assert result.ref["content_type"] == "image/jpeg"
 
 
 def test_real_flow_run_ignores_env_reference_url_ref_by_default(tmp_path, monkeypatch):
@@ -2057,13 +2078,28 @@ def test_poster_title_image_local_staging_infers_png_reference_content_type(tmp_
     assert ref["content_type"] == "image/png"
 
 
-def test_poster_title_image_rejects_jpeg_reference_content_type(tmp_path, monkeypatch):
+def test_poster_title_image_accepts_jpeg_reference_content_type(tmp_path, monkeypatch):
+    clear_storage_env(monkeypatch)
+    monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
+    source = tmp_path / "reference.jpg"
+    source.write_bytes(_jpeg_bytes())
+
+    ref = poster_title_image.stage_local_reference_image(
+        reference_image="reference.jpg",
+        content_type=None,
+        app_env={"STORAGE_BACKEND": "local", "LOCAL_OBJECT_STORAGE_PATH": "storage/objects"},
+    )
+
+    assert ref["content_type"] == "image/jpeg"
+
+
+def test_poster_title_image_rejects_undecodable_reference_image(tmp_path, monkeypatch):
     clear_storage_env(monkeypatch)
     monkeypatch.setattr(poster_title_image, "ROOT_DIR", tmp_path)
     source = tmp_path / "reference.jpg"
     source.write_bytes(b"jpeg")
 
-    with pytest.raises(poster_title_image.FlowError, match="image/png"):
+    with pytest.raises(poster_title_image.FlowError, match="not a decodable image"):
         poster_title_image.stage_local_reference_image(
             reference_image="reference.jpg",
             content_type=None,

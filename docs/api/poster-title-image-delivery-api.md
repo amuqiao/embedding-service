@@ -642,10 +642,9 @@ POST /api/v1/ai-jobs/jobs
 | `job_params.items[].model_options.output_format` | `png` |
 | `job_params.items[].reference_image.public_url` | 必须，HTTPS OSS URL |
 | `job_params.items[].reference_image.internal_url` | 必须，HTTPS OSS internal URL |
-| `job_params.items[].reference_image.content_type` | 必须，`image/png` |
+| `job_params.items[].reference_image.content_type` | 必须，`image/png`、`image/jpeg` 或 `image/webp` |
 | `job_params.items[].reference_image.sha256` | 必须，同一个 OSS object 原始内容的小写 64 位 hex SHA-256 |
-| 参考图透明背景 | 必须，服务端会解码图片并检查透明边界 |
-| 输入图片 MIME | `image/png` |
+| 输入图片 MIME | `image/png`、`image/jpeg`、`image/webp` |
 | 单个输入图片大小 | 最大 20 MB |
 | 单个输入图片尺寸 | 最大 4096 x 4096，且总像素不超过 16777216 |
 

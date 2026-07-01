@@ -14,8 +14,9 @@ from urllib.parse import quote, urlsplit
 from app.core.exceptions import AppError
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSError
 from app.integrations.image import (
-    TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
-    validate_transparent_reference_image,
+    POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
+    POSTER_TITLE_IMAGE_REFERENCE_POLICY,
+    validate_image_bytes,
 )
 from app.jobs.adapters.oss_url_ref import canonical_ref_from_oss_url_ref
 from scripts.jobs import formatters
@@ -30,7 +31,7 @@ DEFAULT_JOB_TYPE = "poster_title_image"
 DEFAULT_IMAGE_MODEL_ID = "gpt-image-2"
 DEFAULT_BUCKET = "local-dev"
 DEFAULT_REGION = "local"
-ALLOWED_CONTENT_TYPES = TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES
+ALLOWED_CONTENT_TYPES = POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,7 @@ def _optional_draw_count(raw_item: dict[str, Any], default: int) -> int:
 
 def _validate_reference_input_bytes(data: bytes, *, content_type: str) -> None:
     try:
-        validate_transparent_reference_image(data, content_type=content_type)
+        validate_image_bytes(data, content_type=content_type, policy=POSTER_TITLE_IMAGE_REFERENCE_POLICY)
     except AppError as exc:
         raise FlowError(f"poster_title_image reference image invalid: {exc.message}", exit_code=2) from exc
 

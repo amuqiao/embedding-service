@@ -14,10 +14,11 @@ from app.core.model_registry import get_enabled_model
 from app.core.prompt_templates import get_prompt_block_default
 from app.integrations.ai_adapters.base import ImageInput
 from app.integrations.image import (
-    TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
-    TRANSPARENT_REFERENCE_MAX_BYTES,
+    POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
+    POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES,
+    POSTER_TITLE_IMAGE_REFERENCE_POLICY,
     transparent_title_layer_from_green_screen_bytes,
-    validate_transparent_reference_image,
+    validate_image_bytes,
 )
 from app.integrations.object_storage import sha256_digest
 from app.integrations.storage import storage
@@ -159,7 +160,7 @@ def _validate_reference_ref_payload(reference_image: Any) -> None:
             reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image,
             allowed_buckets=settings.job.poster_title_image_allowed_oss_buckets,
             allowed_regions=settings.job.poster_title_image_allowed_oss_regions,
-            allowed_content_types=TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
+            allowed_content_types=POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
             public_endpoint=settings.storage.oss_public_endpoint or None,
         )
     except AppError as exc:
@@ -174,19 +175,19 @@ def _load_reference_image_from_ref(reference_image: Any) -> ImageInput:
             payload,
             allowed_buckets=settings.job.poster_title_image_allowed_oss_buckets,
             allowed_regions=settings.job.poster_title_image_allowed_oss_regions,
-            allowed_content_types=TRANSPARENT_REFERENCE_ALLOWED_CONTENT_TYPES,
+            allowed_content_types=POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
             public_endpoint=settings.storage.oss_public_endpoint or None,
         )
     except AppError as exc:
         _raise_reference_invalid_if_applicable(exc)
         raise
     try:
-        data = read_http_url_bytes(str(payload["public_url"]).strip(), max_bytes=TRANSPARENT_REFERENCE_MAX_BYTES)
+        data = read_http_url_bytes(str(payload["public_url"]).strip(), max_bytes=POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES)
         if sha256_digest(data) != ref.content_hash:
             raise AppError("INPUT_HASH_MISMATCH", "reference image sha256 mismatch")
         if ref.content_type is None:
             raise AppError("INVALID_INPUT", "reference image content_type is required")
-        validate_transparent_reference_image(data, content_type=ref.content_type)
+        validate_image_bytes(data, content_type=ref.content_type, policy=POSTER_TITLE_IMAGE_REFERENCE_POLICY)
     except AppError as exc:
         _raise_reference_invalid_if_applicable(exc)
         raise

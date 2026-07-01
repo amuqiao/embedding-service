@@ -80,6 +80,8 @@ def _poster_hidden_model_config() -> str:
       input_media_types:
         - text/plain
         - image/png
+        - image/jpeg
+        - image/webp
       output_media_types:
         - text/plain
       limits:
@@ -118,6 +120,8 @@ def _poster_hidden_model_config() -> str:
       input_media_types:
         - text/plain
         - image/png
+        - image/jpeg
+        - image/webp
       output_media_types:
         - image/png
       limits:

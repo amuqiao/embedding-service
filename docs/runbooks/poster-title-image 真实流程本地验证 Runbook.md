@@ -227,7 +227,7 @@ SERVICE_API_KEY='<测试环境 API token>' \
 |---|---|---|
 | 本地图片 | 本地开发最快 | `--reference .data/title/xxx.png` |
 | 上传后复用 URL Ref JSON | 远端测试推荐 | `--reference-url-ref-json .run/reference-image.json` |
-| 手动四字段 URL Ref | 调用方已给完整对象引用 | `--reference-public-url ... --reference-internal-url ... --reference-content-type image/png --reference-sha256 ...` |
+| 手动四字段 URL Ref | 调用方已给完整对象引用 | `--reference-public-url ... --reference-internal-url ... --reference-content-type image/png --reference-sha256 ...`；`--reference-content-type` 也可使用 `image/jpeg` 或 `image/webp` |
 
 `--reference-url-ref-json` 可以读取两种结构：
 
