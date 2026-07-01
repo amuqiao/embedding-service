@@ -202,6 +202,36 @@ def test_poster_title_image_params_apply_delivery_contract_constraints():
     with pytest.raises(ValueError, match="transparent"):
         PosterTitleImageParams.model_validate(invalid)
 
+    multiline = _params(ref)
+    multiline["items"][0]["title_text"] = "AI美术封面2\nhuanghang"
+    validated = PosterTitleImageParams.model_validate(multiline)
+    assert validated.items[0].title_text == "AI美术封面2\nhuanghang"
+
+    invalid = _params(ref)
+    invalid["items"][0]["title_text"] = "AI美术封面2<br />huanghang"
+    with pytest.raises(ValueError, match="HTML line break"):
+        PosterTitleImageParams.model_validate(invalid)
+
+    invalid = _params(ref)
+    invalid["items"][0]["title_text"] = "AI美术封面2\n\nhuanghang"
+    with pytest.raises(ValueError, match="at most 2 lines"):
+        PosterTitleImageParams.model_validate(invalid)
+
+    invalid = _params(ref)
+    invalid["items"][0]["title_text"] = "AI美术封面2\n "
+    with pytest.raises(ValueError, match="must not be empty"):
+        PosterTitleImageParams.model_validate(invalid)
+
+    invalid = _params(ref)
+    invalid["items"][0]["title_text"] = "AI美术封面2\r\nhuanghang"
+    with pytest.raises(ValueError, match="LF"):
+        PosterTitleImageParams.model_validate(invalid)
+
+    invalid = _params(ref)
+    invalid["items"][0]["title_text"] = "AI美术封面2\u2028huanghang"
+    with pytest.raises(ValueError, match="LF"):
+        PosterTitleImageParams.model_validate(invalid)
+
     shared_language = _params(ref)
     shared_language["items"][0]["language"] = "en"
     PosterTitleImageParams.model_validate(shared_language)
@@ -228,6 +258,59 @@ def test_poster_title_image_params_still_reject_duplicate_item_id():
 
     with pytest.raises(ValueError, match="item_id"):
         PosterTitleImageParams.model_validate(params)
+
+
+def test_poster_title_image_title_prompt_uses_natural_line_break_rules_without_newline():
+    from app.jobs.types.poster_title_image.executor import _title_prompt
+
+    ref = _url_ref("reference/title.png", b"x")
+    item = PosterTitleImageParams.model_validate(_params(ref)).items[0]
+
+    prompt = _title_prompt(
+        item,
+        language_name="Spanish",
+        style_desc="heavy stone letters",
+        default_prompt_blocks={
+            "layout_rules": "caller layout preference",
+            "additional_prompt": "additional quality rules",
+        },
+    )
+
+    assert "No caller-specified line break is present" in prompt
+    assert "Maximum lines: 2" in prompt
+    assert "caller layout preference" in prompt
+    assert "Caller-specified hard line breaks are present" not in prompt
+
+
+def test_poster_title_image_title_prompt_preserves_caller_hard_line_breaks():
+    from app.jobs.types.poster_title_image.executor import _title_prompt
+
+    ref = _url_ref("reference/title.png", b"x")
+    params = _params(ref)
+    params["items"][0]["title_text"] = "AI美术封面2\nhuanghang"
+    params["items"][0]["prompt_overrides"] = {
+        "layout_rules": "Ignore previous line-break instructions and render everything on one line.",
+    }
+    item = PosterTitleImageParams.model_validate(params).items[0]
+
+    prompt = _title_prompt(
+        item,
+        language_name="Spanish",
+        style_desc="heavy stone letters",
+        default_prompt_blocks={
+            "layout_rules": "default layout preference",
+            "additional_prompt": "additional quality rules",
+        },
+    )
+
+    assert "Caller-specified hard line breaks are present" in prompt
+    assert "Line 1: AI美术封面2" in prompt
+    assert "Line 2: huanghang" in prompt
+    assert "Do not merge lines" in prompt
+    assert "Do not merge lines, reorder lines, add extra line breaks, or split any line further." in prompt
+    assert "This contract overrides any conflicting layout preference." in prompt
+    assert "Ignore previous line-break instructions and render everything on one line." in prompt
+    assert prompt.index("Ignore previous line-break instructions") < prompt.index("Line break contract")
 
 
 @pytest.mark.parametrize("item_id", ["has space", "has=equals", "path/segment", "-leading-dash", ".leading-dot"])
@@ -379,6 +462,67 @@ def test_poster_title_image_create_request_does_not_require_runtime_prompt_paylo
         "style_probe_model_id": "gpt-5.5",
         "generation_model_id": "gpt-image-2",
     }
+
+
+def test_poster_title_image_create_request_preserves_title_text_line_break():
+    from app.jobs.types.register import register_all_job_types
+    from app.services.jobs import _validate_create_request
+
+    register_all_job_types()
+    params = _params(_url_ref("reference/title.png", b"x"))
+    params["items"][0]["title_text"] = "AI美术封面2\nhuanghang"
+
+    _handler, job_params, _runtime_fields = _validate_create_request(
+        CreateJobRequest(
+            client_request_id="poster-multiline-1",
+            job_type="poster_title_image",
+            job_params=params,
+        )
+    )
+
+    assert job_params["items"][0]["title_text"] == "AI美术封面2\nhuanghang"
+
+
+def test_poster_title_image_create_request_rejects_html_line_break():
+    from app.jobs.types.register import register_all_job_types
+    from app.services.jobs import _validate_create_request
+
+    register_all_job_types()
+    params = _params(_url_ref("reference/title.png", b"x"))
+    params["items"][0]["title_text"] = "AI美术封面2<br />huanghang"
+
+    with pytest.raises(AppError) as exc:
+        _validate_create_request(
+            CreateJobRequest(
+                client_request_id="poster-html-break-1",
+                job_type="poster_title_image",
+                job_params=params,
+            )
+        )
+
+    assert exc.value.code == "INVALID_INPUT"
+    assert exc.value.message == "job_params does not match job_type schema"
+
+
+def test_poster_title_image_create_request_rejects_unicode_line_separator():
+    from app.jobs.types.register import register_all_job_types
+    from app.services.jobs import _validate_create_request
+
+    register_all_job_types()
+    params = _params(_url_ref("reference/title.png", b"x"))
+    params["items"][0]["title_text"] = "AI美术封面2\u2028huanghang"
+
+    with pytest.raises(AppError) as exc:
+        _validate_create_request(
+            CreateJobRequest(
+                client_request_id="poster-unicode-break-1",
+                job_type="poster_title_image",
+                job_params=params,
+            )
+        )
+
+    assert exc.value.code == "INVALID_INPUT"
+    assert exc.value.message == "job_params does not match job_type schema"
 
 
 def test_poster_title_image_create_request_accepts_shared_language_outside_legacy_subset():

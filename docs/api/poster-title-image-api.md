@@ -183,7 +183,7 @@ CPP 用该接口获取指定 `job_type` 下的默认提示词模板。调用方�
         "key": "layout_rules",
         "role": "user",
         "label": "排版规则",
-        "default_content": "标题为横向标题区。先评估该语言文案的视觉宽度..."
+        "default_content": "标题为横向标题区。无调用方指定换行时先评估该语言文案的视觉宽度；有 LF 换行时保留调用方指定换行..."
       }
     ]
   },
@@ -322,7 +322,7 @@ Job constraints:
 | `job_params.items` | 至少 1 个 item；默认最多 50 个，受服务端 `POSTER_TITLE_IMAGE_MAX_ITEMS` 配置限制 |
 | `job_params.items[].item_id` | 1 到 64 个字符；同一 Job 内唯一；首字符必须是字母或数字，后续只允许字母、数字、`.`、`_`、`-` |
 | `job_params.items[].language` | 语种代码必须来自 [`业务语种规范.md`](业务语种规范.md)；同一 Job 内允许重复 |
-| `job_params.items[].title_text` | 1 到 200 个字符 |
+| `job_params.items[].title_text` | 1 到 200 个字符；仅支持最多 1 个 LF `\n` 作为调用方指定硬换行，最多 2 行；不支持 CRLF、其它换行字符或 HTML `<br />` |
 | `job_params.items[].model_id` | 可省略；默认值和 allowlist 来自 `app/jobs/types/poster_title_image/models.yaml`；当前默认和 allowlist 均为 `gpt-image-2`；同一 Job 内必须一致 |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
 | `job_params.items[].model_options.quality` | `low`、`medium`、`high`、`auto` |
@@ -367,6 +367,7 @@ Forbidden request fields:
 - 不传 token、图片、视频或音频计费用量。
 - 不传外层 `model_id`、`model_options`、`source`、`render_options`、`prompt_overrides` 或 `batch_options`。
 - 不传 `items[].layout`；排版由 `title_text`、item 级提示词和服务内部规则共同决定。
+- `items[].title_text` 中的 LF `\n` 表示调用方指定硬换行，服务端会要求模型按这些行渲染；未传 `\n` 时由服务端排版规则决定是否自然换行。`prompt_overrides.layout_rules` 只能补充视觉排版偏好，不能覆盖 `title_text` 的硬换行合同。
 - 不传拆分的 `bucket`、`region`、`endpoint`、`object_key` 或临时签名参数；输入参考图只使用 `OSS URL Ref` 字段。
 
 ### Accepted Response

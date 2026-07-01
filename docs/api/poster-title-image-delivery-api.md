@@ -486,7 +486,7 @@ GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
         "key": "layout_rules",
         "role": "user",
         "label": "Layout rules",
-        "default_content": "The title is a horizontal poster-title layer. Render the text large and bold, filling about 85-95% of the frame width while preserving a clear safety margin on every side. Prefer one line when the specific language and text width fit comfortably. For longer text, allow one natural grammatical line break only; keep each line balanced, never split inside a word, and use at most two lines. Do not crop, truncate, overlap, squeeze, warp, rotate, or scatter the text. The full title must remain centered, readable, and naturally spaced."
+        "default_content": "The title is a horizontal poster-title layer. Render the text large and bold, filling about 85-95% of the frame width while preserving a clear safety margin on every side. When title_text does not include caller-specified line breaks, prefer one line if the specific language and text width fit comfortably; for longer text, allow one natural grammatical line break only. When title_text includes caller-specified LF line breaks, preserve those line breaks exactly. Keep each line balanced, never split inside a word, and use at most two lines. Do not crop, truncate, overlap, squeeze, warp, rotate, or scatter the text. The full title must remain centered, readable, and naturally spaced."
       }
     ]
   },
@@ -633,7 +633,7 @@ POST /api/v1/ai-jobs/jobs
 | `job_params.items` | 至少 1 个 item；默认最多 50 个，受服务端 `POSTER_TITLE_IMAGE_MAX_ITEMS` 配置限制 |
 | `job_params.items[].item_id` | 1 到 64 个字符；同一任务内唯一；首字符必须是字母或数字，后续只允许字母、数字、`.`、`_`、`-` |
 | `job_params.items[].language` | 语种代码必须来自第 3 节 `GET /languages` 返回的 `data.languages[].language`；同一任务内允许重复 |
-| `job_params.items[].title_text` | 1 到 200 个字符 |
+| `job_params.items[].title_text` | 1 到 200 个字符；仅支持最多 1 个 LF `\n` 作为调用方指定硬换行，最多 2 行；不支持 CRLF、其它换行字符或 HTML `<br />` |
 | `job_params.items[].model_id` | 可省略；默认值和 allowlist 来自 `app/jobs/types/poster_title_image/models.yaml`；当前默认和 allowlist 均为 `gpt-image-2`；同一任务内必须一致 |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
 | `job_params.items[].model_options.quality` | `low`、`medium`、`high`、`auto` |
@@ -666,6 +666,7 @@ POST /api/v1/ai-jobs/jobs
 - 不传外层 `model_id`、`model_options`、`source`、`render_options`、`prompt_overrides` 或 `batch_options`。
 - 不传拆分的 `bucket`、`region`、`endpoint`、`object_key` 或临时签名参数；参考图只使用 `OSS URL Ref` 字段。
 - 不传 `items[].layout`；排版由 `title_text`、item 级提示词和服务内部规则共同决定。
+- `items[].title_text` 中的 LF `\n` 表示调用方指定硬换行，服务端会要求模型按这些行渲染；未传 `\n` 时由服务端排版规则决定是否自然换行。`prompt_overrides.layout_rules` 只能补充视觉排版偏好，不能覆盖 `title_text` 的硬换行合同。
 
 ### Callback Notification
 

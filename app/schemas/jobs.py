@@ -15,6 +15,20 @@ from app.schemas.errors import CallbackErrorDetail, JobErrorDetail
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 BARE_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 REAL_LLM_ECHO_INLINE_MAX_BYTES = 4096
+POSTER_TITLE_IMAGE_MAX_TITLE_LINES = 2
+POSTER_TITLE_IMAGE_DISALLOWED_LINE_BREAKS = frozenset(
+    {
+        "\r",
+        "\v",
+        "\f",
+        "\x1c",
+        "\x1d",
+        "\x1e",
+        "\x85",
+        "\u2028",
+        "\u2029",
+    }
+)
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
 ProgressStage = Literal[
@@ -424,6 +438,20 @@ class PosterTitleImageItemParams(StrictBaseModel):
     def validate_language_subset(cls, value: str) -> str:
         if value not in supported_language_codes():
             raise ValueError("language is not supported by poster_title_image")
+        return value
+
+    @field_validator("title_text")
+    @classmethod
+    def validate_title_text_line_breaks(cls, value: str) -> str:
+        if any(separator in value for separator in POSTER_TITLE_IMAGE_DISALLOWED_LINE_BREAKS):
+            raise ValueError("title_text line breaks must use LF \\n only")
+        if "<br" in value.lower():
+            raise ValueError("title_text does not support HTML line break tags; use LF \\n")
+        lines = value.split("\n")
+        if len(lines) > POSTER_TITLE_IMAGE_MAX_TITLE_LINES:
+            raise ValueError(f"title_text must use at most {POSTER_TITLE_IMAGE_MAX_TITLE_LINES} lines")
+        if any(not line.strip() for line in lines):
+            raise ValueError("title_text lines must not be empty")
         return value
 
 

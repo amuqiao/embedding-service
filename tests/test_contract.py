@@ -91,6 +91,8 @@ def test_default_prompt_templates_declares_poster_title_image_blocks():
         "additional_prompt",
         "layout_rules",
     }
+    layout_rules = next(block for block in template.prompt_blocks if block.key == "layout_rules")
+    assert "caller-specified LF line breaks" in layout_rules.default_content
 
 
 def test_runtime_prompt_builds_generic_user_and_work_note_messages():
@@ -779,6 +781,8 @@ def test_prompt_templates_route_defaults_to_poster_title_image(monkeypatch):
         "additional_prompt",
         "layout_rules",
     }
+    layout_rules = next(block for block in body["data"]["prompt_blocks"] if block["key"] == "layout_rules")
+    assert "caller-specified LF line breaks" in layout_rules["default_content"]
 
 
 def test_prompt_templates_route_filters_by_job_type(monkeypatch):

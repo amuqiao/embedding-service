@@ -38,6 +38,7 @@ from app.jobs.types.poster_title_image.errors import (
 )
 from app.models.job import Job
 from app.schemas.jobs import (
+    POSTER_TITLE_IMAGE_MAX_TITLE_LINES,
     PosterTitleImageBatchSummary,
     PosterTitleImageDurationMs,
     PosterTitleImageGenerateItemParams,
@@ -101,9 +102,8 @@ Reproduce every character exactly — do not add, omit, alter, or paraphrase any
 For non-Latin scripts (Japanese, Korean, Thai, Arabic, Cyrillic, etc.): preserve native glyph structure but apply the same stroke weight, surface texture, distress level, and cinematic drama as the style description above.
 
 == LAYOUT ==
-Placement context: {layout_rules}
-Line breaks: Assess the visual width of the rendered text for this specific language and script. If it fits comfortably on one line, use a SINGLE line. If it is too long, break at ONE natural grammatical boundary only.
-Maximum lines: 2
+Placement context (lower priority than the line break contract below): {layout_rules}
+Line break contract (highest priority within layout; overrides any conflicting placement context or prompt override): {line_break_rules}
 Scale: Render the title LARGE — main-title proportions. The text block must fill 85-95% of the frame width. Do not render small, compact, or center-pinned text.
 
 == TECHNICAL REQUIREMENTS ==
@@ -323,8 +323,29 @@ def _title_prompt(
         locked_style_desc=style_desc,
         target_text=item.title_text,
         language=f"{item.language} ({language_name})",
+        line_break_rules=_line_break_rules(item.title_text),
         layout_rules=layout_rules,
         additional_prompt=additional_prompt,
+    )
+
+
+def _line_break_rules(title_text: str) -> str:
+    lines = title_text.split("\n")
+    if len(lines) == 1:
+        return (
+            "No caller-specified line break is present. Prefer one single line when it fits comfortably. "
+            "If the rendered text is too long, add at most one natural grammatical line break. "
+            f"Maximum lines: {POSTER_TITLE_IMAGE_MAX_TITLE_LINES}. "
+            "This contract overrides any conflicting layout preference."
+        )
+    numbered_lines = " ".join(f"Line {index}: {line}" for index, line in enumerate(lines, start=1))
+    return (
+        "Caller-specified hard line breaks are present. "
+        f"Render exactly these {len(lines)} lines in this order: {numbered_lines}. "
+        "Preserve the line breaks exactly. Do not merge lines, reorder lines, add extra line breaks, "
+        "or split any line further. "
+        f"Maximum lines: {POSTER_TITLE_IMAGE_MAX_TITLE_LINES}. "
+        "This contract overrides any conflicting layout preference."
     )
 
 

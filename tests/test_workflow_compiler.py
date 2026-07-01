@@ -272,6 +272,39 @@ def test_poster_title_image_workflow_node_keys_do_not_collide_for_safe_item_ids(
     assert _item_node_key("a-b") != _item_node_key("a_b")
 
 
+def test_poster_title_image_workflow_preserves_title_text_line_breaks_in_child_params():
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+    register_all_job_types()
+    ref = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/a.png",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/a.png",
+        "content_type": "image/png",
+        "sha256": "a" * 64,
+    }
+    item = {
+        "item_id": "en",
+        "language": "en",
+        "title_text": "AI美术封面2\nhuanghang",
+        "model_options": {
+            "size": "auto",
+            "quality": "high",
+            "draw_count": 1,
+            "background": "transparent",
+            "output_format": "png",
+        },
+        "reference_image": ref,
+    }
+
+    plan = compile_registered_workflow("poster_title_image", {"items": [item]})
+
+    nodes = _nodes_by_key(plan)
+    item_node = nodes[_item_node_key("en")]
+    join_node = nodes["join"]
+    assert item_node["job_params"]["item"]["title_text"] == "AI美术封面2\nhuanghang"
+    assert join_node["job_params"]["items"][0]["title_text"] == "AI美术封面2\nhuanghang"
+
+
 def test_poster_title_image_workflow_rejects_unsafe_item_ids_before_node_key_building():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
