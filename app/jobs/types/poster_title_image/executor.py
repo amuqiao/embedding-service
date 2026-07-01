@@ -333,8 +333,8 @@ def _line_break_rules(title_text: str) -> str:
     lines = title_text.split("\n")
     if len(lines) == 1:
         return (
-            "No caller-specified line break is present. Prefer one single line when it fits comfortably. "
-            "If the rendered text is too long, add at most one natural grammatical line break. "
+            "No caller-specified line break is present. Render the title as exactly one line. "
+            "Do not add line breaks or split the text. "
             f"Maximum lines: {POSTER_TITLE_IMAGE_MAX_TITLE_LINES}. "
             "This contract overrides any conflicting layout preference."
         )

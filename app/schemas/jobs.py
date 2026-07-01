@@ -29,6 +29,22 @@ POSTER_TITLE_IMAGE_DISALLOWED_LINE_BREAKS = frozenset(
         "\u2029",
     }
 )
+POSTER_TITLE_IMAGE_LINE_CONTROL_OVERRIDE_PATTERN = re.compile(
+    r"\\n|\b(?:line[- ]?breaks?|newlines?|new\s+lines?|hard\s+breaks?|lf)\b|"
+    r"\b(?:render|show|display|draw|format|set|make|force|keep|preserve|put|place)\b.{0,40}"
+    r"\b(?:single|one|two|three|\d+|separate|multiple)\s+lines?\b|"
+    r"\b(?:title|text|words?)\b.{0,40}\b(?:single|one|two|three|\d+|separate|multiple)\s+lines?\b|"
+    r"\b(?:title|text|words?)\b.{0,40}\b(?:rows?|stacked|multiline)\b|"
+    r"\b(?:arrange|put|place|keep|make|set|format|render|display|show)\b.{0,20}"
+    r"\b(?:title|text|words?)\b.{0,40}\b(?:rows?|stacked|multiline)\b|"
+    r"\b(?:each|every)\s+word\b.{0,40}\b(?:own|separate)\s+rows?\b|"
+    r"\bmultiline\b|"
+    r"\b(?:break|wrap|split)\b.{0,40}\b(?:title|text|words?)\b|"
+    r"\b(?:title|text|words?)\b.{0,40}\b(?:break|wrap|split)\b|"
+    r"\b(?:split|merge|preserve|add|remove|reorder)\s+(?:any\s+)?lines?\b|"
+    r"换行|分行|断行|单行|多行|合并行|拆行",
+    re.IGNORECASE,
+)
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
 ProgressStage = Literal[
@@ -420,14 +436,46 @@ class PosterTitleImageModelOptions(StrictBaseModel):
 
 class PosterTitleImagePromptOverrides(StrictBaseModel):
     style_probe: str | None = Field(default=None, min_length=1, max_length=4000)
-    additional_prompt: str | None = Field(default=None, min_length=1, max_length=4000)
-    layout_rules: str | None = Field(default=None, min_length=1, max_length=4000)
+    additional_prompt: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4000,
+        description=(
+            "Additional visual or style preference only. It must not define, add, remove, merge, or reorder "
+            "title_text line breaks."
+        ),
+    )
+    layout_rules: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4000,
+        description=(
+            "Visual layout preference only. It must not define, add, remove, merge, or reorder title_text line breaks."
+        ),
+    )
+
+    @field_validator("additional_prompt", "layout_rules")
+    @classmethod
+    def validate_no_line_break_control(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if POSTER_TITLE_IMAGE_LINE_CONTROL_OVERRIDE_PATTERN.search(value):
+            raise ValueError(
+                "prompt_overrides.additional_prompt and prompt_overrides.layout_rules must not control title_text line breaks"
+            )
+        return value
 
 
 class PosterTitleImageItemParams(StrictBaseModel):
     item_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     language: str = Field(min_length=1, max_length=16)
-    title_text: str = Field(min_length=1, max_length=200)
+    title_text: str = Field(
+        min_length=1,
+        max_length=200,
+        description=(
+            "Only source of title line breaks. No LF means exactly one line; LF separates caller-specified lines."
+        ),
+    )
     model_id: str | None = Field(default=None, min_length=1, max_length=128)
     model_options: PosterTitleImageModelOptions = Field(default_factory=PosterTitleImageModelOptions)
     reference_image: PosterTitleImageReferenceImage

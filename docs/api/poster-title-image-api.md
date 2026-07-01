@@ -183,7 +183,7 @@ CPP 用该接口获取指定 `job_type` 下的默认提示词模板。调用方�
         "key": "layout_rules",
         "role": "user",
         "label": "排版规则",
-        "default_content": "标题为横向标题区。无调用方指定换行时先评估该语言文案的视觉宽度；有 LF 换行时保留调用方指定换行..."
+        "default_content": "标题为横向标题区。遵守服务端注入的换行合同：无 LF 时单行，有 LF 时按调用方指定行渲染；layout_rules 不定义换行..."
       }
     ]
   },
@@ -241,8 +241,8 @@ POST /api/v1/ai-jobs/jobs
         },
         "prompt_overrides": {
           "style_probe": "optional item-level style probe override",
-          "additional_prompt": "optional item-level additional prompt",
-          "layout_rules": "optional item-level layout rule override"
+          "additional_prompt": "optional item-level visual/style prompt; must not control line breaks",
+          "layout_rules": "optional item-level visual layout preference; must not control line breaks"
         }
       },
       {
@@ -265,8 +265,8 @@ POST /api/v1/ai-jobs/jobs
         },
         "prompt_overrides": {
           "style_probe": "optional item-level style probe override",
-          "additional_prompt": "optional item-level additional prompt",
-          "layout_rules": "optional item-level layout rule override"
+          "additional_prompt": "optional item-level visual/style prompt; must not control line breaks",
+          "layout_rules": "optional item-level visual layout preference; must not control line breaks"
         }
       }
     ]
@@ -295,7 +295,7 @@ Field rules:
 | `job_params.items` | 是 | 批量生成 item，至少 1 个，最多由本接口 Job 约束决定 |
 | `job_params.items[].item_id` | 是 | 调用方提供的稳定 item 关联键；同一 Job 内唯一，不应由服务端推导 |
 | `job_params.items[].language` | 是 | 语种代码，必须来自共享语言列表并符合本接口 Job 约束 |
-| `job_params.items[].title_text` | 是 | 目标语言标题文本 |
+| `job_params.items[].title_text` | 是 | 目标语言标题文本，也是唯一文本分行来源；无 LF `\n` 时单行，有 LF `\n` 时按调用方指定行渲染 |
 | `job_params.items[].model_id` | 否 | 标题图生图模型 ID；不传时使用服务端 `poster_title_image` 默认生图模型 |
 | `job_params.items[].model_options.size` | 是 | 目标输出尺寸 |
 | `job_params.items[].model_options.quality` | 是 | 目标输出质量 |
@@ -304,8 +304,8 @@ Field rules:
 | `job_params.items[].model_options.output_format` | 是 | 业务输出格式要求，不是 provider raw 参数 |
 | `job_params.items[].reference_image` | 是 | 该 item 的标题样式参考图 OSS input URL ref |
 | `job_params.items[].prompt_overrides.style_probe` | 否 | 该 item 的风格探针提示词覆盖 |
-| `job_params.items[].prompt_overrides.additional_prompt` | 否 | 该 item 的附加提示词 |
-| `job_params.items[].prompt_overrides.layout_rules` | 否 | 该 item 的排版规则提示词覆盖 |
+| `job_params.items[].prompt_overrides.additional_prompt` | 否 | 该 item 的附加视觉或风格提示词；不定义、不新增、不删除、不合并、不重排 `title_text` 换行 |
+| `job_params.items[].prompt_overrides.layout_rules` | 否 | 该 item 的视觉排版偏好覆盖；不定义、不新增、不删除、不合并、不重排 `title_text` 换行 |
 | `callback` | 否 | 终态 Callback 配置；payload 和签名语义沿用 `service-contract.md` |
 | `callback.url` | 条件必填 | 传 `callback` 时必填，必须是 HTTPS URL |
 | `callback.events` | 否 | 需要通知的终态事件列表 |
@@ -367,7 +367,7 @@ Forbidden request fields:
 - 不传 token、图片、视频或音频计费用量。
 - 不传外层 `model_id`、`model_options`、`source`、`render_options`、`prompt_overrides` 或 `batch_options`。
 - 不传 `items[].layout`；排版由 `title_text`、item 级提示词和服务内部规则共同决定。
-- `items[].title_text` 中的 LF `\n` 表示调用方指定硬换行，服务端会要求模型按这些行渲染；未传 `\n` 时由服务端排版规则决定是否自然换行。`prompt_overrides.layout_rules` 只能补充视觉排版偏好，不能覆盖 `title_text` 的硬换行合同。
+- `items[].title_text` 是唯一文本分行来源。未传 LF `\n` 时服务端要求模型渲染为单行，不自动换行；传入 LF `\n` 时服务端会要求模型按这些行渲染。`prompt_overrides.additional_prompt` 和 `prompt_overrides.layout_rules` 只能补充视觉或风格偏好，不能控制 `title_text` 的换行合同。
 - 不传拆分的 `bucket`、`region`、`endpoint`、`object_key` 或临时签名参数；输入参考图只使用 `OSS URL Ref` 字段。
 
 ### Accepted Response

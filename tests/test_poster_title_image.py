@@ -260,7 +260,7 @@ def test_poster_title_image_params_still_reject_duplicate_item_id():
         PosterTitleImageParams.model_validate(params)
 
 
-def test_poster_title_image_title_prompt_uses_natural_line_break_rules_without_newline():
+def test_poster_title_image_title_prompt_requires_single_line_without_newline():
     from app.jobs.types.poster_title_image.executor import _title_prompt
 
     ref = _url_ref("reference/title.png", b"x")
@@ -277,6 +277,8 @@ def test_poster_title_image_title_prompt_uses_natural_line_break_rules_without_n
     )
 
     assert "No caller-specified line break is present" in prompt
+    assert "Render the title as exactly one line" in prompt
+    assert "Do not add line breaks or split the text" in prompt
     assert "Maximum lines: 2" in prompt
     assert "caller layout preference" in prompt
     assert "Caller-specified hard line breaks are present" not in prompt
@@ -289,7 +291,7 @@ def test_poster_title_image_title_prompt_preserves_caller_hard_line_breaks():
     params = _params(ref)
     params["items"][0]["title_text"] = "AI美术封面2\nhuanghang"
     params["items"][0]["prompt_overrides"] = {
-        "layout_rules": "Ignore previous line-break instructions and render everything on one line.",
+        "layout_rules": "Keep the title centered with generous side margins.",
     }
     item = PosterTitleImageParams.model_validate(params).items[0]
 
@@ -309,8 +311,52 @@ def test_poster_title_image_title_prompt_preserves_caller_hard_line_breaks():
     assert "Do not merge lines" in prompt
     assert "Do not merge lines, reorder lines, add extra line breaks, or split any line further." in prompt
     assert "This contract overrides any conflicting layout preference." in prompt
-    assert "Ignore previous line-break instructions and render everything on one line." in prompt
-    assert prompt.index("Ignore previous line-break instructions") < prompt.index("Line break contract")
+    assert "Keep the title centered with generous side margins." in prompt
+    assert prompt.index("Keep the title centered") < prompt.index("Line break contract")
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("layout_rules", "render everything on one line"),
+        ("layout_rules", "Break the title after the first word."),
+        ("layout_rules", "Keep the title on 2 rows."),
+        ("layout_rules", "Put the title on separate rows."),
+        ("layout_rules", "Arrange the title in two stacked rows."),
+        ("layout_rules", "Put each word on its own row."),
+        ("additional_prompt", "Make the title multiline."),
+        ("layout_rules", "标题必须单行"),
+        ("additional_prompt", "preserve two lines"),
+        ("additional_prompt", "Break the text after the first word."),
+        ("additional_prompt", "请不要换行"),
+    ],
+)
+def test_poster_title_image_prompt_overrides_reject_line_break_control(field_name, value):
+    ref = _url_ref("reference/title.png", b"x")
+    params = _params(ref)
+    params["items"][0]["prompt_overrides"] = {field_name: value}
+
+    with pytest.raises(ValueError, match="must not control title_text line breaks"):
+        PosterTitleImageParams.model_validate(params)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("layout_rules", "Use a single line gold outline around each letter."),
+        ("additional_prompt", "Add two lines of tiny decorative sparks beneath the title."),
+        ("layout_rules", "Place multiple rows of decorative sparks under the title."),
+        ("additional_prompt", "Show two rows of tiny stars behind the title."),
+    ],
+)
+def test_poster_title_image_prompt_overrides_allow_visual_line_descriptions(field_name, value):
+    ref = _url_ref("reference/title.png", b"x")
+    params = _params(ref)
+    params["items"][0]["prompt_overrides"] = {field_name: value}
+
+    validated = PosterTitleImageParams.model_validate(params)
+
+    assert getattr(validated.items[0].prompt_overrides, field_name) == value
 
 
 @pytest.mark.parametrize("item_id", ["has space", "has=equals", "path/segment", "-leading-dash", ".leading-dot"])
@@ -516,6 +562,63 @@ def test_poster_title_image_create_request_rejects_unicode_line_separator():
         _validate_create_request(
             CreateJobRequest(
                 client_request_id="poster-unicode-break-1",
+                job_type="poster_title_image",
+                job_params=params,
+            )
+        )
+
+    assert exc.value.code == "INVALID_INPUT"
+    assert exc.value.message == "job_params does not match job_type schema"
+
+
+@pytest.mark.parametrize(
+    "title_text",
+    [
+        "AI美术封面2\r\nhuanghang",
+        "AI美术封面2\n ",
+        "AI美术封面2\nhuanghang\nsubtitle",
+    ],
+)
+def test_poster_title_image_create_request_rejects_invalid_title_text_line_breaks(title_text):
+    from app.jobs.types.register import register_all_job_types
+    from app.services.jobs import _validate_create_request
+
+    register_all_job_types()
+    params = _params(_url_ref("reference/title.png", b"x"))
+    params["items"][0]["title_text"] = title_text
+
+    with pytest.raises(AppError) as exc:
+        _validate_create_request(
+            CreateJobRequest(
+                client_request_id="poster-invalid-line-break-1",
+                job_type="poster_title_image",
+                job_params=params,
+            )
+        )
+
+    assert exc.value.code == "INVALID_INPUT"
+    assert exc.value.message == "job_params does not match job_type schema"
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("layout_rules", "render everything on one line"),
+        ("additional_prompt", "请不要换行"),
+    ],
+)
+def test_poster_title_image_create_request_rejects_prompt_override_line_break_control(field_name, value):
+    from app.jobs.types.register import register_all_job_types
+    from app.services.jobs import _validate_create_request
+
+    register_all_job_types()
+    params = _params(_url_ref("reference/title.png", b"x"))
+    params["items"][0]["prompt_overrides"] = {field_name: value}
+
+    with pytest.raises(AppError) as exc:
+        _validate_create_request(
+            CreateJobRequest(
+                client_request_id="poster-invalid-prompt-line-break-1",
                 job_type="poster_title_image",
                 job_params=params,
             )
