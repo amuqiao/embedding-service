@@ -1338,7 +1338,10 @@ def test_jobs_cli_help_is_available_without_db():
     assert "summary" in result.stdout
     assert "latency" in result.stdout
     assert "capacity" in result.stdout
+    assert "gate" in result.stdout
     assert "payload" in result.stdout
+    assert "30s、10m、24h、7d" in result.stdout
+    assert "常用排障顺序" in result.stdout
 
 
 def test_real_flow_cli_help_is_available_without_api():
@@ -1669,6 +1672,18 @@ def test_jobs_list_defaults_to_root_scope_and_passes_explicit_scope(monkeypatch)
     assert json.loads(child_result.stdout)["scope"]["record_scope"] == "child"
 
 
+def test_jobs_list_human_output_prints_scope_filters(monkeypatch):
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", lambda action: [])
+
+    default_result = RUNNER.invoke(jobs_cli_app, ["list"])
+    window_result = RUNNER.invoke(jobs_cli_app, ["list", "--since", "10m", "--status", "queued,running", "--scope", "family"])
+
+    assert default_result.exit_code == 0
+    assert "since=all scope=root status=-" in default_result.stdout
+    assert window_result.exit_code == 0
+    assert "since=10m scope=family status=queued,running" in window_result.stdout
+
+
 def test_jobs_global_options_do_not_shadow_subcommand_options(monkeypatch):
     captured: list[dict] = []
 
@@ -1838,7 +1853,9 @@ def test_jobs_summary_default_is_human_readable(monkeypatch):
     result = RUNNER.invoke(jobs_cli_app, ["summary", "--since", "10m"])
 
     assert result.exit_code == 0
-    assert "== Job Summary ==" in result.stdout
+    assert "== Job 窗口汇总 ==" in result.stdout
+    assert "since=10m record_scope=root" in result.stdout
+    assert "== Jobs ==" in result.stdout
     assert "== Attempts ==" in result.stdout
     assert "running" in result.stdout
     assert "succeeded" in result.stdout
@@ -1849,6 +1866,35 @@ def test_jobs_summary_default_is_human_readable(monkeypatch):
     assert "delivered" in result.stdout
     assert "job_test_echo" in result.stdout
     assert '"scope"' not in result.stdout
+
+
+def test_jobs_overview_human_clarifies_global_gate_when_window_is_empty(monkeypatch):
+    def fake_overview_payload(**kwargs):
+        return _pressure_payload(
+            since=kwargs["since"],
+            older_than=kwargs["older_than"],
+            job_type=None,
+            caller_id=None,
+            max_active_jobs=1000,
+            queue_wait_warning_seconds=30,
+            run_warning_seconds=60,
+            payload=_pressure_input(
+                summary_payload=_summary_payload(total=0),
+                capacity_payload=_capacity_payload(active_jobs=1, queued=1, active_ratio=0.001),
+            ),
+        )
+
+    monkeypatch.setattr("scripts.jobs.cli._overview_payload", fake_overview_payload)
+
+    result = RUNNER.invoke(jobs_cli_app, ["overview", "--since", "10m"])
+
+    assert result.exit_code == 0
+    assert "== Job 总览 ==" in result.stdout
+    assert "== 最近窗口 Root Job 汇总 ==" in result.stdout
+    assert "== 当前全局 Active Gate ==" in result.stdout
+    assert "实时全局门禁水位" in result.stdout
+    assert "window_empty_but_global_active" in result.stdout
+    assert "./scripts/jobs.sh gate" in result.stdout
 
 
 def test_jobs_summary_json_uses_stable_scope(monkeypatch):
@@ -1928,7 +1974,9 @@ def test_jobs_inspect_json_includes_children_only_when_requested(monkeypatch):
     assert "children" not in json.loads(without_children.stdout)
     assert with_children.exit_code == 0
     payload = json.loads(with_children.stdout)
-    assert payload["children"] == [{"workflow_node_key": "probe.0", "job_id": "child-job-1"}]
+    assert payload["children"][0]["workflow_node_key"] == "probe.0"
+    assert payload["children"][0]["job_id"] == "child-job-1"
+    assert "job_params_ref" not in payload["children"][0]
 
 
 def test_jobs_inspect_json_includes_single_job_diagnosis(monkeypatch):
@@ -1999,7 +2047,7 @@ def test_jobs_job_entrypoint_outputs_single_job_status(monkeypatch):
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["job"]["id"] == "job-1"
+    assert payload["job"]["job_id"] == "job-1"
     assert payload["job"]["status"] == "succeeded"
 
 
@@ -2075,9 +2123,10 @@ def test_jobs_workflow_entrypoint_accepts_child_job_id(monkeypatch):
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["source_job"]["id"] == "child-job-1"
-    assert payload["root_job"]["id"] == "root-job-1"
+    assert payload["source_job"]["job_id"] == "child-job-1"
+    assert payload["root_job"]["job_id"] == "root-job-1"
     assert payload["children"][0]["workflow_node_key"] == "first"
+    assert "job_params_ref" not in payload["root_job"]
     assert calls["child_jobs"] == ["root-job-1"]
 
 
@@ -2311,7 +2360,7 @@ def test_jobs_diagnose_includes_children_only_when_requested(monkeypatch):
     assert with_payload["diagnosis"]["findings"][0]["signal"] == "job_waiting_children"
 
 
-def test_jobs_inspect_human_summarizes_workflow_plan(monkeypatch):
+def test_jobs_inspect_does_not_output_job_payload_fields(monkeypatch):
     long_prompt = "Analyze title image. " * 40
 
     def fake_with_connection(action):
@@ -2374,13 +2423,13 @@ def test_jobs_inspect_human_summarizes_workflow_plan(monkeypatch):
     assert human.exit_code == 0
     assert "style_prompt" not in human.stdout
     assert "style_desc" not in human.stdout
-    assert "== Workflow Plan ==" in human.stdout
-    assert "nodes=1" in human.stdout
-    assert "probe.0" in human.stdout
+    assert "== Workflow Plan ==" not in human.stdout
+    assert "probe.0" not in human.stdout
     assert json_result.exit_code == 0
+    assert long_prompt not in json_result.stdout
     payload = json.loads(json_result.stdout)
-    assert payload["job"]["runtime_ref"]["payload"]["workflow_plan"]["nodes"][0]["job_params"]["style_prompt"] == long_prompt
-    assert payload["job"]["canonical_result"]["workflow"]["nodes"][0]["result"]["style_desc"] == long_prompt
+    assert "runtime_ref" not in payload["job"]
+    assert "canonical_result" not in payload["job"]
 
 
 def test_jobs_show_default_is_human_readable(monkeypatch):
@@ -2418,11 +2467,14 @@ def test_jobs_show_default_is_human_readable(monkeypatch):
     assert human.exit_code == 0
     assert "== Job ==" in human.stdout
     assert "job_id" in human.stdout
-    assert "== Job Items ==" in human.stdout
-    assert "== Result Summary ==" in human.stdout
+    assert "== Job Items ==" not in human.stdout
+    assert "== Result Summary ==" not in human.stdout
+    assert "Cuando el amor se alejo" not in human.stdout
     assert '"payload_summary"' not in human.stdout
     assert json_result.exit_code == 0
-    assert json.loads(json_result.stdout)["job"]["job_params_ref"]["payload"]["items"][0]["title_text"] == "Cuando el amor se alejo"
+    payload = json.loads(json_result.stdout)
+    assert "job_params_ref" not in payload["job"]
+    assert "result" not in payload["job"]
 
 
 def test_jobs_payload_outputs_job_params_runtime_and_result(monkeypatch):
@@ -2498,13 +2550,20 @@ def test_jobs_payload_outputs_job_params_runtime_and_result(monkeypatch):
 
     monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
 
-    without_children = RUNNER.invoke(jobs_cli_app, ["payload", "root-job-1", "--json"])
-    with_children = RUNNER.invoke(jobs_cli_app, ["payload", "root-job-1", "--include-children", "--json"])
+    summary = RUNNER.invoke(jobs_cli_app, ["payload", "root-job-1", "--json"])
+    without_children = RUNNER.invoke(jobs_cli_app, ["payload", "root-job-1", "--full", "--json"])
+    with_children = RUNNER.invoke(jobs_cli_app, ["payload", "root-job-1", "--include-children", "--full", "--json"])
 
+    assert summary.exit_code == 0
     assert without_children.exit_code == 0
     assert with_children.exit_code == 0
     assert child_calls == ["child_jobs"]
+    summary_payload = json.loads(summary.stdout)
+    assert summary_payload["mode"] == "summary"
+    assert summary_payload["payload"]["job_params"]["items_count"] == 1
+    assert "Cuando el amor se alejo" not in summary.stdout
     payload = json.loads(with_children.stdout)
+    assert payload["mode"] == "full"
     assert payload["payload"]["job_params"]["items"][0]["title_text"] == "Cuando el amor se alejo"
     assert payload["payload"]["runtime_ref"]["payload"]["job_params_hash"] == "sha256:params"
     assert payload["payload"]["result"]["items"][0]["status"] == "succeeded"
@@ -2546,16 +2605,14 @@ def test_jobs_payload_default_is_human_readable(monkeypatch):
     result = RUNNER.invoke(jobs_cli_app, ["payload", "root-job-1"])
 
     assert result.exit_code == 0
-    assert "== Job Payload ==" in result.stdout
-    assert "== Job Params ==" in result.stdout
-    assert "== Runtime Ref ==" in result.stdout
-    assert "== Result ==" in result.stdout
-    assert "== Error ==" in result.stdout
+    assert "== Job Payload Summary ==" in result.stdout
+    assert "== Payload Summary ==" in result.stdout
     assert "75" in result.stdout
     assert "execute" in result.stdout
     assert "not_configured" in result.stdout
-    assert '"message": "hello"' in result.stdout
-    assert '"code": "BOOM"' in result.stdout
+    assert '"key_count": 1' in result.stdout
+    assert '"message": "hello"' not in result.stdout
+    assert '"code": "BOOM"' not in result.stdout
 
 
 def test_jobs_payload_not_found_returns_3(monkeypatch):
@@ -2588,10 +2645,51 @@ def test_jobs_capacity_default_is_human_readable(monkeypatch):
 
     assert result.exit_code == 0
     assert "== Job Capacity ==" in result.stdout
-    assert "== Current ==" in result.stdout
-    assert "== Window ==" in result.stdout
-    assert "== Estimated ==" in result.stdout
+    assert "== 当前全局 Active Gate ==" in result.stdout
+    assert "实时全局门禁水位" in result.stdout
+    assert "== 窗口容量估算 ==" in result.stdout
+    assert "== 容量估算 ==" in result.stdout
     assert '"current"' not in result.stdout
+
+
+def test_jobs_gate_default_is_human_readable(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.jobs.cli._with_connection",
+        lambda action: {"active_jobs": 12, "queued": 10, "running_active": 2},
+    )
+
+    result = RUNNER.invoke(jobs_cli_app, ["gate", "--max-active-jobs", "50"])
+
+    assert result.exit_code == 0
+    assert "== 当前全局 Active Gate ==" in result.stdout
+    assert "scope=global_current" in result.stdout
+    assert "实时全局门禁水位" in result.stdout
+    assert "active_jobs" in result.stdout
+    assert "0.24" in result.stdout
+    assert '"current"' not in result.stdout
+
+
+def test_jobs_gate_json_reports_global_current(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.jobs.cli._with_connection",
+        lambda action: {"active_jobs": 12, "queued": 10, "running_active": 2},
+    )
+
+    result = RUNNER.invoke(jobs_cli_app, ["gate", "--max-active-jobs", "50", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["scope"] == {"current": "global_gate", "window": "none", "filters": "none"}
+    assert payload["current"]["active_jobs"] == 12
+    assert payload["current"]["active_ratio"] == 0.24
+    assert "实时全局门禁水位" in payload["notes"]["scope"]
+
+
+def test_jobs_gate_rejects_since_filter():
+    result = RUNNER.invoke(jobs_cli_app, ["gate", "--since", "10m"])
+
+    assert result.exit_code != 0
+    assert "No such option" in result.stderr
 
 
 def test_jobs_pressure_default_is_human_readable(monkeypatch):
@@ -2619,8 +2717,8 @@ def test_jobs_pressure_default_is_human_readable(monkeypatch):
     assert result.exit_code == 0
     assert "== Job Pressure Diagnosis ==" in result.stdout
     assert "== Capacity ==" in result.stdout
-    assert "== Current ==" in result.stdout
-    assert "== Window ==" in result.stdout
+    assert "== 当前全局 Active Gate ==" in result.stdout
+    assert "== 窗口容量估算 ==" in result.stdout
     assert '"capacity"' not in result.stdout
 
 

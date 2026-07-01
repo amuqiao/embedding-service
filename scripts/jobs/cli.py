@@ -42,10 +42,15 @@ INSPECT_HELP_EPILOG = """\b
 """
 
 PAYLOAD_HELP_EPILOG = """\b
+说明：
+  payload 默认只输出入参、runtime、结果和错误 payload 的结构摘要。
+  使用 --full 才输出完整 payload；输出可能很大，只在明确需要排查原始内容时使用。
+
+\b
 常用示例：
   ./scripts/jobs.sh payload <job_id>
   ./scripts/jobs.sh payload <job_id> --json
-  ./scripts/jobs.sh workflow <job_id> --json
+  ./scripts/jobs.sh payload <job_id> --full
 """
 
 DIAGNOSE_HELP_EPILOG = """\b
@@ -132,9 +137,27 @@ LATENCY_HELP_EPILOG = """\b
 """
 
 CAPACITY_HELP_EPILOG = """\b
+说明：
+  capacity 同时展示当前全局 Active Gate 和指定窗口的容量估算。
+  只看当前全局门禁水位时，优先使用 ./scripts/jobs.sh gate。
+
+\b
 常用示例：
   ./scripts/jobs.sh capacity --since 10m --caller-id default --max-active-jobs 1000
   ./scripts/jobs.sh capacity --since 10m --json
+"""
+
+GATE_HELP_EPILOG = """\b
+说明：
+  gate 是实时全局门禁口径。
+  不使用 --since 时间窗口，也不按 job_type 或 caller_id 过滤。
+  active_jobs = queued + running 且 active_attempt_id 非空。
+
+\b
+常用示例：
+  ./scripts/jobs.sh gate
+  ./scripts/jobs.sh gate --max-active-jobs 1000
+  ./scripts/jobs.sh gate --json
 """
 
 TYPES_HELP_EPILOG = """\b
@@ -167,21 +190,35 @@ HELP_EPILOG = """\b
 
 \b
 关键概念：
+  时间窗口只支持正整数 + 单位：30s、10m、24h、7d。
+  单位含义：s=秒，m=分钟，h=小时，d=天。
+  不支持：10min、1.5h、0m 或绝对时间戳。
+
+\b
+窗口与实时口径：
+  --since 表示只看 created_at 落入最近窗口的 Job。
+  --older-than 表示把持续超过该时长的未完成状态视为风险候选。
+  Global Active Gate 是当前全局 Active Gate；不受 --since、job_type 或 caller_id 过滤影响。
+
+\b
+Scope：
   Scope 表示 Job 记录范围：
   root         外部业务 Job；list、summary、latency 和 capacity window 默认使用。
   child        workflow internal child Job。
   family       先按 root 条件选业务请求，再包含这些 root 及 children；drain、pressure 和 stuck 默认用于执行风险排障。
   all          不加 lineage 条件；仅用于显式底层排查。
-  global_gate  capacity current 的全局 active 门禁口径。
+  global_gate  当前全局 Active Gate。
 
 \b
-常用示例：
+常用排障顺序：
   ./scripts/jobs.sh
-  ./scripts/jobs.sh list --status running --since 24h --limit 20
-  ./scripts/jobs.sh job <job_id>
+  ./scripts/jobs.sh overview --since 1h
+  ./scripts/jobs.sh gate
+  ./scripts/jobs.sh list --status queued,running --scope family --limit 20
+  ./scripts/jobs.sh list --status failed --since 1h --limit 20
+  ./scripts/jobs.sh inspect <job_id>
   ./scripts/jobs.sh workflow <job_id>
-  ./scripts/jobs.sh summary --since 10m
-  ./scripts/jobs.sh types
+  ./scripts/jobs.sh drain --since 30m --strict
 
 \b
 进阶用法：
@@ -690,6 +727,95 @@ def _payload_job_summary(job: dict) -> dict[str, Any]:
     }
 
 
+def _child_job_summary(job: dict) -> dict[str, Any]:
+    return {
+        "workflow_node_key": job.get("workflow_node_key"),
+        "job_id": str(job.get("job_id") or job.get("id")),
+        "root_job_id": job.get("root_job_id"),
+        "status": job.get("status"),
+        "job_type": job.get("job_type"),
+        "caller_id": job.get("caller_id"),
+        "client_request_id": job.get("client_request_id"),
+        "progress_percent": job.get("progress_percent"),
+        "progress_stage": job.get("progress_stage"),
+        "progress_text": job.get("progress_text"),
+        "active_attempt_id": job.get("active_attempt_id"),
+        "attempt_status": job.get("attempt_status"),
+        "attempt_no": job.get("attempt_no"),
+        "worker_id": job.get("worker_id"),
+        "lease_expires_at": job.get("lease_expires_at"),
+        "dispatch_status": job.get("dispatch_status"),
+        "publish_attempts": job.get("publish_attempts"),
+        "dispatch_next_attempt_at": job.get("dispatch_next_attempt_at"),
+        "created_at": job.get("created_at"),
+        "started_at": job.get("started_at"),
+        "updated_at": job.get("updated_at"),
+        "finished_at": job.get("finished_at"),
+        "duration": job.get("duration"),
+    }
+
+
+def _payload_shape(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {"present": False}
+    if isinstance(value, dict):
+        keys = list(value.keys())
+        summary: dict[str, Any] = {
+            "present": True,
+            "type": "dict",
+            "key_count": len(keys),
+            "keys": keys[:20],
+        }
+        for key in ("items", "nodes", "results"):
+            item = value.get(key)
+            if isinstance(item, list):
+                summary[f"{key}_count"] = len(item)
+        return summary
+    if isinstance(value, list):
+        return {"present": True, "type": "list", "item_count": len(value)}
+    if isinstance(value, str):
+        return {"present": True, "type": "str", "length": len(value)}
+    return {"present": True, "type": type(value).__name__}
+
+
+def _ref_shape(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {"present": False}
+    if not isinstance(value, dict):
+        return _payload_shape(value)
+    return {
+        "present": True,
+        "type": value.get("type"),
+        "name": value.get("name"),
+        "storage": value.get("storage"),
+        "content_hash": value.get("content_hash"),
+        "content_size_bytes": value.get("content_size_bytes"),
+        "payload": _payload_shape(value.get("payload")),
+    }
+
+
+def _payload_summary_evidence(job: dict) -> dict[str, Any]:
+    return {
+        "job_id": str(job.get("id") or job.get("job_id")),
+        "root_job_id": job.get("root_job_id"),
+        "workflow_node_key": job.get("workflow_node_key"),
+        "status": job.get("status"),
+        "job_type": job.get("job_type"),
+        "caller_id": job.get("caller_id"),
+        "client_request_id": job.get("client_request_id"),
+        "metadata": _payload_shape(job.get("metadata")),
+        "job_params": _payload_shape(_job_params_payload(job)),
+        "job_params_ref": _ref_shape(job.get("job_params_ref")),
+        "job_params_hash": job.get("job_params_hash"),
+        "runtime_ref": _ref_shape(job.get("runtime_ref")),
+        "result": _payload_shape(job.get("result")),
+        "result_ref": _ref_shape(job.get("result_ref")),
+        "canonical_result": _payload_shape(job.get("canonical_result")),
+        "canonical_result_ref": _ref_shape(job.get("canonical_result_ref")),
+        "error": _payload_shape(job.get("error")),
+    }
+
+
 def _job_inspect_row(job: dict) -> dict[str, Any]:
     return {
         "job_id": str(job.get("id")),
@@ -857,12 +983,6 @@ def _render_job_detail_sections(job: dict) -> None:
 def _render_capacity_human(payload: dict[str, Any], *, title: str = "Job Capacity") -> None:
     current = payload.get("current") or {}
     estimated = payload.get("estimated") or {}
-    current_row = {
-        **current,
-        "max_active_jobs": payload.get("max_active_jobs"),
-        "active_ratio": estimated.get("active_ratio"),
-        "headroom": estimated.get("headroom"),
-    }
     formatters.section(title)
     scope = payload.get("scope") or {}
     window_scope = scope.get("window") if isinstance(scope.get("window"), dict) else {}
@@ -876,16 +996,38 @@ def _render_capacity_human(payload: dict[str, Any], *, title: str = "Job Capacit
             window_scope.get("caller_id") or "-",
         ),
     )
-    formatters.section("Current")
-    formatters.print_table([current_row], _capacity_current_columns())
-    formatters.section("Window")
+    _render_gate_human(
+        _gate_payload(current=current, max_active_jobs=payload.get("max_active_jobs")),
+        title="当前全局 Active Gate",
+    )
+    formatters.section("窗口容量估算")
+    formatters.event(
+        "OK",
+        "window",
+        "since=%s record_scope=%s job_type=%s caller_id=%s"
+        % (
+            window_scope.get("since") or "-",
+            window_scope.get("record_scope") or "-",
+            window_scope.get("job_type") or "-",
+            window_scope.get("caller_id") or "-",
+        ),
+    )
     formatters.print_table([payload.get("window") or {}], _capacity_window_columns())
-    formatters.section("Estimated")
+    formatters.section("容量估算")
     formatters.print_table([estimated], _capacity_estimated_columns())
     recommendation = payload.get("recommendation")
     if isinstance(recommendation, dict):
-        formatters.section("Recommendation")
+        formatters.section("建议")
         formatters.print_table([recommendation], _capacity_recommendation_columns())
+
+
+def _render_gate_human(payload: dict[str, Any], *, title: str = "当前全局 Active Gate") -> None:
+    formatters.section(title)
+    formatters.event("OK", "gate", "scope=global_current")
+    note = (payload.get("notes") or {}).get("scope")
+    if note:
+        print(f"说明：{note}")
+    formatters.print_table([payload.get("current") or {}], _capacity_current_columns())
 
 
 def _log_match_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1028,21 +1170,25 @@ def _print_payload_value(value: Any) -> None:
     formatters.print_json(value)
 
 
-def _render_payload_human(payload: dict[str, Any], *, include_children: bool) -> None:
+def _render_payload_human(payload: dict[str, Any], *, include_children: bool, full: bool) -> None:
     job = payload["job"]
-    formatters.section("Job Payload")
+    formatters.section("Job Payload" if full else "Job Payload Summary")
     formatters.event(
         "OK",
         "job",
-        f"job_id={job['job_id']} status={job.get('status') or '-'} job_type={job.get('job_type') or '-'}",
+        f"job_id={job['job_id']} status={job.get('status') or '-'} job_type={job.get('job_type') or '-'} mode={payload.get('mode') or '-'}",
     )
     formatters.print_table([job], _job_inspect_columns())
-    for section_name, value in _payload_sections(payload["payload"]):
-        formatters.section(section_name)
-        _print_payload_value(value)
+    if full:
+        for section_name, value in _payload_sections(payload["payload"]):
+            formatters.section(section_name)
+            _print_payload_value(value)
+    else:
+        formatters.section("Payload Summary")
+        formatters.print_json(payload["payload"])
     if include_children:
         children = payload.get("children") or []
-        formatters.section("Children Payloads")
+        formatters.section("Children Payloads" if full else "Children Payload Summaries")
         formatters.event("OK", "children", f"count={len(children)}")
         if not children:
             print("no workflow children")
@@ -1051,9 +1197,13 @@ def _render_payload_human(payload: dict[str, Any], *, include_children: bool) ->
             child_job = child["job"]
             formatters.section(f"Child {child_job['job_id']}")
             formatters.print_table([child_job], _child_job_columns())
-            for section_name, value in _payload_sections(child["payload"]):
-                formatters.section(section_name)
-                _print_payload_value(value)
+            if full:
+                for section_name, value in _payload_sections(child["payload"]):
+                    formatters.section(section_name)
+                    _print_payload_value(value)
+            else:
+                formatters.section("Payload Summary")
+                formatters.print_json(child["payload"])
 
 
 def _as_aware_utc(value: Any) -> datetime | None:
@@ -1121,7 +1271,7 @@ def _diagnose_job(
                         "workflow",
                         "workflow_child_failed",
                         "root 正在等待 child 收敛，且存在 failed child。",
-                        {"failed_children": len(failed_children), "sample": failed_children[:3]},
+                        {"failed_children": len(failed_children), "sample": [_child_job_summary(row) for row in failed_children[:3]]},
                     )
                 elif active_children:
                     add(
@@ -1129,7 +1279,7 @@ def _diagnose_job(
                         "workflow",
                         "job_waiting_children",
                         "root 没有 active attempt，正在等待 internal child Job。",
-                        {"active_children": len(active_children), "sample": active_children[:3]},
+                        {"active_children": len(active_children), "sample": [_child_job_summary(row) for row in active_children[:3]]},
                     )
                 else:
                     add("info", "workflow", "job_waiting_reconcile", "root 没有 active attempt，可能正在等待 workflow reconciler 收敛。")
@@ -1144,7 +1294,7 @@ def _diagnose_job(
             add("critical", "job", "active_attempt_missing", "queued Job 缺少 active_attempt_id，worker 无法领取。")
 
     if job_status == "failed":
-        add("warning", "job", "job_failed", "Job 已失败；优先查看 job.error 和 failed attempt。", {"error": job.get("error")})
+        add("warning", "job", "job_failed", "Job 已失败；需要原始错误 payload 时使用 payload --full。", {"error": _payload_shape(job.get("error"))})
 
     events = _event_types(timeline)
     for attempt in attempts:
@@ -1279,7 +1429,7 @@ def _diagnose_job(
                 "workflow",
                 "child_dispatch_dead_letter",
                 "存在 child Job 的 dispatch dead-letter。",
-                {"count": len(child_dispatch_dead), "sample": child_dispatch_dead[:3]},
+                {"count": len(child_dispatch_dead), "sample": [_child_job_summary(row) for row in child_dispatch_dead[:3]]},
             )
 
     if not findings:
@@ -1328,8 +1478,6 @@ def _render_inspect_human(payload: dict[str, Any], *, include_children: bool) ->
     )
     formatters.print_table([_job_inspect_row(job)], _job_inspect_columns())
 
-    _render_job_detail_sections(job)
-
     _render_diagnosis_human(payload["diagnosis"], title="Diagnosis")
 
     formatters.section("Attempts")
@@ -1364,6 +1512,31 @@ def _render_diagnosis_human(diagnosis: dict[str, Any], *, title: str = "Job Diag
         formatters.section("Next Checks")
         for item in diagnosis["next_checks"]:
             print(f"- {item}")
+
+
+def _inspect_json_payload(payload: dict[str, Any], *, include_children: bool) -> dict[str, Any]:
+    result = {
+        "job": _job_summary(payload["job"]),
+        "attempts": payload["attempts"],
+        "callbacks": payload["callbacks"],
+        "timeline": payload["timeline"],
+        "diagnosis": payload["diagnosis"],
+    }
+    if include_children:
+        result["children"] = [_child_job_summary(child) for child in payload.get("children") or []]
+    return result
+
+
+def _workflow_json_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_job": _job_summary(payload["source_job"]),
+        "root_job": _job_summary(payload["root_job"]),
+        "children": [_child_job_summary(child) for child in payload.get("children") or []],
+        "attempts": payload["attempts"],
+        "callbacks": payload["callbacks"],
+        "timeline": payload["timeline"],
+        "diagnosis": payload["diagnosis"],
+    }
 
 
 def _registered_job_type_specs() -> list[dict[str, Any]]:
@@ -1436,9 +1609,23 @@ def _render_result(*, section: str, target: str, rows: list[dict], columns: list
     formatters.print_table(rows, columns)
 
 
-def _render_jobs_result(*, rows: list[dict], record_scope: str) -> None:
+def _render_jobs_result(*, rows: list[dict], scope: dict[str, Any]) -> None:
     formatters.section("Jobs")
-    formatters.event("OK", "jobs", f"count={len(rows)} scope={record_scope}")
+    statuses = scope.get("statuses") or []
+    status_text = ",".join(statuses) if statuses else "-"
+    formatters.event(
+        "OK",
+        "jobs",
+        "count=%s since=%s scope=%s status=%s job_type=%s caller_id=%s"
+        % (
+            len(rows),
+            scope.get("since") or "all",
+            scope.get("record_scope") or "-",
+            status_text,
+            scope.get("job_type") or "-",
+            scope.get("caller_id") or "-",
+        ),
+    )
     formatters.print_table(rows, _jobs_columns())
 
 
@@ -1502,6 +1689,32 @@ def _capacity_recommendation(payload: dict[str, Any], max_active_jobs: int | Non
         "max_active_jobs": max_active_jobs,
         "active_ratio": active_ratio,
         "message": message,
+    }
+
+
+def _gate_payload(*, current: dict[str, Any], max_active_jobs: int | None) -> dict[str, Any]:
+    current_row = dict(current)
+    active_jobs = int(current_row.get("active_jobs") or 0)
+    if max_active_jobs is not None and max_active_jobs > 0:
+        active_ratio = active_jobs / max_active_jobs
+        headroom = max_active_jobs - active_jobs
+    else:
+        active_ratio = None
+        headroom = None
+    current_row["max_active_jobs"] = max_active_jobs
+    current_row["active_ratio"] = active_ratio
+    current_row["headroom"] = headroom
+    return {
+        "scope": {
+            "current": "global_gate",
+            "window": "none",
+            "filters": "none",
+        },
+        "current": current_row,
+        "notes": {
+            "scope": "实时全局门禁水位；不使用时间窗口，也不按 job_type/caller_id 过滤。",
+            "active_jobs": "queued + running 且 active_attempt_id 非空。",
+        },
     }
 
 
@@ -1658,28 +1871,35 @@ def _fetch_summary_payload(
 
 def _render_summary(payload: dict[str, Any]) -> None:
     scope = payload["scope"]
+    query_scopes = scope.get("query_scopes") or {}
     jobs = payload.get("jobs") or {}
     no_jobs_found = _count(jobs.get("total")) == 0
 
-    formatters.section("Job Summary")
+    formatters.section("Job 窗口汇总")
     formatters.event(
         "OK",
         "summary",
-        f"since={scope['since']} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'}",
+        f"since={scope['since']} record_scope={scope.get('record_scope') or '-'} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'}",
     )
     if no_jobs_found:
         print("no jobs found in the selected window.")
+    formatters.section("Jobs")
+    formatters.event("OK", "scope", f"since={scope['since']} record_scope={query_scopes.get('jobs') or scope.get('record_scope') or '-'}")
     formatters.print_table([jobs], _summary_job_columns())
     formatters.section("Attempts")
+    formatters.event("OK", "scope", f"since={scope['since']} record_scope={query_scopes.get('attempts') or '-'}")
     formatters.print_table([payload.get("attempts") or {}], _summary_attempt_columns())
     formatters.section("Dispatch")
+    formatters.event("OK", "scope", f"since={scope['since']} record_scope={query_scopes.get('dispatch') or '-'}")
     formatters.print_table([payload.get("dispatch") or {}], _summary_dispatch_columns())
     formatters.section("Callbacks")
+    formatters.event("OK", "scope", f"since={scope['since']} record_scope={query_scopes.get('callbacks') or '-'}")
     formatters.print_table([payload.get("callbacks") or {}], _summary_callback_columns())
     formatters.section("By Job Type")
+    formatters.event("OK", "scope", f"since={scope['since']} record_scope={query_scopes.get('by_job_type') or scope.get('record_scope') or '-'}")
     formatters.print_table(payload.get("by_job_type") or [], _summary_by_job_type_columns(), empty_message="no jobs found")
     if no_jobs_found:
-        formatters.section("Next Checks")
+        formatters.section("下一步检查")
         for item in _summary_next_checks(scope, no_jobs_found=True):
             print(f"- {item}")
 
@@ -2015,6 +2235,14 @@ def _pressure_payload(
 
     if total_jobs == 0:
         add("info", "scope", "empty_window", "当前窗口内没有 Job；扩大 --since 或确认 caller_id/job_type。")
+        if active_jobs > 0:
+            add(
+                "info",
+                "scope",
+                "window_empty_but_global_active",
+                "最近窗口内没有 root Job，但当前全局 Active Gate 仍有 active Job；这些任务可能创建于窗口外。",
+                {"active_jobs": active_jobs},
+            )
 
     if locust:
         post_jobs = locust.get("post_jobs") or {}
@@ -2230,10 +2458,12 @@ def _pressure_payload(
         "api_log": api_log,
         "samples": {"active": active_samples, "failed": failed_samples},
         "next_checks": [
+            "./scripts/jobs.sh gate",
             f"./scripts/jobs.sh drain --since {since} --older-than {older_than}{filters} --strict",
             f"./scripts/jobs.sh list --status failed --scope family --since {since}{filters} --limit 20",
             f"./scripts/jobs.sh stuck --since {since} --older-than {older_than}{filters} --limit 20",
             f"./scripts/jobs.sh latency --since {since}{filters} --group-by job_type",
+            f"./scripts/jobs.sh list --status queued,running --scope family{filters} --limit 20",
             "./scripts/dev.sh status",
         ],
     }
@@ -2438,11 +2668,11 @@ def _overview_payload(
 
 def _render_overview(payload: dict[str, Any]) -> None:
     scope = payload["scope"]
-    formatters.section("Job Overview")
+    formatters.section("Job 总览")
     formatters.event(
         payload["status"].upper(),
         "overview",
-        f"since={scope['since']} root_scope=root risk_scope=family current_scope=global_gate",
+        f"window={scope['since']} root_window=root family_risk=family current_gate=global_gate",
     )
     bottleneck_rows = [
         {
@@ -2453,17 +2683,30 @@ def _render_overview(payload: dict[str, Any]) -> None:
         }
         for item in payload["bottlenecks"][:5]
     ]
-    formatters.section("Top Findings")
+    formatters.section("关键发现")
     formatters.print_table(bottleneck_rows, _pressure_bottleneck_columns(), empty_message="no findings")
-    formatters.section("Root Job Summary")
+    formatters.section("最近窗口 Root Job 汇总")
+    formatters.event(
+        "OK",
+        "scope",
+        f"since={scope['since']} record_scope=root job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'}",
+    )
     formatters.print_table([payload["summary"].get("jobs") or {}], _summary_job_columns())
-    formatters.section("Global Active Gate")
-    formatters.print_table([payload["capacity"].get("current") or {}], _capacity_current_columns())
-    formatters.section("Family Risk Sample")
+    _render_gate_human(
+        _gate_payload(
+            current=payload["capacity"].get("current") or {},
+            max_active_jobs=payload["capacity"].get("max_active_jobs"),
+        ),
+    )
+    formatters.section("最近窗口 Family 风险样本")
     stuck = payload["stuck"]
-    formatters.event("OK", "stuck", f"sample_count={stuck['sample_count']} truncated={stuck['truncated']}")
+    formatters.event(
+        "OK",
+        "stuck",
+        f"since={scope['since']} older_than={scope['older_than']} record_scope=family sample_count={stuck['sample_count']} truncated={stuck['truncated']}",
+    )
     formatters.print_table(stuck["sample"], _stuck_columns(), empty_message="no stuck records")
-    formatters.section("Next Checks")
+    formatters.section("下一步检查")
     for item in payload["next_checks"]:
         print(f"- {item}")
 
@@ -2531,6 +2774,23 @@ def overview(
     )
 
 
+@app.command(help="查看当前全局 Active Gate。", epilog=GATE_HELP_EPILOG)
+def gate(
+    max_active_jobs: Annotated[
+        int | None,
+        typer.Option("--max-active-jobs", min=0, help="用于计算水位比例；默认读取环境或 .env。"),
+    ] = None,
+    json_output: JsonOption = False,
+) -> None:
+    limit = max_active_jobs if max_active_jobs is not None else _env_max_active_jobs()
+    current = _with_connection(lambda conn: queries.global_gate(conn))
+    payload = _gate_payload(current=current, max_active_jobs=limit)
+    if json_output:
+        formatters.print_json(payload)
+        return
+    _render_gate_human(payload)
+
+
 @app.command("list", help="查看最近 Job 摘要。", epilog=LIST_HELP_EPILOG)
 def list_jobs(
     status: Annotated[
@@ -2572,10 +2832,18 @@ def list_jobs(
             record_scope=parsed_scope,
         )
     )
+    scope_payload = {
+        "record_scope": parsed_scope,
+        "since": since,
+        "statuses": statuses,
+        "job_type": job_type,
+        "caller_id": caller_id,
+        "client_request_id": client_request_id,
+    }
     if json_output:
-        formatters.print_json({"scope": {"record_scope": parsed_scope, "since": since, "job_type": job_type, "caller_id": caller_id}, "jobs": rows})
+        formatters.print_json({"scope": scope_payload, "jobs": rows})
         return
-    _render_jobs_result(rows=rows, record_scope=parsed_scope)
+    _render_jobs_result(rows=rows, scope=scope_payload)
 
 
 @app.command(help="查看单个 Job 权威状态。", epilog=SHOW_HELP_EPILOG)
@@ -2585,12 +2853,11 @@ def show(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
         print(f"ERROR: job not found: {job_id}", file=sys.stderr)
         raise typer.Exit(3)
     if json_output:
-        formatters.print_json({"job": job})
+        formatters.print_json({"job": _job_summary(job)})
         return
     formatters.section("Job")
     formatters.event("OK", "job", f"job_id={job_id}")
     formatters.print_table([_job_inspect_row(job)], _job_inspect_columns())
-    _render_job_detail_sections(job)
 
 
 @app.command("job", help="查看单个 Job 轻量状态。", epilog=JOB_HELP_EPILOG)
@@ -2631,7 +2898,7 @@ def inspect(
         print(f"ERROR: job not found: {job_id}", file=sys.stderr)
         raise typer.Exit(3)
     if json_output:
-        formatters.print_json(payload)
+        formatters.print_json(_inspect_json_payload(payload, include_children=include_children))
         return
     _render_inspect_human(payload, include_children=include_children)
 
@@ -2643,21 +2910,27 @@ def payload(
         bool,
         typer.Option("--include-children", help="包含 workflow internal child jobs 的入参和结果 payload。"),
     ] = False,
+    full: Annotated[
+        bool,
+        typer.Option("--full", help="输出完整入参、runtime、结果和错误 payload；可能很大。"),
+    ] = False,
     json_output: JsonOption = False,
 ) -> None:
     def action(conn):
         job = queries.get_job(conn, job_id)
         if job is None:
             return None
+        evidence_fn = _payload_evidence if full else _payload_summary_evidence
         result = {
+            "mode": "full" if full else "summary",
             "job": _payload_job_summary(job),
-            "payload": _payload_evidence(job),
+            "payload": evidence_fn(job),
         }
         if include_children:
             result["children"] = [
                 {
                     "job": _payload_job_summary(child),
-                    "payload": _payload_evidence(child),
+                    "payload": evidence_fn(child),
                 }
                 for child in queries.child_jobs(conn, job_id)
             ]
@@ -2670,7 +2943,7 @@ def payload(
     if json_output:
         formatters.print_json(result)
         return
-    _render_payload_human(result, include_children=include_children)
+    _render_payload_human(result, include_children=include_children, full=full)
 
 
 @app.command(help="诊断单个 Job 的 attempt、dispatch、callback 和 claim 风险。", epilog=DIAGNOSE_HELP_EPILOG)
@@ -2794,7 +3067,7 @@ def workflow(
         print(f"ERROR: job not found: {job_id}", file=sys.stderr)
         raise typer.Exit(3)
     if json_output:
-        formatters.print_json(payload)
+        formatters.print_json(_workflow_json_payload(payload))
         return
     _render_workflow_human(payload)
 

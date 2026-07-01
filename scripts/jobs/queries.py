@@ -559,6 +559,24 @@ def failure_groups(
     )
 
 
+def global_gate(conn: connection) -> dict[str, Any]:
+    return _fetch_one(
+        conn,
+        """
+        SELECT
+          count(*) FILTER (
+            WHERE j.status = 'queued'
+               OR (j.status = 'running' AND j.active_attempt_id IS NOT NULL)
+          ) AS active_jobs,
+          count(*) FILTER (WHERE j.status = 'queued') AS queued,
+          count(*) FILTER (WHERE j.status = 'running' AND j.active_attempt_id IS NOT NULL) AS running_active
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NULL
+        """,
+        {},
+    ) or {}
+
+
 def capacity(
     conn: connection,
     *,
@@ -575,21 +593,7 @@ def capacity(
         since=since,
         record_scope=window_scope,
     )
-    active = _fetch_one(
-        conn,
-        f"""
-        SELECT
-          count(*) FILTER (
-            WHERE j.status = 'queued'
-               OR (j.status = 'running' AND j.active_attempt_id IS NOT NULL)
-          ) AS active_jobs,
-          count(*) FILTER (WHERE j.status = 'queued') AS queued,
-          count(*) FILTER (WHERE j.status = 'running' AND j.active_attempt_id IS NOT NULL) AS running_active
-        FROM job_aggregates j
-        WHERE j.deleted_at IS NULL
-        """,
-        {},
-    ) or {}
+    active = global_gate(conn)
     window = _fetch_one(
         conn,
         f"""
