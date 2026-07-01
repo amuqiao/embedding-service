@@ -5,6 +5,7 @@ import csv
 import io
 import re
 import sys
+import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -79,6 +80,13 @@ CALLBACKS_HELP_EPILOG = """\b
   ./scripts/jobs.sh callbacks <job_id> --json
 """
 
+TRACE_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/jobs.sh trace <job_id>
+  ./scripts/jobs.sh trace <job_id> --include-children
+  ./scripts/jobs.sh trace <job_id> --json
+"""
+
 STUCK_HELP_EPILOG = """\b
 常用示例：
   ./scripts/jobs.sh stuck --older-than 10m --caller-id default
@@ -110,6 +118,36 @@ DOCTOR_HELP_EPILOG = """\b
   ./scripts/jobs.sh doctor --since 10m --caller-id default --json
 """
 
+OBSERVE_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/jobs.sh observe --interval 60 --samples 5
+  ./scripts/jobs.sh observe --since 30m --caller-id default --json
+"""
+
+BROKER_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/jobs.sh broker
+  ./scripts/jobs.sh broker --redis-key taskiq --json
+"""
+
+RUNTIME_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/jobs.sh runtime
+  ./scripts/jobs.sh runtime --json
+"""
+
+FAILURES_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/jobs.sh failures --since 1h --limit 20
+  ./scripts/jobs.sh failures --since 1h --caller-id default --json
+"""
+
+CALLBACKS_SUMMARY_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/jobs.sh callbacks-summary --since 1h
+  ./scripts/jobs.sh callbacks-summary --since 1h --caller-id default --json
+"""
+
 OVERVIEW_HELP_EPILOG = """\b
 常用示例：
   ./scripts/jobs.sh
@@ -136,6 +174,12 @@ LATENCY_HELP_EPILOG = """\b
   ./scripts/jobs.sh latency --since 30m --group-by status --json
 """
 
+INGRESS_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/jobs.sh ingress --since 30m --bucket 1m
+  ./scripts/jobs.sh ingress --caller-id default --job-type job_test_echo --since 1h --json
+"""
+
 CAPACITY_HELP_EPILOG = """\b
 说明：
   capacity 同时展示当前全局 active 占用和指定窗口的容量估算。
@@ -145,6 +189,7 @@ CAPACITY_HELP_EPILOG = """\b
 \b
 常用示例：
   ./scripts/jobs.sh capacity --since 10m --caller-id default --max-active-jobs 1000
+  ./scripts/jobs.sh capacity --worker-pods 4 --worker-concurrency 30 --api-pods 2 --db-max-connections 100
   ./scripts/jobs.sh capacity --since 10m --json
 """
 
@@ -169,6 +214,11 @@ TYPES_HELP_EPILOG = """\b
   ./scripts/jobs.sh types --json
 """
 
+GUIDE_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/jobs.sh guide
+"""
+
 HELP_EPILOG = """\b
 作用域：
   在本地或 Pod 内查询 Job、attempt、callback 和 timeline 证据。
@@ -177,56 +227,40 @@ HELP_EPILOG = """\b
 \b
 默认行为：
   ./scripts/jobs.sh 等同于 overview，默认查看最近 10m，stuck 判定窗口 1m，样本条数 10。
-  list 默认只查看 root Job，返回 20 条；完整过滤参数请运行 ./scripts/jobs.sh list -h。
 
 \b
-配置与环境变量：
-  DATABASE_URL    DB 查询必填；可通过运行环境或根目录 .env 注入。
-  DB_SSL          可选；false/0/no/off 时为 psycopg2 URL 追加 sslmode=disable。
-
-\b
-输出：
-  默认输出面向人读，使用 section/event/table。
-  --json 输出完整 JSON，且 stdout 只包含 JSON，适合 AI、CI 或运维平台解析。
-  错误原因输出到 stderr。
-
-\b
-关键概念：
-  时间窗口只支持正整数 + 单位：30s、10m、24h、7d。
-  单位含义：s=秒，m=分钟，h=小时，d=天。
-  不支持：10min、1.5h、0m 或绝对时间戳。
-
-\b
-窗口与实时口径：
-  --since 表示只看 created_at 落入最近窗口的 Job。
-  --older-than 表示把持续超过该时长的未完成状态视为风险候选。
-  当前全局 active 占用（内部口径名 global_gate）用来判断是否接近 MAX_ACTIVE_JOBS 上限。
-  它不受 --since、job_type 或 caller_id 过滤影响。
-
-\b
-Scope：
-  Scope 表示 Job 记录范围：
-  root         外部业务 Job；list、summary、latency 和 capacity window 默认使用。
-  child        workflow internal child Job。
-  family       先按 root 条件选业务请求，再包含这些 root 及 children；drain、pressure 和 stuck 默认用于执行风险排障。
-  all          不加 lineage 条件；仅用于显式底层排查。
-  global_gate  内部口径名，表示当前全局 active 占用。
+四层模型：
+  系统态           overview / doctor / gate / capacity / pressure / ingress
+  恢复态           observe / drain / stuck
+  运输和运行时     broker / runtime
+  单 Job 轨迹      trace / inspect / diagnose / workflow / attempts / callbacks / timeline
 
 \b
 常用排障顺序：
-  ./scripts/jobs.sh
   ./scripts/jobs.sh overview --since 1h
-  ./scripts/jobs.sh gate
-  ./scripts/jobs.sh list --status queued,running --scope family --limit 20
-  ./scripts/jobs.sh list --status failed --since 1h --limit 20
-  ./scripts/jobs.sh inspect <job_id>
-  ./scripts/jobs.sh workflow <job_id>
-  ./scripts/jobs.sh drain --since 30m --strict
+  ./scripts/jobs.sh observe --interval 60 --samples 5
+  ./scripts/jobs.sh broker
+  ./scripts/jobs.sh runtime
+  ./scripts/jobs.sh failures --since 1h
+  ./scripts/jobs.sh callbacks-summary --since 1h
 
 \b
-进阶用法：
-  各子命令的过滤参数、JSON 输出和排障示例请查看：
-  ./scripts/jobs.sh <command> -h
+常见问题：
+  当前是否健康？         overview / doctor / gate
+  是否正在恢复？         observe
+  Redis/worker 是否消费？ broker / runtime
+  调用方流量是否变大？    ingress
+  能不能加并发或 pod？    capacity
+  单个 Job 卡在哪？       trace / inspect / diagnose
+
+\b
+关键参数：
+  时间窗口只支持正整数 + 单位：30s、10m、24h、7d。
+  --json 输出完整 JSON；./scripts/jobs.sh <command> -h 查看单命令参数。
+
+\b
+更多说明：
+  ./scripts/jobs.sh guide
 
 \b
 副作用与保护边界：
@@ -239,6 +273,73 @@ Exit Codes:
   2  参数非法或 DB 不可达
   3  查询对象不存在
   4  查询失败或证据不可达
+"""
+
+GUIDE_TEXT = """Job 排障四层模型
+
+1. 系统态
+   先判断 Job 系统是否可用。
+   常用命令：
+     ./scripts/jobs.sh overview --since 1h
+     ./scripts/jobs.sh doctor --since 1h
+     ./scripts/jobs.sh gate
+     ./scripts/jobs.sh capacity --since 30m
+     ./scripts/jobs.sh pressure --since 20m
+     ./scripts/jobs.sh ingress --since 30m --bucket 1m
+   重点字段：
+     active_jobs、queued、running_active、failed、dispatch_due、callback_due、stuck。
+
+2. 恢复态
+   不要只看一张快照，用连续采样判断系统是否正在变好。
+   常用命令：
+     ./scripts/jobs.sh observe --interval 60 --samples 5
+     ./scripts/jobs.sh drain --since 30m --strict
+     ./scripts/jobs.sh stuck --older-than 10m
+   判断方式：
+     queued 或 active_jobs 下降、stuck 减少、failure 不再增长、callback due 下降，才说明在恢复。
+
+3. 运输和运行时
+   DB 只说明业务事实，不能单独证明 Redis broker 和 worker 正在消费。
+   常用命令：
+     ./scripts/jobs.sh broker
+     ./scripts/jobs.sh runtime
+   重点字段：
+     Redis key type、length、pending、consumer groups、WORKER_CONCURRENCY、Taskiq 进程、recovery loop、CPU/memory cgroup。
+
+4. 单 Job 轨迹
+   不只看 status，要看 Job 卡在生命周期哪一段。
+   常用命令：
+     ./scripts/jobs.sh trace <job_id>
+     ./scripts/jobs.sh inspect <job_id>
+     ./scripts/jobs.sh diagnose <job_id>
+     ./scripts/jobs.sh workflow <job_id>
+   轨迹模型：
+     created -> queued -> dispatch published -> attempt claimed -> running heartbeat -> terminal -> callback delivered
+
+常用路径
+  系统快照：
+    ./scripts/jobs.sh overview --since 1h
+
+  判断是否恢复：
+    ./scripts/jobs.sh observe --interval 60 --samples 5
+
+  判断 Redis/worker 是否消费：
+    ./scripts/jobs.sh broker
+    ./scripts/jobs.sh runtime
+
+  判断失败是否集中：
+    ./scripts/jobs.sh failures --since 1h
+    ./scripts/jobs.sh callbacks-summary --since 1h
+
+  判断能不能加并发或 pod：
+    ./scripts/jobs.sh capacity --worker-pods 4 --worker-concurrency 30 --api-pods 2 --db-max-connections 100
+
+  分析单个 Job：
+    ./scripts/jobs.sh trace <job_id>
+    ./scripts/jobs.sh inspect <job_id>
+
+更多细节
+  ./scripts/jobs.sh <command> -h
 """
 
 app = typer.Typer(
@@ -472,6 +573,16 @@ def _latency_columns() -> list[tuple[str, str]]:
     ]
 
 
+def _ingress_columns() -> list[tuple[str, str]]:
+    return [
+        ("bucket_at", "bucket_at"),
+        ("created", "created"),
+        ("started", "started"),
+        ("terminal", "terminal"),
+        ("failed", "failed"),
+    ]
+
+
 def _pressure_bottleneck_columns() -> list[tuple[str, str]]:
     return [
         ("severity", "severity"),
@@ -644,7 +755,34 @@ def _capacity_recommendation_columns() -> list[tuple[str, str]]:
     return [
         ("max_active_jobs", "max_active_jobs"),
         ("active_ratio", "active_ratio"),
+        ("db_connection_risk", "db_risk"),
         ("message", "message"),
+    ]
+
+
+def _capacity_db_budget_columns() -> list[tuple[str, str]]:
+    return [
+        ("api_pods", "api_pods"),
+        ("api_pool_per_pod", "api_pool_per_pod"),
+        ("worker_pods", "worker_pods"),
+        ("worker_concurrency", "worker_concurrency"),
+        ("estimated_connections", "estimated_connections"),
+        ("db_max_connections", "db_max_connections"),
+        ("usable_connections", "usable_connections"),
+        ("headroom", "headroom"),
+        ("risk", "risk"),
+    ]
+
+
+def _capacity_db_budget_source_columns() -> list[tuple[str, str]]:
+    return [
+        ("api_pods", "api_pods"),
+        ("worker_pods", "worker_pods"),
+        ("worker_concurrency", "worker_concurrency"),
+        ("db_pool_size", "db_pool_size"),
+        ("db_max_overflow", "db_max_overflow"),
+        ("db_max_connections", "db_max_connections"),
+        ("db_usable_ratio", "db_usable_ratio"),
     ]
 
 
@@ -662,6 +800,85 @@ def _diagnosis_columns() -> list[tuple[str, str]]:
         ("area", "area"),
         ("signal", "signal"),
         ("message", "message"),
+    ]
+
+
+def _trace_phase_columns() -> list[tuple[str, str]]:
+    return [
+        ("phase", "phase"),
+        ("status", "status"),
+        ("from", "from"),
+        ("to", "to"),
+        ("duration_seconds", "duration_s"),
+        ("signal", "signal"),
+    ]
+
+
+def _observe_columns() -> list[tuple[str, str]]:
+    return [
+        ("sample", "sample"),
+        ("captured_at", "captured_at"),
+        ("queued", "queued"),
+        ("running_active", "running_active"),
+        ("active_jobs", "active_jobs"),
+        ("failed", "failed"),
+        ("callback_due", "callback_due"),
+        ("stuck", "stuck"),
+        ("state", "state"),
+    ]
+
+
+def _broker_columns() -> list[tuple[str, str]]:
+    return [
+        ("broker_kind", "broker_kind"),
+        ("redis_key", "redis_key"),
+        ("redis_ping", "ping"),
+        ("redis_key_type", "key_type"),
+        ("length", "length"),
+        ("pending", "pending"),
+        ("oldest_message_age_seconds", "oldest_age_s"),
+        ("verdict", "verdict"),
+    ]
+
+
+def _runtime_env_columns() -> list[tuple[str, str]]:
+    return [
+        ("WORKER_CONCURRENCY", "WORKER_CONCURRENCY"),
+        ("WORKER_RECOVERY_LOOP", "WORKER_RECOVERY_LOOP"),
+        ("TASKIQ_BROKER_KIND", "TASKIQ_BROKER_KIND"),
+        ("MAX_ACTIVE_JOBS", "MAX_ACTIVE_JOBS"),
+        ("DB_POOL_SIZE", "DB_POOL_SIZE"),
+        ("DB_MAX_OVERFLOW", "DB_MAX_OVERFLOW"),
+    ]
+
+
+def _runtime_process_columns() -> list[tuple[str, str]]:
+    return [
+        ("name", "name"),
+        ("count", "count"),
+        ("sample", "sample"),
+    ]
+
+
+def _runtime_cgroup_columns() -> list[tuple[str, str]]:
+    return [
+        ("cpu_max", "cpu_max"),
+        ("cpu_quota_cores", "cpu_quota_cores"),
+        ("cpu_usage_usec", "cpu_usage_usec"),
+        ("memory_current_bytes", "memory_current_bytes"),
+        ("memory_max_bytes", "memory_max_bytes"),
+    ]
+
+
+def _callbacks_summary_columns() -> list[tuple[str, str]]:
+    return [
+        ("status", "status"),
+        ("count", "count"),
+        ("due", "due"),
+        ("oldest_age_seconds", "oldest_age_s"),
+        ("next_attempt_at", "next_attempt_at"),
+        ("last_http_status_seen", "http_seen"),
+        ("sample_last_error", "sample_error"),
     ]
 
 
@@ -1018,6 +1235,17 @@ def _render_capacity_human(payload: dict[str, Any], *, title: str = "Job Capacit
     formatters.print_table([payload.get("window") or {}], _capacity_window_columns())
     formatters.section("容量估算")
     formatters.print_table([estimated], _capacity_estimated_columns())
+    db_budget = payload.get("db_connection_budget")
+    if isinstance(db_budget, dict):
+        formatters.section("DB 连接预算估算")
+        formatters.print_table([db_budget], _capacity_db_budget_columns())
+        input_sources = db_budget.get("input_sources")
+        if isinstance(input_sources, dict):
+            formatters.section("DB 连接预算输入来源")
+            formatters.print_table([input_sources], _capacity_db_budget_source_columns())
+        message = db_budget.get("message")
+        if message:
+            print(f"说明：{message}")
     recommendation = payload.get("recommendation")
     if isinstance(recommendation, dict):
         formatters.section("建议")
@@ -1543,6 +1771,156 @@ def _workflow_json_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _event_time(timeline: list[dict], event_type: str) -> datetime | None:
+    for row in timeline:
+        if row.get("event_type") == event_type:
+            return _as_aware_utc(row.get("created_at"))
+    return None
+
+
+def _duration_seconds(start: datetime | None, end: datetime | None) -> float | None:
+    if start is None or end is None:
+        return None
+    return max((end - start).total_seconds(), 0.0)
+
+
+def _phase_row(phase: str, status: str, start: datetime | None, end: datetime | None, signal: str) -> dict[str, Any]:
+    return {
+        "phase": phase,
+        "status": status,
+        "from": start,
+        "to": end,
+        "duration_seconds": _duration_seconds(start, end),
+        "signal": signal,
+    }
+
+
+def _job_trace_payload(payload: dict[str, Any], *, include_children: bool) -> dict[str, Any]:
+    job = payload["job"]
+    attempts = payload.get("attempts") or []
+    callbacks = payload.get("callbacks") or []
+    timeline = payload.get("timeline") or []
+    now = datetime.now(timezone.utc)
+    created_at = _as_aware_utc(job.get("created_at"))
+    queued_at = _as_aware_utc(job.get("queued_at")) or created_at
+    started_at = _as_aware_utc(job.get("started_at"))
+    finished_at = _as_aware_utc(job.get("finished_at"))
+    dispatch_published_at = _event_time(timeline, "dispatch.published")
+    attempt_claimed_at = _event_time(timeline, "attempt.claimed")
+    if dispatch_published_at is None:
+        dispatch_published_at = min(
+            (_as_aware_utc(row.get("published_at")) for row in attempts if row.get("published_at")),
+            default=None,
+        )
+    if attempt_claimed_at is None:
+        attempt_claimed_at = min(
+            (
+                value
+                for value in (
+                    _as_aware_utc(row.get("leased_at")) or _as_aware_utc(row.get("started_at"))
+                    for row in attempts
+                )
+                if value is not None
+            ),
+            default=None,
+        )
+    if attempt_claimed_at is None and started_at is not None:
+        attempt_claimed_at = started_at
+    if dispatch_published_at is None and attempt_claimed_at is not None:
+        dispatch_published_at = attempt_claimed_at
+    callback_created_at = _event_time(timeline, "callback.created")
+    callback_delivered_at = _event_time(timeline, "callback.delivered")
+    callback_dead_lettered_at = _event_time(timeline, "callback.dead_letter")
+    callback_settled_at = callback_delivered_at or callback_dead_lettered_at
+
+    phases = [
+        _phase_row("accepted", "done" if queued_at else "unknown", created_at, queued_at, "job_created"),
+        _phase_row(
+            "dispatch_wait",
+            "done" if dispatch_published_at else "waiting" if job.get("status") in {"queued", "running"} else "unknown",
+            queued_at,
+            dispatch_published_at or (now if job.get("status") in {"queued", "running"} else None),
+            "dispatch.published" if dispatch_published_at else "dispatch_not_published",
+        ),
+        _phase_row(
+            "claim_wait",
+            "done" if attempt_claimed_at else "waiting" if dispatch_published_at and job.get("status") in {"queued", "running"} else "unknown",
+            dispatch_published_at,
+            attempt_claimed_at or (now if dispatch_published_at and job.get("status") in {"queued", "running"} else None),
+            "attempt.claimed" if attempt_claimed_at else "attempt_not_claimed",
+        ),
+        _phase_row(
+            "running",
+            "done" if finished_at else "running" if started_at or attempt_claimed_at else "not_started",
+            started_at or attempt_claimed_at,
+            finished_at or (now if job.get("status") == "running" else None),
+            "job_terminal" if finished_at else "active_execution",
+        ),
+        _phase_row(
+            "callback",
+            "done" if callback_delivered_at else "failed" if callback_dead_lettered_at else "waiting" if callback_created_at else "not_configured",
+            callback_created_at or finished_at,
+            callback_settled_at or (now if callback_created_at else None),
+            "callback.delivered" if callback_delivered_at else "callback.dead_letter" if callback_dead_lettered_at else "callback_pending",
+        ),
+    ]
+
+    current_phase = next((row for row in phases if row["status"] in {"waiting", "running", "failed"}), phases[-1])
+    worker_ids = sorted({str(row.get("worker_id")) for row in attempts if row.get("worker_id")})
+    trace = {
+        "job": _job_summary(job),
+        "current": {
+            "phase": current_phase["phase"],
+            "status": current_phase["status"],
+            "signal": current_phase["signal"],
+        },
+        "phases": phases,
+        "attempts": {
+            "count": len(attempts),
+            "worker_ids": worker_ids,
+            "latest_status": attempts[-1].get("status") if attempts else None,
+            "latest_heartbeat_at": max((row.get("heartbeat_at") for row in attempts if row.get("heartbeat_at")), default=None),
+        },
+        "callbacks": {
+            "count": len(callbacks),
+            "latest_status": callbacks[0].get("status") if callbacks else None,
+            "latest_http_status": callbacks[0].get("last_http_status") if callbacks else None,
+        },
+        "diagnosis": payload["diagnosis"],
+    }
+    if include_children:
+        children = payload.get("children") or []
+        trace["children"] = {
+            "count": len(children),
+            "active": len([row for row in children if row.get("status") in {"queued", "running"}]),
+            "failed": len([row for row in children if row.get("status") == "failed"]),
+            "sample": [_child_job_summary(row) for row in children[:10]],
+        }
+    return trace
+
+
+def _render_trace_human(payload: dict[str, Any]) -> None:
+    formatters.section("Job Trace")
+    job = payload["job"]
+    current = payload["current"]
+    formatters.event(
+        payload["diagnosis"]["status"].upper(),
+        "trace",
+        "job_id=%s status=%s current_phase=%s signal=%s"
+        % (job.get("job_id"), job.get("status"), current.get("phase"), current.get("signal")),
+    )
+    formatters.section("Phases")
+    formatters.print_table(payload["phases"], _trace_phase_columns())
+    formatters.section("Runtime Evidence")
+    formatters.print_table([payload["attempts"]], [("count", "attempts"), ("worker_ids", "workers"), ("latest_status", "latest_attempt"), ("latest_heartbeat_at", "heartbeat")])
+    formatters.section("Callback Evidence")
+    formatters.print_table([payload["callbacks"]], [("count", "callbacks"), ("latest_status", "latest_callback"), ("latest_http_status", "http")])
+    if "children" in payload:
+        formatters.section("Workflow Children")
+        formatters.print_table([payload["children"]], [("count", "count"), ("active", "active"), ("failed", "failed"), ("sample", "sample")])
+    _render_diagnosis_human(payload["diagnosis"], title="Trace Diagnosis")
+
+
 def _registered_job_type_specs() -> list[dict[str, Any]]:
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -1673,11 +2051,130 @@ def _env_max_active_jobs() -> int | None:
         raise typer.Exit(2)
 
 
+def _env_int(name: str, *, min_value: int | None = None) -> int | None:
+    value, _source = _env_int_with_source(name, min_value=min_value)
+    return value
+
+
+def _env_int_with_source(name: str, *, min_value: int | None = None) -> tuple[int | None, str]:
+    raw, source = db.env_value_with_source(name)
+    if raw is None or raw.strip() == "":
+        return None, source
+    try:
+        value = int(raw)
+    except ValueError:
+        print(f"ERROR: invalid {name}: {raw}", file=sys.stderr)
+        raise typer.Exit(2)
+    if min_value is not None and value < min_value:
+        print(f"ERROR: invalid {name}: {raw}; expected >= {min_value}", file=sys.stderr)
+        raise typer.Exit(2)
+    return value, source
+
+
+def _capacity_db_budget(
+    *,
+    api_pods: int | None,
+    worker_pods: int | None,
+    worker_concurrency: int | None,
+    db_pool_size: int | None,
+    db_max_overflow: int | None,
+    db_max_connections: int | None,
+    db_usable_ratio: float,
+) -> dict[str, Any]:
+    if worker_concurrency is not None:
+        resolved_worker_concurrency, worker_concurrency_source = worker_concurrency, "cli"
+    else:
+        resolved_worker_concurrency, worker_concurrency_source = _env_int_with_source("WORKER_CONCURRENCY", min_value=1)
+    if db_pool_size is not None:
+        resolved_db_pool_size, db_pool_size_source = db_pool_size, "cli"
+    else:
+        resolved_db_pool_size, db_pool_size_source = _env_int_with_source("DB_POOL_SIZE", min_value=1)
+    if db_max_overflow is not None:
+        resolved_db_max_overflow, db_max_overflow_source = db_max_overflow, "cli"
+    else:
+        resolved_db_max_overflow, db_max_overflow_source = _env_int_with_source("DB_MAX_OVERFLOW", min_value=0)
+    input_sources = {
+        "api_pods": "cli" if api_pods is not None else "missing",
+        "worker_pods": "cli" if worker_pods is not None else "missing",
+        "worker_concurrency": worker_concurrency_source,
+        "db_pool_size": db_pool_size_source,
+        "db_max_overflow": db_max_overflow_source,
+        "db_max_connections": "cli" if db_max_connections is not None else "missing",
+        "db_usable_ratio": "cli_or_default",
+    }
+    resolved_inputs = {
+        "api_pods": api_pods,
+        "worker_pods": worker_pods,
+        "worker_concurrency": resolved_worker_concurrency,
+        "db_pool_size": resolved_db_pool_size,
+        "db_max_overflow": resolved_db_max_overflow,
+        "db_max_connections": db_max_connections,
+    }
+    missing_inputs = sorted(key for key, value in resolved_inputs.items() if value is None)
+    api_pool_per_pod = (
+        resolved_db_pool_size + resolved_db_max_overflow
+        if resolved_db_pool_size is not None and resolved_db_max_overflow is not None
+        else None
+    )
+    worker_slots = (
+        worker_pods * resolved_worker_concurrency
+        if worker_pods is not None and resolved_worker_concurrency is not None
+        else None
+    )
+    estimated_connections = (
+        (api_pods * api_pool_per_pod) + worker_slots
+        if api_pods is not None and api_pool_per_pod is not None and worker_slots is not None
+        else None
+    )
+    usable_connections = int(db_max_connections * db_usable_ratio) if db_max_connections is not None else None
+    headroom = (
+        usable_connections - estimated_connections
+        if usable_connections is not None and estimated_connections is not None
+        else None
+    )
+    if estimated_connections is None or usable_connections is None:
+        risk = "unknown"
+        message = "缺少 %s，无法估算 DB 连接预算。" % ", ".join(missing_inputs or ["必要输入"])
+    elif estimated_connections > usable_connections:
+        risk = "critical"
+        message = "估算连接数超过可用连接预算；不要继续提高 API/worker 并发，先治理 DB 连接。"
+    elif estimated_connections >= int(usable_connections * 0.8):
+        risk = "warning"
+        message = "估算连接数接近可用连接预算；提高并发前先确认 PostgreSQL 实际连接和等待情况。"
+    else:
+        risk = "ok"
+        message = "估算连接预算仍有余量；仍需结合实际 PostgreSQL 连接数、CPU 和慢查询判断。"
+    return {
+        "api_pods": api_pods,
+        "api_pool_per_pod": api_pool_per_pod,
+        "worker_pods": worker_pods,
+        "worker_concurrency": resolved_worker_concurrency,
+        "worker_slots": worker_slots,
+        "db_pool_size": resolved_db_pool_size,
+        "db_max_overflow": resolved_db_max_overflow,
+        "db_max_connections": db_max_connections,
+        "db_usable_ratio": db_usable_ratio,
+        "usable_connections": usable_connections,
+        "estimated_connections": estimated_connections,
+        "headroom": headroom,
+        "risk": risk,
+        "message": message,
+        "missing_inputs": missing_inputs,
+        "input_sources": input_sources,
+    }
+
+
 def _capacity_recommendation(payload: dict[str, Any], max_active_jobs: int | None) -> dict[str, Any]:
     active_jobs = int(payload["current"].get("active_jobs") or 0)
     needed = payload["estimated"].get("active_jobs_needed_upper_bound")
     active_ratio = active_jobs / max_active_jobs if max_active_jobs and max_active_jobs > 0 else None
-    if max_active_jobs is None:
+    db_budget = payload.get("db_connection_budget") if isinstance(payload, dict) else None
+    db_risk = db_budget.get("risk") if isinstance(db_budget, dict) else None
+    if db_risk == "critical":
+        message = "DB 连接预算已超限；不要提高 WORKER_CONCURRENCY、API pod 或 worker pod，先治理连接预算。"
+    elif db_risk == "warning":
+        message = "DB 连接预算接近上限；提高并发或 pod 前，先确认 PostgreSQL 实际连接、等待和慢查询。"
+    elif max_active_jobs is None:
         message = "未提供 MAX_ACTIVE_JOBS，无法判断当前 active 占用比例。"
     elif max_active_jobs == 0:
         message = "MAX_ACTIVE_JOBS=0 表示不限制 active 占用；生产不建议用它做容量保护。"
@@ -1692,6 +2189,7 @@ def _capacity_recommendation(payload: dict[str, Any], max_active_jobs: int | Non
     return {
         "max_active_jobs": max_active_jobs,
         "active_ratio": active_ratio,
+        "db_connection_risk": db_risk,
         "message": message,
     }
 
@@ -2046,6 +2544,25 @@ def _has_db_connection_error(failure_groups: list[dict]) -> bool:
         if any(needle in text for needle in needles):
             return True
     return False
+
+
+def _system_state_from_bottlenecks(status: str, bottlenecks: list[dict[str, Any]]) -> str:
+    signals = {str(item.get("signal")) for item in bottlenecks}
+    if signals & {"dispatch_dead_letter", "job_failures", "http_5xx", "db_connection_pressure", "api_log_db_connection_pressure"}:
+        return "degraded"
+    if signals & {"callback_dead_letter", "callback_due", "callback_lease_expired", "terminal_callback_not_settled"}:
+        return "callback_backlog"
+    if signals & {"published_dispatch_not_claimed", "dispatch_due_not_published", "queue_wait_high"}:
+        return "worker_or_broker_lag"
+    if signals & {"running_attempt_lease_expired", "run_time_high"}:
+        return "execution_slow"
+    if signals & {"active_gate_saturated", "active_gate_near_limit", "estimated_need_exceeds_limit"}:
+        return "capacity_pressure"
+    if signals & {"window_empty_but_global_active"}:
+        return "old_active_remaining"
+    if status == "ok":
+        return "healthy"
+    return status
 
 
 def _read_csv_rows(path: Path) -> list[dict[str, str]]:
@@ -2448,6 +2965,7 @@ def _pressure_payload(
             "run_warning_seconds": run_warning_seconds,
         },
         "status": status,
+        "system_state": _system_state_from_bottlenecks(status, bottlenecks),
         "bottlenecks": bottlenecks,
         "summary": summary,
         "capacity": capacity_payload,
@@ -2479,7 +2997,7 @@ def _render_pressure(payload: dict[str, Any]) -> None:
     formatters.event(
         payload["status"].upper(),
         "pressure",
-        f"since={scope['since']} older_than={scope['older_than']} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'}",
+        f"system_state={payload.get('system_state') or '-'} since={scope['since']} older_than={scope['older_than']} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'}",
     )
     formatters.section("Bottlenecks")
     rows = [
@@ -2676,7 +3194,7 @@ def _render_overview(payload: dict[str, Any]) -> None:
     formatters.event(
         payload["status"].upper(),
         "overview",
-        f"window={scope['since']} root_window=root family_risk=family current_global_active=global_gate",
+        f"system_state={payload.get('system_state') or '-'} window={scope['since']} root_window=root family_risk=family current_global_active=global_gate",
     )
     bottleneck_rows = [
         {
@@ -2740,6 +3258,260 @@ def _run_overview(
     _render_overview(payload)
 
 
+def _observe_row(index: int, payload: dict[str, Any]) -> dict[str, Any]:
+    summary = payload.get("summary") or {}
+    jobs = summary.get("jobs") or {}
+    callbacks = summary.get("callbacks") or {}
+    capacity = payload.get("capacity") or {}
+    current = capacity.get("current") or {}
+    stuck = payload.get("stuck") or {}
+    return {
+        "sample": index,
+        "captured_at": datetime.now(timezone.utc),
+        "status": payload.get("status"),
+        "state": payload.get("system_state"),
+        "queued": _count(jobs.get("queued")),
+        "running_active": _count(jobs.get("running_active")),
+        "active_jobs": _count(current.get("active_jobs")),
+        "failed": _count(jobs.get("failed")),
+        "callback_due": _count(callbacks.get("due")),
+        "stuck": _count(stuck.get("sample_count")),
+    }
+
+
+def _observe_verdict(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rows:
+        return {"state": "unknown", "message": "no samples collected"}
+    first = rows[0]
+    last = rows[-1]
+    if len(rows) == 1:
+        return {"state": last.get("state") or last.get("status") or "unknown", "message": "single snapshot; trend unavailable"}
+    failed_delta = _count(last.get("failed")) - _count(first.get("failed"))
+    queued_delta = _count(last.get("queued")) - _count(first.get("queued"))
+    active_delta = _count(last.get("active_jobs")) - _count(first.get("active_jobs"))
+    stuck_delta = _count(last.get("stuck")) - _count(first.get("stuck"))
+    callback_delta = _count(last.get("callback_due")) - _count(first.get("callback_due"))
+    if failed_delta > 0:
+        return {"state": "degrading", "message": "failed count increased during observation"}
+    if stuck_delta > 0 or callback_delta > 0:
+        return {"state": "degrading", "message": "stuck or callback backlog increased during observation"}
+    if active_delta < 0:
+        return {"state": "recovering", "message": "active backlog decreased during observation"}
+    if queued_delta > 0 or active_delta > 0:
+        return {"state": "backlog_expanding", "message": "queued or active backlog increased during observation"}
+    if queued_delta < 0:
+        return {"state": last.get("state") or "stable", "message": "queued decreased but active backlog stayed flat"}
+    return {"state": last.get("state") or "stable", "message": "sampled counters stayed flat"}
+
+
+def _render_observe_human(payload: dict[str, Any]) -> None:
+    verdict = payload["verdict"]
+    scope = payload["scope"]
+    formatters.section("Job Observe")
+    formatters.event(
+        verdict["state"].upper(),
+        "observe",
+        "since=%s samples=%s interval=%ss - %s"
+        % (scope["since"], len(payload["samples"]), scope["interval_seconds"], verdict["message"]),
+    )
+    formatters.print_table(payload["samples"], _observe_columns())
+    formatters.section("Next Checks")
+    for item in payload["next_checks"]:
+        print(f"- {item}")
+
+
+def _decode_redis(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _stream_oldest_age_seconds(client: Any, redis_key: str) -> float | None:
+    rows = client.xrange(redis_key, count=1)
+    if not rows:
+        return None
+    raw_id = _decode_redis(rows[0][0])
+    timestamp_ms = raw_id.split("-", 1)[0]
+    try:
+        created_at = datetime.fromtimestamp(int(timestamp_ms) / 1000, tz=timezone.utc)
+    except ValueError:
+        return None
+    return max((datetime.now(timezone.utc) - created_at).total_seconds(), 0.0)
+
+
+def _broker_payload(*, redis_key: str) -> dict[str, Any]:
+    redis_url = db.env_value("REDIS_URL")
+    if not redis_url:
+        raise RuntimeError("REDIS_URL is required")
+    from redis import Redis
+
+    client = Redis.from_url(redis_url, socket_connect_timeout=5, socket_timeout=5)
+    ping_ok = bool(client.ping())
+    key_type = _decode_redis(client.type(redis_key))
+    kind = db.env_value("TASKIQ_BROKER_KIND") or "redis_stream"
+    payload: dict[str, Any] = {
+        "broker_kind": kind,
+        "redis_key": redis_key,
+        "redis_ping": "ok" if ping_ok else "failed",
+        "redis_key_type": key_type,
+        "length": None,
+        "pending": None,
+        "consumer_groups": [],
+        "oldest_message_age_seconds": None,
+    }
+    if key_type == "list":
+        payload["length"] = int(client.llen(redis_key))
+    elif key_type == "stream":
+        payload["length"] = int(client.xlen(redis_key))
+        payload["oldest_message_age_seconds"] = _stream_oldest_age_seconds(client, redis_key)
+        groups = client.xinfo_groups(redis_key)
+        normalized_groups = [{_decode_redis(key): _decode_redis(value) for key, value in group.items()} for group in groups]
+        payload["consumer_groups"] = normalized_groups
+        payload["pending"] = sum(int(group.get("pending") or 0) for group in normalized_groups)
+    elif key_type == "none":
+        payload["length"] = 0
+
+    expected_type = {"redis_stream": "stream", "redis_list": "list"}.get(kind)
+    if expected_type and key_type not in {expected_type, "none"}:
+        verdict = "broker_key_type_mismatch"
+    elif key_type not in {"list", "stream", "none"}:
+        verdict = "broker_key_type_unsupported"
+    elif key_type == "stream" and int(payload.get("pending") or 0) > 0:
+        verdict = "broker_has_pending"
+    elif key_type == "stream" and int(payload.get("length") or 0) > 0 and not payload.get("consumer_groups"):
+        verdict = "stream_has_entries_no_group"
+    elif key_type == "stream":
+        verdict = "broker_stream_no_pending"
+    elif int(payload.get("length") or 0) > 0:
+        verdict = "broker_has_backlog"
+    else:
+        verdict = "broker_empty"
+    payload["verdict"] = verdict
+    return payload
+
+
+def _render_broker_human(payload: dict[str, Any]) -> None:
+    formatters.section("Taskiq Broker")
+    formatters.event(payload["verdict"].upper(), "broker", f"key={payload['redis_key']} kind={payload['broker_kind']}")
+    formatters.print_table([payload], _broker_columns())
+    groups = payload.get("consumer_groups") or []
+    if groups:
+        formatters.section("Consumer Groups")
+        formatters.print_table(groups, [("name", "name"), ("consumers", "consumers"), ("pending", "pending"), ("last-delivered-id", "last_delivered_id")])
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def _process_rows() -> list[dict[str, Any]]:
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return [{"name": "procfs", "count": 0, "sample": "unavailable"}]
+    patterns = {
+        "taskiq_worker": "taskiq worker",
+        "recovery_loop": "app.tasks.recovery_loop",
+        "start_worker": "start-worker.sh",
+        "api_server": "uvicorn",
+    }
+    matches = {name: [] for name in patterns}
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        raw = _read_text(entry / "cmdline")
+        if not raw:
+            continue
+        cmdline = raw.replace("\x00", " ").strip()
+        for name, needle in patterns.items():
+            if needle in cmdline:
+                matches[name].append(cmdline)
+    return [{"name": name, "count": len(values), "sample": values[0] if values else "-"} for name, values in matches.items()]
+
+
+def _runtime_cgroup_payload() -> dict[str, Any]:
+    root = Path("/sys/fs/cgroup")
+    cpu_max = _read_text(root / "cpu.max")
+    cpu_quota_cores: float | str | None = None
+    if cpu_max:
+        parts = cpu_max.split()
+        if len(parts) >= 2 and parts[0] != "max":
+            try:
+                cpu_quota_cores = int(parts[0]) / int(parts[1])
+            except (ValueError, ZeroDivisionError):
+                cpu_quota_cores = "unavailable"
+        elif parts and parts[0] == "max":
+            cpu_quota_cores = "unlimited"
+    cpu_stat = _read_text(root / "cpu.stat") or ""
+    cpu_usage_usec = None
+    for line in cpu_stat.splitlines():
+        if line.startswith("usage_usec "):
+            cpu_usage_usec = line.split()[1]
+            break
+    return {
+        "cpu_max": cpu_max or "unavailable",
+        "cpu_quota_cores": cpu_quota_cores or "unavailable",
+        "cpu_usage_usec": cpu_usage_usec or "unavailable",
+        "memory_current_bytes": _read_text(root / "memory.current") or "unavailable",
+        "memory_max_bytes": _read_text(root / "memory.max") or "unavailable",
+    }
+
+
+def _runtime_payload() -> dict[str, Any]:
+    env_keys = ["WORKER_CONCURRENCY", "WORKER_RECOVERY_LOOP", "TASKIQ_BROKER_KIND", "MAX_ACTIVE_JOBS", "DB_POOL_SIZE", "DB_MAX_OVERFLOW"]
+    env = {key: db.env_value(key) or "-" for key in env_keys}
+    processes = _process_rows()
+    cgroup = _runtime_cgroup_payload()
+    return {
+        "scope": "current_pod",
+        "environment": env,
+        "processes": processes,
+        "cgroup": cgroup,
+        "verdict": "runtime_visible" if any(row["count"] for row in processes if row["name"] != "procfs") else "runtime_processes_not_detected",
+    }
+
+
+def _render_runtime_human(payload: dict[str, Any]) -> None:
+    formatters.section("Pod Runtime")
+    formatters.event(payload["verdict"].upper(), "runtime", f"scope={payload['scope']}")
+    formatters.section("Environment")
+    formatters.print_table([payload["environment"]], _runtime_env_columns())
+    formatters.section("Processes")
+    formatters.print_table(payload["processes"], _runtime_process_columns())
+    formatters.section("Cgroup")
+    formatters.print_table([payload["cgroup"]], _runtime_cgroup_columns())
+
+
+def _callbacks_summary_payload(*, since: str, job_type: str | None, caller_id: str | None, record_scope: str) -> dict[str, Any]:
+    window, since_at = _since_window(since)
+    rows = _with_connection(
+        lambda conn: queries.callbacks_summary(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            record_scope=record_scope,
+        )
+    )
+    due = sum(_count(row.get("due")) for row in rows)
+    dead = sum(_count(row.get("count")) for row in rows if row.get("status") == "dead_letter")
+    status = "critical" if dead else "warning" if due else "ok"
+    return {
+        "scope": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id, "record_scope": record_scope},
+        "status": status,
+        "callbacks": rows,
+    }
+
+
+def _render_callbacks_summary_human(payload: dict[str, Any]) -> None:
+    scope = payload["scope"]
+    formatters.section("Callback Summary")
+    formatters.event(payload["status"].upper(), "callbacks", f"since={scope['since']} record_scope={scope['record_scope']} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'}")
+    formatters.print_table(payload["callbacks"], _callbacks_summary_columns(), empty_message="no callbacks")
+
+
 @app.callback()
 def main(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is None:
@@ -2752,6 +3524,11 @@ def main(ctx: typer.Context) -> None:
             sample_limit=10,
             json_output=False,
         )
+
+
+@app.command(help="查看 Job 排障四层模型和场景化用法。", epilog=GUIDE_HELP_EPILOG)
+def guide() -> None:
+    print(GUIDE_TEXT)
 
 
 @app.command(help="查看 Job 总览；默认等同于 jobs.sh 无参。", epilog=OVERVIEW_HELP_EPILOG)
@@ -3144,6 +3921,44 @@ def callbacks(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
     )
 
 
+@app.command(help="查看单个 Job 的阶段耗时和当前卡点。", epilog=TRACE_HELP_EPILOG)
+def trace(
+    job_id: JobIdArgument,
+    events_limit: Annotated[
+        int,
+        typer.Option("--events-limit", min=1, max=1000, help="用于计算阶段的最近事件条数。"),
+    ] = 100,
+    include_children: Annotated[
+        bool,
+        typer.Option("--include-children", help="包含 workflow internal child 汇总。"),
+    ] = False,
+    json_output: JsonOption = False,
+) -> None:
+    def action(conn):
+        job = queries.get_job(conn, job_id)
+        if job is None:
+            return None
+        payload = {
+            "job": job,
+            "attempts": queries.attempts(conn, job_id),
+            "callbacks": queries.callbacks(conn, job_id),
+            "timeline": queries.timeline(conn, job_id, limit=events_limit),
+        }
+        if include_children:
+            payload["children"] = queries.child_jobs(conn, _root_job_id_for(job))
+        payload["diagnosis"] = _diagnose_job(payload, include_children=include_children)
+        return _job_trace_payload(payload, include_children=include_children)
+
+    payload = _with_connection(action)
+    if payload is None:
+        print(f"ERROR: job not found: {job_id}", file=sys.stderr)
+        raise typer.Exit(3)
+    if json_output:
+        formatters.print_json(payload)
+        return
+    _render_trace_human(payload)
+
+
 @app.command(help="扫描疑似卡住的 Job、attempt 或 callback lease。", epilog=STUCK_HELP_EPILOG)
 def stuck(
     older_than: Annotated[
@@ -3446,6 +4261,200 @@ def doctor(
     _render_doctor(payload)
 
 
+@app.command(help="连续采样 Job 宏观状态，判断是否正在恢复。", epilog=OBSERVE_HELP_EPILOG)
+def observe(
+    since: Annotated[str, typer.Option("--since", help="每次采样的诊断窗口，例如 30m。")] = "30m",
+    older_than: Annotated[str, typer.Option("--older-than", help="stuck 判定窗口，例如 1m。")] = "1m",
+    interval: Annotated[int, typer.Option("--interval", min=0, help="采样间隔秒数；生产建议 60。")] = 60,
+    samples: Annotated[int, typer.Option("--samples", min=1, max=100, help="采样次数。")] = 5,
+    job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤窗口证据。")] = None,
+    caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤窗口证据。")] = None,
+    max_active_jobs: Annotated[
+        int | None,
+        typer.Option("--max-active-jobs", min=0, help="用于计算 active 占用比例；默认读取环境或 .env。"),
+    ] = None,
+    sample_limit: Annotated[int, typer.Option("--sample-limit", min=1, max=100, help="stuck 样本条数。")] = 20,
+    json_output: JsonOption = False,
+) -> None:
+    limit = max_active_jobs if max_active_jobs is not None else _env_max_active_jobs()
+    rows: list[dict[str, Any]] = []
+    for index in range(1, samples + 1):
+        payload = _overview_payload(
+            since=since,
+            older_than=older_than,
+            job_type=job_type,
+            caller_id=caller_id,
+            max_active_jobs=limit,
+            sample_limit=sample_limit,
+        )
+        rows.append(_observe_row(index, payload))
+        if index < samples and interval > 0:
+            time.sleep(interval)
+    filters = (f" --job-type {job_type}" if job_type else "") + (f" --caller-id {caller_id}" if caller_id else "")
+    payload = {
+        "scope": {
+            "since": since,
+            "older_than": older_than,
+            "interval_seconds": interval,
+            "samples": samples,
+            "job_type": job_type,
+            "caller_id": caller_id,
+        },
+        "samples": rows,
+        "verdict": _observe_verdict(rows),
+        "next_checks": [
+            f"./scripts/jobs.sh overview --since {since}{filters}",
+            f"./scripts/jobs.sh stuck --since {since} --older-than {older_than}{filters} --limit 20",
+            f"./scripts/jobs.sh failures --since {since}{filters}",
+            f"./scripts/jobs.sh callbacks-summary --since {since}{filters}",
+            "./scripts/jobs.sh broker",
+            "./scripts/jobs.sh runtime",
+        ],
+    }
+    if json_output:
+        formatters.print_json(payload)
+        return
+    _render_observe_human(payload)
+
+
+@app.command(help="查看 Redis/Taskiq broker 只读运输层状态。", epilog=BROKER_HELP_EPILOG)
+def broker(
+    redis_key: Annotated[str, typer.Option("--redis-key", help="Taskiq Redis 队列 key；默认 taskiq。")] = "taskiq",
+    json_output: JsonOption = False,
+) -> None:
+    try:
+        payload = _broker_payload(redis_key=redis_key)
+    except Exception as exc:
+        print(f"ERROR: broker evidence unavailable: {exc}", file=sys.stderr)
+        raise typer.Exit(4) from exc
+    if json_output:
+        formatters.print_json(payload)
+        return
+    _render_broker_human(payload)
+
+
+@app.command(help="查看当前 Pod/容器内 worker runtime、进程和 cgroup 资源证据。", epilog=RUNTIME_HELP_EPILOG)
+def runtime(json_output: JsonOption = False) -> None:
+    payload = _runtime_payload()
+    if json_output:
+        formatters.print_json(payload)
+        return
+    _render_runtime_human(payload)
+
+
+@app.command(help="聚合查看 failed Job 的错误 code、kind 和 phase。", epilog=FAILURES_HELP_EPILOG)
+def failures(
+    job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
+    caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    since: Annotated[str, typer.Option("--since", help="只统计指定窗口内创建的 Job，例如 1h。")] = "1h",
+    record_scope: ScopeOption = "family",
+    limit: LimitOption = 20,
+    json_output: JsonOption = False,
+) -> None:
+    try:
+        parsed_scope = parse_record_scope(record_scope)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    window, since_at = _since_window(since)
+    rows = _with_connection(
+        lambda conn: queries.failure_groups(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            limit=limit,
+            record_scope=parsed_scope,
+        )
+    )
+    payload = {
+        "scope": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id, "record_scope": parsed_scope},
+        "failure_groups": rows,
+    }
+    if json_output:
+        formatters.print_json(payload)
+        return
+    formatters.section("Failure Groups")
+    formatters.event("OK", "failures", f"since={since} record_scope={parsed_scope} job_type={job_type or '-'} caller_id={caller_id or '-'}")
+    formatters.print_table(rows, _failure_group_columns(), empty_message="no failed jobs")
+
+
+@app.command("callbacks-summary", help="宏观查看 callback outbox 是否闭环。", epilog=CALLBACKS_SUMMARY_HELP_EPILOG)
+def callbacks_summary(
+    job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
+    caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    since: Annotated[str, typer.Option("--since", help="只统计指定窗口内创建的 root Job，例如 1h。")] = "1h",
+    record_scope: ScopeOption = "root",
+    json_output: JsonOption = False,
+) -> None:
+    try:
+        parsed_scope = parse_record_scope(record_scope)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    payload = _callbacks_summary_payload(since=since, job_type=job_type, caller_id=caller_id, record_scope=parsed_scope)
+    if json_output:
+        formatters.print_json(payload)
+        return
+    _render_callbacks_summary_human(payload)
+
+
+@app.command(help="按时间桶查看 Job 创建、开始、终态和失败速率。", epilog=INGRESS_HELP_EPILOG)
+def ingress(
+    job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
+    caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    since: Annotated[str, typer.Option("--since", help="统计窗口，例如 30m。")] = "30m",
+    bucket: Annotated[str, typer.Option("--bucket", help="时间桶大小，例如 1m、5m、1h。")] = "1m",
+    record_scope: ScopeOption = "root",
+    json_output: JsonOption = False,
+) -> None:
+    window, since_at = _since_window(since)
+    try:
+        bucket_delta = parse_duration(bucket)
+        parsed_scope = parse_record_scope(record_scope)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    bucket_seconds = int(bucket_delta.total_seconds())
+    if bucket_seconds <= 0:
+        print("ERROR: --bucket must be greater than 0 seconds", file=sys.stderr)
+        raise typer.Exit(2)
+    rows = _with_connection(
+        lambda conn: queries.ingress(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            bucket_seconds=bucket_seconds,
+            record_scope=parsed_scope,
+        )
+    )
+    payload = {
+        "scope": {
+            "since": since,
+            "seconds": window.total_seconds(),
+            "bucket": bucket,
+            "bucket_seconds": bucket_seconds,
+            "job_type": job_type,
+            "caller_id": caller_id,
+            "record_scope": parsed_scope,
+        },
+        "ingress": rows,
+        "notes": {
+            "created": "created_at 落入该时间桶的 Job 数。",
+            "started": "started_at 落入该时间桶的 Job 数。",
+            "terminal": "finished_at 落入该时间桶的 succeeded/failed Job 数。",
+            "failed": "finished_at 落入该时间桶且 status=failed 的 Job 数。",
+        },
+    }
+    if json_output:
+        formatters.print_json(payload)
+        return
+    formatters.section("Job Ingress")
+    formatters.event("OK", "ingress", f"since={since} bucket={bucket} record_scope={parsed_scope} job_type={job_type or '-'} caller_id={caller_id or '-'}")
+    formatters.print_table(rows, _ingress_columns(), empty_message="no job events")
+
+
 @app.command(help="统计 Job 生命周期耗时。", epilog=LATENCY_HELP_EPILOG)
 def latency(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
@@ -3502,6 +4511,16 @@ def capacity(
         int | None,
         typer.Option("--max-active-jobs", min=0, help="用于计算 active 占用比例；默认读取环境或 .env。"),
     ] = None,
+    worker_pods: Annotated[int | None, typer.Option("--worker-pods", min=1, help="worker Pod 数，用于估算 DB 连接预算。")] = None,
+    worker_concurrency: Annotated[int | None, typer.Option("--worker-concurrency", min=1, help="单 worker Pod 并发；默认读取 WORKER_CONCURRENCY。")] = None,
+    api_pods: Annotated[int | None, typer.Option("--api-pods", min=1, help="API Pod 数，用于估算 DB 连接预算。")] = None,
+    db_max_connections: Annotated[int | None, typer.Option("--db-max-connections", min=1, help="PostgreSQL max_connections，用于估算 DB 连接预算。")] = None,
+    db_pool_size: Annotated[int | None, typer.Option("--db-pool-size", min=1, help="API 单 Pod DB_POOL_SIZE；默认读取环境。")] = None,
+    db_max_overflow: Annotated[int | None, typer.Option("--db-max-overflow", min=0, help="API 单 Pod DB_MAX_OVERFLOW；默认读取环境。")] = None,
+    db_usable_ratio: Annotated[
+        float,
+        typer.Option("--db-usable-ratio", min=0.1, max=1.0, help="可用于应用的 DB 连接比例；默认 0.8。"),
+    ] = 0.8,
     record_scope: ScopeOption = "root",
     json_output: JsonOption = False,
 ) -> None:
@@ -3541,8 +4560,18 @@ def capacity(
             "current_active_jobs": "当前全局 active 占用：queued + running 且 active_attempt_id 非空，包含 root 与 child。",
             "accepted_submit_rps": "使用窗口内 first_created_at 到 newest_created_at 的 observed span 估算；没有跨度时退回 --since 秒数。",
             "active_jobs_needed_upper_bound": "使用窗口 accepted_submit_rps * lifecycle_p95_seconds 得到的上界估算；workflow root 等待子任务时间会让它偏保守；terminal_jobs 少于 accepted_jobs 时仍应等待排空后再采信。",
+            "db_connection_budget": "估算公式：api_pods * (DB_POOL_SIZE + DB_MAX_OVERFLOW) + worker_pods * WORKER_CONCURRENCY；再与 db_max_connections * db_usable_ratio 比较。",
         },
     }
+    payload["db_connection_budget"] = _capacity_db_budget(
+        api_pods=api_pods,
+        worker_pods=worker_pods,
+        worker_concurrency=worker_concurrency,
+        db_pool_size=db_pool_size,
+        db_max_overflow=db_max_overflow,
+        db_max_connections=db_max_connections,
+        db_usable_ratio=db_usable_ratio,
+    )
     payload["recommendation"] = _capacity_recommendation(payload, limit)
     if json_output:
         formatters.print_json(payload)

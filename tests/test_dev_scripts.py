@@ -1,6 +1,7 @@
 import os
 import json
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from scripts.jobs import formatters as job_formatters
 from scripts.jobs.cli import app as jobs_cli_app
 from scripts.jobs.cli import (
     _api_log_payload,
+    _capacity_db_budget,
     _capacity_recommendation,
     _locust_payload,
     _pressure_payload,
@@ -1340,8 +1342,31 @@ def test_jobs_cli_help_is_available_without_db():
     assert "capacity" in result.stdout
     assert "gate" in result.stdout
     assert "payload" in result.stdout
+    assert "guide" in result.stdout
     assert "30s、10m、24h、7d" in result.stdout
     assert "常用排障顺序" in result.stdout
+    assert "./scripts/jobs.sh observe --interval 60 --samples 5" in result.stdout
+    assert "./scripts/jobs.sh guide" in result.stdout
+    assert "Scope：" not in result.stdout
+    assert "窗口与实时口径：" not in result.stdout
+
+
+def test_jobs_guide_is_available_without_db():
+    result = subprocess.run(
+        ["./scripts/jobs.sh", "guide"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "Job 排障四层模型" in result.stdout
+    assert "系统态" in result.stdout
+    assert "恢复态" in result.stdout
+    assert "运输和运行时" in result.stdout
+    assert "单 Job 轨迹" in result.stdout
+    assert "created -> queued -> dispatch published -> attempt claimed" in result.stdout
+    assert "./scripts/jobs.sh capacity --worker-pods" in result.stdout
 
 
 def test_real_flow_cli_help_is_available_without_api():
@@ -1636,6 +1661,85 @@ def test_jobs_capacity_recommendation_reports_gate_pressure():
     assert "达到或超过 MAX_ACTIVE_JOBS" in recommendation["message"]
 
 
+def test_jobs_capacity_db_budget_reports_risk_levels():
+    ok = _capacity_db_budget(
+        api_pods=2,
+        worker_pods=4,
+        worker_concurrency=10,
+        db_pool_size=5,
+        db_max_overflow=5,
+        db_max_connections=100,
+        db_usable_ratio=0.8,
+    )
+    critical = _capacity_db_budget(
+        api_pods=4,
+        worker_pods=6,
+        worker_concurrency=20,
+        db_pool_size=5,
+        db_max_overflow=10,
+        db_max_connections=100,
+        db_usable_ratio=0.8,
+    )
+    unknown = _capacity_db_budget(
+        api_pods=None,
+        worker_pods=1,
+        worker_concurrency=1,
+        db_pool_size=5,
+        db_max_overflow=10,
+        db_max_connections=100,
+        db_usable_ratio=0.8,
+    )
+
+    assert ok["estimated_connections"] == 60
+    assert ok["usable_connections"] == 80
+    assert ok["risk"] == "ok"
+    assert critical["estimated_connections"] == 180
+    assert critical["risk"] == "critical"
+    assert unknown["risk"] == "unknown"
+    assert unknown["missing_inputs"] == ["api_pods"]
+    assert ok["input_sources"]["worker_concurrency"] == "cli"
+
+
+def test_jobs_capacity_db_budget_reports_env_input_sources(monkeypatch):
+    values = {
+        "WORKER_CONCURRENCY": ("8", "environment"),
+        "DB_POOL_SIZE": ("5", ".env"),
+        "DB_MAX_OVERFLOW": ("10", ".env"),
+    }
+    monkeypatch.setattr("scripts.jobs.cli.db.env_value_with_source", lambda name: values.get(name, (None, "missing")))
+
+    budget = _capacity_db_budget(
+        api_pods=1,
+        worker_pods=2,
+        worker_concurrency=None,
+        db_pool_size=None,
+        db_max_overflow=None,
+        db_max_connections=100,
+        db_usable_ratio=0.8,
+    )
+
+    assert budget["worker_concurrency"] == 8
+    assert budget["db_pool_size"] == 5
+    assert budget["db_max_overflow"] == 10
+    assert budget["input_sources"]["worker_concurrency"] == "environment"
+    assert budget["input_sources"]["db_pool_size"] == ".env"
+    assert budget["input_sources"]["db_max_overflow"] == ".env"
+    assert budget["estimated_connections"] == 31
+
+
+def test_jobs_capacity_recommendation_blocks_concurrency_when_db_budget_is_critical():
+    payload = {
+        "current": {"active_jobs": 10},
+        "estimated": {"active_jobs_needed_upper_bound": 5},
+        "db_connection_budget": {"risk": "critical"},
+    }
+
+    recommendation = _capacity_recommendation(payload, 1000)
+
+    assert recommendation["db_connection_risk"] == "critical"
+    assert "不要提高 WORKER_CONCURRENCY" in recommendation["message"]
+
+
 def test_jobs_cli_no_args_runs_overview(monkeypatch):
     def fake_overview(**kwargs):
         assert kwargs["since"] == "10m"
@@ -1722,9 +1826,17 @@ def test_jobs_summary_uses_subcommand_since_after_callback_simplification(monkey
 @pytest.mark.parametrize(
     ("command", "expected"),
     [
+        (["guide", "-h"], "./scripts/jobs.sh guide"),
         (["overview", "-h"], "./scripts/jobs.sh overview --since 10m"),
         (["job", "-h"], "./scripts/jobs.sh job <job_id>"),
         (["workflow", "-h"], "./scripts/jobs.sh workflow <job_id>"),
+        (["trace", "-h"], "./scripts/jobs.sh trace <job_id>"),
+        (["observe", "-h"], "./scripts/jobs.sh observe --interval 60 --samples 5"),
+        (["broker", "-h"], "./scripts/jobs.sh broker --redis-key taskiq --json"),
+        (["runtime", "-h"], "./scripts/jobs.sh runtime --json"),
+        (["failures", "-h"], "./scripts/jobs.sh failures --since 1h --limit 20"),
+        (["callbacks-summary", "-h"], "./scripts/jobs.sh callbacks-summary --since 1h"),
+        (["ingress", "-h"], "./scripts/jobs.sh ingress --since 30m --bucket 1m"),
     ],
 )
 def test_jobs_new_entrypoint_help_has_examples(command, expected):
@@ -2092,6 +2204,138 @@ def test_jobs_callbacks_json_outputs_full_callback_response_evidence(monkeypatch
     assert callback["last_http_status"] == 200
     assert callback["last_response"]["error"] == contract_error
     assert callback["last_error"]["response"]["error"] == contract_error
+
+
+def test_jobs_trace_json_reports_phase_durations_and_current_phase(monkeypatch):
+    created_at = datetime(2026, 7, 1, 1, 0, tzinfo=timezone.utc)
+    started_at = datetime(2026, 7, 1, 1, 2, tzinfo=timezone.utc)
+    finished_at = datetime(2026, 7, 1, 1, 5, tzinfo=timezone.utc)
+
+    def fake_with_connection(action):
+        monkeypatch.setattr(
+            queries,
+            "get_job",
+            lambda _conn, _job_id: {
+                "id": "job-1",
+                "status": "succeeded",
+                "created_at": created_at,
+                "queued_at": created_at,
+                "started_at": started_at,
+                "finished_at": finished_at,
+            },
+        )
+        monkeypatch.setattr(
+            queries,
+            "attempts",
+            lambda _conn, _job_id: [
+                {
+                    "id": "attempt-1",
+                    "status": "succeeded",
+                    "worker_id": "worker-a",
+                    "heartbeat_at": datetime(2026, 7, 1, 1, 4, tzinfo=timezone.utc),
+                }
+            ],
+        )
+        monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(
+            queries,
+            "timeline",
+            lambda _conn, _job_id, *, limit: [
+                {"event_type": "dispatch.published", "created_at": datetime(2026, 7, 1, 1, 1, tzinfo=timezone.utc)},
+                {"event_type": "attempt.claimed", "created_at": started_at},
+            ],
+        )
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["trace", "job-1", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    phases = {item["phase"]: item for item in payload["phases"]}
+    assert phases["dispatch_wait"]["duration_seconds"] == 60.0
+    assert phases["claim_wait"]["duration_seconds"] == 60.0
+    assert phases["running"]["duration_seconds"] == 180.0
+    assert payload["attempts"]["worker_ids"] == ["worker-a"]
+    assert payload["current"]["phase"] == "callback"
+    assert payload["current"]["status"] == "not_configured"
+
+
+def test_jobs_trace_include_children_summarizes_workflow(monkeypatch):
+    def fake_with_connection(action):
+        monkeypatch.setattr(
+            queries,
+            "get_job",
+            lambda _conn, _job_id: {"id": "root-job-1", "status": "running", "root_job_id": None},
+        )
+        monkeypatch.setattr(queries, "attempts", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
+        monkeypatch.setattr(
+            queries,
+            "child_jobs",
+            lambda _conn, _root_job_id: [
+                {"job_id": "child-1", "status": "running", "workflow_node_key": "a"},
+                {"job_id": "child-2", "status": "failed", "workflow_node_key": "b"},
+            ],
+        )
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["trace", "root-job-1", "--include-children", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["children"]["count"] == 2
+    assert payload["children"]["active"] == 1
+    assert payload["children"]["failed"] == 1
+
+
+def test_jobs_trace_uses_attempt_fallback_when_timeline_is_truncated(monkeypatch):
+    started_at = datetime(2026, 7, 1, 1, 2, tzinfo=timezone.utc)
+
+    def fake_with_connection(action):
+        monkeypatch.setattr(
+            queries,
+            "get_job",
+            lambda _conn, _job_id: {
+                "id": "job-1",
+                "status": "running",
+                "created_at": datetime(2026, 7, 1, 1, 0, tzinfo=timezone.utc),
+                "queued_at": datetime(2026, 7, 1, 1, 0, tzinfo=timezone.utc),
+                "started_at": started_at,
+                "finished_at": None,
+            },
+        )
+        monkeypatch.setattr(
+            queries,
+            "attempts",
+            lambda _conn, _job_id: [
+                {
+                    "id": "attempt-1",
+                    "status": "running",
+                    "published_at": datetime(2026, 7, 1, 1, 1, tzinfo=timezone.utc),
+                    "leased_at": started_at,
+                    "worker_id": "worker-a",
+                }
+            ],
+        )
+        monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(jobs_cli_app, ["trace", "job-1", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    phases = {item["phase"]: item for item in payload["phases"]}
+    assert phases["dispatch_wait"]["status"] == "done"
+    assert phases["claim_wait"]["status"] == "done"
+    assert payload["current"]["phase"] == "running"
 
 
 def test_jobs_workflow_entrypoint_accepts_child_job_id(monkeypatch):
@@ -2794,6 +3038,229 @@ def test_jobs_doctor_json_reports_abnormal_metrics(monkeypatch):
     assert "./scripts/jobs.sh stuck --older-than 10m" in payload["next_checks"]
 
 
+def test_jobs_observe_json_detects_recovering_trend(monkeypatch):
+    snapshots = [
+        _pressure_payload(
+            since="30m",
+            older_than="1m",
+            job_type=None,
+            caller_id=None,
+            max_active_jobs=1000,
+            queue_wait_warning_seconds=30,
+            run_warning_seconds=60,
+            payload=_pressure_input(
+                summary_payload=_summary_payload(total=10, queued=5),
+                capacity_payload=_capacity_payload(active_jobs=5, queued=5, active_ratio=0.005),
+            ),
+        ),
+        _pressure_payload(
+            since="30m",
+            older_than="1m",
+            job_type=None,
+            caller_id=None,
+            max_active_jobs=1000,
+            queue_wait_warning_seconds=30,
+            run_warning_seconds=60,
+            payload=_pressure_input(
+                summary_payload=_summary_payload(total=10, queued=2),
+                capacity_payload=_capacity_payload(active_jobs=2, queued=2, active_ratio=0.002),
+            ),
+        ),
+    ]
+
+    monkeypatch.setattr("scripts.jobs.cli._env_max_active_jobs", lambda: 1000)
+    monkeypatch.setattr("scripts.jobs.cli._overview_payload", lambda **_kwargs: snapshots.pop(0))
+    monkeypatch.setattr("scripts.jobs.cli.time.sleep", lambda _seconds: None)
+
+    result = RUNNER.invoke(jobs_cli_app, ["observe", "--samples", "2", "--interval", "0", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["verdict"]["state"] == "recovering"
+    assert payload["samples"][0]["queued"] == 5
+    assert payload["samples"][1]["queued"] == 2
+    assert "./scripts/jobs.sh broker" in payload["next_checks"]
+
+
+def test_jobs_observe_does_not_report_recovering_when_only_queued_moves_to_running(monkeypatch):
+    snapshots = [
+        _pressure_payload(
+            since="30m",
+            older_than="1m",
+            job_type=None,
+            caller_id=None,
+            max_active_jobs=1000,
+            queue_wait_warning_seconds=30,
+            run_warning_seconds=60,
+            payload=_pressure_input(
+                summary_payload=_summary_payload(total=10, queued=10),
+                capacity_payload=_capacity_payload(active_jobs=10, queued=10, active_ratio=0.01),
+            ),
+        ),
+        _pressure_payload(
+            since="30m",
+            older_than="1m",
+            job_type=None,
+            caller_id=None,
+            max_active_jobs=1000,
+            queue_wait_warning_seconds=30,
+            run_warning_seconds=60,
+            payload=_pressure_input(
+                summary_payload=_summary_payload(total=10, queued=0, running_active=10),
+                capacity_payload=_capacity_payload(active_jobs=10, queued=0, running_active=10, active_ratio=0.01),
+            ),
+        ),
+    ]
+
+    monkeypatch.setattr("scripts.jobs.cli._env_max_active_jobs", lambda: 1000)
+    monkeypatch.setattr("scripts.jobs.cli._overview_payload", lambda **_kwargs: snapshots.pop(0))
+
+    result = RUNNER.invoke(jobs_cli_app, ["observe", "--samples", "2", "--interval", "0", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["verdict"]["state"] != "recovering"
+    assert payload["verdict"]["message"] == "queued decreased but active backlog stayed flat"
+
+
+def test_jobs_broker_command_outputs_injected_payload(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.jobs.cli._broker_payload",
+        lambda *, redis_key: {
+            "broker_kind": "redis_list",
+            "redis_key": redis_key,
+            "redis_ping": "ok",
+            "redis_key_type": "list",
+            "length": 3,
+            "pending": None,
+            "consumer_groups": [],
+            "oldest_message_age_seconds": None,
+            "verdict": "broker_has_backlog",
+        },
+    )
+
+    result = RUNNER.invoke(jobs_cli_app, ["broker", "--redis-key", "taskiq", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["redis_key"] == "taskiq"
+    assert payload["redis_key_type"] == "list"
+    assert payload["length"] == 3
+    assert payload["verdict"] == "broker_has_backlog"
+
+
+def test_jobs_broker_stream_uses_pending_not_xlen_for_backlog(monkeypatch):
+    class FakeRedis:
+        @classmethod
+        def from_url(cls, *_args, **_kwargs):
+            return cls()
+
+        def ping(self):
+            return True
+
+        def type(self, _key):
+            return b"stream"
+
+        def xlen(self, _key):
+            return 100
+
+        def xrange(self, _key, *, count):
+            return [(b"1780000000000-0", {})]
+
+        def xinfo_groups(self, _key):
+            return [{b"name": b"taskiq", b"consumers": 1, b"pending": 0, b"last-delivered-id": b"1780000000000-0"}]
+
+    monkeypatch.setattr("scripts.jobs.cli.db.env_value", lambda key: {"REDIS_URL": "redis://example/0", "TASKIQ_BROKER_KIND": "redis_stream"}.get(key))
+    monkeypatch.setitem(sys.modules, "redis", type("RedisModule", (), {"Redis": FakeRedis}))
+
+    from scripts.jobs.cli import _broker_payload
+
+    payload = _broker_payload(redis_key="taskiq")
+
+    assert payload["length"] == 100
+    assert payload["pending"] == 0
+    assert payload["verdict"] == "broker_stream_no_pending"
+
+
+def test_jobs_runtime_command_outputs_current_pod_scope(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.jobs.cli._runtime_payload",
+        lambda: {
+            "scope": "current_pod",
+            "environment": {
+                "WORKER_CONCURRENCY": "4",
+                "WORKER_RECOVERY_LOOP": "true",
+                "TASKIQ_BROKER_KIND": "redis_stream",
+                "MAX_ACTIVE_JOBS": "5000",
+                "DB_POOL_SIZE": "5",
+                "DB_MAX_OVERFLOW": "10",
+            },
+            "processes": [{"name": "taskiq_worker", "count": 1, "sample": "taskiq worker app.tasks.taskiq_app:broker"}],
+            "cgroup": {
+                "cpu_max": "200000 100000",
+                "cpu_quota_cores": 2,
+                "cpu_usage_usec": "100",
+                "memory_current_bytes": "1024",
+                "memory_max_bytes": "2048",
+            },
+            "verdict": "runtime_visible",
+        },
+    )
+
+    result = RUNNER.invoke(jobs_cli_app, ["runtime", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["scope"] == "current_pod"
+    assert payload["environment"]["WORKER_CONCURRENCY"] == "4"
+    assert payload["processes"][0]["name"] == "taskiq_worker"
+
+
+def test_jobs_failures_json_uses_failure_group_query(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_failure_groups(conn, **kwargs):
+        captured.update(kwargs)
+        return [{"count": 2, "error_code": "MODEL_CALL_FAILED", "error_kind": "worker_error", "failure_phase": "execute"}]
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", lambda action: action(None))
+    monkeypatch.setattr(queries, "failure_groups", fake_failure_groups)
+
+    result = RUNNER.invoke(jobs_cli_app, ["failures", "--since", "1h", "--caller-id", "default", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["scope"]["record_scope"] == "family"
+    assert captured["record_scope"] == "family"
+    assert captured["caller_id"] == "default"
+    assert payload["failure_groups"][0]["error_code"] == "MODEL_CALL_FAILED"
+
+
+def test_jobs_callbacks_summary_json_reports_due_status(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.jobs.cli._callbacks_summary_payload",
+        lambda **kwargs: {
+            "scope": {
+                "since": kwargs["since"],
+                "seconds": 3600.0,
+                "job_type": kwargs["job_type"],
+                "caller_id": kwargs["caller_id"],
+                "record_scope": kwargs["record_scope"],
+            },
+            "status": "warning",
+            "callbacks": [{"status": "pending", "count": 3, "due": 2, "oldest_age_seconds": 600.0}],
+        },
+    )
+
+    result = RUNNER.invoke(jobs_cli_app, ["callbacks-summary", "--since", "1h", "--caller-id", "default", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "warning"
+    assert payload["scope"]["record_scope"] == "root"
+    assert payload["callbacks"][0]["due"] == 2
+
+
 def test_jobs_pressure_payload_detects_db_connection_pressure():
     payload = _pressure_payload(
         since="20m",
@@ -3355,6 +3822,44 @@ def test_jobs_latency_json_uses_lifecycle_fields(monkeypatch):
     assert "active_p95_seconds" not in payload["latency"][0]
 
 
+def test_jobs_ingress_json_uses_query_scope_and_bucket(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_ingress(conn, **kwargs):
+        captured.update(kwargs)
+        return [
+            {
+                "bucket_at": datetime(2026, 7, 1, 1, 0, tzinfo=timezone.utc),
+                "created": 4,
+                "started": 3,
+                "terminal": 2,
+                "failed": 1,
+            }
+        ]
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", lambda action: action(None))
+    monkeypatch.setattr(queries, "ingress", fake_ingress)
+
+    result = RUNNER.invoke(jobs_cli_app, ["ingress", "--since", "30m", "--bucket", "1m", "--caller-id", "default", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["scope"]["record_scope"] == "root"
+    assert payload["scope"]["bucket_seconds"] == 60
+    assert captured["bucket_seconds"] == 60
+    assert captured["caller_id"] == "default"
+    assert captured["record_scope"] == "root"
+    assert payload["ingress"][0]["created"] == 4
+    assert payload["notes"]["terminal"].startswith("finished_at")
+
+
+def test_jobs_ingress_rejects_invalid_bucket():
+    result = RUNNER.invoke(jobs_cli_app, ["ingress", "--bucket", "0s", "--json"])
+
+    assert result.exit_code == 2
+    assert "时间窗口格式必须类似" in result.stderr
+
+
 def test_jobs_capacity_json_separates_global_current_from_window(monkeypatch):
     def fake_with_connection(action):
         return {
@@ -3377,6 +3882,53 @@ def test_jobs_capacity_json_separates_global_current_from_window(monkeypatch):
     assert payload["estimated"]["active_jobs_needed_upper_bound"] == 5.0
     assert payload["estimated"]["active_ratio"] == 0.24
     assert "workflow root" in payload["notes"]["active_jobs_needed_upper_bound"]
+
+
+def test_jobs_capacity_json_reports_db_connection_budget(monkeypatch):
+    def fake_with_connection(action):
+        return {
+            "current": {"active_jobs": 12, "queued": 10, "running_active": 2},
+            "window": {"accepted_jobs": 20, "terminal_jobs": 18, "lifecycle_p95_seconds": 15.0},
+            "estimated": {"active_jobs_needed_upper_bound": 5.0},
+        }
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    result = RUNNER.invoke(
+        jobs_cli_app,
+        [
+            "capacity",
+            "--since",
+            "10m",
+            "--max-active-jobs",
+            "50",
+            "--worker-pods",
+            "4",
+            "--worker-concurrency",
+            "10",
+            "--api-pods",
+            "2",
+            "--db-max-connections",
+            "100",
+            "--db-pool-size",
+            "5",
+            "--db-max-overflow",
+            "5",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    budget = payload["db_connection_budget"]
+    assert budget["worker_slots"] == 40
+    assert budget["api_pool_per_pod"] == 10
+    assert budget["estimated_connections"] == 60
+    assert budget["usable_connections"] == 80
+    assert budget["headroom"] == 20
+    assert budget["risk"] == "ok"
+    assert budget["input_sources"]["worker_concurrency"] == "cli"
+    assert payload["recommendation"]["db_connection_risk"] == "ok"
 
 
 def test_jobs_capacity_query_keeps_current_global_when_window_is_filtered(monkeypatch):
@@ -3500,6 +4052,82 @@ def test_jobs_summary_dispatch_counts_only_run_attempt_task(monkeypatch):
     assert "JOIN job_aggregates j ON j.id = a.job_id" in dispatch_sql
     assert "d.job_id" not in dispatch_sql
     assert "d.task_name = 'jobs.run_attempt'" in dispatch_sql
+
+
+def test_jobs_callbacks_summary_query_uses_callback_outbox_and_scope(monkeypatch):
+    captured_sql: list[str] = []
+    captured_params: list[dict] = []
+
+    def fake_fetch_all(conn, sql, params):
+        captured_sql.append(sql)
+        captured_params.append(params)
+        return []
+
+    monkeypatch.setattr(queries, "_fetch_all", fake_fetch_all)
+
+    queries.callbacks_summary(
+        None,
+        job_type="job_test_echo",
+        caller_id="default",
+        since="2026-06-26T00:00:00+00:00",
+        record_scope="root",
+    )
+
+    sql = captured_sql[0]
+    assert "FROM callback_outbox c" in sql
+    assert "JOIN job_aggregates j ON j.id = c.job_id" in sql
+    assert "c.status IN ('pending', 'failed', 'retrying')" in sql
+    assert "c.next_attempt_at <= now()" in sql
+    assert "j.root_job_id IS NULL" in sql
+    assert "j.workflow_node_key IS NULL" in sql
+    assert "j.client_request_id IS NOT NULL" in sql
+    assert "j.job_type = %(job_type)s" in sql
+    assert "j.caller_id = %(caller_id)s" in sql
+    assert captured_params[0]["job_type"] == "job_test_echo"
+    assert captured_params[0]["caller_id"] == "default"
+
+
+def test_jobs_ingress_query_buckets_independent_event_times(monkeypatch):
+    captured_sql: list[str] = []
+    captured_params: list[dict] = []
+
+    def fake_fetch_all(conn, sql, params):
+        captured_sql.append(sql)
+        captured_params.append(params)
+        return []
+
+    monkeypatch.setattr(queries, "_fetch_all", fake_fetch_all)
+
+    since = datetime(2026, 7, 1, 1, 0, tzinfo=timezone.utc)
+    queries.ingress(
+        None,
+        job_type="job_test_echo",
+        caller_id="default",
+        since=since,
+        bucket_seconds=60,
+        record_scope="root",
+    )
+
+    sql = captured_sql[0]
+    assert "WITH events AS" in sql
+    assert "SELECT j.created_at AS event_at, 'created' AS metric" in sql
+    assert "SELECT j.started_at AS event_at, 'started' AS metric" in sql
+    assert "SELECT j.finished_at AS event_at, 'terminal' AS metric" in sql
+    assert "SELECT j.finished_at AS event_at, 'failed' AS metric" in sql
+    assert "AND j.created_at >= %(since)s" in sql
+    assert "AND j.started_at >= %(since)s" in sql
+    assert "AND j.finished_at >= %(since)s" in sql
+    assert "AND j.status = 'failed'" in sql
+    assert "floor(EXTRACT(EPOCH FROM event_at) / %(bucket_seconds)s)" in sql
+    assert "j.root_job_id IS NULL" in sql
+    assert "j.workflow_node_key IS NULL" in sql
+    assert "j.client_request_id IS NOT NULL" in sql
+    assert "j.job_type = %(job_type)s" in sql
+    assert "j.caller_id = %(caller_id)s" in sql
+    assert captured_params[0]["since"] == since
+    assert captured_params[0]["bucket_seconds"] == 60
+    assert captured_params[0]["job_type"] == "job_test_echo"
+    assert captured_params[0]["caller_id"] == "default"
 
 
 def test_jobs_stuck_query_accepts_scope_filters(monkeypatch):

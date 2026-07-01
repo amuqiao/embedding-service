@@ -25,20 +25,48 @@
   -> ./scripts/jobs.sh
   -> ./scripts/jobs.sh overview --since 1h
 
+判断是不是正在恢复
+  -> ./scripts/jobs.sh observe --interval 60 --samples 5
+
 再看当前全局是否还有未结束且占用处理名额的 Job
   -> ./scripts/jobs.sh gate
+
+查运输层和当前 Pod 运行时
+  -> ./scripts/jobs.sh broker
+  -> ./scripts/jobs.sh runtime
 
 再找样本
   -> ./scripts/jobs.sh list --status queued,running --scope family --limit 20
   -> ./scripts/jobs.sh list --status failed --since 1h --limit 20
+  -> ./scripts/jobs.sh failures --since 1h
+  -> ./scripts/jobs.sh callbacks-summary --since 1h
 
 拿到 job_id 后看单 Job
   -> ./scripts/jobs.sh inspect <job_id>
+  -> ./scripts/jobs.sh trace <job_id>
   -> ./scripts/jobs.sh workflow <job_id>
 
 只有明确需要原始入参/出参时
   -> ./scripts/jobs.sh payload <job_id> --full
 ```
+
+可以把 `jobs.sh` 当成四层只读运维入口：
+
+```text
+系统态
+  overview / doctor / gate / capacity / pressure / ingress
+
+恢复态
+  observe / drain / stuck
+
+运输层和 Pod 运行时
+  broker / runtime
+
+单 Job 轨迹
+  inspect / trace / diagnose / workflow / attempts / callbacks / timeline
+```
+
+`broker` 和 `runtime` 的作用域是当前执行环境。它们适合在 Pod 内运行，用于确认当前 Pod 看到的 Redis/Taskiq、进程、环境变量和 cgroup 资源；它们不会修改 Redis、DB 或 Job 状态。
 
 ## 三个最容易混淆的概念
 
@@ -144,6 +172,8 @@ capacity 看当前占用 + 最近窗口的容量估算。
 | 当前是否接近 `MAX_ACTIVE_JOBS` 上限？ | `gate --max-active-jobs <n>` | 直接看 active_ratio 和 headroom，含义见上面的字段说明 |
 | 最近 1 小时的吞吐和生命周期是否支撑当前上限？ | `capacity --since 1h` | 需要窗口 accepted_jobs、lifecycle p95 和估算需求 |
 | 按某个 caller/job_type 估算本轮压测容量？ | `capacity --since 20m --caller-id <id>` | 过滤只作用于窗口估算，不作用于当前全局占用 |
+| 入口提交速率是否突然变大？ | `ingress --since 30m --bucket 1m` | 看 created、started、terminal、failed 是否同向变化 |
+| 是否可以加 worker 并发或 pod？ | `capacity --worker-pods <n> --worker-concurrency <n> --api-pods <n> --db-max-connections <n>` | 同时看处理槽位和 DB 连接预算 |
 
 常用命令：
 
@@ -152,6 +182,8 @@ capacity 看当前占用 + 最近窗口的容量估算。
 ./scripts/jobs.sh gate --max-active-jobs 1000
 ./scripts/jobs.sh capacity --since 1h --max-active-jobs 1000
 ./scripts/jobs.sh capacity --since 20m --caller-id default --max-active-jobs 1000
+./scripts/jobs.sh capacity --worker-pods 4 --worker-concurrency 30 --api-pods 2 --db-max-connections 100
+./scripts/jobs.sh ingress --since 30m --bucket 1m
 ```
 
 读 `capacity` 时按这个图理解：
@@ -169,7 +201,32 @@ capacity
   Estimated
     active_ratio/headroom 来自 Current
     active_jobs_needed_upper_bound 来自 Window
+
+  DB Connection Budget
+    来自 --api-pods / --worker-pods / --worker-concurrency / --db-max-connections
+    未显式传 --worker-concurrency / --db-pool-size / --db-max-overflow 时，会读取当前环境或 .env，并在 input_sources 中标出来源
 ```
+
+`capacity` 的 DB 连接预算是估算，不直接查询 PostgreSQL 当前连接数。公式是：
+
+```text
+api_pods * (DB_POOL_SIZE + DB_MAX_OVERFLOW)
++ worker_pods * WORKER_CONCURRENCY
+<= db_max_connections * db_usable_ratio
+```
+
+这个结果用于回答“能不能继续加 `WORKER_CONCURRENCY` 或 pod”。如果 `risk=critical`，最终建议会优先阻止继续升并发；如果 `risk=unknown`，说明缺少 pod 数、并发、pool 或 PostgreSQL `max_connections` 这类输入。读预算时同时看 `input_sources`，确认关键值来自 `cli`、`environment` 还是 `.env`。
+
+`ingress` 不是单纯按 `created_at` 查窗口。它按事件发生时间分别统计：
+
+```text
+created   created_at 落入时间桶
+started   started_at 落入时间桶
+terminal  finished_at 落入时间桶
+failed    finished_at 落入时间桶且 status=failed
+```
+
+所以它适合看“入口是否还在变大、worker 是否跟得上、终态是否开始恢复、失败是否同步升高”。
 
 如果只是想知道“现在还有没有 Job 在排队或执行”，不要用 `capacity` 绕一圈，直接用：
 
@@ -371,12 +428,19 @@ payload --full
 | `gate` | 现在全局还有多少 Job 在排队或执行？ | active_jobs、queued、running_active、active_ratio、headroom | 无窗口、无业务过滤 |
 | `summary` | 某个窗口内计数怎样？ | jobs、attempts、dispatch、callbacks、by_job_type | 窗口统计，不是全局实时 |
 | `doctor` | 窗口汇总说明什么？ | summary 诊断和下一步命令 | 适合不确定下一步时使用 |
-| `capacity` | 当前占用和窗口容量估算怎样？ | current、window estimate、estimated | current 是全局，window 才受过滤 |
+| `observe` | 系统是否正在恢复？ | 多次采样 queued、active、failed、callback due、stuck 和 verdict | 默认会等待采样间隔 |
+| `broker` | Redis/Taskiq 运输层是否有积压或 key 类型错配？ | Redis ping、key type、length、pending、consumer groups、verdict | 只读；不会清理队列 key |
+| `runtime` | 当前 Pod 内 worker/API runtime 证据是什么？ | 环境变量、Taskiq/recovery 进程、cgroup CPU/内存 | 只代表当前 Pod |
+| `capacity` | 当前占用、窗口容量和 DB 连接预算怎样？ | current、window estimate、estimated、db_connection_budget | current 是全局，window 才受过滤 |
+| `ingress` | 调用方流量和处理吞吐趋势怎样？ | 每个时间桶的 created、started、terminal、failed | 默认 root scope；按事件时间聚合 |
 | `latency` | 慢在哪里？ | queue/run/lifecycle p95、success_rate | 先按 `job_type` 分组看 |
+| `failures` | 失败集中在哪类错误？ | error_code、error_kind、failure_phase 聚合 | 默认 `family` scope |
+| `callbacks-summary` | callback 是否闭环？ | callback status、due、oldest age、HTTP/error 样本 | 宏观 callback outbox |
 | `list` | 哪些 Job 值得看？ | Job 样本列表 | 默认 root；child 问题用 family |
 | `job` | 单个 Job 当前状态是什么？ | 轻量状态 | 不展开 payload |
 | `show` | 单个 Job 权威状态是什么？ | 与 `job` 类似的兼容入口 | 优先使用 `job` |
 | `inspect` | 单个 Job 证据集中看是什么？ | job summary、diagnosis、attempts、callbacks、timeline | 不输出完整 payload |
+| `trace` | 单个 Job 各阶段耗时和当前卡点是什么？ | accepted、dispatch_wait、claim_wait、running、callback 阶段 | 看阶段摘要，不替代 timeline 原始事件 |
 | `diagnose` | 单个 Job 卡在哪里？ | findings、signal、next checks | 判断 attempt/dispatch/callback/claim |
 | `workflow` | root 和 children 关系怎样？ | root、children、root attempts/callbacks/timeline | 可传 root 或 child job_id |
 | `timeline` | 状态怎么流转的？ | audit events | `--limit` 控制事件数 |
@@ -403,6 +467,47 @@ payload --full
 | `http_503_gate_hit` | active_jobs 达到上限，系统开始用 503 拒绝新请求 | 确认能排空后再讨论容量 |
 | `http_5xx` | 服务或依赖异常 | 停止升压，查日志和 failed Job |
 | `db_connection_pressure` | 数据库连接压力 | 先治理连接池/并发，不要先调大 MAX_ACTIVE_JOBS |
+
+## 判断是否正在恢复
+
+单次 `overview` 是快照，不能证明系统正在变好。需要连续观察：
+
+```bash
+./scripts/jobs.sh observe --interval 60 --samples 5
+```
+
+重点看：
+
+```text
+queued 是否下降
+active_jobs 是否下降
+failed 是否继续增加
+callback_due 是否下降
+stuck 是否减少
+```
+
+典型判断：
+
+```text
+recovering
+  queued 或 active_jobs 持续下降，failed/stuck/callback_due 没有继续增加。
+
+backlog_expanding
+  queued 或 active_jobs 持续上升，说明入口流量或执行耗时超过当前处理能力。
+
+degrading
+  failed、stuck 或 callback_due 增加，先查 failures、stuck、callbacks-summary。
+```
+
+常用组合：
+
+```bash
+./scripts/jobs.sh observe --interval 60 --samples 5
+./scripts/jobs.sh broker
+./scripts/jobs.sh runtime
+./scripts/jobs.sh failures --since 1h
+./scripts/jobs.sh callbacks-summary --since 1h
+```
 
 ## 典型流程
 

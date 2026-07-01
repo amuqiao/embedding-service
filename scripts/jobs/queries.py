@@ -518,6 +518,72 @@ def latency(
     )
 
 
+def ingress(
+    conn: connection,
+    *,
+    job_type: str | None,
+    caller_id: str | None,
+    since: datetime,
+    bucket_seconds: int,
+    record_scope: str = "root",
+) -> list[dict]:
+    filters, params = _scope_filters(
+        table_alias="j",
+        job_type=job_type,
+        caller_id=caller_id,
+        since=None,
+        record_scope=record_scope,
+    )
+    params["since"] = since
+    params["bucket_seconds"] = bucket_seconds
+    return _fetch_all(
+        conn,
+        f"""
+        WITH events AS (
+          SELECT j.created_at AS event_at, 'created' AS metric
+          FROM job_aggregates j
+          WHERE j.deleted_at IS NULL
+            AND j.created_at >= %(since)s
+            {filters}
+          UNION ALL
+          SELECT j.started_at AS event_at, 'started' AS metric
+          FROM job_aggregates j
+          WHERE j.deleted_at IS NULL
+            AND j.started_at IS NOT NULL
+            AND j.started_at >= %(since)s
+            {filters}
+          UNION ALL
+          SELECT j.finished_at AS event_at, 'terminal' AS metric
+          FROM job_aggregates j
+          WHERE j.deleted_at IS NULL
+            AND j.finished_at IS NOT NULL
+            AND j.finished_at >= %(since)s
+            {filters}
+          UNION ALL
+          SELECT j.finished_at AS event_at, 'failed' AS metric
+          FROM job_aggregates j
+          WHERE j.deleted_at IS NULL
+            AND j.status = 'failed'
+            AND j.finished_at IS NOT NULL
+            AND j.finished_at >= %(since)s
+            {filters}
+        )
+        SELECT
+          to_timestamp(
+            floor(EXTRACT(EPOCH FROM event_at) / %(bucket_seconds)s) * %(bucket_seconds)s
+          ) AS bucket_at,
+          count(*) FILTER (WHERE metric = 'created') AS created,
+          count(*) FILTER (WHERE metric = 'started') AS started,
+          count(*) FILTER (WHERE metric = 'terminal') AS terminal,
+          count(*) FILTER (WHERE metric = 'failed') AS failed
+        FROM events
+        GROUP BY bucket_at
+        ORDER BY bucket_at ASC
+        """,
+        params,
+    )
+
+
 def failure_groups(
     conn: connection,
     *,
@@ -554,6 +620,63 @@ def failure_groups(
         GROUP BY 1, 2, 3, 4, 5
         ORDER BY count DESC, newest_updated_at DESC
         LIMIT %(limit)s
+        """,
+        params,
+    )
+
+
+def callbacks_summary(
+    conn: connection,
+    *,
+    job_type: str | None,
+    caller_id: str | None,
+    since: datetime | None,
+    record_scope: str = "root",
+) -> list[dict]:
+    filters, params = _scope_filters(
+        table_alias="j",
+        job_type=job_type,
+        caller_id=caller_id,
+        since=since,
+        record_scope=record_scope,
+    )
+    return _fetch_all(
+        conn,
+        f"""
+        SELECT
+          c.status,
+          count(*) AS count,
+          count(*) FILTER (
+            WHERE c.status IN ('pending', 'failed', 'retrying')
+              AND (c.next_attempt_at IS NULL OR c.next_attempt_at <= now())
+          ) AS due,
+          min(c.created_at) AS oldest_created_at,
+          max(c.updated_at) AS newest_updated_at,
+          min(c.next_attempt_at) FILTER (
+            WHERE c.status IN ('pending', 'failed', 'retrying')
+          ) AS next_attempt_at,
+          max(c.delivery_attempts) AS max_delivery_attempts_seen,
+          max(c.last_http_status) FILTER (WHERE c.last_http_status IS NOT NULL) AS last_http_status_seen,
+          max(c.last_error::text) FILTER (WHERE c.last_error IS NOT NULL) AS sample_last_error,
+          EXTRACT(EPOCH FROM (now() - min(c.created_at))) AS oldest_age_seconds
+        FROM callback_outbox c
+        JOIN job_aggregates j ON j.id = c.job_id
+        WHERE j.deleted_at IS NULL
+        {filters}
+        GROUP BY c.status
+        ORDER BY
+          CASE c.status
+            WHEN 'pending' THEN 1
+            WHEN 'leased' THEN 2
+            WHEN 'delivering' THEN 3
+            WHEN 'failed' THEN 4
+            WHEN 'retrying' THEN 5
+            WHEN 'dead_letter' THEN 6
+            WHEN 'delivered' THEN 7
+            WHEN 'skipped' THEN 8
+            ELSE 9
+          END,
+          c.status ASC
         """,
         params,
     )

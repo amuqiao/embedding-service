@@ -36,6 +36,16 @@ def env_value(key: str) -> str | None:
     return _env_file_value(key)
 
 
+def env_value_with_source(key: str) -> tuple[str | None, str]:
+    value = os.getenv(key)
+    if value is not None:
+        return value, "environment"
+    value = _env_file_value(key)
+    if value is not None:
+        return value, ".env"
+    return None, "missing"
+
+
 def normalize_database_url(database_url: str, *, db_ssl: str | None) -> str:
     if not database_url:
         raise ValueError("DATABASE_URL is required")
