@@ -62,22 +62,27 @@ release_usage() {
   ${entry} [prepare|push|--push|status]
   ${entry} -h|--help
 
-执行位置：
-  建议始终在主项目 ${REQUIRED_LOCAL_BRANCH} 目录执行。本脚本会自动进入 tmp 发布目录处理 ${TARGET_BRANCH}。
-
-作用域：
-  本脚本只负责 Git 发布流：检查 ${REQUIRED_LOCAL_BRANCH}，在独立 tmp 仓库合入 ${SOURCE_REF} 到 ${TARGET_BRANCH}，再按显式 push 推送。
-  不负责 Kuboard 切镜像、业务验证、生产部署、远程数据库、K8s 或云平台资源。
-
-运行环境：
-  Requires: Bash, Git。
-  Dependencies: 可访问 origin 远端；push 阶段需要当前身份有目标分支推送权限。
+发布 ${SOURCE_REF} 到 ${TARGET_ENV_LABEL} 分支 ${TARGET_BRANCH} 的 Git 发布流入口。
 
 命令：
   prepare  检查主 ${REQUIRED_LOCAL_BRANCH}，重建 tmp 仓库，在 tmp 仓库切到 ${TARGET_BRANCH} 并合入 ${SOURCE_REF}。
   push     进入 tmp 仓库，提交 prepare 产生的待发布 merge，并推送到 origin/${TARGET_BRANCH} 触发 CI。
   --push   push 的别名，适合第二次执行时直接添加选项。
   status   同时输出主 ${REQUIRED_LOCAL_BRANCH} 目录、tmp 发布目录状态，并给出 prepare/push 判断。
+
+作用域：
+  本脚本只负责 Git 发布流：检查 ${REQUIRED_LOCAL_BRANCH}，在独立 tmp 仓库合入 ${SOURCE_REF} 到 ${TARGET_BRANCH}，再按显式 push 推送。
+  建议始终在主项目 ${REQUIRED_LOCAL_BRANCH} 目录执行。本脚本会自动进入 tmp 发布目录处理 ${TARGET_BRANCH}。
+
+不负责：
+  Kuboard 切镜像、业务验证、生产部署、远程数据库、K8s 或云平台资源。
+
+运行环境：
+  Requires: Bash, Git。
+  Dependencies: 可访问 origin 远端；push 阶段需要当前身份有目标分支推送权限。
+
+默认行为：
+  无参数时默认执行 prepare，只准备 tmp 发布目录，不提交、不推送。
 
 配置与环境变量：
   SOURCE_REF       要合入 ${TARGET_ENV_LABEL} 的来源分支，默认：${SOURCE_REF}
