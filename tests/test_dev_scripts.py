@@ -1633,7 +1633,7 @@ def test_jobs_capacity_recommendation_reports_gate_pressure():
     recommendation = _capacity_recommendation(payload, 750)
 
     assert recommendation["active_ratio"] > 1
-    assert "达到或超过门禁" in recommendation["message"]
+    assert "达到或超过 MAX_ACTIVE_JOBS" in recommendation["message"]
 
 
 def test_jobs_cli_no_args_runs_overview(monkeypatch):
@@ -1891,8 +1891,8 @@ def test_jobs_overview_human_clarifies_global_gate_when_window_is_empty(monkeypa
     assert result.exit_code == 0
     assert "== Job 总览 ==" in result.stdout
     assert "== 最近窗口 Root Job 汇总 ==" in result.stdout
-    assert "== 当前全局 Active Gate ==" in result.stdout
-    assert "实时全局门禁水位" in result.stdout
+    assert "== 当前全局 active 占用 ==" in result.stdout
+    assert "当前全局 active 占用" in result.stdout
     assert "window_empty_but_global_active" in result.stdout
     assert "./scripts/jobs.sh gate" in result.stdout
 
@@ -2645,8 +2645,8 @@ def test_jobs_capacity_default_is_human_readable(monkeypatch):
 
     assert result.exit_code == 0
     assert "== Job Capacity ==" in result.stdout
-    assert "== 当前全局 Active Gate ==" in result.stdout
-    assert "实时全局门禁水位" in result.stdout
+    assert "== 当前全局 active 占用 ==" in result.stdout
+    assert "当前全局 active 占用" in result.stdout
     assert "== 窗口容量估算 ==" in result.stdout
     assert "== 容量估算 ==" in result.stdout
     assert '"current"' not in result.stdout
@@ -2661,9 +2661,10 @@ def test_jobs_gate_default_is_human_readable(monkeypatch):
     result = RUNNER.invoke(jobs_cli_app, ["gate", "--max-active-jobs", "50"])
 
     assert result.exit_code == 0
-    assert "== 当前全局 Active Gate ==" in result.stdout
+    assert "== 当前全局 active 占用 ==" in result.stdout
     assert "scope=global_current" in result.stdout
-    assert "实时全局门禁水位" in result.stdout
+    assert "当前全局 active 占用" in result.stdout
+    assert "字段：active_jobs=queued" in result.stdout
     assert "active_jobs" in result.stdout
     assert "0.24" in result.stdout
     assert '"current"' not in result.stdout
@@ -2682,7 +2683,7 @@ def test_jobs_gate_json_reports_global_current(monkeypatch):
     assert payload["scope"] == {"current": "global_gate", "window": "none", "filters": "none"}
     assert payload["current"]["active_jobs"] == 12
     assert payload["current"]["active_ratio"] == 0.24
-    assert "实时全局门禁水位" in payload["notes"]["scope"]
+    assert "当前全局 active 占用" in payload["notes"]["scope"]
 
 
 def test_jobs_gate_rejects_since_filter():
@@ -2717,7 +2718,7 @@ def test_jobs_pressure_default_is_human_readable(monkeypatch):
     assert result.exit_code == 0
     assert "== Job Pressure Diagnosis ==" in result.stdout
     assert "== Capacity ==" in result.stdout
-    assert "== 当前全局 Active Gate ==" in result.stdout
+    assert "== 当前全局 active 占用 ==" in result.stdout
     assert "== 窗口容量估算 ==" in result.stdout
     assert '"capacity"' not in result.stdout
 

@@ -25,7 +25,7 @@
   -> ./scripts/jobs.sh
   -> ./scripts/jobs.sh overview --since 1h
 
-再看当前全局是否还有 active
+再看当前全局是否还有未结束且占用处理名额的 Job
   -> ./scripts/jobs.sh gate
 
 再找样本
@@ -86,14 +86,22 @@ all
   只用于明确的底层排查。
 ```
 
-### 全局实时门禁
+### 当前全局 active 占用
 
-`global_gate` 是当前全局 Active Gate，不是窗口统计。
+`global_gate` 是脚本内部使用的口径名。对使用者来说，可以先把它理解成：
 
 ```text
-Global Active Gate
-  = 当前所有 queued
-  + 当前所有 running 且 active_attempt_id 非空
+当前全局 active 占用
+  = 现在还在排队的 Job
+  + 现在正在被 worker 执行的 Job
+```
+
+它回答的是“系统现在还有多少 Job 正在占用处理名额”，不是“最近 10 分钟创建了多少 Job”。
+
+```text
+active_jobs
+  = queued
+  + running 且 active_attempt_id 非空
 
 不受 --since 影响
 不按 job_type 过滤
@@ -102,22 +110,40 @@ Global Active Gate
 
 这也是 `gate` 和 `capacity` 的核心区别。
 
+`gate` 输出里几个字段可以这样读：
+
+```text
+active_jobs
+  现在还在排队或执行的 Job 数量。
+
+max_active_jobs
+  当前配置允许同时占用的上限，也就是 MAX_ACTIVE_JOBS。
+
+active_ratio
+  active_jobs / max_active_jobs。
+  例如 0.8 表示已经用掉 80%。
+
+headroom
+  max_active_jobs - active_jobs。
+  例如 999 表示距离上限还差 999 个 active Job。
+```
+
 ## `gate` 和 `capacity` 怎么用
 
 先记住一句话：
 
 ```text
-gate     看现在有没有占着全局门禁。
-capacity 看当前门禁水位 + 最近窗口的容量估算。
+gate     看当前还有多少 Job 正在占用处理名额。
+capacity 看当前占用 + 最近窗口的容量估算。
 ```
 
 | 问题 | 用哪个 | 原因 |
 | --- | --- | --- |
-| 现在全局还有多少 active？ | `gate` | 只查实时全局门禁，短、快、没有窗口概念 |
-| 为什么 overview 说窗口为空但 active_jobs=1？ | `gate` | active 可能是窗口外创建的老任务 |
-| 当前是否接近 `MAX_ACTIVE_JOBS`？ | `gate --max-active-jobs <n>` | 直接看 active_ratio/headroom |
-| 最近 1 小时的吞吐和生命周期是否支撑当前门禁？ | `capacity --since 1h` | 需要窗口 accepted_jobs、lifecycle p95 和估算需求 |
-| 按某个 caller/job_type 估算本轮压测容量？ | `capacity --since 20m --caller-id <id>` | 过滤只作用于窗口估算，不作用于 current gate |
+| 现在全局还有多少 Job 在排队或执行？ | `gate` | 只查当前全局占用，短、快、没有窗口概念 |
+| 为什么 overview 说窗口为空但 active_jobs=1？ | `gate` | 这个 Job 可能创建于窗口外，但现在仍未结束 |
+| 当前是否接近 `MAX_ACTIVE_JOBS` 上限？ | `gate --max-active-jobs <n>` | 直接看 active_ratio 和 headroom，含义见上面的字段说明 |
+| 最近 1 小时的吞吐和生命周期是否支撑当前上限？ | `capacity --since 1h` | 需要窗口 accepted_jobs、lifecycle p95 和估算需求 |
+| 按某个 caller/job_type 估算本轮压测容量？ | `capacity --since 20m --caller-id <id>` | 过滤只作用于窗口估算，不作用于当前全局占用 |
 
 常用命令：
 
@@ -132,8 +158,8 @@ capacity 看当前门禁水位 + 最近窗口的容量估算。
 
 ```text
 capacity
-  Current Global Active Gate
-    实时全局值
+  Current Global Active
+    当前全局 active 占用
     不受 --since / --job-type / --caller-id 影响
 
   Window Capacity Estimate
@@ -145,7 +171,7 @@ capacity
     active_jobs_needed_upper_bound 来自 Window
 ```
 
-如果只是想知道“现在还有没有全局 active”，不要用 `capacity` 绕一圈，直接用：
+如果只是想知道“现在还有没有 Job 在排队或执行”，不要用 `capacity` 绕一圈，直接用：
 
 ```bash
 ./scripts/jobs.sh gate
@@ -173,14 +199,14 @@ capacity
 最近窗口 Root Job 汇总
   只看 --since 窗口内创建的 root Job。
 
-当前全局 Active Gate
-  实时全局门禁水位，不受 --since 影响。
+当前全局 active 占用
+  现在仍在排队或执行的 Job 数量，不受 --since 影响。
 
 最近窗口 Family 风险样本
   以 root 窗口为入口，看 root + children 的 stuck 风险。
 ```
 
-如果窗口为空但 gate 还有 active，优先查：
+如果窗口为空但 `gate` 显示仍有 active_jobs，优先查：
 
 ```bash
 ./scripts/jobs.sh gate
@@ -341,11 +367,11 @@ payload --full
 
 | 命令 | 先问的问题 | 输出重点 | 注意 |
 | --- | --- | --- | --- |
-| 无参 / `overview` | 最近窗口整体怎样？ | root 窗口汇总、global gate、family 风险样本、next checks | 默认 `--since 10m` |
-| `gate` | 现在全局 active 门禁是多少？ | active_jobs、queued、running_active、active_ratio、headroom | 无窗口、无业务过滤 |
+| 无参 / `overview` | 最近窗口整体怎样？ | root 窗口汇总、当前全局 active 占用、family 风险样本、next checks | 默认 `--since 10m` |
+| `gate` | 现在全局还有多少 Job 在排队或执行？ | active_jobs、queued、running_active、active_ratio、headroom | 无窗口、无业务过滤 |
 | `summary` | 某个窗口内计数怎样？ | jobs、attempts、dispatch、callbacks、by_job_type | 窗口统计，不是全局实时 |
 | `doctor` | 窗口汇总说明什么？ | summary 诊断和下一步命令 | 适合不确定下一步时使用 |
-| `capacity` | 当前水位和窗口容量估算怎样？ | current gate、window estimate、estimated | current 是全局，window 才受过滤 |
+| `capacity` | 当前占用和窗口容量估算怎样？ | current、window estimate、estimated | current 是全局，window 才受过滤 |
 | `latency` | 慢在哪里？ | queue/run/lifecycle p95、success_rate | 先按 `job_type` 分组看 |
 | `list` | 哪些 Job 值得看？ | Job 样本列表 | 默认 root；child 问题用 family |
 | `job` | 单个 Job 当前状态是什么？ | 轻量状态 | 不展开 payload |
@@ -367,16 +393,16 @@ payload --full
 | signal / 状态 | 意味着什么 | 先做什么 |
 | --- | --- | --- |
 | `empty_window` | 当前 `--since` 窗口内没有 root Job | 扩大窗口或查 `gate` |
-| `window_empty_but_global_active` | 窗口为空，但全局仍有 active | 查 `gate` 和无窗口 active list |
+| `window_empty_but_global_active` | 窗口为空，但仍有 Job 在排队或执行 | 查 `gate` 和无窗口 active list |
 | `published_dispatch_not_claimed` | dispatch 已发布但 worker 未领取 | 查 worker/broker 和 timeline |
 | `dispatch_dead_letter` | run_attempt 发布路径失败 | 查 dispatch error，不要盲目重试 |
 | `running_attempt_lease_expired` | worker 心跳或 recovery 有风险 | 查 worker 日志和 recovery |
 | `callback_dead_letter` | 回调没有送达 | 查 callback error 和目标服务 |
 | `job_waiting_children` | workflow root 在等 child | 用 `workflow <job_id>` |
 | `workflow_child_failed` | workflow child 失败 | 找 child 后 inspect/diagnose |
-| `http_503_gate_hit` | 容量门禁生效 | 确认能排空后再讨论容量 |
+| `http_503_gate_hit` | active_jobs 达到上限，系统开始用 503 拒绝新请求 | 确认能排空后再讨论容量 |
 | `http_5xx` | 服务或依赖异常 | 停止升压，查日志和 failed Job |
-| `db_connection_pressure` | 数据库连接压力 | 先治理连接池/并发，不要先调大门禁 |
+| `db_connection_pressure` | 数据库连接压力 | 先治理连接池/并发，不要先调大 MAX_ACTIVE_JOBS |
 
 ## 典型流程
 
@@ -388,7 +414,7 @@ payload --full
 ./scripts/jobs.sh overview --since 1h
 ```
 
-原因通常是：active Job 创建时间早于当前 `--since` 窗口，但仍占全局门禁。
+原因通常是：这个 Job 创建时间早于当前 `--since` 窗口，但现在仍在排队或执行。
 
 ### 有 failed Job
 
@@ -445,7 +471,7 @@ payload --full
 ./scripts/jobs.sh drain --since 30m --caller-id default --strict
 ```
 
-如果主要是 `http_503_gate_hit`，且后台能排空、健康检查正常，说明门禁保护生效。是否调大门禁要结合 `capacity`、`latency`、失败率和环境资源判断。
+如果主要是 `http_503_gate_hit`，且后台能排空、健康检查正常，说明 `MAX_ACTIVE_JOBS` 上限保护生效。是否调大这个上限，要结合 `capacity`、`latency`、失败率和环境资源判断。
 
 ## JSON 使用边界
 

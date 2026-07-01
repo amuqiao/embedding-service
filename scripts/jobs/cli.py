@@ -138,8 +138,9 @@ LATENCY_HELP_EPILOG = """\b
 
 CAPACITY_HELP_EPILOG = """\b
 说明：
-  capacity 同时展示当前全局 Active Gate 和指定窗口的容量估算。
-  只看当前全局门禁水位时，优先使用 ./scripts/jobs.sh gate。
+  capacity 同时展示当前全局 active 占用和指定窗口的容量估算。
+  active 占用用于判断是否接近 MAX_ACTIVE_JOBS 上限。
+  只看当前全局 active 占用时，优先使用 ./scripts/jobs.sh gate。
 
 \b
 常用示例：
@@ -149,7 +150,8 @@ CAPACITY_HELP_EPILOG = """\b
 
 GATE_HELP_EPILOG = """\b
 说明：
-  gate 是实时全局门禁口径。
+  gate 查看当前全局 active 占用。
+  可以把 active 占用理解为：现在有多少 Job 正在排队，或正在被 worker 执行。
   不使用 --since 时间窗口，也不按 job_type 或 caller_id 过滤。
   active_jobs = queued + running 且 active_attempt_id 非空。
 
@@ -198,7 +200,8 @@ HELP_EPILOG = """\b
 窗口与实时口径：
   --since 表示只看 created_at 落入最近窗口的 Job。
   --older-than 表示把持续超过该时长的未完成状态视为风险候选。
-  Global Active Gate 是当前全局 Active Gate；不受 --since、job_type 或 caller_id 过滤影响。
+  当前全局 active 占用（内部口径名 global_gate）用来判断是否接近 MAX_ACTIVE_JOBS 上限。
+  它不受 --since、job_type 或 caller_id 过滤影响。
 
 \b
 Scope：
@@ -207,7 +210,7 @@ Scope：
   child        workflow internal child Job。
   family       先按 root 条件选业务请求，再包含这些 root 及 children；drain、pressure 和 stuck 默认用于执行风险排障。
   all          不加 lineage 条件；仅用于显式底层排查。
-  global_gate  当前全局 Active Gate。
+  global_gate  内部口径名，表示当前全局 active 占用。
 
 \b
 常用排障顺序：
@@ -998,7 +1001,7 @@ def _render_capacity_human(payload: dict[str, Any], *, title: str = "Job Capacit
     )
     _render_gate_human(
         _gate_payload(current=current, max_active_jobs=payload.get("max_active_jobs")),
-        title="当前全局 Active Gate",
+        title="当前全局 active 占用",
     )
     formatters.section("窗口容量估算")
     formatters.event(
@@ -1021,12 +1024,13 @@ def _render_capacity_human(payload: dict[str, Any], *, title: str = "Job Capacit
         formatters.print_table([recommendation], _capacity_recommendation_columns())
 
 
-def _render_gate_human(payload: dict[str, Any], *, title: str = "当前全局 Active Gate") -> None:
+def _render_gate_human(payload: dict[str, Any], *, title: str = "当前全局 active 占用") -> None:
     formatters.section(title)
     formatters.event("OK", "gate", "scope=global_current")
     note = (payload.get("notes") or {}).get("scope")
     if note:
         print(f"说明：{note}")
+    print("字段：active_jobs=queued + 正在执行的 running；active_ratio=active_jobs / MAX_ACTIVE_JOBS；headroom=剩余可接收余量。")
     formatters.print_table([payload.get("current") or {}], _capacity_current_columns())
 
 
@@ -1674,17 +1678,17 @@ def _capacity_recommendation(payload: dict[str, Any], max_active_jobs: int | Non
     needed = payload["estimated"].get("active_jobs_needed_upper_bound")
     active_ratio = active_jobs / max_active_jobs if max_active_jobs and max_active_jobs > 0 else None
     if max_active_jobs is None:
-        message = "未提供 MAX_ACTIVE_JOBS，无法判断当前水位比例。"
+        message = "未提供 MAX_ACTIVE_JOBS，无法判断当前 active 占用比例。"
     elif max_active_jobs == 0:
-        message = "MAX_ACTIVE_JOBS=0 表示跳过 active 门禁；生产不建议用它做容量保护。"
+        message = "MAX_ACTIVE_JOBS=0 表示不限制 active 占用；生产不建议用它做容量保护。"
     elif active_ratio is not None and active_ratio >= 1:
-        message = "当前 active 已达到或超过门禁；若组件健康且可排空，才小步提高 MAX_ACTIVE_JOBS。"
+        message = "当前 active 已达到或超过 MAX_ACTIVE_JOBS；若组件健康且可排空，才小步提高这个上限。"
     elif active_ratio is not None and active_ratio >= 0.8:
-        message = "当前 active 接近门禁；先确认 queued/running 可排空和 DB/Redis/worker 健康。"
+        message = "当前 active 接近 MAX_ACTIVE_JOBS；先确认 queued/running 可排空和 DB/Redis/worker 健康。"
     elif needed is not None and max_active_jobs is not None and needed > max_active_jobs:
-        message = "按当前窗口生命周期上界估算，业务 active 需求可能高于门禁；先确认环境硬上限，再调整。"
+        message = "按当前窗口生命周期上界估算，业务 active 需求可能高于 MAX_ACTIVE_JOBS；先确认环境硬上限，再调整。"
     else:
-        message = "当前窗口未显示 active 门禁压力；继续结合延迟、失败率和排空趋势判断。"
+        message = "当前窗口未显示 active 占用压力；继续结合延迟、失败率和排空趋势判断。"
     return {
         "max_active_jobs": max_active_jobs,
         "active_ratio": active_ratio,
@@ -1712,7 +1716,7 @@ def _gate_payload(*, current: dict[str, Any], max_active_jobs: int | None) -> di
         },
         "current": current_row,
         "notes": {
-            "scope": "实时全局门禁水位；不使用时间窗口，也不按 job_type/caller_id 过滤。",
+            "scope": "当前全局 active 占用；不使用时间窗口，也不按 job_type/caller_id 过滤。",
             "active_jobs": "queued + running 且 active_attempt_id 非空。",
         },
     }
@@ -2240,7 +2244,7 @@ def _pressure_payload(
                 "info",
                 "scope",
                 "window_empty_but_global_active",
-                "最近窗口内没有 root Job，但当前全局 Active Gate 仍有 active Job；这些任务可能创建于窗口外。",
+                "最近窗口内没有 root Job，但当前全局 active 占用仍不为 0；这些任务可能创建于窗口外。",
                 {"active_jobs": active_jobs},
             )
 
@@ -2270,7 +2274,7 @@ def _pressure_payload(
                 "warning",
                 "capacity",
                 "http_503_gate_hit",
-                "Locust 失败主要是 HTTP 503，若响应体含 active_jobs/limit 且后台可排空，可判定容量门禁生效。",
+                "Locust 失败主要是 HTTP 503，若响应体含 active_jobs/limit 且后台可排空，可判定 MAX_ACTIVE_JOBS 保护生效。",
                 {"failure_status_counts": status_counts, "post_jobs": post_jobs},
             )
         elif failure_count:
@@ -2322,7 +2326,7 @@ def _pressure_payload(
                 "critical",
                 "capacity",
                 "active_gate_saturated",
-                "全局 active 已达到或超过 MAX_ACTIVE_JOBS，POST /jobs 可能开始返回 503。",
+                "当前全局 active 占用已达到或超过 MAX_ACTIVE_JOBS，POST /jobs 可能开始返回 503。",
                 {"active_jobs": active_jobs, "max_active_jobs": max_active_jobs, "active_ratio": active_ratio},
             )
         elif active_ratio >= 0.8:
@@ -2330,7 +2334,7 @@ def _pressure_payload(
                 "warning",
                 "capacity",
                 "active_gate_near_limit",
-                "全局 active 接近 MAX_ACTIVE_JOBS，继续加压前先确认可排空。",
+                "当前全局 active 占用接近 MAX_ACTIVE_JOBS，继续加压前先确认可排空。",
                 {"active_jobs": active_jobs, "max_active_jobs": max_active_jobs, "active_ratio": active_ratio},
             )
 
@@ -2672,7 +2676,7 @@ def _render_overview(payload: dict[str, Any]) -> None:
     formatters.event(
         payload["status"].upper(),
         "overview",
-        f"window={scope['since']} root_window=root family_risk=family current_gate=global_gate",
+        f"window={scope['since']} root_window=root family_risk=family current_global_active=global_gate",
     )
     bottleneck_rows = [
         {
@@ -2758,7 +2762,7 @@ def overview(
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
     max_active_jobs: Annotated[
         int | None,
-        typer.Option("--max-active-jobs", min=0, help="用于计算水位比例；默认读取环境或 .env。"),
+        typer.Option("--max-active-jobs", min=0, help="用于计算 active 占用比例；默认读取环境或 .env。"),
     ] = None,
     sample_limit: Annotated[int, typer.Option("--sample-limit", min=1, max=100, help="样本条数。")] = 10,
     json_output: JsonOption = False,
@@ -2774,11 +2778,11 @@ def overview(
     )
 
 
-@app.command(help="查看当前全局 Active Gate。", epilog=GATE_HELP_EPILOG)
+@app.command(help="查看当前全局 active 占用。", epilog=GATE_HELP_EPILOG)
 def gate(
     max_active_jobs: Annotated[
         int | None,
-        typer.Option("--max-active-jobs", min=0, help="用于计算水位比例；默认读取环境或 .env。"),
+        typer.Option("--max-active-jobs", min=0, help="用于计算 active 占用比例；默认读取环境或 .env。"),
     ] = None,
     json_output: JsonOption = False,
 ) -> None:
@@ -3258,7 +3262,7 @@ def pressure(
     ] = "1m",
     max_active_jobs: Annotated[
         int | None,
-        typer.Option("--max-active-jobs", min=0, help="用于计算水位比例；默认读取环境或 .env。"),
+        typer.Option("--max-active-jobs", min=0, help="用于计算 active 占用比例；默认读取环境或 .env。"),
     ] = None,
     queue_wait_warning_seconds: Annotated[
         float,
@@ -3486,17 +3490,17 @@ def latency(
     _render_result(section="Job Latency", target="groups", rows=rows, columns=_latency_columns())
 
 
-@app.command(help="查看 MAX_ACTIVE_JOBS 当前水位和窗口容量估算。", epilog=CAPACITY_HELP_EPILOG)
+@app.command(help="查看当前全局 active 占用和窗口容量估算。", epilog=CAPACITY_HELP_EPILOG)
 def capacity(
-    job_type: Annotated[str | None, typer.Option("--job-type", help="窗口估算按 job_type 过滤；current 仍是全局门禁口径。")] = None,
-    caller_id: Annotated[str | None, typer.Option("--caller-id", help="窗口估算按 caller_id 过滤；current 仍是全局门禁口径。")] = None,
+    job_type: Annotated[str | None, typer.Option("--job-type", help="窗口估算按 job_type 过滤；current 仍是全局 active 占用口径。")] = None,
+    caller_id: Annotated[str | None, typer.Option("--caller-id", help="窗口估算按 caller_id 过滤；current 仍是全局 active 占用口径。")] = None,
     since: Annotated[
         str,
         typer.Option("--since", help="估算窗口，例如 10m。"),
     ] = "10m",
     max_active_jobs: Annotated[
         int | None,
-        typer.Option("--max-active-jobs", min=0, help="用于计算水位比例；默认读取环境或 .env。"),
+        typer.Option("--max-active-jobs", min=0, help="用于计算 active 占用比例；默认读取环境或 .env。"),
     ] = None,
     record_scope: ScopeOption = "root",
     json_output: JsonOption = False,
@@ -3534,7 +3538,7 @@ def capacity(
         "window": payload["window"],
         "estimated": payload["estimated"],
         "notes": {
-            "current_active_jobs": "全局实时门禁口径：queued + running 且 active_attempt_id 非空，包含 root 与 child。",
+            "current_active_jobs": "当前全局 active 占用：queued + running 且 active_attempt_id 非空，包含 root 与 child。",
             "accepted_submit_rps": "使用窗口内 first_created_at 到 newest_created_at 的 observed span 估算；没有跨度时退回 --since 秒数。",
             "active_jobs_needed_upper_bound": "使用窗口 accepted_submit_rps * lifecycle_p95_seconds 得到的上界估算；workflow root 等待子任务时间会让它偏保守；terminal_jobs 少于 accepted_jobs 时仍应等待排空后再采信。",
         },
