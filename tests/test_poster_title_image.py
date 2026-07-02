@@ -1012,7 +1012,40 @@ def test_poster_title_image_missing_default_prompt_is_runtime_config_error(monke
 async def test_poster_title_image_generate_item_leaf_generates_transparent_title_layer(monkeypatch, tmp_path, caplog):
     from app.jobs.types.poster_title_image import PosterTitleImageGenerateItemJob
 
-    local_storage = LocalObjectStorage(tmp_path)
+    class RecordingLocalObjectStorage(LocalObjectStorage):
+        def __init__(self, root):
+            super().__init__(root)
+            self.write_calls = []
+
+        def write_bytes(
+            self,
+            *,
+            bucket,
+            key,
+            region,
+            data,
+            content_type="application/octet-stream",
+            content_disposition=None,
+        ):
+            self.write_calls.append(
+                {
+                    "bucket": bucket,
+                    "key": key,
+                    "region": region,
+                    "content_type": content_type,
+                    "content_disposition": content_disposition,
+                }
+            )
+            return super().write_bytes(
+                bucket=bucket,
+                key=key,
+                region=region,
+                data=data,
+                content_type=content_type,
+                content_disposition=content_disposition,
+            )
+
+    local_storage = RecordingLocalObjectStorage(tmp_path)
     reference = _transparent_reference_png_bytes(accent=(0, 0, 255, 255))
     reference_bucket = _allowed_reference_bucket()
     reference_region = _allowed_reference_region()
@@ -1136,6 +1169,15 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     assert "poster title text only" in recorded[0]["prompt"]
 
     output_key = "ai-jobs/job-1/poster-title/{}/es/title-layer.png".format(root_id)
+    assert local_storage.write_calls == [
+        {
+            "bucket": output_bucket,
+            "key": output_key,
+            "region": output_region,
+            "content_type": "image/png",
+            "content_disposition": f'attachment; filename="poster-title-{root_id}-es.png"',
+        }
+    ]
     written = local_storage.read_bytes(bucket=output_bucket, region=output_region, key=output_key)
     output_image = Image.open(io.BytesIO(written)).convert("RGBA")
     assert output_image.getpixel((0, 0))[3] == 0
@@ -1167,7 +1209,39 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
 async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeypatch, tmp_path):
     from app.jobs.types.poster_title_image import PosterTitleImageGenerateItemJob
 
-    local_storage = LocalObjectStorage(tmp_path)
+    class RecordingLocalObjectStorage(LocalObjectStorage):
+        def __init__(self, root):
+            super().__init__(root)
+            self.write_calls = []
+
+        def write_bytes(
+            self,
+            *,
+            bucket,
+            key,
+            region,
+            data,
+            content_type="application/octet-stream",
+            content_disposition=None,
+        ):
+            self.write_calls.append(
+                {
+                    "bucket": bucket,
+                    "key": key,
+                    "region": region,
+                    "content_disposition": content_disposition,
+                }
+            )
+            return super().write_bytes(
+                bucket=bucket,
+                key=key,
+                region=region,
+                data=data,
+                content_type=content_type,
+                content_disposition=content_disposition,
+            )
+
+    local_storage = RecordingLocalObjectStorage(tmp_path)
     reference = _transparent_reference_png_bytes(accent=(0, 0, 255, 255))
     reference_bucket = _allowed_reference_bucket()
     reference_region = _allowed_reference_region()
@@ -1253,6 +1327,21 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
     keys = [
         "ai-jobs/job-1/poster-title/{}/es/title-layer.png".format(root_id),
         "ai-jobs/job-1/poster-title/{}/es/title-layer-2.png".format(root_id),
+    ]
+    output_write_calls = [call for call in local_storage.write_calls if call["content_disposition"] is not None]
+    assert output_write_calls == [
+        {
+            "bucket": reference_bucket,
+            "key": keys[0],
+            "region": reference_region,
+            "content_disposition": f'attachment; filename="poster-title-{root_id}-es.png"',
+        },
+        {
+            "bucket": reference_bucket,
+            "key": keys[1],
+            "region": reference_region,
+            "content_disposition": f'attachment; filename="poster-title-{root_id}-es-2.png"',
+        },
     ]
     for key in keys:
         written = local_storage.read_bytes(bucket=reference_bucket, region=reference_region, key=key)

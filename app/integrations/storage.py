@@ -18,6 +18,7 @@ class ObjectStorage(Protocol):
         region: str,
         data: bytes,
         content_type: str = "application/octet-stream",
+        content_disposition: str | None = None,
     ) -> dict: ...
 
     def read_text(self, *, bucket: str, key: str, region: str) -> str: ...
@@ -61,6 +62,7 @@ class LocalObjectStorage:
         region: str,
         data: bytes,
         content_type: str = "application/octet-stream",
+        content_disposition: str | None = None,
     ) -> dict:
         path = self._path(bucket, key)
         try:
@@ -133,10 +135,16 @@ class AliyunObjectStorage:
         region: str,
         data: bytes,
         content_type: str = "application/octet-stream",
+        content_disposition: str | None = None,
     ) -> dict:
         self._assert_target(bucket=bucket, region=region)
         try:
-            self.client.put_object(key, data, content_type=content_type)
+            self.client.put_object(
+                key,
+                data,
+                content_type=content_type,
+                content_disposition=content_disposition,
+            )
         except AliyunOSSError as exc:
             raise AppError(
                 "OSS_WRITE_FAILED",

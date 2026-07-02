@@ -77,8 +77,8 @@ def test_aliyun_object_storage_keeps_text_compatibility_contract():
             assert key == "project/result.txt"
             return "hello".encode("utf-8")
 
-        def put_object(self, key, data, *, content_type):
-            self.put_calls.append((key, data, content_type))
+        def put_object(self, key, data, *, content_type, content_disposition=None):
+            self.put_calls.append((key, data, content_type, content_disposition))
             return {}
 
     client = FakeClient()
@@ -86,7 +86,7 @@ def test_aliyun_object_storage_keeps_text_compatibility_contract():
 
     written = storage.write_text(bucket="bucket", region="ap-southeast-1", key="result.txt", content="hello")
 
-    assert client.put_calls == [("result.txt", b"hello", "text/plain; charset=utf-8")]
+    assert client.put_calls == [("result.txt", b"hello", "text/plain; charset=utf-8", None)]
     assert written == {
         "oss_bucket": "bucket",
         "oss_key": "project/result.txt",
@@ -95,6 +95,53 @@ def test_aliyun_object_storage_keeps_text_compatibility_contract():
         "content_size_bytes": len(b"hello"),
     }
     assert storage.read_text(bucket="bucket", region="ap-southeast-1", key="project/result.txt") == "hello"
+
+
+def test_aliyun_object_storage_forwards_content_disposition():
+    class FakeClient:
+        class Config:
+            bucket = "bucket"
+            region = "ap-southeast-1"
+
+        config = Config()
+
+        def __init__(self):
+            self.put_calls = []
+
+        def object_key(self, key):
+            return key
+
+        def put_object(self, key, data, *, content_type, content_disposition=None):
+            self.put_calls.append(
+                {
+                    "key": key,
+                    "data": data,
+                    "content_type": content_type,
+                    "content_disposition": content_disposition,
+                }
+            )
+            return {}
+
+    client = FakeClient()
+    storage = AliyunObjectStorage(client)
+
+    storage.write_bytes(
+        bucket="bucket",
+        region="ap-southeast-1",
+        key="title-layer.png",
+        data=b"png",
+        content_type="image/png",
+        content_disposition='attachment; filename="poster-title-job-item.png"',
+    )
+
+    assert client.put_calls == [
+        {
+            "key": "title-layer.png",
+            "data": b"png",
+            "content_type": "image/png",
+            "content_disposition": 'attachment; filename="poster-title-job-item.png"',
+        }
+    ]
 
 
 def test_parse_aliyun_oss_url_extracts_object_identity():

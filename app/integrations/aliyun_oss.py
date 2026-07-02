@@ -56,8 +56,21 @@ class AliyunOSSClient:
         _, body, _ = self._request("GET", self.object_key(key))
         return body
 
-    def put_object(self, key: str, data: bytes, *, content_type: str = "application/octet-stream") -> dict[str, str]:
-        _, _, headers = self._request("PUT", self.object_key(key), data=data, content_type=content_type)
+    def put_object(
+        self,
+        key: str,
+        data: bytes,
+        *,
+        content_type: str = "application/octet-stream",
+        content_disposition: str | None = None,
+    ) -> dict[str, str]:
+        _, _, headers = self._request(
+            "PUT",
+            self.object_key(key),
+            data=data,
+            content_type=content_type,
+            content_disposition=content_disposition,
+        )
         return headers
 
     def head_object(self, key: str) -> dict[str, str]:
@@ -94,6 +107,7 @@ class AliyunOSSClient:
         *,
         data: bytes | None = None,
         content_type: str = "",
+        content_disposition: str | None = None,
     ) -> tuple[int, bytes, dict[str, str]]:
 
         content_md5 = ""
@@ -108,6 +122,7 @@ class AliyunOSSClient:
                 object_key=object_key,
                 content_type=content_type,
                 content_md5=content_md5,
+                content_disposition=content_disposition,
             ),
         )
         try:
@@ -137,6 +152,7 @@ class AliyunOSSClient:
         object_key: str,
         content_type: str = "",
         content_md5: str = "",
+        content_disposition: str | None = None,
     ) -> dict[str, str]:
         date = formatdate(timeval=None, localtime=False, usegmt=True)
         string_to_sign = "\n".join(
@@ -162,4 +178,6 @@ class AliyunOSSClient:
             headers["Content-Type"] = content_type
         if content_md5:
             headers["Content-MD5"] = content_md5
+        if content_disposition:
+            headers["Content-Disposition"] = content_disposition
         return headers

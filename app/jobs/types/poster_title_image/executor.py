@@ -393,6 +393,15 @@ def _output_key_for_item_id(job: Job, item_id: str, image_index: int) -> str:
     return f"{prefix}/{key}" if prefix else key
 
 
+def _download_filename_for_item_id(job: Job, item_id: str, image_index: int) -> str:
+    image_suffix = "" if image_index == 1 else f"-{image_index}"
+    return f"poster-title-{job.root_job_id or job.id}-{item_id}{image_suffix}.png"
+
+
+def _attachment_content_disposition(filename: str) -> str:
+    return f'attachment; filename="{filename}"'
+
+
 def _extract_join_result(result: dict[str, Any]) -> dict[str, Any]:
     if result.get("job_type") == POSTER_TITLE_IMAGE_JOB_TYPE and "batch_summary" in result:
         return PosterTitleImageResult.model_validate(result).model_dump()
@@ -761,6 +770,9 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
                 key=key,
                 data=image_bytes,
                 content_type="image/png",
+                content_disposition=_attachment_content_disposition(
+                    _download_filename_for_item_id(job, item.item_id, image_index)
+                ),
             )
             log_event(
                 logger,

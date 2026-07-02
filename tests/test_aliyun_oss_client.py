@@ -53,3 +53,61 @@ def test_aliyun_oss_client_signed_get_url_applies_project_root_and_hides_secret(
     assert query["Expires"] == ["1060"]
     assert query["Signature"]
     assert "secret-value" not in url
+
+
+def test_aliyun_oss_client_put_object_sends_content_disposition(monkeypatch):
+    client = AliyunOSSClient(
+        AliyunOSSConfig(
+            bucket="bucket-a",
+            region="cn-hangzhou",
+            access_key_id="id",
+            access_key_secret="secret",
+            project_root="project-a",
+        )
+    )
+    calls = []
+
+    def fake_request(method, object_key, **kwargs):
+        calls.append((method, object_key, kwargs))
+        return 200, b"", {}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    client.put_object(
+        "outputs/title-layer.png",
+        b"png",
+        content_type="image/png",
+        content_disposition='attachment; filename="poster-title-job-item.png"',
+    )
+
+    assert calls == [
+        (
+            "PUT",
+            "project-a/outputs/title-layer.png",
+            {
+                "data": b"png",
+                "content_type": "image/png",
+                "content_disposition": 'attachment; filename="poster-title-job-item.png"',
+            },
+        )
+    ]
+
+
+def test_aliyun_oss_client_signed_headers_include_content_disposition():
+    client = AliyunOSSClient(
+        AliyunOSSConfig(
+            bucket="bucket-a",
+            region="cn-hangzhou",
+            access_key_id="id",
+            access_key_secret="secret",
+        )
+    )
+
+    headers = client._sign_headers(
+        method="PUT",
+        object_key="outputs/title-layer.png",
+        content_type="image/png",
+        content_disposition='attachment; filename="poster-title-job-item.png"',
+    )
+
+    assert headers["Content-Disposition"] == 'attachment; filename="poster-title-job-item.png"'
