@@ -3082,12 +3082,6 @@ def _overview_raw_payload(
         since=since_at,
         window_seconds=window.total_seconds(),
     )
-    if max_active_jobs is not None and max_active_jobs > 0:
-        capacity_payload["estimated"]["active_ratio"] = int(capacity_payload["current"].get("active_jobs") or 0) / max_active_jobs
-        capacity_payload["estimated"]["headroom"] = max_active_jobs - int(capacity_payload["current"].get("active_jobs") or 0)
-    else:
-        capacity_payload["estimated"]["active_ratio"] = None
-        capacity_payload["estimated"]["headroom"] = None
     return {
         "stuck_limit": sample_limit,
         "summary": _summary_payload(
@@ -3098,22 +3092,15 @@ def _overview_raw_payload(
             record_scope="root",
             summary_payload=summary_payload,
         ),
-        "capacity": {
-            "scope": {
-                "current": "global_gate",
-                "window": {
-                    "record_scope": "root",
-                    "since": since,
-                    "seconds": window.total_seconds(),
-                    "job_type": job_type,
-                    "caller_id": caller_id,
-                },
-            },
-            "max_active_jobs": max_active_jobs,
-            "current": capacity_payload["current"],
-            "window": capacity_payload["window"],
-            "estimated": capacity_payload["estimated"],
-        },
+        "capacity": _capacity_payload_from_result(
+            capacity_payload,
+            since=since,
+            window=window,
+            job_type=job_type,
+            caller_id=caller_id,
+            record_scope="root",
+            max_active_jobs=max_active_jobs,
+        ),
         "latency": queries.latency(conn, job_type=job_type, caller_id=caller_id, since=since_at, group_by="all"),
         "stuck": queries.stuck(
             conn,
@@ -3488,6 +3475,409 @@ def _render_runtime_human(payload: dict[str, Any]) -> None:
     formatters.print_table(payload["processes"], _runtime_process_columns())
     formatters.section("Cgroup")
     formatters.print_table([payload["cgroup"]], _runtime_cgroup_columns())
+
+
+def _capacity_payload_from_result(
+    raw_payload: dict[str, Any],
+    *,
+    since: str,
+    window: timedelta,
+    job_type: str | None,
+    caller_id: str | None,
+    record_scope: str,
+    max_active_jobs: int | None,
+) -> dict[str, Any]:
+    current = dict(raw_payload.get("current") or {})
+    estimated = dict(raw_payload.get("estimated") or {})
+    if max_active_jobs is not None and max_active_jobs > 0:
+        active_jobs = int(current.get("active_jobs") or 0)
+        estimated["active_ratio"] = active_jobs / max_active_jobs
+        estimated["headroom"] = max_active_jobs - active_jobs
+    else:
+        estimated["active_ratio"] = None
+        estimated["headroom"] = None
+    return {
+        "scope": {
+            "current": "global_gate",
+            "window": {
+                "record_scope": record_scope,
+                "since": since,
+                "seconds": window.total_seconds(),
+                "job_type": job_type,
+                "caller_id": caller_id,
+            },
+        },
+        "max_active_jobs": max_active_jobs,
+        "current": current,
+        "window": dict(raw_payload.get("window") or {}),
+        "estimated": estimated,
+    }
+
+
+def _capacity_notes() -> dict[str, str]:
+    return {
+        "current_active_jobs": "当前全局 active 占用：queued + running 且 active_attempt_id 非空，包含 root 与 child。",
+        "accepted_submit_rps": "使用窗口内 first_created_at 到 newest_created_at 的 observed span 估算；没有跨度时退回 --since 秒数。",
+        "active_jobs_needed_upper_bound": "使用窗口 accepted_submit_rps * lifecycle_p95_seconds 得到的上界估算；workflow root 等待子任务时间会让它偏保守；terminal_jobs 少于 accepted_jobs 时仍应等待排空后再采信。",
+        "db_connection_budget": "估算公式：api_pods * (DB_POOL_SIZE + DB_MAX_OVERFLOW) + worker_pods * WORKER_CONCURRENCY；再与 db_max_connections * db_usable_ratio 比较。",
+    }
+
+
+def _capacity_payload(
+    *,
+    since: str,
+    job_type: str | None,
+    caller_id: str | None,
+    record_scope: str,
+    max_active_jobs: int | None,
+    worker_pods: int | None,
+    worker_concurrency: int | None,
+    api_pods: int | None,
+    db_max_connections: int | None,
+    db_pool_size: int | None,
+    db_max_overflow: int | None,
+    db_usable_ratio: float,
+) -> dict[str, Any]:
+    window, since_at = _since_window(since)
+    raw_payload = _with_connection(
+        lambda conn: queries.capacity(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            window_seconds=window.total_seconds(),
+            window_scope=record_scope,
+        )
+    )
+    payload = _capacity_payload_from_result(
+        raw_payload,
+        since=since,
+        window=window,
+        job_type=job_type,
+        caller_id=caller_id,
+        record_scope=record_scope,
+        max_active_jobs=max_active_jobs,
+    )
+    payload["notes"] = _capacity_notes()
+    payload["db_connection_budget"] = _capacity_db_budget(
+        api_pods=api_pods,
+        worker_pods=worker_pods,
+        worker_concurrency=worker_concurrency,
+        db_pool_size=db_pool_size,
+        db_max_overflow=db_max_overflow,
+        db_max_connections=db_max_connections,
+        db_usable_ratio=db_usable_ratio,
+    )
+    payload["recommendation"] = _capacity_recommendation(payload, max_active_jobs)
+    return payload
+
+
+def _ingress_payload_from_rows(
+    rows: list[dict[str, Any]],
+    *,
+    since: str,
+    window: timedelta,
+    bucket: str,
+    bucket_seconds: int,
+    job_type: str | None,
+    caller_id: str | None,
+    record_scope: str,
+) -> dict[str, Any]:
+    return {
+        "scope": {
+            "since": since,
+            "seconds": window.total_seconds(),
+            "bucket": bucket,
+            "bucket_seconds": bucket_seconds,
+            "job_type": job_type,
+            "caller_id": caller_id,
+            "record_scope": record_scope,
+        },
+        "ingress": rows,
+        "notes": {
+            "created": "created_at 落入该时间桶的 Job 数。",
+            "started": "started_at 落入该时间桶的 Job 数。",
+            "terminal": "finished_at 落入该时间桶的 succeeded/failed Job 数。",
+            "failed": "finished_at 落入该时间桶且 status=failed 的 Job 数。",
+        },
+    }
+
+
+def _ingress_payload(*, since: str, bucket: str, job_type: str | None, caller_id: str | None, record_scope: str) -> dict[str, Any]:
+    window, since_at = _since_window(since)
+    try:
+        bucket_delta = parse_duration(bucket)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    bucket_seconds = int(bucket_delta.total_seconds())
+    if bucket_seconds <= 0:
+        print("ERROR: --bucket must be greater than 0 seconds", file=sys.stderr)
+        raise typer.Exit(2)
+    rows = _with_connection(
+        lambda conn: queries.ingress(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            bucket_seconds=bucket_seconds,
+            record_scope=record_scope,
+        )
+    )
+    return _ingress_payload_from_rows(
+        rows,
+        since=since,
+        window=window,
+        bucket=bucket,
+        bucket_seconds=bucket_seconds,
+        job_type=job_type,
+        caller_id=caller_id,
+        record_scope=record_scope,
+    )
+
+
+def _latency_payload_from_rows(
+    rows: list[dict[str, Any]],
+    *,
+    since: str,
+    window: timedelta,
+    job_type: str | None,
+    caller_id: str | None,
+    record_scope: str,
+    group_by: str,
+) -> dict[str, Any]:
+    return {
+        "scope": {
+            "since": since,
+            "seconds": window.total_seconds(),
+            "job_type": job_type,
+            "caller_id": caller_id,
+            "record_scope": record_scope,
+        },
+        "group_by": group_by,
+        "latency": rows,
+    }
+
+
+def _latency_payload(*, since: str, job_type: str | None, caller_id: str | None, record_scope: str, group_by: str) -> dict[str, Any]:
+    window, since_at = _since_window(since)
+    rows = _with_connection(
+        lambda conn: queries.latency(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            group_by=group_by,
+            record_scope=record_scope,
+        )
+    )
+    return _latency_payload_from_rows(
+        rows,
+        since=since,
+        window=window,
+        job_type=job_type,
+        caller_id=caller_id,
+        record_scope=record_scope,
+        group_by=group_by,
+    )
+
+
+def _stuck_payload_from_rows(
+    rows: list[dict[str, Any]],
+    *,
+    older_than: str,
+    since: str | None,
+    job_type: str | None,
+    caller_id: str | None,
+    record_scope: str,
+) -> dict[str, Any]:
+    return {
+        "scope": {
+            "older_than": older_than,
+            "since": since,
+            "job_type": job_type,
+            "caller_id": caller_id,
+            "record_scope": record_scope,
+        },
+        "items": rows,
+    }
+
+
+def _stuck_payload(
+    *,
+    older_than: str,
+    since: str | None,
+    job_type: str | None,
+    caller_id: str | None,
+    record_scope: str,
+    limit: int,
+) -> dict[str, Any]:
+    try:
+        older_than_delta = parse_duration(older_than)
+        since_delta = parse_optional_duration(since)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    since_at = datetime.now(timezone.utc) - since_delta if since_delta else None
+    rows = _with_connection(
+        lambda conn: queries.stuck(
+            conn,
+            older_than=older_than_delta,
+            limit=limit,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            record_scope=record_scope,
+        )
+    )
+    return _stuck_payload_from_rows(
+        rows,
+        older_than=older_than,
+        since=since,
+        job_type=job_type,
+        caller_id=caller_id,
+        record_scope=record_scope,
+    )
+
+
+def _dashboard_payload(
+    *,
+    since: str,
+    bucket: str,
+    older_than: str,
+    job_type: str | None,
+    caller_id: str | None,
+    max_active_jobs: int | None,
+    record_scope: str = "root",
+    stuck_scope: str = "family",
+    stuck_limit: int = 20,
+) -> dict[str, Any]:
+    window, since_at = _since_window(since)
+    try:
+        bucket_delta = parse_duration(bucket)
+        older_than_delta = parse_duration(older_than)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    bucket_seconds = int(bucket_delta.total_seconds())
+    if bucket_seconds <= 0:
+        print("ERROR: --bucket must be greater than 0 seconds", file=sys.stderr)
+        raise typer.Exit(2)
+
+    def action(conn):
+        execution_scope = "family" if record_scope == "root" else record_scope
+        summary_raw = queries.summary(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            record_scope=record_scope,
+            execution_scope=execution_scope,
+        )
+        capacity_raw = queries.capacity(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            window_seconds=window.total_seconds(),
+            window_scope=record_scope,
+        )
+        ingress_rows = queries.ingress(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            bucket_seconds=bucket_seconds,
+            record_scope=record_scope,
+        )
+        latency_rows = queries.latency(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            group_by="all",
+            record_scope=record_scope,
+        )
+        stuck_rows = queries.stuck(
+            conn,
+            older_than=older_than_delta,
+            limit=stuck_limit,
+            job_type=job_type,
+            caller_id=caller_id,
+            since=since_at,
+            record_scope=stuck_scope,
+        )
+        return {
+            "summary_raw": summary_raw,
+            "capacity_raw": capacity_raw,
+            "ingress_rows": ingress_rows,
+            "latency_rows": latency_rows,
+            "stuck_rows": stuck_rows,
+        }
+
+    raw_payload = _with_connection(action)
+    return {
+        "scope": {
+            "since": since,
+            "seconds": window.total_seconds(),
+            "bucket": bucket,
+            "bucket_seconds": bucket_seconds,
+            "older_than": older_than,
+            "job_type": job_type,
+            "caller_id": caller_id,
+            "record_scope": record_scope,
+            "stuck_scope": stuck_scope,
+        },
+        "summary": _summary_payload(
+            since=since,
+            window=window,
+            job_type=job_type,
+            caller_id=caller_id,
+            record_scope=record_scope,
+            summary_payload=raw_payload["summary_raw"],
+        ),
+        "capacity": _capacity_payload_from_result(
+            raw_payload["capacity_raw"],
+            since=since,
+            window=window,
+            job_type=job_type,
+            caller_id=caller_id,
+            record_scope=record_scope,
+            max_active_jobs=max_active_jobs,
+        ),
+        "ingress": _ingress_payload_from_rows(
+            raw_payload["ingress_rows"],
+            since=since,
+            window=window,
+            bucket=bucket,
+            bucket_seconds=bucket_seconds,
+            job_type=job_type,
+            caller_id=caller_id,
+            record_scope=record_scope,
+        ),
+        "latency": _latency_payload_from_rows(
+            raw_payload["latency_rows"],
+            since=since,
+            window=window,
+            job_type=job_type,
+            caller_id=caller_id,
+            record_scope=record_scope,
+            group_by="all",
+        ),
+        "stuck": _stuck_payload_from_rows(
+            raw_payload["stuck_rows"],
+            older_than=older_than,
+            since=since,
+            job_type=job_type,
+            caller_id=caller_id,
+            record_scope=stuck_scope,
+        ),
+        "notes": {
+            "current": "capacity.current 使用 global_gate，始终是当前全局 active 占用，不受 --since/job_type/caller_id 过滤。",
+            "window": "summary、capacity.window、ingress、latency 按 record_scope 和时间窗口过滤。",
+            "transport_runtime": "dashboard 基础 payload 不读取 Redis、/proc 或 cgroup；broker/runtime 仍是显式检查。",
+        },
+    }
 
 
 def _callbacks_summary_payload(*, since: str, job_type: str | None, caller_id: str | None, record_scope: str) -> dict[str, Any]:
@@ -3982,40 +4372,23 @@ def stuck(
     json_output: JsonOption = False,
 ) -> None:
     try:
-        older_than_delta = parse_duration(older_than)
-        since_delta = parse_optional_duration(since)
         parsed_scope = parse_record_scope(record_scope)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
 
-    since_at = datetime.now(timezone.utc) - since_delta if since_delta else None
-    rows = _with_connection(
-        lambda conn: queries.stuck(
-            conn,
-            older_than=older_than_delta,
-            limit=limit,
-            job_type=job_type,
-            caller_id=caller_id,
-            since=since_at,
-            record_scope=parsed_scope,
-        )
+    payload = _stuck_payload(
+        older_than=older_than,
+        since=since,
+        job_type=job_type,
+        caller_id=caller_id,
+        record_scope=parsed_scope,
+        limit=limit,
     )
     if json_output:
-        formatters.print_json(
-            {
-                "scope": {
-                    "older_than": older_than,
-                    "since": since,
-                    "job_type": job_type,
-                    "caller_id": caller_id,
-                    "record_scope": parsed_scope,
-                },
-                "items": rows,
-            }
-        )
+        formatters.print_json(payload)
         return
-    _render_result(section="Stuck Jobs", target="items", rows=rows, columns=_stuck_columns())
+    _render_result(section="Stuck Jobs", target="items", rows=payload["items"], columns=_stuck_columns())
 
 
 @app.command(help="判断压测前后 Job 是否已经排空。", epilog=DRAIN_HELP_EPILOG)
@@ -4128,12 +4501,6 @@ def pressure(
             since=since_at,
             window_seconds=window.total_seconds(),
         )
-        if limit is not None and limit > 0:
-            capacity_payload["estimated"]["active_ratio"] = int(capacity_payload["current"].get("active_jobs") or 0) / limit
-            capacity_payload["estimated"]["headroom"] = limit - int(capacity_payload["current"].get("active_jobs") or 0)
-        else:
-            capacity_payload["estimated"]["active_ratio"] = None
-            capacity_payload["estimated"]["headroom"] = None
         return {
             "stuck_limit": sample_limit,
             "summary": _summary_payload(
@@ -4144,22 +4511,15 @@ def pressure(
             record_scope="root",
             summary_payload=summary_payload,
         ),
-            "capacity": {
-                "scope": {
-                    "current": "global_gate",
-                    "window": {
-                        "record_scope": "root",
-                        "since": since,
-                        "seconds": window.total_seconds(),
-                        "job_type": job_type,
-                        "caller_id": caller_id,
-                    },
-                },
-                "max_active_jobs": limit,
-                "current": capacity_payload["current"],
-                "window": capacity_payload["window"],
-                "estimated": capacity_payload["estimated"],
-            },
+            "capacity": _capacity_payload_from_result(
+                capacity_payload,
+                since=since,
+                window=window,
+                job_type=job_type,
+                caller_id=caller_id,
+                record_scope="root",
+                max_active_jobs=limit,
+            ),
             "latency": queries.latency(
                 conn,
                 job_type=job_type,
@@ -4414,51 +4774,18 @@ def ingress(
     record_scope: ScopeOption = "root",
     json_output: JsonOption = False,
 ) -> None:
-    window, since_at = _since_window(since)
     try:
-        bucket_delta = parse_duration(bucket)
         parsed_scope = parse_record_scope(record_scope)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
-    bucket_seconds = int(bucket_delta.total_seconds())
-    if bucket_seconds <= 0:
-        print("ERROR: --bucket must be greater than 0 seconds", file=sys.stderr)
-        raise typer.Exit(2)
-    rows = _with_connection(
-        lambda conn: queries.ingress(
-            conn,
-            job_type=job_type,
-            caller_id=caller_id,
-            since=since_at,
-            bucket_seconds=bucket_seconds,
-            record_scope=parsed_scope,
-        )
-    )
-    payload = {
-        "scope": {
-            "since": since,
-            "seconds": window.total_seconds(),
-            "bucket": bucket,
-            "bucket_seconds": bucket_seconds,
-            "job_type": job_type,
-            "caller_id": caller_id,
-            "record_scope": parsed_scope,
-        },
-        "ingress": rows,
-        "notes": {
-            "created": "created_at 落入该时间桶的 Job 数。",
-            "started": "started_at 落入该时间桶的 Job 数。",
-            "terminal": "finished_at 落入该时间桶的 succeeded/failed Job 数。",
-            "failed": "finished_at 落入该时间桶且 status=failed 的 Job 数。",
-        },
-    }
+    payload = _ingress_payload(since=since, bucket=bucket, job_type=job_type, caller_id=caller_id, record_scope=parsed_scope)
     if json_output:
         formatters.print_json(payload)
         return
     formatters.section("Job Ingress")
     formatters.event("OK", "ingress", f"since={since} bucket={bucket} record_scope={parsed_scope} job_type={job_type or '-'} caller_id={caller_id or '-'}")
-    formatters.print_table(rows, _ingress_columns(), empty_message="no job events")
+    formatters.print_table(payload["ingress"], _ingress_columns(), empty_message="no job events")
 
 
 @app.command(help="统计 Job 生命周期耗时。", epilog=LATENCY_HELP_EPILOG)
@@ -4482,27 +4809,11 @@ def latency(
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
-    window, since_at = _since_window(since)
-    rows = _with_connection(
-        lambda conn: queries.latency(
-            conn,
-            job_type=job_type,
-            caller_id=caller_id,
-            since=since_at,
-            group_by=group,
-            record_scope=parsed_scope,
-        )
-    )
+    payload = _latency_payload(since=since, job_type=job_type, caller_id=caller_id, record_scope=parsed_scope, group_by=group)
     if json_output:
-        formatters.print_json(
-            {
-                "scope": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id, "record_scope": parsed_scope},
-                "group_by": group,
-                "latency": rows,
-            }
-        )
+        formatters.print_json(payload)
         return
-    _render_result(section="Job Latency", target="groups", rows=rows, columns=_latency_columns())
+    _render_result(section="Job Latency", target="groups", rows=payload["latency"], columns=_latency_columns())
 
 
 @app.command(help="查看当前全局 active 占用和窗口容量估算。", epilog=CAPACITY_HELP_EPILOG)
@@ -4530,55 +4841,26 @@ def capacity(
     record_scope: ScopeOption = "root",
     json_output: JsonOption = False,
 ) -> None:
-    window, since_at = _since_window(since)
     try:
         parsed_scope = parse_record_scope(record_scope)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
     limit = max_active_jobs if max_active_jobs is not None else _env_max_active_jobs()
-    payload = _with_connection(
-        lambda conn: queries.capacity(
-            conn,
-            job_type=job_type,
-            caller_id=caller_id,
-            since=since_at,
-            window_seconds=window.total_seconds(),
-            window_scope=parsed_scope,
-        )
-    )
-    if limit is not None and limit > 0:
-        payload["estimated"]["active_ratio"] = int(payload["current"].get("active_jobs") or 0) / limit
-        payload["estimated"]["headroom"] = limit - int(payload["current"].get("active_jobs") or 0)
-    else:
-        payload["estimated"]["active_ratio"] = None
-        payload["estimated"]["headroom"] = None
-    payload = {
-        "scope": {
-            "current": "global_gate",
-            "window": {"record_scope": parsed_scope, "since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id},
-        },
-        "max_active_jobs": limit,
-        "current": payload["current"],
-        "window": payload["window"],
-        "estimated": payload["estimated"],
-        "notes": {
-            "current_active_jobs": "当前全局 active 占用：queued + running 且 active_attempt_id 非空，包含 root 与 child。",
-            "accepted_submit_rps": "使用窗口内 first_created_at 到 newest_created_at 的 observed span 估算；没有跨度时退回 --since 秒数。",
-            "active_jobs_needed_upper_bound": "使用窗口 accepted_submit_rps * lifecycle_p95_seconds 得到的上界估算；workflow root 等待子任务时间会让它偏保守；terminal_jobs 少于 accepted_jobs 时仍应等待排空后再采信。",
-            "db_connection_budget": "估算公式：api_pods * (DB_POOL_SIZE + DB_MAX_OVERFLOW) + worker_pods * WORKER_CONCURRENCY；再与 db_max_connections * db_usable_ratio 比较。",
-        },
-    }
-    payload["db_connection_budget"] = _capacity_db_budget(
-        api_pods=api_pods,
+    payload = _capacity_payload(
+        since=since,
+        job_type=job_type,
+        caller_id=caller_id,
+        record_scope=parsed_scope,
+        max_active_jobs=limit,
         worker_pods=worker_pods,
         worker_concurrency=worker_concurrency,
+        api_pods=api_pods,
+        db_max_connections=db_max_connections,
         db_pool_size=db_pool_size,
         db_max_overflow=db_max_overflow,
-        db_max_connections=db_max_connections,
         db_usable_ratio=db_usable_ratio,
     )
-    payload["recommendation"] = _capacity_recommendation(payload, limit)
     if json_output:
         formatters.print_json(payload)
         return

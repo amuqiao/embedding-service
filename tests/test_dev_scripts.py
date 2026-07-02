@@ -15,6 +15,7 @@ from scripts.jobs.cli import (
     _api_log_payload,
     _capacity_db_budget,
     _capacity_recommendation,
+    _dashboard_payload,
     _locust_payload,
     _pressure_payload,
     parse_duration,
@@ -3863,6 +3864,73 @@ def test_jobs_ingress_rejects_invalid_bucket():
 
     assert result.exit_code == 2
     assert "时间窗口格式必须类似" in result.stderr
+
+
+def test_jobs_dashboard_payload_composes_db_evidence_without_runtime_reads(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", lambda action: action(None))
+
+    def fake_summary(conn, **kwargs):
+        captured["summary"] = kwargs
+        return {
+            "jobs": {"total": 4, "queued": 1, "running_active": 1, "succeeded": 1, "failed": 1},
+            "attempts": {},
+            "dispatch": {},
+            "callbacks": {},
+            "by_job_type": [],
+            "query_scopes": {"jobs": "root"},
+        }
+
+    def fake_capacity(conn, **kwargs):
+        captured["capacity"] = kwargs
+        return {
+            "current": {"active_jobs": 2, "queued": 1, "running_active": 1},
+            "window": {"accepted_jobs": 4, "terminal_jobs": 2, "lifecycle_p95_seconds": 12.0},
+            "estimated": {"active_jobs_needed_upper_bound": 3.0},
+        }
+
+    def fake_ingress(conn, **kwargs):
+        captured["ingress"] = kwargs
+        return [{"bucket_at": datetime(2026, 7, 1, 1, 0, tzinfo=timezone.utc), "created": 4, "started": 3, "terminal": 2, "failed": 1}]
+
+    def fake_latency(conn, **kwargs):
+        captured["latency"] = kwargs
+        return [{"group_key": "all", "total": 2, "lifecycle_p95_seconds": 12.0}]
+
+    def fake_stuck(conn, **kwargs):
+        captured["stuck"] = kwargs
+        return []
+
+    monkeypatch.setattr(queries, "summary", fake_summary)
+    monkeypatch.setattr(queries, "capacity", fake_capacity)
+    monkeypatch.setattr(queries, "ingress", fake_ingress)
+    monkeypatch.setattr(queries, "latency", fake_latency)
+    monkeypatch.setattr(queries, "stuck", fake_stuck)
+
+    payload = _dashboard_payload(
+        since="30m",
+        bucket="1m",
+        older_than="10m",
+        job_type="job_test_echo",
+        caller_id="default",
+        max_active_jobs=10,
+        stuck_limit=5,
+    )
+
+    assert payload["scope"]["bucket_seconds"] == 60
+    assert payload["summary"]["jobs"]["total"] == 4
+    assert payload["capacity"]["scope"]["current"] == "global_gate"
+    assert payload["capacity"]["estimated"]["active_ratio"] == 0.2
+    assert payload["ingress"]["ingress"][0]["terminal"] == 2
+    assert payload["latency"]["group_by"] == "all"
+    assert payload["stuck"]["items"] == []
+    assert payload["notes"]["transport_runtime"].startswith("dashboard 基础 payload 不读取 Redis")
+    assert captured["summary"]["execution_scope"] == "family"
+    assert captured["capacity"]["window_scope"] == "root"
+    assert captured["ingress"]["bucket_seconds"] == 60
+    assert captured["latency"]["group_by"] == "all"
+    assert captured["stuck"]["record_scope"] == "family"
 
 
 def test_jobs_capacity_json_separates_global_current_from_window(monkeypatch):
