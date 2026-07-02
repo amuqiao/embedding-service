@@ -3045,6 +3045,7 @@ def test_jobs_doctor_json_reports_abnormal_metrics(monkeypatch):
 
 
 def test_jobs_observe_json_detects_recovering_trend(monkeypatch):
+    ingress_calls: list[dict] = []
     snapshots = [
         _pressure_payload(
             since="30m",
@@ -3073,18 +3074,34 @@ def test_jobs_observe_json_detects_recovering_trend(monkeypatch):
             ),
         ),
     ]
+    ingress_snapshots = [
+        {"ingress": [{"created": 10, "started": 5, "terminal": 2, "failed": 0}]},
+        {"ingress": [{"created": 10, "started": 8, "terminal": 5, "failed": 0}]},
+    ]
 
     monkeypatch.setattr("scripts.jobs.cli._env_max_active_jobs", lambda: 1000)
     monkeypatch.setattr("scripts.jobs.cli._overview_payload", lambda **_kwargs: snapshots.pop(0))
+
+    def fake_ingress_payload(**kwargs):
+        ingress_calls.append(kwargs)
+        return ingress_snapshots.pop(0)
+
+    monkeypatch.setattr("scripts.jobs.cli._ingress_payload", fake_ingress_payload)
     monkeypatch.setattr("scripts.jobs.cli.time.sleep", lambda _seconds: None)
 
-    result = RUNNER.invoke(jobs_cli_app, ["observe", "--samples", "2", "--interval", "0", "--json"])
+    result = RUNNER.invoke(jobs_cli_app, ["observe", "--samples", "2", "--interval", "0", "--caller-id", "default", "--ingress-bucket", "5m", "--json"])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["verdict"]["state"] == "recovering"
     assert payload["samples"][0]["queued"] == 5
     assert payload["samples"][1]["queued"] == 2
+    assert payload["samples"][1]["terminal"] == 5
+    assert payload["samples"][1]["terminal_failed_rate"] == 0
+    assert ingress_calls[0]["record_scope"] == "root"
+    assert ingress_calls[0]["caller_id"] == "default"
+    assert ingress_calls[0]["bucket"] == "5m"
+    assert "./scripts/jobs.sh ingress --since 30m --bucket 5m --caller-id default" in payload["next_checks"]
     assert "./scripts/jobs.sh broker" in payload["next_checks"]
 
 
@@ -3117,9 +3134,14 @@ def test_jobs_observe_does_not_report_recovering_when_only_queued_moves_to_runni
             ),
         ),
     ]
+    ingress_snapshots = [
+        {"ingress": [{"created": 10, "started": 0, "terminal": 0, "failed": 0}]},
+        {"ingress": [{"created": 10, "started": 10, "terminal": 0, "failed": 0}]},
+    ]
 
     monkeypatch.setattr("scripts.jobs.cli._env_max_active_jobs", lambda: 1000)
     monkeypatch.setattr("scripts.jobs.cli._overview_payload", lambda **_kwargs: snapshots.pop(0))
+    monkeypatch.setattr("scripts.jobs.cli._ingress_payload", lambda **_kwargs: ingress_snapshots.pop(0))
 
     result = RUNNER.invoke(jobs_cli_app, ["observe", "--samples", "2", "--interval", "0", "--json"])
 
@@ -3127,6 +3149,98 @@ def test_jobs_observe_does_not_report_recovering_when_only_queued_moves_to_runni
     payload = json.loads(result.stdout)
     assert payload["verdict"]["state"] != "recovering"
     assert payload["verdict"]["message"] == "queued decreased but active backlog stayed flat"
+    assert payload["samples"][1]["terminal"] == 0
+
+
+def test_jobs_observe_reports_expanding_when_active_increases_despite_terminal_throughput(monkeypatch):
+    snapshots = [
+        _pressure_payload(
+            since="30m",
+            older_than="1m",
+            job_type=None,
+            caller_id=None,
+            max_active_jobs=1000,
+            queue_wait_warning_seconds=30,
+            run_warning_seconds=60,
+            payload=_pressure_input(
+                summary_payload=_summary_payload(total=12, queued=10),
+                capacity_payload=_capacity_payload(active_jobs=10, queued=10, active_ratio=0.01),
+            ),
+        ),
+        _pressure_payload(
+            since="30m",
+            older_than="1m",
+            job_type=None,
+            caller_id=None,
+            max_active_jobs=1000,
+            queue_wait_warning_seconds=30,
+            run_warning_seconds=60,
+            payload=_pressure_input(
+                summary_payload=_summary_payload(total=12, queued=5, running_active=7),
+                capacity_payload=_capacity_payload(active_jobs=12, queued=5, running_active=7, active_ratio=0.012),
+            ),
+        ),
+    ]
+    ingress_snapshots = [
+        {"ingress": [{"created": 12, "started": 2, "terminal": 0, "failed": 0}]},
+        {"ingress": [{"created": 12, "started": 7, "terminal": 1, "failed": 0}]},
+    ]
+
+    monkeypatch.setattr("scripts.jobs.cli._env_max_active_jobs", lambda: 1000)
+    monkeypatch.setattr("scripts.jobs.cli._overview_payload", lambda **_kwargs: snapshots.pop(0))
+    monkeypatch.setattr("scripts.jobs.cli._ingress_payload", lambda **_kwargs: ingress_snapshots.pop(0))
+
+    result = RUNNER.invoke(jobs_cli_app, ["observe", "--samples", "2", "--interval", "0", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["verdict"]["state"] == "backlog_expanding"
+
+
+def test_jobs_observe_reports_degrading_when_terminal_failures_increase(monkeypatch):
+    snapshots = [
+        _pressure_payload(
+            since="30m",
+            older_than="1m",
+            job_type=None,
+            caller_id=None,
+            max_active_jobs=1000,
+            queue_wait_warning_seconds=30,
+            run_warning_seconds=60,
+            payload=_pressure_input(
+                summary_payload=_summary_payload(total=10, queued=5),
+                capacity_payload=_capacity_payload(active_jobs=5, queued=5, active_ratio=0.005),
+            ),
+        ),
+        _pressure_payload(
+            since="30m",
+            older_than="1m",
+            job_type=None,
+            caller_id=None,
+            max_active_jobs=1000,
+            queue_wait_warning_seconds=30,
+            run_warning_seconds=60,
+            payload=_pressure_input(
+                summary_payload=_summary_payload(total=10, queued=4),
+                capacity_payload=_capacity_payload(active_jobs=4, queued=4, active_ratio=0.004),
+            ),
+        ),
+    ]
+    ingress_snapshots = [
+        {"ingress": [{"created": 10, "started": 5, "terminal": 2, "failed": 0}]},
+        {"ingress": [{"created": 10, "started": 6, "terminal": 4, "failed": 1}]},
+    ]
+
+    monkeypatch.setattr("scripts.jobs.cli._env_max_active_jobs", lambda: 1000)
+    monkeypatch.setattr("scripts.jobs.cli._overview_payload", lambda **_kwargs: snapshots.pop(0))
+    monkeypatch.setattr("scripts.jobs.cli._ingress_payload", lambda **_kwargs: ingress_snapshots.pop(0))
+
+    result = RUNNER.invoke(jobs_cli_app, ["observe", "--samples", "2", "--interval", "0", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["verdict"]["state"] == "degrading"
+    assert payload["verdict"]["message"] == "terminal failed throughput increased during observation"
 
 
 def test_jobs_broker_command_outputs_injected_payload(monkeypatch):

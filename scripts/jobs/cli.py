@@ -827,6 +827,11 @@ def _observe_columns() -> list[tuple[str, str]]:
         ("queued", "queued"),
         ("running_active", "running_active"),
         ("active_jobs", "active_jobs"),
+        ("created", "created"),
+        ("started", "started"),
+        ("terminal", "terminal"),
+        ("terminal_failed", "terminal_failed"),
+        ("terminal_failed_rate", "failed_rate"),
         ("failed", "failed"),
         ("callback_due", "callback_due"),
         ("stuck", "stuck"),
@@ -3251,13 +3256,29 @@ def _run_overview(
     _render_overview(payload)
 
 
-def _observe_row(index: int, payload: dict[str, Any]) -> dict[str, Any]:
+def _ingress_window_totals(payload: dict[str, Any] | None) -> dict[str, Any]:
+    rows = (payload or {}).get("ingress") or []
+    created = sum(_count(row.get("created")) for row in rows)
+    started = sum(_count(row.get("started")) for row in rows)
+    terminal = sum(_count(row.get("terminal")) for row in rows)
+    failed = sum(_count(row.get("failed")) for row in rows)
+    return {
+        "created": created,
+        "started": started,
+        "terminal": terminal,
+        "terminal_failed": failed,
+        "terminal_failed_rate": round(failed / terminal, 4) if terminal else None,
+    }
+
+
+def _observe_row(index: int, payload: dict[str, Any], ingress_payload: dict[str, Any] | None = None) -> dict[str, Any]:
     summary = payload.get("summary") or {}
     jobs = summary.get("jobs") or {}
     callbacks = summary.get("callbacks") or {}
     capacity = payload.get("capacity") or {}
     current = capacity.get("current") or {}
     stuck = payload.get("stuck") or {}
+    ingress = _ingress_window_totals(ingress_payload)
     return {
         "sample": index,
         "captured_at": datetime.now(timezone.utc),
@@ -3266,6 +3287,11 @@ def _observe_row(index: int, payload: dict[str, Any]) -> dict[str, Any]:
         "queued": _count(jobs.get("queued")),
         "running_active": _count(jobs.get("running_active")),
         "active_jobs": _count(current.get("active_jobs")),
+        "created": ingress["created"],
+        "started": ingress["started"],
+        "terminal": ingress["terminal"],
+        "terminal_failed": ingress["terminal_failed"],
+        "terminal_failed_rate": ingress["terminal_failed_rate"],
         "failed": _count(jobs.get("failed")),
         "callback_due": _count(callbacks.get("due")),
         "stuck": _count(stuck.get("sample_count")),
@@ -3284,12 +3310,20 @@ def _observe_verdict(rows: list[dict[str, Any]]) -> dict[str, Any]:
     active_delta = _count(last.get("active_jobs")) - _count(first.get("active_jobs"))
     stuck_delta = _count(last.get("stuck")) - _count(first.get("stuck"))
     callback_delta = _count(last.get("callback_due")) - _count(first.get("callback_due"))
+    terminal_delta = _count(last.get("terminal")) - _count(first.get("terminal"))
+    terminal_failed_delta = _count(last.get("terminal_failed")) - _count(first.get("terminal_failed"))
     if failed_delta > 0:
         return {"state": "degrading", "message": "failed count increased during observation"}
+    if terminal_failed_delta > 0:
+        return {"state": "degrading", "message": "terminal failed throughput increased during observation"}
     if stuck_delta > 0 or callback_delta > 0:
         return {"state": "degrading", "message": "stuck or callback backlog increased during observation"}
+    if active_delta < 0 and terminal_delta > 0:
+        return {"state": "recovering", "message": "active backlog decreased and terminal throughput increased during observation"}
     if active_delta < 0:
         return {"state": "recovering", "message": "active backlog decreased during observation"}
+    if queued_delta < 0 and active_delta <= 0 and terminal_delta > 0:
+        return {"state": "recovering", "message": "queued decreased and terminal throughput increased during observation"}
     if queued_delta > 0 or active_delta > 0:
         return {"state": "backlog_expanding", "message": "queued or active backlog increased during observation"}
     if queued_delta < 0:
@@ -4631,6 +4665,7 @@ def doctor(
 def observe(
     since: Annotated[str, typer.Option("--since", help="每次采样的诊断窗口，例如 30m。")] = "30m",
     older_than: Annotated[str, typer.Option("--older-than", help="stuck 判定窗口，例如 1m。")] = "1m",
+    ingress_bucket: Annotated[str, typer.Option("--ingress-bucket", help="吞吐统计时间桶，例如 1m、5m。")] = "1m",
     interval: Annotated[int, typer.Option("--interval", min=0, help="采样间隔秒数；生产建议 60。")] = 60,
     samples: Annotated[int, typer.Option("--samples", min=1, max=100, help="采样次数。")] = 5,
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤窗口证据。")] = None,
@@ -4653,7 +4688,14 @@ def observe(
             max_active_jobs=limit,
             sample_limit=sample_limit,
         )
-        rows.append(_observe_row(index, payload))
+        ingress_payload = _ingress_payload(
+            since=since,
+            bucket=ingress_bucket,
+            job_type=job_type,
+            caller_id=caller_id,
+            record_scope="root",
+        )
+        rows.append(_observe_row(index, payload, ingress_payload))
         if index < samples and interval > 0:
             time.sleep(interval)
     filters = (f" --job-type {job_type}" if job_type else "") + (f" --caller-id {caller_id}" if caller_id else "")
@@ -4661,6 +4703,7 @@ def observe(
         "scope": {
             "since": since,
             "older_than": older_than,
+            "ingress_bucket": ingress_bucket,
             "interval_seconds": interval,
             "samples": samples,
             "job_type": job_type,
@@ -4671,6 +4714,7 @@ def observe(
         "next_checks": [
             f"./scripts/jobs.sh overview --since {since}{filters}",
             f"./scripts/jobs.sh stuck --since {since} --older-than {older_than}{filters} --limit 20",
+            f"./scripts/jobs.sh ingress --since {since} --bucket {ingress_bucket}{filters}",
             f"./scripts/jobs.sh failures --since {since}{filters}",
             f"./scripts/jobs.sh callbacks-summary --since {since}{filters}",
             "./scripts/jobs.sh broker",
