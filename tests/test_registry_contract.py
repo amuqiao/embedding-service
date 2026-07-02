@@ -129,7 +129,8 @@ def _assert_default_retry_policy(retry_policy: dict):
     business = retry_policy["business_execution"]
     orchestration = retry_policy["workflow_orchestration"]
     assert business["domain"] == "business_execution"
-    assert business["max_attempts"] == 3
+    assert business["max_attempts"] == 1
+    assert business["retry_delay_seconds"] is None
     assert business["backoff_kind"] == "none"
     assert business["retryable_error_codes"] == []
     assert orchestration["domain"] == "workflow_orchestration"
@@ -287,6 +288,31 @@ def test_job_type_registry_exposes_required_metadata():
     assert poster_spec.prompt_template_required_blocks == frozenset(
         {"style_probe", "additional_prompt", "layout_rules"}
     )
+
+
+def test_poster_title_image_retry_policy_is_scoped_to_transient_leaf_execution():
+    register_all_job_types()
+    specs = job_registry.all_job_type_specs()
+    retryable_codes = ["MODEL_CALL_TIMEOUT", "OSS_FETCH_FAILED", "OSS_WRITE_FAILED"]
+    expected_leaf_business = {
+        "domain": "business_execution",
+        "max_attempts": 2,
+        "retry_delay_seconds": 15,
+        "backoff_kind": "fixed",
+        "retryable_error_codes": retryable_codes,
+    }
+
+    root_policy = specs["poster_title_image"].retry_policy
+    style_policy = specs["poster_title_image_style_probe"].retry_policy
+    generate_policy = specs["poster_title_image_generate_item"].retry_policy
+    join_policy = specs["poster_title_image_join"].retry_policy
+
+    assert root_policy["workflow_orchestration"]["max_attempts"] == 3
+    assert root_policy["business_execution"]["max_attempts"] == 1
+    assert root_policy["business_execution"]["retryable_error_codes"] == []
+    assert style_policy["business_execution"] == expected_leaf_business
+    assert generate_policy["business_execution"] == expected_leaf_business
+    assert join_policy["business_execution"] == root_policy["business_execution"]
 
 
 def test_poster_title_image_job_types_declare_business_log_events():

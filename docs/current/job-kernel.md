@@ -460,9 +460,16 @@ workflow Job
 | purpose | 当前默认 policy | 当前实际含义 |
 |---|---|---|
 | `workflow_orchestration` | `max_attempts=3`，`retry_delay_seconds=5`，`backoff_kind=fixed`，`retryable_error_codes={JOB_STATE_TRANSITION_CONFLICT, TASKIQ_PUBLISH_FAILED}` | 只在编排阶段遇到这些错误码时重试 root orchestration attempt |
-| `business_execution` | `max_attempts=3`，`retry_delay_seconds=None`，`backoff_kind=none`，`retryable_error_codes={}` | 有 3 次额度，但没有任何错误码可使用额度，因此默认不自动业务重跑 |
+| `business_execution` | `max_attempts=1`，`retry_delay_seconds=None`，`backoff_kind=none`，`retryable_error_codes={}` | 默认只有 1 次业务执行 attempt，不自动业务重跑 |
 
-`business_execution.max_attempts=3` 不等于“所有业务失败都重试 3 次”。只有把某个错误码加入 `retryable_error_codes` 后，这个额度才会被使用。
+`business_execution.max_attempts` 是 attempt 总数，不是额外 retry 次数。只有 job_type 明确覆盖 `retry_policy` 并把某个错误码加入 `retryable_error_codes` 后，execution retry 才会被使用。
+
+当前 job_type 专属 business execution retry：
+
+| job_type | business_execution policy | 当前实际含义 |
+|---|---|---|
+| `poster_title_image_style_probe` | `max_attempts=2`，`retry_delay_seconds=15`，`backoff_kind=fixed`，`retryable_error_codes={MODEL_CALL_TIMEOUT, OSS_FETCH_FAILED, OSS_WRITE_FAILED}` | 对风格探测中的模型超时和引用图读取/写入类瞬时失败允许 1 次重试 |
+| `poster_title_image_generate_item` | `max_attempts=2`，`retry_delay_seconds=15`，`backoff_kind=fixed`，`retryable_error_codes={MODEL_CALL_TIMEOUT, OSS_FETCH_FAILED, OSS_WRITE_FAILED}` | 对单个标题图生成中的模型超时、引用图读取和结果写入类瞬时失败允许 1 次重试 |
 
 按运行形态展开：
 

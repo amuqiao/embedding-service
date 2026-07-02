@@ -24,7 +24,7 @@ from app.integrations.object_storage import sha256_digest
 from app.integrations.storage import storage
 from app.jobs.adapters.http_url_input import read_http_url_bytes
 from app.jobs.adapters.oss_url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
-from app.jobs.base import JobExecutor
+from app.jobs.base import ExecutionRetryPolicy, JobExecutor, JobRetryPolicy
 from app.jobs.model_selection import (
     poster_title_image_generation_allowed_model_ids,
     poster_title_image_generation_default_model_id,
@@ -67,6 +67,22 @@ POSTER_TITLE_IMAGE_JOB_TYPE = "poster_title_image"
 POSTER_TITLE_IMAGE_STYLE_PROBE_JOB_TYPE = "poster_title_image_style_probe"
 POSTER_TITLE_IMAGE_GENERATE_ITEM_JOB_TYPE = "poster_title_image_generate_item"
 POSTER_TITLE_IMAGE_JOIN_JOB_TYPE = "poster_title_image_join"
+POSTER_TITLE_IMAGE_BUSINESS_RETRY_POLICY = JobRetryPolicy(
+    business_execution=ExecutionRetryPolicy(
+        domain="business_execution",
+        max_attempts=2,
+        retry_delay_seconds=15,
+        backoff_kind="fixed",
+        retryable_error_codes=frozenset(
+            {
+                "MODEL_CALL_TIMEOUT",
+                "OSS_FETCH_FAILED",
+                "OSS_WRITE_FAILED",
+                "JOB_TIMEOUT",
+            }
+        ),
+    )
+)
 POSTER_TITLE_IMAGE_JOIN_NODE_KEY = "join"
 POSTER_TITLE_IMAGE_PROMPT_BLOCKS = ("style_probe", "additional_prompt", "layout_rules")
 GREEN_SCREEN = "#00FF00"
@@ -572,6 +588,7 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
     public_result_schema = PosterTitleImageStyleProbeResult
     allow_callback = False
     timeout_seconds = 300
+    retry_policy = POSTER_TITLE_IMAGE_BUSINESS_RETRY_POLICY
     allowed_error_codes = PosterTitleImageJob.allowed_error_codes
     log_events = POSTER_TITLE_IMAGE_STYLE_PROBE_LOG_EVENTS
 
@@ -637,6 +654,7 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
     public_result_schema = PosterTitleImageGenerateItemResult
     allow_callback = False
     timeout_seconds = 600
+    retry_policy = POSTER_TITLE_IMAGE_BUSINESS_RETRY_POLICY
     allowed_error_codes = PosterTitleImageJob.allowed_error_codes
     log_events = POSTER_TITLE_IMAGE_GENERATE_ITEM_LOG_EVENTS
 

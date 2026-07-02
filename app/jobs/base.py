@@ -93,7 +93,7 @@ class JobRetryPolicy:
     )
     business_execution: ExecutionRetryPolicy = ExecutionRetryPolicy(
         domain="business_execution",
-        max_attempts=3,
+        max_attempts=1,
         retry_delay_seconds=None,
         backoff_kind="none",
         retryable_error_codes=frozenset(),
