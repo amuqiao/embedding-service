@@ -19,7 +19,7 @@ from app.repositories.job_repo import JobRepo
 from app.schemas.errors import JobErrorDetail
 from app.schemas.jobs import CreateJobRequest, CreateJobResponse, JobResult, JobStatusResponse
 from app.services.ai_capability_kernel import require_enabled_text_model
-from app.services.billing import get_scope_billing, job_cost_from_billing
+from app.services.billing import get_scope_billing, job_cost_from_billing, job_usage_from_billing
 from app.services.job_runtime import (
     build_runtime_snapshot,
     configured_output_target,
@@ -163,12 +163,14 @@ def _job_payload(
     job: Job,
     *,
     cost: dict[str, Any] | None = None,
+    usage: dict[str, Any] | None = None,
+    include_usage: bool = True,
     job_result: dict[str, Any] | None | object = _JOB_RESULT_UNSET,
     callback_outbox: Any | None = None,
 ) -> dict[str, Any]:
     result = job.result if job_result is _JOB_RESULT_UNSET else job_result
     try:
-        return validate_job_status_payload(
+        payload = validate_job_status_payload(
             {
                 "job_id": job.id,
                 "client_request_id": job.client_request_id or "",
@@ -182,6 +184,7 @@ def _job_payload(
                 "job_result": result,
                 "job_error": _job_error_detail(job.error),
                 "cost": cost,
+                "usage": usage,
                 "callback": _callback_state(job, callback_outbox),
                 "status_url": _status_url(job.id),
                 "created_at": job.created_at,
@@ -189,6 +192,9 @@ def _job_payload(
                 "finished_at": job.finished_at,
             }
         ).model_dump(mode="json")
+        if not include_usage:
+            payload.pop("usage", None)
+        return payload
     except Exception as exc:
         raise AppError(
             "JOB_VIEW_CONTRACT_INVALID",
@@ -202,11 +208,12 @@ def _job_to_response(
     request_id: str = "-",
     *,
     cost: dict[str, Any] | None = None,
+    usage: dict[str, Any] | None = None,
     job_result: dict[str, Any] | None | object = _JOB_RESULT_UNSET,
     callback_outbox: Any | None = None,
 ) -> JobStatusResponse:
     return JobStatusResponse.model_validate(
-        _job_payload(job, cost=cost, job_result=job_result, callback_outbox=callback_outbox)
+        _job_payload(job, cost=cost, usage=usage, job_result=job_result, callback_outbox=callback_outbox)
     )
 
 
@@ -471,11 +478,14 @@ async def get_job_response(
     if not job:
         raise NotFoundAppError("JOB_NOT_FOUND", f"job_id 不存在: {job_id}")
     cost = None
+    usage = None
     projected_result: dict[str, Any] | None | object = _JOB_RESULT_UNSET
     if job.status in {"succeeded", "failed"}:
         billing = await get_scope_billing(db, scope_type="job", scope_id=str(job.id), caller_id=caller_id)
         mapped = job_cost_from_billing(billing)
         cost = mapped.model_dump() if mapped is not None else None
+        mapped_usage = job_usage_from_billing(billing)
+        usage = mapped_usage.model_dump() if mapped_usage is not None else None
         if job.status == "failed":
             from app.jobs.factory import get_job_executor
 
@@ -495,6 +505,7 @@ async def get_job_response(
         job,
         request_id,
         cost=cost,
+        usage=usage,
         job_result=projected_result,
         callback_outbox=callback_outbox,
     )

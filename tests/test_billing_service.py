@@ -7,7 +7,7 @@ import pytest
 
 from app.core import pricing_registry
 from app.services import billing as billing_service
-from app.services.billing import build_scope_billing_envelope
+from app.services.billing import build_scope_billing_envelope, job_usage_from_billing
 
 
 def _row(
@@ -58,6 +58,63 @@ def test_scope_billing_without_ai_call_logs_uses_pricing_default_currency(monkey
 
     assert billing.status == "not_billable"
     assert billing.currency == "EUR"
+
+
+def test_job_usage_maps_terminal_billing_token_projection():
+    billing = build_scope_billing_envelope(
+        scope_type="job",
+        scope_id="job-1",
+        rows=[
+            _row(
+                usage_units={
+                    "input_tokens": 100,
+                    "cached_input_tokens": 20,
+                    "output_tokens": 30,
+                    "total_tokens": 130,
+                },
+            ),
+            _row(
+                usage_units={
+                    "input_tokens": 40,
+                    "cached_input_tokens": 5,
+                    "output_tokens": 10,
+                    "total_tokens": 50,
+                },
+            ),
+        ],
+    )
+
+    usage = job_usage_from_billing(billing)
+
+    assert usage is not None
+    assert usage.model_dump() == {
+        "ai_call_count": 2,
+        "total_tokens": 180,
+        "final": True,
+    }
+
+
+def test_job_usage_keeps_total_tokens_null_when_billing_has_no_token_units():
+    billing = build_scope_billing_envelope(
+        scope_type="job",
+        scope_id="job-1",
+        rows=[_row(usage_units={"image_count": 1})],
+    )
+
+    usage = job_usage_from_billing(billing)
+
+    assert usage is not None
+    assert usage.model_dump() == {"ai_call_count": 1, "total_tokens": None, "final": True}
+
+
+def test_job_usage_omits_incomplete_billing_projection():
+    billing = build_scope_billing_envelope(
+        scope_type="job",
+        scope_id="job-1",
+        rows=[_row(status="pending", billable_status="pending", cost_calculation_status="pending")],
+    )
+
+    assert job_usage_from_billing(billing) is None
 
 
 def test_scope_billing_sums_decimal_cost_usage_and_unique_pricing_refs():

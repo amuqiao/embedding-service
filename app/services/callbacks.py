@@ -88,10 +88,16 @@ def build_callback_body(
             "sent_at": sent_at.isoformat(),
             "trigger_request_id": trigger_request_id_from_job(job),
             "caller_id": job.caller_id,
-            "job": _job_payload(job, job_result=_callback_job_result(job, job_result=job_result)),
+            "job": _job_payload(
+                job,
+                job_result=_callback_job_result(job, job_result=job_result),
+                include_usage=False,
+            ),
         }
     )
-    return envelope.model_dump(mode="json")
+    body = envelope.model_dump(mode="json")
+    body["job"].pop("usage", None)
+    return body
 
 
 async def build_callback_body_for_job(job: Job, db: Any) -> dict:

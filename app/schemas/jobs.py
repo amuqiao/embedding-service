@@ -132,6 +132,12 @@ class JobCost(StrictBaseModel):
     final: bool
 
 
+class JobUsage(StrictBaseModel):
+    ai_call_count: int = Field(ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    final: bool
+
+
 class JobEnvelope(StrictBaseModel):
     job_id: UUID
     client_request_id: str | None = None
@@ -141,6 +147,7 @@ class JobEnvelope(StrictBaseModel):
     job_result: dict[str, Any] | None = None
     job_error: JobErrorDetail | None = None
     cost: JobCost | None = None
+    usage: JobUsage | None = None
     callback: CallbackState
     status_url: str
     created_at: datetime
@@ -156,11 +163,15 @@ class JobEnvelope(StrictBaseModel):
                 raise ValueError("job_error must be null while job is not terminal")
             if self.cost is not None:
                 raise ValueError("cost must be null while job is not terminal")
+            if self.usage is not None:
+                raise ValueError("usage must be null while job is not terminal")
         elif self.job_status == "running":
             if self.job_error is not None:
                 raise ValueError("job_error must be null while job is not terminal")
             if self.cost is not None:
                 raise ValueError("cost must be null while job is not terminal")
+            if self.usage is not None:
+                raise ValueError("usage must be null while job is not terminal")
         elif self.job_status == "succeeded":
             if self.job_error is not None:
                 raise ValueError("job_error must be null when job succeeded")

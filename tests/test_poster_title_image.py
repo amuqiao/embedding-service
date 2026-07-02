@@ -2103,4 +2103,30 @@ def test_job_envelope_rejects_non_terminal_cost():
         )
 
 
+def test_job_envelope_rejects_non_terminal_usage():
+    with pytest.raises(ValueError, match="usage must be null"):
+        JobEnvelope.model_validate(
+            {
+                "job_id": uuid.uuid4(),
+                "client_request_id": "poster-1",
+                "job_type": "poster_title_image",
+                "job_status": "running",
+                "job_progress": {"stage": "calling_model", "percent": 50},
+                "job_result": None,
+                "job_error": None,
+                "cost": None,
+                "usage": {
+                    "ai_call_count": 1,
+                    "total_tokens": None,
+                    "final": True,
+                },
+                "callback": {"status": "not_configured", "attempt": 0},
+                "status_url": "/api/v1/ai-jobs/jobs/test",
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+                "finished_at": None,
+            }
+        )
+
+
 GREEN_BACKGROUND_TEXT = "#00FF00"

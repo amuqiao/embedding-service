@@ -52,6 +52,7 @@ def _job_envelope(
         "job_result": job_result,
         "job_error": None,
         "cost": None,
+        "usage": None,
         "callback": {
             "status": "pending",
             "attempt": 0,
@@ -89,6 +90,7 @@ def _assert_standard_job_fields(job: dict) -> None:
         "job_result",
         "job_error",
         "cost",
+        "usage",
         "callback",
         "status_url",
         "created_at",

@@ -12,7 +12,7 @@ from app.models.ai_call_log import AiCallLog
 from app.repositories.ai_call_log_repo import AiCallLogRepo
 from app.repositories.job_repo import JobRepo
 from app.schemas.billing import BillingEnvelope
-from app.schemas.jobs import JobCost
+from app.schemas.jobs import JobCost, JobUsage
 
 ZERO_AMOUNT = "0.00000000"
 
@@ -131,6 +131,15 @@ def job_cost_from_billing(billing: BillingEnvelope) -> JobCost | None:
     if not billing.currency:
         return None
     return JobCost(currency=billing.currency, amount=billing.total_cost_amount, final=True)
+
+
+def job_usage_from_billing(billing: BillingEnvelope) -> JobUsage | None:
+    if billing.status not in {"estimated", "not_billable"}:
+        return None
+
+    units = billing.usage_units
+    total_tokens = units.get("total_tokens")
+    return JobUsage(ai_call_count=billing.ai_call_count, total_tokens=total_tokens, final=True)
 
 
 async def get_job_billing(

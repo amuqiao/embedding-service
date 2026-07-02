@@ -589,6 +589,73 @@ async def test_job_response_drops_stored_result_when_job_type_does_not_allow_sna
     assert response.job_result is None
 
 
+async def test_job_response_exposes_terminal_usage_projection(monkeypatch):
+    from app.models.job import Job
+    from app.schemas.billing import BillingEnvelope
+    from app.services.jobs import get_job_response
+
+    job_id = uuid.UUID("0a9be3fb-f01b-4f5d-90b5-4148c4a61df1")
+    job = Job(
+        id=job_id,
+        caller_id="caller-1",
+        client_request_id="contract-test",
+        job_type="arithmetic",
+        status="succeeded",
+        progress_percent=100,
+        progress_stage="completed",
+        result={
+            "a": 8,
+            "b": 2,
+            "addition": 10,
+            "subtraction": 6,
+            "multiplication": 16,
+            "division": 4.0,
+        },
+        error=None,
+        finished_at=datetime(2026, 6, 15, 10, 1, 0, tzinfo=UTC),
+        created_at=datetime(2026, 6, 15, 10, 0, 0, tzinfo=UTC),
+    )
+
+    async def fake_get_for_caller(_db, received_job_id, caller_id):
+        assert received_job_id == job_id
+        assert caller_id == "caller-1"
+        return job
+
+    async def fake_get_scope_billing(*_args, **_kwargs):
+        return BillingEnvelope(
+            scope_type="job",
+            scope_id=str(job_id),
+            status="estimated",
+            currency="USD",
+            total_cost_amount="0.04491750",
+            usage_units={
+                "input_tokens": 1240,
+                "cached_input_tokens": 0,
+                "output_tokens": 311,
+                "total_tokens": 1551,
+            },
+            pricing_refs=["openai:gpt-test@2026-06-23"],
+            ai_call_count=3,
+            billable_call_count=3,
+            unbillable_call_count=0,
+            failed_call_count=0,
+        )
+
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_for_caller", fake_get_for_caller)
+    monkeypatch.setattr("app.services.jobs.get_scope_billing", fake_get_scope_billing)
+
+    response = await get_job_response(object(), job.id, "caller-1")
+
+    assert response.cost is not None
+    assert response.cost.model_dump() == {"currency": "USD", "amount": "0.04491750", "final": True}
+    assert response.usage is not None
+    assert response.usage.model_dump() == {
+        "ai_call_count": 3,
+        "total_tokens": 1551,
+        "final": True,
+    }
+
+
 def test_arithmetic_job_view_result_uses_registered_result_schema(monkeypatch):
     from app.jobs.types.arithmetic import ArithmeticJob
 
