@@ -15,6 +15,7 @@
 >
 > | 版本 | 日期 | 修改内容 |
 > |---|---|---|
+> | `current + vNext review` | `2026-07-02` | 任务查询 Job snapshot 增加 `job.usage` 轻量用量摘要投影；模型获取示例补齐 `parameters` 和 `notes`。 |
 > | `current + vNext review` | `2026-06-29` | 调整为调用方独立交付文档，移除其它文档依赖；模型获取接口使用 `job_type=poster_title_image` 返回标题图可选模型。 |
 > | `current + vNext review` | `2026-06-29` | 更新 dev 环境模型、语种、Prompt 模板和任务查询响应示例，对齐当前接口实际返回字段。 |
 > | `current + vNext review` | `2026-06-24` | 初版交付评审草案，定义 AI 标题图生成对接入口、Job 查询结果、费用查询和终态 Callback 合同。 |
@@ -79,7 +80,7 @@ curl -sS -X GET "http://127.0.0.1:8100/api/v1/ai-jobs/models" \
 
 本文定义交付评审合同，用于双方评审接口形态；不表示所有字段、状态和路由都已经在当前服务实现中上线。
 
-当前服务已支持 `poster_title_image` 声明 `result_snapshot_statuses={"running","failed"}`，在 `running` 和 `failed` 状态返回已成功 item 的 `job_result` 增量快照。当前稳定费用查询入口是 `GET /jobs/{job_id}/billing`；`job.cost` 是 Job snapshot 和 Callback 中的 Job 级总费用快照。
+当前服务已支持 `poster_title_image` 声明 `result_snapshot_statuses={"running","failed"}`，在 `running` 和 `failed` 状态返回已成功 item 的 `job_result` 增量快照。当前稳定费用查询入口是 `GET /jobs/{job_id}/billing`；`job.cost` 是 Job snapshot 和 Callback 中的 Job 级总费用快照，`job.usage` 是任务查询 Job snapshot 中的 Job 级用量摘要投影。
 
 ## 1. 接入约定
 
@@ -198,6 +199,31 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 - 终态 Job 可返回 `cost`；如果返回，`cost.final=true`。
 - 如果费用尚不可用，`cost=null`；费用状态以 Job billing 的 `status` 为准。
 
+### Usage
+
+`job.usage` 只返回任务查询 Job snapshot 的轻量用量摘要，不返回 provider 调用明细、输入输出 token 拆分、缓存 token、图片数、价格规则或诊断原因；需要完整聚合明细时查询 Job billing。
+
+```json
+{
+  "ai_call_count": 3,
+  "total_tokens": 1551,
+  "final": true
+}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `ai_call_count` | integer | 该 Job scope 下已记录的 AI provider 调用次数 |
+| `total_tokens` | integer 或 null | 该 Job 的总 token 消耗；如果没有 token 维度或 provider 未返回 token，则为 `null` |
+| `final` | boolean | `true` 表示用量摘要已随终态 Job 聚合完成 |
+
+规则：
+
+- 非终态 Job 的 `usage` 为 `null`。
+- 终态 Job 可返回 `usage`；如果返回，`usage.final=true`。
+- 如果用量摘要尚不可用，`usage=null`；用量聚合状态以 Job billing 的 `status` 为准。
+- `total_tokens=null` 表示没有可用 token 维度，不表示 token 消耗为 0。
+
 ### Job Status
 
 | 状态 | 说明 |
@@ -260,12 +286,73 @@ GET /api/v1/ai-jobs/models?job_type=poster_title_image
         "features": {
           "native_transparency": false,
           "supports_edit": true
-        }
+        },
+        "parameters": [
+          {
+            "name": "n",
+            "label": "数量",
+            "type": "integer",
+            "required": false,
+            "default": 1,
+            "min": 1,
+            "max": 4
+          },
+          {
+            "name": "size",
+            "label": "尺寸",
+            "type": "select",
+            "required": false,
+            "default": "auto",
+            "options": [
+              "auto",
+              "1024x1024",
+              "1536x1024",
+              "1024x1536"
+            ]
+          },
+          {
+            "name": "background",
+            "label": "背景",
+            "type": "select",
+            "required": false,
+            "default": "auto",
+            "options": [
+              "opaque",
+              "auto"
+            ]
+          },
+          {
+            "name": "quality",
+            "label": "质量",
+            "type": "select",
+            "required": false,
+            "default": "auto",
+            "options": [
+              "auto",
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          {
+            "name": "output_format",
+            "label": "格式",
+            "type": "select",
+            "required": false,
+            "default": "png",
+            "options": [
+              "png",
+              "jpeg",
+              "webp"
+            ]
+          }
+        ],
+        "notes": ""
       }
     ]
   },
   "request_id": "trace-id-123",
-  "server_time": "2026-06-29T09:29:15.503461+00:00"
+  "server_time": "2026-07-02T12:38:24.128921+00:00"
 }
 ```
 
@@ -273,6 +360,8 @@ GET /api/v1/ai-jobs/models?job_type=poster_title_image
 |---|---|---|
 | `data.default_model_id` | string | `poster_title_image` 默认生图模型；调用方不传 `job_params.items[].model_id` 时服务端使用该模型 |
 | `data.models` | array | 当前可用于标题图生成的图片模型列表 |
+| `data.billing_enabled` | boolean，可选 | 服务开启模型目录 billing 能力展示时返回；未开启时省略 |
+| `data.cost_estimate_available` | boolean，可选 | 服务开启模型目录 billing 能力展示时返回；未开启时省略 |
 | `data.models[].id` | string | 图片模型 ID；任务创建接口的 `job_params.items[].model_id` 必须使用该列表中的值 |
 | `data.models[].name` | string | 模型名称 |
 | `data.models[].model_type` | string | 模型粗分类；本接口当前只返回 `image` |
@@ -283,10 +372,20 @@ GET /api/v1/ai-jobs/models?job_type=poster_title_image
 | `data.models[].output_media_types` | array | 模型可输出的 MIME type |
 | `data.models[].limits` | object | 类型化公开限制；图片模型当前包含 `max_output_count` |
 | `data.models[].features` | object | 类型化公开能力开关，例如 `supports_edit`、`native_transparency` |
+| `data.models[].parameters` | array | 模型目录中允许展示的可配置参数 schema；是否可提交仍以任务创建接口合同为准 |
+| `data.models[].parameters[].name` | string | 参数名 |
+| `data.models[].parameters[].label` | string | 参数展示名称 |
+| `data.models[].parameters[].type` | string | 参数类型：`string`、`integer`、`number`、`boolean` 或 `select` |
+| `data.models[].parameters[].required` | boolean | 参数是否必填 |
+| `data.models[].parameters[].default` | string、number 或 boolean | 参数默认值 |
+| `data.models[].parameters[].options` | array，可选 | `select` 参数允许值；不适用时省略 |
+| `data.models[].parameters[].min` | number，可选 | 数值参数最小值；不适用时省略 |
+| `data.models[].parameters[].max` | number，可选 | 数值参数最大值；不适用时省略 |
+| `data.models[].notes` | string | 模型公开备注；没有备注时为空字符串 |
 
 `/models?job_type=poster_title_image` 在本文交付范围内只返回标题图任务允许展示和提交的模型。当前 `poster_title_image` 可提交的生图模型基线是 `gpt-image-2`。
 
-图片生成参数不通过 `/models` 提交；调用方创建任务时仍以第 5 节的 `job_params.items[].model_options` 合同为准，例如使用 `draw_count` 表达候选图数量、`background` 固定为 `transparent`、`output_format` 固定为 `png`，且 `size` 只能提交本业务约束表允许的值。
+`parameters[]` 只描述模型目录可展示的模型级参数 schema，不是任务创建接口的直接提交合同。调用方创建任务时仍以第 5 节的 `job_params.items[].model_options` 合同为准，例如使用 `draw_count` 表达候选图数量、`background` 固定为 `transparent`、`output_format` 固定为 `png`，且 `size` 只能提交本业务约束表允许的值。
 
 ## 3. 语种获取接口
 
@@ -779,7 +878,7 @@ Callback payload 不套 HTTP success envelope：
 规则：
 
 - `event` 允许 `job.succeeded`、`job.failed`。
-- Callback payload 顶层 `job` 使用同一套 `JobEnvelope` 字段结构；调用方需要最新增量结果时，应以 `job.status_url` 再查询任务状态。
+- Callback payload 顶层 `job` 使用 `JobEnvelope` 核心字段结构；当前终态 Callback 不返回 `job.usage`，调用方需要最新增量结果或用量摘要时，应以 `job.status_url` 再查询任务状态。
 - 终态 Callback payload 可返回 `job.cost`；如果返回，`job.cost.final=true`。
 - 调用方接收 Callback 时应返回 HTTP `2xx` 和 JSON body：`{"accepted": true}`。
 - Callback 失败不改变 Job 终态；调用方仍可通过任务查询接口获取最终结果。
@@ -802,6 +901,7 @@ Callback payload 不套 HTTP success envelope：
       "job_result": null,
       "job_error": null,
       "cost": null,
+      "usage": null,
       "callback": {
         "status": "pending",
         "attempt": 0,
@@ -821,7 +921,7 @@ Callback payload 不套 HTTP success envelope：
 
 ## 6. 任务查询接口
 
-查询任务当前状态、增量结果和终态费用。任务未完成时，已成功生成的 item 标题图片可以先返回给调用方展示；未开始、运行中或失败的 internal leaf job 不进入 `job_result.items[]`。
+查询任务当前状态、增量结果、终态费用和终态用量摘要。任务未完成时，已成功生成的 item 标题图片可以先返回给调用方展示；未开始、运行中或失败的 internal leaf job 不进入 `job_result.items[]`。
 
 ### Method / Path
 
@@ -881,6 +981,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
       },
       "job_error": null,
       "cost": null,
+      "usage": null,
       "callback": {
         "status": "pending",
         "attempt": 0,
@@ -960,6 +1061,11 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         "amount": "0.04491750",
         "final": true
       },
+      "usage": {
+        "ai_call_count": 2,
+        "total_tokens": 1551,
+        "final": true
+      },
       "callback": {
         "status": "not_configured",
         "attempt": 0,
@@ -1007,6 +1113,11 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         "amount": "0.042800",
         "final": true
       },
+      "usage": {
+        "ai_call_count": 1,
+        "total_tokens": null,
+        "final": true
+      },
       "callback": {
         "status": "pending",
         "attempt": 0,
@@ -1038,6 +1149,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | `job.job_result` | object 或 null | 任务结果快照 |
 | `job.job_error` | object 或 null | Job 级失败原因 |
 | `job.cost` | object 或 null | Job 级总费用；非终态为 `null`，终态可返回 `Cost` |
+| `job.usage` | object 或 null | Job 级用量摘要；非终态为 `null`，终态可返回 `Usage` |
 | `job.callback` | object | Callback 投递状态摘要；来源是终态 callback 投递账本投影，不表示 Job 执行重试 |
 | `job.status_url` | string | 任务查询路径 |
 | `job.created_at` | string | 创建时间 |
@@ -1085,10 +1197,11 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 
 - HTTP `200` 只表示成功查到 Job，不表示 Job 执行成功。
 - `poster_title_image` 支持在 `running` 和 `failed` 状态返回已成功 item 的 `job_result` 增量快照。
-- `queued` 时 `job_result=null`、`cost=null`。
+- `queued` 时 `job_result=null`、`cost=null`、`usage=null`。
 - `running` 或 `failed` 时可以返回非空 `job_result`，用于展示已经成功生成的 item 图片产物；如果尚未生成首个成功 item，也可以返回 `job_result=null`。
 - `running` 或 `failed` 的非空 `job_result.items[]` 只包含 `status=succeeded` 的 item，不返回未开始、运行中或失败的 internal leaf job 状态。
-- `succeeded`、`failed` 为终态，可返回 `cost`；如果返回，`cost.final=true`。
+- `succeeded`、`failed` 为终态，可返回 `cost` 和 `usage`；如果返回，`cost.final=true`、`usage.final=true`。
+- 如果终态 Job 没有可用 token 维度，`usage.total_tokens=null`；调用方不能把 `null` 当成 0。
 - 未传 `callback.url` 时，`job.callback.status=not_configured`，`attempt=0`。
 - `running` 或 `failed` 的非空 `job_result.items[]` 必须按请求 `items[]` 顺序返回已成功 item 子集。
 - 已经公开为 `succeeded` 的 item，后续响应必须继续返回该 item 及其已产出的 `images`。
