@@ -129,7 +129,7 @@ def _assert_default_retry_policy(retry_policy: dict):
     business = retry_policy["business_execution"]
     orchestration = retry_policy["workflow_orchestration"]
     assert business["domain"] == "business_execution"
-    assert business["max_attempts"] == 1
+    assert business["max_attempts"] == 3
     assert business["backoff_kind"] == "none"
     assert business["retryable_error_codes"] == []
     assert orchestration["domain"] == "workflow_orchestration"
