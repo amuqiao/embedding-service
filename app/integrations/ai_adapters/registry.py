@@ -8,6 +8,7 @@ from app.integrations.ai_adapters.base import (
     TextGenerationAdapter,
 )
 from app.integrations.ai_adapters.litellm_adapter import LiteLLMAdapter
+from app.integrations.ai_adapters.openai_images_adapter import OpenAIImagesAdapter
 from app.integrations.ai_adapters.openai_responses_adapter import OpenAIResponsesAdapter
 
 
@@ -20,6 +21,7 @@ class AdapterRegistration:
 
 
 _OPENAI_RESPONSES_ADAPTER = OpenAIResponsesAdapter()
+_OPENAI_IMAGES_ADAPTER = OpenAIImagesAdapter()
 
 _ADAPTERS: dict[str, AdapterRegistration] = {
     "litellm": AdapterRegistration(
@@ -27,6 +29,15 @@ _ADAPTERS: dict[str, AdapterRegistration] = {
         text_generation_adapter=LiteLLMAdapter(),
         multimodal_text_generation_adapter=_OPENAI_RESPONSES_ADAPTER,
         image_generation_adapter=_OPENAI_RESPONSES_ADAPTER,
+    ),
+    "openai_responses": AdapterRegistration(
+        name="openai_responses",
+        multimodal_text_generation_adapter=_OPENAI_RESPONSES_ADAPTER,
+        image_generation_adapter=_OPENAI_RESPONSES_ADAPTER,
+    ),
+    "openai_images": AdapterRegistration(
+        name="openai_images",
+        image_generation_adapter=_OPENAI_IMAGES_ADAPTER,
     ),
 }
 

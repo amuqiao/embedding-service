@@ -11,9 +11,11 @@ APP_DIR = Path(__file__).resolve().parents[1]
 JOB_MODEL_CONFIG_ROOT = APP_DIR / "jobs" / "types"
 JOB_MODEL_CONFIG_FILENAME = "models.yaml"
 JOB_MODEL_CONFIG_TOP_LEVEL_KEYS = frozenset(
-    {"version", "job_type", "public_model_selection", "internal_models"}
+    {"version", "job_type", "public_model_selection", "internal_models", "generation"}
 )
 PUBLIC_MODEL_SELECTION_FIELDS = frozenset({"request_field", "default_model_id", "allowed_model_ids"})
+GENERATION_FIELDS = frozenset({"image_adapter"})
+POSTER_TITLE_IMAGE_GENERATION_IMAGE_ADAPTERS = frozenset({"openai_responses", "openai_images"})
 POSTER_TITLE_IMAGE_JOB_TYPE = "poster_title_image"
 
 
@@ -29,6 +31,7 @@ class PublicModelSelection:
 class PosterTitleImageModelSelection:
     public_model_selection: PublicModelSelection
     style_probe_model_id: str
+    image_generation_adapter: str
     source_path: Path
 
 
@@ -118,6 +121,16 @@ def _internal_models(data: dict[str, Any], *, source: Path) -> dict[str, Any]:
     return value
 
 
+def _generation_config(data: dict[str, Any], *, source: Path) -> dict[str, Any]:
+    value = data.get("generation")
+    if not isinstance(value, dict):
+        raise RuntimeError(f"job model selection config requires generation object: {source}")
+    unknown_keys = sorted(set(value) - GENERATION_FIELDS)
+    if unknown_keys:
+        raise RuntimeError(f"generation contains unknown fields: {unknown_keys} ({source})")
+    return value
+
+
 def get_poster_title_image_model_selection() -> PosterTitleImageModelSelection:
     public = get_public_model_selection(POSTER_TITLE_IMAGE_JOB_TYPE)
     data = _read_config(public.source_path)
@@ -126,9 +139,17 @@ def get_poster_title_image_model_selection() -> PosterTitleImageModelSelection:
     if not isinstance(style_probe, dict):
         raise RuntimeError("poster_title_image internal_models.style_probe must be a YAML object")
     style_probe_model_id = _required_str(style_probe, "model_id", source=public.source_path)
+    generation = _generation_config(data, source=public.source_path)
+    image_generation_adapter = _required_str(generation, "image_adapter", source=public.source_path)
+    if image_generation_adapter not in POSTER_TITLE_IMAGE_GENERATION_IMAGE_ADAPTERS:
+        raise RuntimeError(
+            "poster_title_image generation.image_adapter must be one of: "
+            + ", ".join(sorted(POSTER_TITLE_IMAGE_GENERATION_IMAGE_ADAPTERS))
+        )
     return PosterTitleImageModelSelection(
         public_model_selection=public,
         style_probe_model_id=style_probe_model_id,
+        image_generation_adapter=image_generation_adapter,
         source_path=public.source_path,
     )
 
@@ -143,3 +164,7 @@ def poster_title_image_generation_allowed_model_ids() -> tuple[str, ...]:
 
 def poster_title_image_style_probe_model_id() -> str:
     return get_poster_title_image_model_selection().style_probe_model_id
+
+
+def poster_title_image_generation_image_adapter() -> str:
+    return get_poster_title_image_model_selection().image_generation_adapter

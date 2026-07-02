@@ -580,8 +580,11 @@ def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry
         from app.integrations.image import POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES
 
         poster_selection = model_selection.get_poster_title_image_model_selection()
+        validate_image_generation_adapter(poster_selection.image_generation_adapter)
         for model_id in poster_selection.public_model_selection.allowed_model_ids:
             generation_model = model_by_id[model_id]
+            if poster_selection.image_generation_adapter in {"openai_responses", "openai_images"} and generation_model.provider != "openai":
+                raise RuntimeError("poster_title_image generation.image_adapter requires OpenAI image models")
             if generation_model.model_type != "image":
                 raise RuntimeError("poster_title_image public_model_selection must reference image models")
             if "image_edit" not in generation_model.capabilities:
@@ -616,5 +619,8 @@ def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry
                 "poster_title_image internal_models.style_probe.model_id must support reference image input media types: "
                 + ", ".join(missing_style_probe_media_types)
             )
-        if style_probe_model.features.get("supports_image_generation_tool") is not True:
+        if (
+            poster_selection.image_generation_adapter == "openai_responses"
+            and style_probe_model.features.get("supports_image_generation_tool") is not True
+        ):
             raise RuntimeError("poster_title_image internal_models.style_probe.model_id must support image_generation tool")

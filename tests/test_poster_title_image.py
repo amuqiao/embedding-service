@@ -39,7 +39,7 @@ from app.schemas.jobs import (
     PosterTitleImageParams,
 )
 from app.services.billing import job_cost_from_billing
-from app.services.job_runtime import payload_hash
+from app.services.job_runtime import build_runtime_snapshot, payload_hash, write_runtime_json
 from app.services.ai_capability_kernel import ModelGate
 
 
@@ -154,6 +154,19 @@ def _job_params_fields(params: dict) -> dict:
         },
         "job_params_hash": payload_hash(params),
     }
+
+
+def _runtime_ref(*, job_type: str, params: dict, runtime_fields: dict, output_target: dict) -> dict:
+    return write_runtime_json(
+        None,
+        "runtime",
+        build_runtime_snapshot(
+            job_type=job_type,
+            job_params_hash=payload_hash(params),
+            runtime_fields=runtime_fields,
+            output_target=output_target,
+        ),
+    )
 
 
 def _params_for_item_count(ref: dict, count: int, *, language: str = "en") -> dict:
@@ -536,7 +549,26 @@ def test_poster_title_image_create_request_does_not_require_runtime_prompt_paylo
         "operation": "poster_title_image",
         "style_probe_model_id": "gpt-5.5",
         "generation_model_id": "gpt-image-2",
+        "image_adapter": "openai_responses",
     }
+
+
+def test_poster_title_image_model_options_accept_catalog_sizes():
+    ref = _url_ref("reference/title.png", b"x")
+    allowed_sizes = (
+        "1024x1024",
+        "1536x1024",
+        "1024x1536",
+        "auto",
+    )
+
+    for size in allowed_sizes:
+        params = _params(ref)
+        params["items"][0]["model_options"]["size"] = size
+
+        validated = PosterTitleImageParams.model_validate(params)
+
+        assert validated.items[0].model_options.size == size
 
 
 def test_poster_title_image_create_request_preserves_title_text_line_break():
@@ -778,6 +810,21 @@ def test_poster_title_image_response_model_requires_image_generation_tool(monkey
         _validate_style_probe_model(required_media_types={"image/png"})
 
 
+def test_poster_title_image_images_adapter_does_not_require_image_generation_tool(monkeypatch):
+    from app.jobs.types.poster_title_image.executor import _validate_style_probe_model
+
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.poster_title_image_style_probe_model_id",
+        lambda: "gpt-4o",
+    )
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.poster_title_image_generation_image_adapter",
+        lambda: "openai_images",
+    )
+
+    _validate_style_probe_model(required_media_types={"image/png"})
+
+
 def test_remove_green_background_matches_poc_chroma_key_strategy():
     data = remove_green_background(_png_bytes())
     result = Image.open(io.BytesIO(data)).convert("RGBA")
@@ -1015,7 +1062,11 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
         lambda *_args: _ReferenceOpener(),
     )
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.output_target_from_job", lambda _job: output_target)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_provider_model", lambda: "gpt-5.5")
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_provider_model", lambda _model_id: "gpt-5.5")
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.poster_title_image_generation_image_adapter",
+        lambda: "openai_images",
+    )
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.settings",
@@ -1032,6 +1083,12 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     root_id = uuid.uuid4()
     job_id = uuid.uuid4()
     reference_ref = _url_ref("reference/title.png", reference, bucket=reference_bucket, region=reference_region)
+    child_params = {
+        "item": _params(reference_ref)["items"][0],
+        "probe_node_key": "probe.0",
+        "style_probe_model_id": "gpt-5.5",
+        "image_adapter": "openai_images",
+    }
     job = Job(
         id=job_id,
         caller_id="caller-1",
@@ -1041,11 +1098,17 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
         active_attempt_id=uuid.uuid4(),
         root_job_id=root_id,
         workflow_node_key="item.es",
-        **_job_params_fields(
-            {
-                "item": _params(reference_ref)["items"][0],
-                "probe_node_key": "probe.0",
-            }
+        **_job_params_fields(child_params),
+        runtime_ref=_runtime_ref(
+            job_type="poster_title_image_generate_item",
+            params=child_params,
+            runtime_fields={
+                "operation": "poster_title_image_generate_item",
+                "generation_model_id": "gpt-image-2",
+                "style_probe_model_id": "gpt-5.5",
+                "image_adapter": "openai_images",
+            },
+            output_target=output_target,
         ),
         created_at=datetime.now(timezone.utc),
     )
@@ -1062,6 +1125,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     assert obj["content_type"] == "image/png"
     assert len(recorded) == 1
     assert recorded[0]["model_id"] == "gpt-image-2"
+    assert recorded[0]["image_adapter"] == "openai_images"
     assert recorded[0]["response_model"] == "gpt-5.5"
     assert recorded[0]["background"] == "auto"
     assert recorded[0]["output_format"] == "png"
@@ -1142,7 +1206,7 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
         lambda *_args, **_kwargs: reference,
     )
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.output_target_from_job", lambda _job: output_target)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_provider_model", lambda: "gpt-5.5")
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_provider_model", lambda _model_id: "gpt-5.5")
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.generate_image_with_ledger",
@@ -1151,6 +1215,12 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
 
     params = _params(_url_ref("reference/title.png", reference))
     params["items"][0]["model_options"]["draw_count"] = 2
+    child_params = {
+        "item": params["items"][0],
+        "probe_node_key": "probe.0",
+        "style_probe_model_id": "gpt-5.5",
+        "image_adapter": "openai_responses",
+    }
     root_id = uuid.uuid4()
     job = Job(
         id=uuid.uuid4(),
@@ -1161,7 +1231,18 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
         active_attempt_id=uuid.uuid4(),
         root_job_id=root_id,
         workflow_node_key="item.es",
-        **_job_params_fields({"item": params["items"][0], "probe_node_key": "probe.0"}),
+        **_job_params_fields(child_params),
+        runtime_ref=_runtime_ref(
+            job_type="poster_title_image_generate_item",
+            params=child_params,
+            runtime_fields={
+                "operation": "poster_title_image_generate_item",
+                "generation_model_id": "gpt-image-2",
+                "style_probe_model_id": "gpt-5.5",
+                "image_adapter": "openai_responses",
+            },
+            output_target=output_target,
+        ),
         created_at=datetime.now(timezone.utc),
     )
 
@@ -1593,7 +1674,10 @@ async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, 
         content_type="image/png",
     )
 
-    async def fake_probe_style(*_args, **_kwargs):
+    recorded_probe_kwargs: dict = {}
+
+    async def fake_probe_style(*_args, **kwargs):
+        recorded_probe_kwargs.update(kwargs)
         return "bold stone title letters"
 
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
@@ -1619,7 +1703,25 @@ async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, 
                 "style_key": "style-1",
                 "reference_image": _url_ref("reference/title.png", reference),
                 "style_prompt": "describe style",
+                "style_probe_model_id": "gpt-5.5",
+                "image_adapter": "openai_responses",
             }
+        ),
+        runtime_ref=_runtime_ref(
+            job_type="poster_title_image_style_probe",
+            params={
+                "style_key": "style-1",
+                "reference_image": _url_ref("reference/title.png", reference),
+                "style_prompt": "describe style",
+                "style_probe_model_id": "gpt-5.5",
+                "image_adapter": "openai_responses",
+            },
+            runtime_fields={
+                "operation": "poster_title_image_style_probe",
+                "style_probe_model_id": "gpt-5.5",
+                "image_adapter": "openai_responses",
+            },
+            output_target={"type": "oss_prefix", "oss_bucket": "local-dev", "oss_region": "local", "oss_prefix": "ai-jobs/"},
         ),
         created_at=datetime.now(timezone.utc),
     )
@@ -1629,6 +1731,8 @@ async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, 
 
     assert result["style_key"] == "style-1"
     assert result["style_desc"] == "bold stone title letters"
+    assert recorded_probe_kwargs["model_id"] == "gpt-5.5"
+    assert recorded_probe_kwargs["image_adapter"] == "openai_responses"
     messages = "\n".join(record.getMessage() for record in caplog.records)
     assert f"event={LogEvent.POSTER_TITLE_IMAGE_STYLE_PROBE_COMPLETED}" in messages
     assert f"job_id={job_id}" in messages
@@ -1679,6 +1783,8 @@ async def test_style_probe_uses_ai_ledger(monkeypatch):
     text = await _probe_style(
         reference_image,
         "describe style",
+        model_id="gpt-5.5",
+        image_adapter="openai_responses",
         caller_id="caller-1",
         scope_id=str(job.id),
         scope_job_id=job.id,

@@ -197,6 +197,8 @@ public_model_selection:
 internal_models:
   style_probe:
     model_id: custom-style-probe-model
+generation:
+  image_adapter: openai_responses
 """,
         encoding="utf-8",
     )
@@ -549,6 +551,44 @@ def test_model_registry_requires_poster_title_image_model_selection_config(tmp_p
 
     with pytest.raises(RuntimeError, match="poster_title_image requires"):
         model_registry.validate_model_catalog()
+
+
+@pytest.mark.parametrize("image_adapter", ["missing-image-adapter", "litellm"])
+def test_model_registry_validates_poster_title_image_generation_image_adapter(tmp_path, monkeypatch, image_adapter):
+    config_path = tmp_path / "models.yaml"
+    _write_model_config(config_path)
+    job_model_root = tmp_path / "job-types"
+    _write_job_model_selection(job_model_root)
+    job_config_path = job_model_root / "poster_title_image" / "models.yaml"
+    job_config_path.write_text(
+        job_config_path.read_text(encoding="utf-8").replace(
+            "image_adapter: openai_responses",
+            f"image_adapter: {image_adapter}",
+        ),
+        encoding="utf-8",
+    )
+    test_settings = _build_settings(
+        OPENAI_API_KEY="test-key",
+        DEFAULT_MODEL_ID="custom-model",
+        MODEL_CONFIG_PATH=str(config_path),
+    )
+    monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
+    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
+    monkeypatch.setattr("app.jobs.registry.all_job_types", lambda: ["poster_title_image"])
+    monkeypatch.setattr(model_registry, "validate_price_matches_model", lambda **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="generation.image_adapter must be one of"):
+        model_registry.validate_model_catalog()
+
+
+def test_poster_title_image_model_selection_reads_generation_image_adapter(tmp_path, monkeypatch):
+    job_model_root = tmp_path / "job-types"
+    _write_job_model_selection(job_model_root)
+    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
+
+    selection = model_selection.get_poster_title_image_model_selection()
+
+    assert selection.image_generation_adapter == "openai_responses"
 
 
 def test_model_registry_rejects_unknown_job_type(tmp_path, monkeypatch):

@@ -28,6 +28,7 @@ from app.jobs.base import ExecutionRetryPolicy, JobExecutor, JobRetryPolicy
 from app.jobs.model_selection import (
     poster_title_image_generation_allowed_model_ids,
     poster_title_image_generation_default_model_id,
+    poster_title_image_generation_image_adapter,
     poster_title_image_style_probe_model_id,
 )
 from app.jobs.registry import register_job_type
@@ -59,7 +60,12 @@ from app.schemas.jobs import (
 )
 from app.services.ai_capability_kernel import ImageModelGate, ModelGate
 from app.services.ai_gateway_facade import generate_image_with_ledger, generate_text_with_images_with_ledger
-from app.services.job_runtime import ai_billing_scope_id_from_job, job_params_from_job, output_target_from_job
+from app.services.job_runtime import (
+    ai_billing_scope_id_from_job,
+    job_params_from_job,
+    output_target_from_job,
+    runtime_fields_from_job,
+)
 from app.services.jobs import trigger_request_id_from_job
 from app.workflows import WorkflowDefinition, chord, group, register as register_workflow, task
 
@@ -133,24 +139,31 @@ Scale: Render the title LARGE — main-title proportions. The text block must fi
 """
 
 
-def _style_probe_provider_model() -> str:
-    model_id = _style_probe_model_id()
+def _style_probe_provider_model(model_id: str) -> str:
     model = get_enabled_model(model_id)
     if model is None:
         raise AppError("MODEL_NOT_AVAILABLE", f"模型不可用: {model_id}")
     return model.provider_model
 
 
-def _style_probe_model_id_for_reference(reference_image: ImageInput) -> str:
-    model_id = _style_probe_model_id()
-    _validate_style_probe_model(required_media_types={reference_image.content_type})
+def _style_probe_model_id_for_reference(reference_image: ImageInput, *, model_id: str, image_adapter: str) -> str:
+    _validate_style_probe_model(
+        required_media_types={reference_image.content_type},
+        model_id=model_id,
+        image_adapter=image_adapter,
+    )
     return model_id
 
 
-def _validate_style_probe_model(*, required_media_types: set[str]) -> None:
-    model_id = _style_probe_model_id()
+def _validate_style_probe_model(
+    *,
+    required_media_types: set[str],
+    model_id: str | None = None,
+    image_adapter: str | None = None,
+) -> None:
+    model_id = model_id or _style_probe_model_id()
     result = STYLE_PROBE_MODEL_GATE.resolve_multimodal_text(model_id, required_media_types=required_media_types)
-    if result.model.features.get("supports_image_generation_tool") is not True:
+    if (image_adapter or _image_adapter()) == "openai_responses" and result.model.features.get("supports_image_generation_tool") is not True:
         raise AppError("MODEL_NOT_AVAILABLE", f"模型不支持 image_generation tool 调用: {model_id}")
 
 
@@ -246,6 +259,10 @@ def _generation_allowed_model_ids() -> tuple[str, ...]:
     return poster_title_image_generation_allowed_model_ids()
 
 
+def _image_adapter() -> str:
+    return poster_title_image_generation_image_adapter()
+
+
 def _max_workflow_nodes() -> int:
     return settings.job.poster_title_image_max_items * 2 + 1
 
@@ -276,6 +293,8 @@ async def _probe_style(
     reference_image: ImageInput,
     prompt: str,
     *,
+    model_id: str,
+    image_adapter: str,
     caller_id: str,
     scope_id: str,
     scope_job_id: Any,
@@ -294,7 +313,7 @@ async def _probe_style(
         scope_job_id=scope_job_id,
         attempt_id=attempt_id,
         job_type=job.job_type,
-        model_id=_style_probe_model_id_for_reference(reference_image),
+        model_id=_style_probe_model_id_for_reference(reference_image, model_id=model_id, image_adapter=image_adapter),
         prompt=prompt,
         reference_images=[reference_image],
     )
@@ -521,9 +540,11 @@ class PosterTitleImageJob(JobExecutor):
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = PosterTitleImageParams.model_validate(job_params)
+        image_adapter = _image_adapter()
         return PosterTitleImageRuntimeFields(
             style_probe_model_id=_style_probe_model_id(),
             generation_model_id=_generation_model_id_from_params(params),
+            image_adapter=image_adapter,
         ).model_dump()
 
     async def build_result_snapshot(self, status: str, job: Job, db: AsyncSession) -> dict[str, Any] | None:
@@ -554,6 +575,7 @@ class PosterTitleImageJob(JobExecutor):
                     "allowed_model_ids": list(allowed_model_ids),
                 },
             )
+        image_adapter = _image_adapter()
         IMAGE_MODEL_GATE.resolve(generation_model_id, require_edit=True)
         for item in params.items:
             require_supported_language(item.language)
@@ -567,7 +589,7 @@ class PosterTitleImageJob(JobExecutor):
                     },
                 )
             _validate_reference_ref_payload(item.reference_image)
-            _validate_style_probe_model(required_media_types={item.reference_image.content_type})
+            _validate_style_probe_model(required_media_types={item.reference_image.content_type}, image_adapter=image_adapter)
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:
         raise AppError(
@@ -596,12 +618,15 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
         return PosterTitleImageStyleProbeParams.model_validate(job_params).model_dump()
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        params = PosterTitleImageStyleProbeParams.model_validate(job_params)
         return PosterTitleImageStyleProbeRuntimeFields(
-            style_probe_model_id=_style_probe_model_id()
+            style_probe_model_id=params.style_probe_model_id,
+            image_adapter=params.image_adapter,
         ).model_dump()
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:
         params = PosterTitleImageStyleProbeParams.model_validate(job_params_from_job(job))
+        runtime_fields = PosterTitleImageStyleProbeRuntimeFields.model_validate(runtime_fields_from_job(job))
         attempt_id = job.active_attempt_id
         if attempt_id is None:
             raise AppError("JOB_RUNTIME_NOT_SUPPORTED", "poster_title_image style probe requires active_attempt_id")
@@ -613,6 +638,8 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
         style_desc = await _probe_style(
             reference_image,
             params.style_prompt,
+            model_id=runtime_fields.style_probe_model_id,
+            image_adapter=runtime_fields.image_adapter,
             caller_id=job.caller_id,
             scope_id=str(ai_scope_id),
             scope_job_id=ai_scope_id,
@@ -633,7 +660,7 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
             job_type=job.job_type,
             workflow_node_key=job.workflow_node_key,
             operation="poster_title_image.probe_style",
-            model_id=_style_probe_model_id(),
+            model_id=runtime_fields.style_probe_model_id,
             duration_ms=elapsed_ms,
         )
         return PosterTitleImageStyleProbeResult(
@@ -664,7 +691,9 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = PosterTitleImageGenerateItemParams.model_validate(job_params)
         return PosterTitleImageGenerateItemRuntimeFields(
-            generation_model_id=params.item.model_id or _generation_default_model_id()
+            generation_model_id=params.item.model_id or _generation_default_model_id(),
+            style_probe_model_id=params.style_probe_model_id,
+            image_adapter=params.image_adapter,
         ).model_dump()
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:
@@ -677,8 +706,10 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
         log_request_id = request_id or "-"
         ai_scope_id = ai_billing_scope_id_from_job(job)
         output_target = output_target_from_job(job)
-        generation_model_id = item.model_id or _generation_default_model_id()
-        response_model = _style_probe_provider_model()
+        runtime_fields = PosterTitleImageGenerateItemRuntimeFields.model_validate(runtime_fields_from_job(job))
+        generation_model_id = runtime_fields.generation_model_id
+        image_adapter = runtime_fields.image_adapter
+        response_model = _style_probe_provider_model(runtime_fields.style_probe_model_id)
         default_prompt_blocks = _default_prompt_blocks()
         children = await _workflow_children(job, db)
         probe_child = _child_by_node_key(children, params.probe_node_key)
@@ -711,6 +742,7 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
                 attempt_id=attempt_id,
                 job_type=job.job_type,
                 model_id=generation_model_id,
+                image_adapter=image_adapter,
                 response_model=response_model,
                 prompt=prompt,
                 reference_images=[reference_image],
@@ -889,6 +921,8 @@ def register_poster_title_image_workflow() -> None:
 def _workflow_expr(job_params: dict[str, Any]) -> Any:
     params = PosterTitleImageParams.model_validate(job_params)
     default_prompt_blocks = _default_prompt_blocks()
+    image_adapter = _image_adapter()
+    style_probe_model_id = _style_probe_model_id()
     style_nodes: dict[str, tuple[str, PosterTitleImageItemParams, str]] = {}
     item_members = []
     for item in params.items:
@@ -905,6 +939,8 @@ def _workflow_expr(job_params: dict[str, Any]) -> Any:
                 {
                     "item": item.model_dump(),
                     "probe_node_key": probe_node_key,
+                    "style_probe_model_id": style_probe_model_id,
+                    "image_adapter": image_adapter,
                 },
                 depends_on=(probe_node_key,),
             )
@@ -917,6 +953,8 @@ def _workflow_expr(job_params: dict[str, Any]) -> Any:
                 "style_key": style_key,
                 "reference_image": item.reference_image.model_dump(),
                 "style_prompt": style_prompt,
+                "style_probe_model_id": style_probe_model_id,
+                "image_adapter": image_adapter,
             },
         )
         for style_key, (node_key, item, style_prompt) in style_nodes.items()

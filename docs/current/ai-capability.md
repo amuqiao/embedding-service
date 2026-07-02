@@ -4,14 +4,16 @@
 
 ## 当前行为
 
-- 当前稳定 AI 调用入口是 `app/services/ai_gateway_facade.py` 的 `generate_text_with_ledger()`。
-- 当前真实 provider path 是文本生成；内置真实 LLM 示例 `job_real_llm_echo` 和 `job_real_llm_double_echo` 通过该入口调用模型。
+- 当前稳定 AI 调用入口是 `app/services/ai_gateway_facade.py` 的 `generate_text_with_ledger()`、`generate_text_with_images_with_ledger()` 和 `generate_image_with_ledger()`。
+- 当前真实 provider path 覆盖文本生成、带参考图文本生成，以及 `poster_title_image` 使用的图片生成；内置真实 LLM 示例 `job_real_llm_echo` 和 `job_real_llm_double_echo` 通过文本入口调用模型。
 - `app/services/ai_capability_kernel.py` 承载当前 AI kernel 组件：`ModelGate`、`ProviderGateway`、`UsageNormalizer`、`TypedPricingResolver` 和 `UsageLedgerWriter`。
-- `app/integrations/ai_adapters/` 承载模型调用 adapter registry；当前内置 `litellm` adapter。
+- `app/integrations/ai_adapters/` 承载模型调用 adapter registry；当前内置 `litellm`、`openai_responses` 和 `openai_images` adapter。
 - `app/integrations/ai_gateway.py` 是当前 LiteLLM 文本调用实现，返回 `TextGenerationResult` 和 provider usage，不写数据库、不改 Job 状态、不生成 billing 响应。
 - `app/core/usage_records.py` 已有 `TextUsageRecord`、`ImageUsageRecord`、`AudioUsageRecord` 和 `VideoUsageRecord` 类型；当前只有文本 provider path 会产生真实 provider usage record。
 
 ## Runtime Path
+
+文本生成：
 
 ```text
 Job executor / real LLM job_type
@@ -22,6 +24,21 @@ Job executor / real LLM job_type
   -> ai_adapters.registry
   -> litellm adapter
   -> UsageNormalizer.normalize_text()
+  -> TypedPricingResolver.calculate_cost()
+  -> UsageLedgerWriter.mark_succeeded() / mark_failed()
+```
+
+图片生成：
+
+```text
+poster_title_image generate item
+  -> generate_image_with_ledger()
+  -> ModelGate
+  -> UsageLedgerWriter.create_pending()
+  -> ProviderGateway.generate_image()
+  -> ai_adapters.registry
+  -> openai_responses 或 openai_images adapter
+  -> UsageNormalizer.normalize_image()
   -> TypedPricingResolver.calculate_cost()
   -> UsageLedgerWriter.mark_succeeded() / mark_failed()
 ```
@@ -52,11 +69,13 @@ Job executor / real LLM job_type
 
 顶层字段是运行时服务配置；`public` 块是 `GET /models` 的唯一公开投影来源。修改 `provider_model`、`adapter_model`、`pricing_ref`、`requires_env` 或 `generation` 不应改变调用方看到的模型信息，除非同时显式修改 `public` 块。
 
-`public.model_type` 是模型目录粗分类，当前支持 `text`、`image`、`audio` 和 `video`。`public.capabilities` 表达具体可执行能力，`model_type` 不绑定单一 capability 或输出 MIME type。当前真实 provider path 只覆盖文本生成；图片模型可以进入 catalog 展示，但必须由对应业务 `job_type` 和 adapter 调用链路决定是否可提交和执行。
+`public.model_type` 是模型目录粗分类，当前支持 `text`、`image`、`audio` 和 `video`。`public.capabilities` 表达具体可执行能力，`model_type` 不绑定单一 capability 或输出 MIME type。图片模型可以进入 catalog 展示，但是否可提交和执行由对应业务 `job_type` 和 adapter 调用链路决定；当前 `poster_title_image` 通过任务级模型选择和 `generation.image_adapter` 使用图片生成能力。
 
 `public.limits` 和 `public.features` 是公开的类型化元信息。当前文本模型使用 `limits.context_window` 和 `features.supports_json_output`。`public.parameters` 是允许 `GET /models` 展示给调用方的模型级可配置参数 schema。当前内置文本模型没有公开模型级参数，因此配置为 `parameters: []`。`generation` 仍是 text provider 内部调用配置，不进入公开模型合同。
 
-`adapter` 指向模型调用 adapter，当前内置 `litellm` adapter 复用 LiteLLM 文本生成调用。`provider_model` 是 provider 原始模型名，用于 pricing 匹配和审计；`adapter_model` 是传给 adapter 的模型标识，LiteLLM adapter 当前使用 `openai/<provider_model>` 形式。缺少 required env 的模型不会出现在 `GET /models` 返回中。`GET /models` 只返回模型目录的公开投影，不暴露 `adapter`、`adapter_model`、`pricing_ref`、`requires_env`、`generation` 或 provider 内部参数。`GET /models?job_type=<job_type>` 仍使用同一个公开模型投影；当对应 `app/jobs/types/<job_type>/models.yaml` 存在时，响应会按任务级 `public_model_selection` 过滤并返回任务级默认模型。
+`adapter` 指向模型调用 adapter。`litellm` 当前复用 LiteLLM 文本生成调用；`openai_responses` 使用 OpenAI Responses API，支持带参考图文本生成和 `image_generation` tool；`openai_images` 使用 OpenAI Images API 直连生图/编辑。`provider_model` 是 provider 原始模型名，用于 pricing 匹配和审计；`adapter_model` 是传给 adapter 的模型标识，LiteLLM adapter 当前使用 `openai/<provider_model>` 形式。缺少 required env 的模型不会出现在 `GET /models` 返回中。`GET /models` 只返回模型目录的公开投影，不暴露 `adapter`、`adapter_model`、`pricing_ref`、`requires_env`、`generation` 或 provider 内部参数。`GET /models?job_type=<job_type>` 仍使用同一个公开模型投影；当对应 `app/jobs/types/<job_type>/models.yaml` 存在时，响应会按任务级 `public_model_selection` 过滤并返回任务级默认模型。
+
+`poster_title_image` 的生图连接路径由 `app/jobs/types/poster_title_image/models.yaml` 中的 `generation.image_adapter` 控制，当前默认是 `openai_responses`。如需切换到 POC 的 Images API 直连方案，只改该字段为 `openai_images`；prompt 构造、绿底后处理、draw_count、Job workflow 和 billing scope 不随之改变。adapter 选择会写入 Job runtime snapshot；修改 YAML 后只影响后续新建 Job，已创建 Job 和已生成的内部子任务继续使用入库时冻结的 adapter。
 
 Prompt 目录由 `PROMPT_CONFIG_PATH` 指向的基础配置和 `app/jobs/types/*/prompts.yaml` 的业务包内配置共同组成，加载逻辑在 `app/core/prompt_templates.py`。当前 Prompt registry 会进入 registry consistency 校验；正式业务 `job_type` 需要按自身 schema 引用 prompt refs，且不同配置文件之间不得重复声明同一个 prompt ref。
 
@@ -84,8 +103,8 @@ Prompt 目录由 `PROMPT_CONFIG_PATH` 指向的基础配置和 `app/jobs/types/*
 
 ## 当前限制
 
-- 当前真实 provider path 只覆盖文本生成。
-- image / audio / video usage record 和 pricing rule 基础类型已经存在，但还没有真实多模态 provider adapter 和业务消费链路。
+- 当前图片 provider path 只覆盖 `poster_title_image` 所需的生图/编辑形态；mask、单次请求多图、API 级透明背景和图像 token 精算不属于当前合同。
+- audio / video usage record 和 pricing rule 基础类型已经存在，但还没有真实 provider adapter 和业务消费链路。
 - 当前 `ai_call_ledger_entries` 持久化 `usage_detail` 和 `usage_units`，没有独立持久化 `usage_kind` 或 `usage_schema_version` 列。
 - workflow child AI 调用当前使用 root Job billing scope；node / child 级成本归因没有专用持久化字段。
 

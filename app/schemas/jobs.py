@@ -526,17 +526,21 @@ class PosterTitleImageRuntimeFields(StrictBaseModel):
     operation: Literal["poster_title_image"] = "poster_title_image"
     style_probe_model_id: str = Field(min_length=1, max_length=128)
     generation_model_id: str = Field(min_length=1, max_length=128)
+    image_adapter: str = Field(min_length=1, max_length=128)
 
 
 class PosterTitleImageStyleProbeParams(StrictBaseModel):
     style_key: str = Field(min_length=1)
     reference_image: PosterTitleImageReferenceImage
     style_prompt: str = Field(min_length=1, max_length=8000)
+    style_probe_model_id: str = Field(min_length=1, max_length=128)
+    image_adapter: str = Field(min_length=1, max_length=128)
 
 
 class PosterTitleImageStyleProbeRuntimeFields(StrictBaseModel):
     operation: Literal["poster_title_image_style_probe"] = "poster_title_image_style_probe"
     style_probe_model_id: str = Field(min_length=1, max_length=128)
+    image_adapter: str = Field(min_length=1, max_length=128)
 
 
 class PosterTitleImageDurationMs(StrictBaseModel):
@@ -553,11 +557,15 @@ class PosterTitleImageStyleProbeResult(StrictBaseModel):
 class PosterTitleImageGenerateItemParams(StrictBaseModel):
     item: PosterTitleImageItemParams
     probe_node_key: str = Field(min_length=1, max_length=128)
+    style_probe_model_id: str = Field(min_length=1, max_length=128)
+    image_adapter: str = Field(min_length=1, max_length=128)
 
 
 class PosterTitleImageGenerateItemRuntimeFields(StrictBaseModel):
     operation: Literal["poster_title_image_generate_item"] = "poster_title_image_generate_item"
     generation_model_id: str = Field(min_length=1, max_length=128)
+    style_probe_model_id: str = Field(min_length=1, max_length=128)
+    image_adapter: str = Field(min_length=1, max_length=128)
 
 
 PosterTitleImageItemStatus = Literal["pending", "running", "succeeded", "failed"]

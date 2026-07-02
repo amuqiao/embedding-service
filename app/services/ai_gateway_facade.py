@@ -291,6 +291,7 @@ async def generate_image_with_ledger(
     scope_id: str,
     operation: str,
     model_id: str,
+    image_adapter: str | None = None,
     response_model: str,
     prompt: str,
     reference_images: list[ImageInput],
@@ -325,6 +326,7 @@ async def generate_image_with_ledger(
     request_hash, input_size_bytes = kernel.hash_payload(
         {
             "model_id": model_id,
+            "image_adapter": image_adapter or model.adapter,
             "response_model": response_model,
             "prompt": prompt,
             "reference_images": [
@@ -369,6 +371,7 @@ async def generate_image_with_ledger(
     try:
         result = await PROVIDER_GATEWAY.generate_image(
             model,
+            image_adapter=image_adapter,
             response_model=response_model,
             prompt=prompt,
             reference_images=reference_images,

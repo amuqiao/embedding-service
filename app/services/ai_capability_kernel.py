@@ -254,6 +254,7 @@ class ProviderGateway:
         self,
         model: TextModel,
         *,
+        image_adapter: str | None = None,
         response_model: str,
         prompt: str,
         reference_images: list[ImageInput],
@@ -262,7 +263,7 @@ class ProviderGateway:
         background: str,
         output_format: str,
     ) -> ImageGenerationResult:
-        adapter = require_image_generation_adapter(model.adapter)
+        adapter = require_image_generation_adapter(image_adapter or model.adapter)
         return await adapter.generate_image(
             ImageGenerationRequest(
                 adapter_model=model.adapter_model,

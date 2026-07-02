@@ -8,3 +8,5 @@ public_model_selection:
 internal_models:
   style_probe:
     model_id: gpt-5.5
+generation:
+  image_adapter: openai_responses

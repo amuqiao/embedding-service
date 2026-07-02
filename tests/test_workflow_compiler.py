@@ -305,6 +305,41 @@ def test_poster_title_image_workflow_preserves_title_text_line_breaks_in_child_p
     assert join_node["job_params"]["items"][0]["title_text"] == "AI美术封面2\nhuanghang"
 
 
+def test_poster_title_image_workflow_freezes_image_adapter_in_child_params(monkeypatch):
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+    register_all_job_types()
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.poster_title_image_generation_image_adapter",
+        lambda: "openai_images",
+    )
+    ref = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/a.png",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/a.png",
+        "content_type": "image/png",
+        "sha256": "a" * 64,
+    }
+    item = {
+        "item_id": "en",
+        "language": "en",
+        "title_text": "Title",
+        "model_options": {
+            "size": "auto",
+            "quality": "high",
+            "draw_count": 1,
+            "background": "transparent",
+            "output_format": "png",
+        },
+        "reference_image": ref,
+    }
+
+    plan = compile_registered_workflow("poster_title_image", {"items": [item]})
+
+    nodes = _nodes_by_key(plan)
+    assert nodes["probe.0"]["job_params"]["image_adapter"] == "openai_images"
+    assert nodes[_item_node_key("en")]["job_params"]["image_adapter"] == "openai_images"
+
+
 def test_poster_title_image_workflow_rejects_unsafe_item_ids_before_node_key_building():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()

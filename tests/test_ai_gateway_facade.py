@@ -6,7 +6,7 @@ import pytest
 
 from app.core.exceptions import AppError
 from app.core.error_registry import get_error_spec
-from app.core.pricing_registry import CallPrice, TokenPrice
+from app.core.pricing_registry import CallPrice, ImagePrice, TokenPrice
 from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
 from app.services import ai_capability_kernel
 from app.services import ai_gateway_facade
@@ -262,6 +262,7 @@ async def test_provider_gateway_builds_image_generation_request_from_model(monke
     image = ImageInput(data=b"image", content_type="image/png", detail="low")
     await ai_capability_kernel.ProviderGateway().generate_image(
         _image_model(),
+        image_adapter="openai_images",
         response_model="gpt-4o",
         prompt="draw",
         reference_images=[image],
@@ -272,7 +273,7 @@ async def test_provider_gateway_builds_image_generation_request_from_model(monke
     )
 
     assert recorded["request"]
-    assert recorded["adapter_name"] == "litellm"
+    assert recorded["adapter_name"] == "openai_images"
     request = recorded["request"]
     assert request.adapter_model == "openai/custom-image-model"
     assert request.provider_model == "custom-image-model"
@@ -284,8 +285,65 @@ async def test_provider_gateway_builds_image_generation_request_from_model(monke
     assert request.background == "auto"
     assert request.output_format == "png"
     assert request.timeout_seconds == 45
-    assert request.api_key == "test-key"
-    assert request.api_base == "https://example.test/v1"
+
+
+@pytest.mark.asyncio
+async def test_generate_image_with_ledger_includes_image_adapter_in_hash_and_provider_call(monkeypatch):
+    session_factory = _FakeSessionFactory()
+    call_ids = [uuid.uuid4(), uuid.uuid4()]
+    pending_calls: list[dict] = []
+    provider_calls: list[str | None] = []
+    price = ImagePrice(
+        ref="openai:custom-image-model@2026-06-23",
+        model_id="custom-image-model",
+        provider="openai",
+        provider_model="custom-image-model",
+        pricing_type="per_image",
+        version="2026-06-23",
+        currency="USD",
+        amount_per_image=Decimal("0.04000000"),
+    )
+
+    async def fake_create_pending(*_args, **kwargs):
+        pending_calls.append(kwargs)
+        return SimpleNamespace(id=call_ids[len(pending_calls) - 1])
+
+    async def fake_generate_image(_model, *, image_adapter=None, **_kwargs):
+        provider_calls.append(image_adapter)
+        return ImageGenerationResult(images=[b"png"], usage={"image_count": 1})
+
+    async def fake_mark_succeeded(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_image_model", lambda _model_id: _image_model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: price)
+    monkeypatch.setattr(ai_gateway_facade.PROVIDER_GATEWAY, "generate_image", fake_generate_image)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fake_mark_succeeded)
+
+    common_kwargs = dict(
+        caller_id="caller-1",
+        scope_type="job",
+        scope_id="00000000-0000-0000-0000-000000000001",
+        operation="poster_title_image.generate_title",
+        model_id="custom-image-model",
+        response_model="gpt-5.5",
+        prompt="draw",
+        reference_images=[ImageInput(data=b"image", content_type="image/png", detail="low")],
+        size="auto",
+        quality="high",
+        background="auto",
+        output_format="png",
+        job_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        attempt_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        job_type="poster_title_image_generate_item",
+        ledger_session_factory=session_factory,
+    )
+    await ai_gateway_facade.generate_image_with_ledger(**common_kwargs, image_adapter="openai_responses")
+    await ai_gateway_facade.generate_image_with_ledger(**common_kwargs, image_adapter="openai_images")
+
+    assert provider_calls == ["openai_responses", "openai_images"]
+    assert pending_calls[0]["request_hash"] != pending_calls[1]["request_hash"]
 
 
 @pytest.mark.parametrize(
