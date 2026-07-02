@@ -32,7 +32,12 @@ from app.jobs.types.poster_title_image.errors import (
 )
 from app.models.job import Job
 from app.schemas.billing import BillingEnvelope
-from app.schemas.jobs import CreateJobRequest, JobEnvelope, PosterTitleImageParams
+from app.schemas.jobs import (
+    CreateJobRequest,
+    JobEnvelope,
+    POSTER_TITLE_IMAGE_MAX_TITLE_LINES,
+    PosterTitleImageParams,
+)
 from app.services.billing import job_cost_from_billing
 from app.services.job_runtime import payload_hash
 from app.services.ai_capability_kernel import ModelGate
@@ -214,7 +219,7 @@ def test_poster_title_image_params_apply_delivery_contract_constraints():
 
     invalid = _params(ref)
     invalid["items"][0]["title_text"] = "AI美术封面2\n\nhuanghang"
-    with pytest.raises(ValueError, match="at most 2 lines"):
+    with pytest.raises(ValueError, match=rf"at most {POSTER_TITLE_IMAGE_MAX_TITLE_LINES} lines"):
         PosterTitleImageParams.model_validate(invalid)
 
     invalid = _params(ref)
@@ -260,7 +265,7 @@ def test_poster_title_image_params_still_reject_duplicate_item_id():
         PosterTitleImageParams.model_validate(params)
 
 
-def test_poster_title_image_title_prompt_requires_single_line_without_newline():
+def test_poster_title_image_title_prompt_allows_automatic_wrapping_without_newline():
     from app.jobs.types.poster_title_image.executor import _title_prompt
 
     ref = _url_ref("reference/title.png", b"x")
@@ -276,12 +281,33 @@ def test_poster_title_image_title_prompt_requires_single_line_without_newline():
         },
     )
 
-    assert "No caller-specified line break is present" in prompt
-    assert "Render the title as exactly one line" in prompt
-    assert "Do not add line breaks or split the text" in prompt
-    assert "Maximum lines: 2" in prompt
+    assert "No caller-specified hard line break is present" in prompt
+    assert "Wrap the title naturally within the title area" in prompt
+    assert "Render the title as exactly one line" not in prompt
+    assert "Do not add line breaks or split the text" not in prompt
+    assert f"Maximum lines: {POSTER_TITLE_IMAGE_MAX_TITLE_LINES}" in prompt
     assert "caller layout preference" in prompt
     assert "Caller-specified hard line breaks are present" not in prompt
+
+
+def test_poster_title_image_title_prompt_uses_configured_max_title_lines(monkeypatch):
+    from app.jobs.types.poster_title_image import executor as poster_executor
+
+    ref = _url_ref("reference/title.png", b"x")
+    item = PosterTitleImageParams.model_validate(_params(ref)).items[0]
+    monkeypatch.setattr(poster_executor, "POSTER_TITLE_IMAGE_MAX_TITLE_LINES", 3)
+
+    prompt = poster_executor._title_prompt(
+        item,
+        language_name="Spanish",
+        style_desc="heavy stone letters",
+        default_prompt_blocks={
+            "layout_rules": "caller layout preference",
+            "additional_prompt": "additional quality rules",
+        },
+    )
+
+    assert "Maximum lines: 3" in prompt
 
 
 def test_poster_title_image_title_prompt_preserves_caller_hard_line_breaks():
@@ -306,6 +332,7 @@ def test_poster_title_image_title_prompt_preserves_caller_hard_line_breaks():
     )
 
     assert "Caller-specified hard line breaks are present" in prompt
+    assert "The caller's LF characters define both the line count and the hard line break positions." in prompt
     assert "Line 1: AI美术封面2" in prompt
     assert "Line 2: huanghang" in prompt
     assert "Do not merge lines" in prompt
@@ -324,6 +351,8 @@ def test_poster_title_image_title_prompt_preserves_caller_hard_line_breaks():
         ("layout_rules", "Put the title on separate rows."),
         ("layout_rules", "Arrange the title in two stacked rows."),
         ("layout_rules", "Put each word on its own row."),
+        ("layout_rules", "Reposition the title line breaks for better balance."),
+        ("additional_prompt", "Move the line break after the second word."),
         ("additional_prompt", "Make the title multiline."),
         ("layout_rules", "标题必须单行"),
         ("additional_prompt", "preserve two lines"),

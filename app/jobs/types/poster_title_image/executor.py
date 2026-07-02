@@ -333,14 +333,15 @@ def _line_break_rules(title_text: str) -> str:
     lines = title_text.split("\n")
     if len(lines) == 1:
         return (
-            "No caller-specified line break is present. Render the title as exactly one line. "
-            "Do not add line breaks or split the text. "
+            "No caller-specified hard line break is present. Wrap the title naturally within the title area "
+            "when needed for fit and balance. "
             f"Maximum lines: {POSTER_TITLE_IMAGE_MAX_TITLE_LINES}. "
             "This contract overrides any conflicting layout preference."
         )
     numbered_lines = " ".join(f"Line {index}: {line}" for index, line in enumerate(lines, start=1))
     return (
         "Caller-specified hard line breaks are present. "
+        "The caller's LF characters define both the line count and the hard line break positions. "
         f"Render exactly these {len(lines)} lines in this order: {numbered_lines}. "
         "Preserve the line breaks exactly. Do not merge lines, reorder lines, add extra line breaks, "
         "or split any line further. "

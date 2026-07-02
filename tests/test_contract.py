@@ -11,7 +11,7 @@ from app.core.prompt_templates import list_prompt_templates
 from app.core.security import require_service_auth
 from app.main import API_PREFIX, app
 from app.schemas.errors import build_error_envelope
-from app.schemas.jobs import CreateJobRequest, JobResult
+from app.schemas.jobs import CreateJobRequest, JobResult, PosterTitleImageItemParams, PosterTitleImagePromptOverrides
 from app.schemas.meta import ModelOut, ModelParameterOut, ModelsResponse
 from app.services.executor import _prompt_messages
 from app.services.jobs import _validate_create_request, validate_job_status_payload
@@ -92,9 +92,30 @@ def test_default_prompt_templates_declares_poster_title_image_blocks():
         "layout_rules",
     }
     layout_rules = next(block for block in template.prompt_blocks if block.key == "layout_rules")
-    assert "service-provided line break contract" in layout_rules.default_content
-    assert "no LF means exactly one line" in layout_rules.default_content
-    assert "Layout rules do not define line breaks" in layout_rules.default_content
+    assert "Render the text large and bold" in layout_rules.default_content
+    assert "Keep text spacing natural and balanced" in layout_rules.default_content
+    assert "line break" not in layout_rules.default_content.lower()
+    assert "no LF means" not in layout_rules.default_content
+    assert "LF means" not in layout_rules.default_content
+    assert "LF" not in layout_rules.default_content
+    assert "Maximum lines" not in layout_rules.default_content
+    assert "exactly one line" not in layout_rules.default_content
+    assert "2 lines" not in layout_rules.default_content
+    assert "two lines" not in layout_rules.default_content
+    assert "title_text" not in layout_rules.default_content
+
+
+def test_poster_title_image_schema_describes_line_break_contract_without_overpromising_wrapping():
+    title_description = PosterTitleImageItemParams.model_fields["title_text"].description or ""
+    assert "Only source of caller-specified hard line breaks" in title_description
+    assert "No LF means no caller-specified hard line break" in title_description
+    assert "may wrap when needed for fit and balance" in title_description
+    assert "Each LF position determines a hard line break position" in title_description
+    assert "No LF means automatic wrapping" not in title_description
+
+    layout_description = PosterTitleImagePromptOverrides.model_fields["layout_rules"].description or ""
+    assert "reposition title_text line breaks" in layout_description
+    assert "line break position" not in layout_description
 
 
 def test_runtime_prompt_builds_generic_user_and_work_note_messages():
@@ -784,9 +805,17 @@ def test_prompt_templates_route_defaults_to_poster_title_image(monkeypatch):
         "layout_rules",
     }
     layout_rules = next(block for block in body["data"]["prompt_blocks"] if block["key"] == "layout_rules")
-    assert "service-provided line break contract" in layout_rules["default_content"]
-    assert "no LF means exactly one line" in layout_rules["default_content"]
-    assert "Layout rules do not define line breaks" in layout_rules["default_content"]
+    assert "Render the text large and bold" in layout_rules["default_content"]
+    assert "Keep text spacing natural and balanced" in layout_rules["default_content"]
+    assert "line break" not in layout_rules["default_content"].lower()
+    assert "no LF means" not in layout_rules["default_content"]
+    assert "LF means" not in layout_rules["default_content"]
+    assert "LF" not in layout_rules["default_content"]
+    assert "Maximum lines" not in layout_rules["default_content"]
+    assert "exactly one line" not in layout_rules["default_content"]
+    assert "2 lines" not in layout_rules["default_content"]
+    assert "two lines" not in layout_rules["default_content"]
+    assert "title_text" not in layout_rules["default_content"]
 
 
 def test_prompt_templates_route_filters_by_job_type(monkeypatch):

@@ -486,7 +486,7 @@ GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
         "key": "layout_rules",
         "role": "user",
         "label": "Layout rules",
-        "default_content": "The title is a horizontal poster-title layer. Render the text large and bold, filling about 85-95% of the frame width while preserving a clear safety margin on every side. Follow the service-provided line break contract for the text structure: no LF means exactly one line, and LF means render the caller-specified lines. Layout rules do not define line breaks. Keep line spacing natural and balanced when multiple lines are present. Do not crop, truncate, overlap, squeeze, warp, rotate, or scatter the text. The full title must remain centered, readable, and naturally spaced."
+        "default_content": "The title is a horizontal poster-title layer. Render the text large and bold, filling about 85-95% of the frame width while preserving a clear safety margin on every side. Keep text spacing natural and balanced. Do not crop, truncate, overlap, squeeze, warp, rotate, or scatter the text. The full title must remain centered, readable, and naturally spaced."
       }
     ]
   },
@@ -512,8 +512,8 @@ GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
 | `data.prompt_blocks[].key` | 说明 | 创建任务覆盖字段 |
 |---|---|---|
 | `style_probe` | 风格探针 | `job_params.items[].prompt_overrides.style_probe` |
-| `additional_prompt` | 附加视觉或风格提示词，不控制换行 | `job_params.items[].prompt_overrides.additional_prompt` |
-| `layout_rules` | 视觉排版偏好，不控制换行 | `job_params.items[].prompt_overrides.layout_rules` |
+| `additional_prompt` | 附加视觉或风格提示词，不控制换行或换行位置 | `job_params.items[].prompt_overrides.additional_prompt` |
+| `layout_rules` | 视觉排版偏好，不控制换行或换行位置 | `job_params.items[].prompt_overrides.layout_rules` |
 
 ## 5. 任务创建接口
 
@@ -553,8 +553,8 @@ POST /api/v1/ai-jobs/jobs
         },
         "prompt_overrides": {
           "style_probe": "optional item-level style probe override",
-          "additional_prompt": "optional item-level visual/style prompt; must not control line breaks",
-          "layout_rules": "optional item-level visual layout preference; must not control line breaks"
+          "additional_prompt": "optional item-level visual/style prompt; must not control line breaks or line break positions",
+          "layout_rules": "optional item-level visual layout preference; must not control line breaks or line break positions"
         }
       },
       {
@@ -577,8 +577,8 @@ POST /api/v1/ai-jobs/jobs
         },
         "prompt_overrides": {
           "style_probe": "optional item-level style probe override",
-          "additional_prompt": "optional item-level visual/style prompt; must not control line breaks",
-          "layout_rules": "optional item-level visual layout preference; must not control line breaks"
+          "additional_prompt": "optional item-level visual/style prompt; must not control line breaks or line break positions",
+          "layout_rules": "optional item-level visual layout preference; must not control line breaks or line break positions"
         }
       }
     ]
@@ -607,7 +607,7 @@ POST /api/v1/ai-jobs/jobs
 | `job_params.items` | array | 是 | 批量生成 item，至少 1 个；数量上限由服务端 `POSTER_TITLE_IMAGE_MAX_ITEMS` 配置，默认 50 |
 | `job_params.items[].item_id` | string | 是 | 调用方提供的稳定 item 关联键；同一任务内唯一 |
 | `job_params.items[].language` | string | 是 | 语种代码，必须来自第 3 节语种目录；同一任务内允许重复 |
-| `job_params.items[].title_text` | string | 是 | 目标语种标题文本，也是唯一文本分行来源；无 LF `\n` 时单行，有 LF `\n` 时按调用方指定行渲染 |
+| `job_params.items[].title_text` | string | 是 | 目标语种标题文本，也是唯一调用方硬分行来源；无 LF `\n` 时服务端允许按标题区域自动换行；有 LF `\n` 时，LF 所在位置就是调用方指定硬分行位置 |
 | `job_params.items[].model_id` | string | 否 | 标题图生图模型 ID；不传时使用服务端 `poster_title_image` 默认生图模型 |
 | `job_params.items[].model_options.size` | string | 是 | 目标输出尺寸 |
 | `job_params.items[].model_options.quality` | string | 是 | 目标输出质量 |
@@ -616,8 +616,8 @@ POST /api/v1/ai-jobs/jobs
 | `job_params.items[].model_options.output_format` | string | 是 | 业务输出格式要求，不是 provider raw 参数 |
 | `job_params.items[].reference_image` | object | 是 | 该 item 的参考图，使用 `OSS URL Ref` |
 | `job_params.items[].prompt_overrides.style_probe` | string | 否 | 该 item 的风格探针提示词覆盖 |
-| `job_params.items[].prompt_overrides.additional_prompt` | string | 否 | 该 item 的附加视觉或风格提示词；不定义、不新增、不删除、不合并、不重排 `title_text` 换行 |
-| `job_params.items[].prompt_overrides.layout_rules` | string | 否 | 该 item 的视觉排版偏好覆盖；不定义、不新增、不删除、不合并、不重排 `title_text` 换行 |
+| `job_params.items[].prompt_overrides.additional_prompt` | string | 否 | 该 item 的附加视觉或风格提示词；不定义、不新增、不删除、不合并、不拆分、不重排、不调整 `title_text` 换行位置 |
+| `job_params.items[].prompt_overrides.layout_rules` | string | 否 | 该 item 的视觉排版偏好覆盖；不定义、不新增、不删除、不合并、不拆分、不重排、不调整 `title_text` 换行位置 |
 | `callback.url` | string | 否 | 终态通知地址；传 `callback` 时必填，必须为 HTTPS URL |
 | `callback.events` | array | 否 | 需要通知的终态事件；不传时默认通知全部终态事件 |
 | `metadata` | object | 否 | 调用方透传元数据，服务不按该字段做业务决策 |
@@ -633,7 +633,7 @@ POST /api/v1/ai-jobs/jobs
 | `job_params.items` | 至少 1 个 item；默认最多 50 个，受服务端 `POSTER_TITLE_IMAGE_MAX_ITEMS` 配置限制 |
 | `job_params.items[].item_id` | 1 到 64 个字符；同一任务内唯一；首字符必须是字母或数字，后续只允许字母、数字、`.`、`_`、`-` |
 | `job_params.items[].language` | 语种代码必须来自第 3 节 `GET /languages` 返回的 `data.languages[].language`；同一任务内允许重复 |
-| `job_params.items[].title_text` | 1 到 200 个字符；仅支持最多 1 个 LF `\n` 作为调用方指定硬换行，最多 2 行；不支持 CRLF、其它换行字符或 HTML `<br />` |
+| `job_params.items[].title_text` | 1 到 200 个字符；仅支持 LF `\n` 作为调用方指定硬换行，LF 所在位置就是硬分行位置；最大硬分行行数由当前服务端校验限制控制，默认 2；可传 LF 数量由最大行数减 1 派生，默认最多 1 个 LF；不支持 CRLF、其它换行字符或 HTML `<br />` |
 | `job_params.items[].model_id` | 可省略；默认值和 allowlist 来自 `app/jobs/types/poster_title_image/models.yaml`；当前默认和 allowlist 均为 `gpt-image-2`；同一任务内必须一致 |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
 | `job_params.items[].model_options.quality` | `low`、`medium`、`high`、`auto` |
@@ -665,8 +665,8 @@ POST /api/v1/ai-jobs/jobs
 - 不允许传 provider API key、provider raw model name、价格规则、token 用量或其它内部字段。
 - 不传外层 `model_id`、`model_options`、`source`、`render_options`、`prompt_overrides` 或 `batch_options`。
 - 不传拆分的 `bucket`、`region`、`endpoint`、`object_key` 或临时签名参数；参考图只使用 `OSS URL Ref` 字段。
-- 不传 `items[].layout`；排版由 `title_text`、item 级提示词和服务内部规则共同决定。
-- `items[].title_text` 是唯一文本分行来源。未传 LF `\n` 时服务端要求模型渲染为单行，不自动换行；传入 LF `\n` 时服务端会要求模型按这些行渲染。`prompt_overrides.additional_prompt` 和 `prompt_overrides.layout_rules` 只能补充视觉或风格偏好，不能控制 `title_text` 的换行合同。
+- 不传 `items[].layout`；视觉排版由 item 级提示词和服务内部规则共同决定，换行结构由 `title_text` 和服务端派生换行合同决定。
+- `items[].title_text` 是唯一调用方硬分行来源。未传 LF `\n` 时服务端允许模型按标题区域、画布和可读性自动换行；传入 LF `\n` 时，LF 所在位置就是调用方指定硬分行位置，服务端会要求模型按这些硬分行位置渲染。硬分行最大行数由当前服务端校验限制控制，默认 2；允许 LF 数量由最大行数减 1 派生，默认最多 1 个 LF。`prompt_overrides.additional_prompt` 和 `prompt_overrides.layout_rules` 只能补充视觉或风格偏好，不能控制 `title_text` 的换行合同或调整硬分行位置。
 
 ### Callback Notification
 

@@ -16,6 +16,7 @@ HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 BARE_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 REAL_LLM_ECHO_INLINE_MAX_BYTES = 4096
 POSTER_TITLE_IMAGE_MAX_TITLE_LINES = 2
+POSTER_TITLE_IMAGE_MAX_HARD_LINE_BREAKS = POSTER_TITLE_IMAGE_MAX_TITLE_LINES - 1
 POSTER_TITLE_IMAGE_DISALLOWED_LINE_BREAKS = frozenset(
     {
         "\r",
@@ -41,7 +42,7 @@ POSTER_TITLE_IMAGE_LINE_CONTROL_OVERRIDE_PATTERN = re.compile(
     r"\bmultiline\b|"
     r"\b(?:break|wrap|split)\b.{0,40}\b(?:title|text|words?)\b|"
     r"\b(?:title|text|words?)\b.{0,40}\b(?:break|wrap|split)\b|"
-    r"\b(?:split|merge|preserve|add|remove|reorder)\s+(?:any\s+)?lines?\b|"
+    r"\b(?:split|merge|preserve|add|remove|reorder|reposition|move)\s+(?:any\s+)?lines?\b|"
     r"换行|分行|断行|单行|多行|合并行|拆行",
     re.IGNORECASE,
 )
@@ -441,8 +442,8 @@ class PosterTitleImagePromptOverrides(StrictBaseModel):
         min_length=1,
         max_length=4000,
         description=(
-            "Additional visual or style preference only. It must not define, add, remove, merge, or reorder "
-            "title_text line breaks."
+            "Additional visual or style preference only. It must not define, add, remove, merge, split, reorder, "
+            "or reposition title_text line breaks."
         ),
     )
     layout_rules: str | None = Field(
@@ -450,7 +451,8 @@ class PosterTitleImagePromptOverrides(StrictBaseModel):
         min_length=1,
         max_length=4000,
         description=(
-            "Visual layout preference only. It must not define, add, remove, merge, or reorder title_text line breaks."
+            "Visual layout preference only. It must not define, add, remove, merge, split, reorder, or reposition "
+            "title_text line breaks."
         ),
     )
 
@@ -473,7 +475,10 @@ class PosterTitleImageItemParams(StrictBaseModel):
         min_length=1,
         max_length=200,
         description=(
-            "Only source of title line breaks. No LF means exactly one line; LF separates caller-specified lines."
+            "Only source of caller-specified hard line breaks. No LF means no caller-specified hard line break; "
+            "The service may wrap when needed for fit and balance. "
+            "Each LF position determines a hard line break position. "
+            f"LF separates caller-specified lines, up to {POSTER_TITLE_IMAGE_MAX_TITLE_LINES} lines."
         ),
     )
     model_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -495,9 +500,9 @@ class PosterTitleImageItemParams(StrictBaseModel):
             raise ValueError("title_text line breaks must use LF \\n only")
         if "<br" in value.lower():
             raise ValueError("title_text does not support HTML line break tags; use LF \\n")
-        lines = value.split("\n")
-        if len(lines) > POSTER_TITLE_IMAGE_MAX_TITLE_LINES:
+        if value.count("\n") > POSTER_TITLE_IMAGE_MAX_HARD_LINE_BREAKS:
             raise ValueError(f"title_text must use at most {POSTER_TITLE_IMAGE_MAX_TITLE_LINES} lines")
+        lines = value.split("\n")
         if any(not line.strip() for line in lines):
             raise ValueError("title_text lines must not be empty")
         return value

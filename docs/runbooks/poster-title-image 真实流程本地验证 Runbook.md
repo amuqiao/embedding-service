@@ -263,7 +263,7 @@ SERVICE_API_KEY='<测试环境 API token>' \
 
 - `item_id`：同一个 Job 内唯一；首字符必须是字母或数字，后续只允许字母、数字、`.`、`_`、`-`。
 - `language`：必须来自共享业务语种目录；同一个 Job 内允许重复。
-- `title_text`：要渲染到标题图里的目标文案；服务端不自动换行，需要调用方指定硬换行时，在 JSON 字符串中使用 LF `\n`，不要使用 CRLF、其它换行字符或 HTML `<br />`。
+- `title_text`：要渲染到标题图里的目标文案；无 LF `\n` 时表示调用方不指定硬换行，服务端可按标题区域需要自动换行；需要调用方指定硬换行时，在 JSON 字符串中使用 LF `\n`，且 LF 所在位置就是硬分行位置；当前默认最多 2 行、最多 1 个 LF；不要使用 CRLF、其它换行字符或 HTML `<br />`。
 - `reference`：参考标题图，可以是本地图片、URL Ref JSON 文件，也可以是完整 URL Ref 四字段。
 
 可选字段：
@@ -272,6 +272,7 @@ SERVICE_API_KEY='<测试环境 API token>' \
 - `size`：默认使用命令行 `--size`。
 - `quality`：默认使用命令行 `--quality`。
 - `draw_count`：默认使用命令行 `--draw-count`，范围是 `1` 到 `4`。
+- `prompt_overrides.additional_prompt` / `prompt_overrides.layout_rules`：只补充视觉或风格偏好，不能控制换行或调整 `title_text` 的硬分行位置。
 
 本地图片示例：
 
