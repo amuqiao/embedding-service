@@ -200,6 +200,14 @@ _CORE_ERROR_SPECS: dict[str, ErrorSpec] = {
         scope="integration",
         owner="broker",
     ),
+    "DISPATCH_PUBLISH_EXHAUSTED": ErrorSpec(
+        "900536",
+        "DISPATCH_PUBLISH_EXHAUSTED",
+        "dispatch publish exhausted",
+        502,
+        scope="integration",
+        owner="broker",
+    ),
     "CALLBACK_RESPONSE_CONTRACT_INVALID": ErrorSpec(
         "900527",
         "CALLBACK_RESPONSE_CONTRACT_INVALID",

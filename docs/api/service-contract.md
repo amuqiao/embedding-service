@@ -168,6 +168,10 @@ CallbackEnvelope
 - `event_id` 是 Callback 事件幂等键，调用方应按它去重。
 - `attempt` 当前是 Callback 事件 payload 中的尝试序号快照，不表示 Job 执行 attempt 编号，也不能作为重试次数事实源；调用方去重应使用 `event_id`。
 - Callback 投递成功或失败不改变 Job 终态。
+- 服务会发送 `X-Callback-Timestamp` 和 `X-Callback-Signature` header。
+- `X-Callback-Signature` 当前格式为 `sha256=<hex>`，签名内容是 `timestamp + "." + raw_body` 的 HMAC-SHA256。
+- 调用方应使用双方约定的 Callback 签名密钥校验签名，并结合 `X-Callback-Timestamp` 与 `event_id` 做重放防护。
+- 同一 `event_id` 重复投递但已成功处理时，调用方仍应返回 `accepted=true`；`accepted=false` 表示拒收，会触发重试直到成功或达到最大尝试次数。
 
 调用方接受 Callback 时应返回 `2xx`、`Content-Type: application/json`，且 body 必须是 `CallbackResponseEnvelope`：
 

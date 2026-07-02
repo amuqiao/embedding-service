@@ -43,6 +43,10 @@ async def _no_jobs(*_args, **_kwargs):
     return []
 
 
+async def _no_dispatches(*_args, **_kwargs):
+    return []
+
+
 def _attempt(status: str = "published") -> JobAttempt:
     attempt_id = uuid.uuid4()
     return JobAttempt(
@@ -92,6 +96,8 @@ def _patch_common_recovery(monkeypatch, *, due_dispatches=None, stale_attempts=N
     monkeypatch.setattr("app.tasks.recovery.JobRepo.find_due_callbacks", _no_attempts)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.find_workflow_roots_for_reconciliation", _no_jobs)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.find_active_pending_attempts_missing_dispatch", _no_attempts)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_dead_lettered_pending_dispatches", _no_dispatches)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.mark_dead_lettered_dispatch_attempt_failed", _no_jobs)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.find_terminal_root_jobs_missing_callback_outbox", _no_jobs)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.cleanup_expired_jobs", _cleanup)
     monkeypatch.setattr(
@@ -165,6 +171,123 @@ async def test_recovery_marks_stale_running_attempt_failed(monkeypatch):
     assert result["failed"] == 1
     assert marked == [attempt.id]
     assert delivered == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_fails_dead_lettered_pending_dispatch(monkeypatch):
+    attempt_id = uuid.uuid4()
+    dispatch = DispatchOutbox(
+        id=uuid.uuid4(),
+        attempt_id=attempt_id,
+        event_id=f"job_attempt:{attempt_id}:dispatch",
+        task_name="jobs.run_attempt",
+        payload={"attempt_id": str(attempt_id)},
+        status="dead_letter",
+        dead_lettered_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        last_error={"code": "TASKIQ_PUBLISH_FAILED"},
+    )
+    failed_job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="job_test_echo",
+        status="failed",
+        progress_percent=0,
+        priority="normal",
+    )
+    marked: list[uuid.UUID] = []
+
+    async def dead_lettered_dispatches(*_args, **_kwargs):
+        return [dispatch]
+
+    async def mark_dead_lettered(_db, dispatch_id, *, error):
+        assert dispatch_id == dispatch.id
+        assert error["code"] == "DISPATCH_PUBLISH_EXHAUSTED"
+        assert error["details"]["attempt_id"] == str(attempt_id)
+        assert error["details"]["dispatch_id"] == str(dispatch.id)
+        assert error["details"]["last_error"] == {"code": "TASKIQ_PUBLISH_FAILED"}
+        marked.append(dispatch_id)
+        return failed_job
+
+    _patch_common_recovery(monkeypatch)
+    monkeypatch.setattr(
+        "app.tasks.recovery.JobRepo.find_dead_lettered_pending_dispatches",
+        dead_lettered_dispatches,
+    )
+    monkeypatch.setattr(
+        "app.tasks.recovery.JobRepo.mark_dead_lettered_dispatch_attempt_failed",
+        mark_dead_lettered,
+    )
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["recovered"] == 0
+    assert result["failed"] == 1
+    assert result["dispatch_dead_letter_failed"] == 1
+    assert marked == [dispatch.id]
+
+
+@pytest.mark.asyncio
+async def test_recovery_advances_workflow_after_dead_lettered_internal_child_failed(monkeypatch):
+    attempt_id = uuid.uuid4()
+    root_job_id = uuid.uuid4()
+    dispatch = DispatchOutbox(
+        id=uuid.uuid4(),
+        attempt_id=attempt_id,
+        event_id=f"job_attempt:{attempt_id}:dispatch",
+        task_name="jobs.run_attempt",
+        payload={"attempt_id": str(attempt_id)},
+        status="dead_letter",
+        dead_lettered_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        last_error={"code": "TASKIQ_PUBLISH_FAILED"},
+    )
+    child = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="job_test_echo",
+        status="failed",
+        root_job_id=root_job_id,
+        workflow_node_key="first",
+        progress_percent=0,
+        priority="normal",
+    )
+    advance_result = SimpleNamespace(
+        root_job_id=root_job_id,
+        created_attempt_ids=(),
+        finalized_root_job_id=root_job_id,
+    )
+    advanced = {}
+
+    async def dead_lettered_dispatches(*_args, **_kwargs):
+        return [dispatch]
+
+    async def mark_dead_lettered(*_args, **_kwargs):
+        return child
+
+    async def advance(_db, *, child_job):
+        advanced["child_job_id"] = child_job.id
+        return advance_result
+
+    async def handle_result(result):
+        advanced["result"] = result
+
+    _patch_common_recovery(monkeypatch)
+    monkeypatch.setattr(
+        "app.tasks.recovery.JobRepo.find_dead_lettered_pending_dispatches",
+        dead_lettered_dispatches,
+    )
+    monkeypatch.setattr(
+        "app.tasks.recovery.JobRepo.mark_dead_lettered_dispatch_attempt_failed",
+        mark_dead_lettered,
+    )
+    monkeypatch.setattr("app.workflows.orchestrator.advance_workflow_after_child_terminal", advance)
+    monkeypatch.setattr("app.tasks.jobs.handle_workflow_advance_result", handle_result)
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["failed"] == 1
+    assert result["dispatch_dead_letter_failed"] == 1
+    assert advanced["child_job_id"] == child.id
+    assert advanced["result"] is advance_result
 
 
 @pytest.mark.asyncio

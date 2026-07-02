@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from app.core.error_registry import get_error_spec
 from app.models.job import CallbackOutbox, DispatchOutbox, Job, JobAttempt, JobEvent, JobSubmissionKey
 from app.repositories.job_repo import JobRepo
 
@@ -1051,6 +1052,148 @@ async def test_mark_dispatch_publish_failed_records_retry_for_leased_dispatch():
     assert dispatch.last_error == error
     assert dispatch.next_attempt_at == deadline
     assert dispatch.lease_token is None
+
+
+@pytest.mark.asyncio
+async def test_find_dead_lettered_pending_dispatches_requires_active_queued_job():
+    db = _FakeDB()
+    db.results.append(_ScalarListResult([]))
+
+    await JobRepo.find_dead_lettered_pending_dispatches(db, limit=10)
+
+    sql = _compile(db.statements[0])
+    assert "job_aggregates.status =" in sql
+    assert "job_aggregates.active_attempt_id = job_execution_attempts.id" in sql
+    assert "job_execution_attempts.status =" in sql
+    assert "dispatch_outbox.task_name =" in sql
+    assert "dispatch_outbox.status =" in sql
+    assert "job_aggregates.deleted_at IS NULL" in sql
+
+
+@pytest.mark.asyncio
+async def test_mark_dead_lettered_dispatch_attempt_failed_terminalizes_pending_job(monkeypatch):
+    error = {
+        "code": "DISPATCH_PUBLISH_EXHAUSTED",
+        "message": "任务发布重试已耗尽，已收敛为失败",
+    }
+    assert get_error_spec("DISPATCH_PUBLISH_EXHAUSTED").retryable is False
+
+    attempt_id = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="dispatch-dead-letter",
+        job_type="job_test_echo",
+        status="queued",
+        active_attempt_id=attempt_id,
+        progress_percent=0,
+        metadata_={},
+    )
+    attempt = _attempt(id=attempt_id, job_id=job.id, status="pending")
+    dispatch = DispatchOutbox(
+        id=uuid.uuid4(),
+        event_id=f"job_attempt:{attempt_id}:dispatch",
+        attempt_id=attempt_id,
+        task_name="jobs.run_attempt",
+        payload={"attempt_id": str(attempt_id)},
+        status="dead_letter",
+        dead_lettered_at=datetime.now(UTC),
+        last_error={"code": "TASKIQ_PUBLISH_FAILED"},
+    )
+    db = _FakeDB()
+    db.results.append(_OneRowResult((job, attempt, dispatch)))
+    callback_jobs = []
+
+    async def ensure_callback(_db, callback_job, *, now):
+        callback_jobs.append((callback_job, now))
+        return None
+
+    monkeypatch.setattr(JobRepo, "ensure_terminal_callback_outbox", ensure_callback)
+
+    failed_job = await JobRepo.mark_dead_lettered_dispatch_attempt_failed(db, dispatch.id, error=error)
+
+    assert failed_job is job
+    assert db.flushed is True
+    assert job.status == "failed"
+    assert job.active_attempt_id is None
+    assert job.error == error
+    assert job.progress_stage == "failed"
+    assert attempt.status == "failed"
+    assert attempt.error == error
+    assert attempt.error_kind == "dispatch_error"
+    assert attempt.failure_phase == "dispatch"
+    assert attempt.retry_eligible is False
+    assert attempt.retry_decision == "do_not_retry"
+    assert attempt.retry_decision_reason == "dispatch_publish_exhausted"
+    assert callback_jobs[0][0] is job
+    events = [obj for obj in db.added if isinstance(obj, JobEvent)]
+    assert len(events) == 1
+    assert events[0].event_type == "attempt.failed"
+    assert events[0].from_status == "pending"
+    assert events[0].to_status == "failed"
+    assert events[0].payload["code"] == "DISPATCH_PUBLISH_EXHAUSTED"
+    assert events[0].payload["dispatch_id"] == str(dispatch.id)
+
+
+@pytest.mark.asyncio
+async def test_replay_dead_lettered_dispatch_resets_publish_budget():
+    attempt_id = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="dispatch-replay",
+        job_type="job_test_echo",
+        status="queued",
+        active_attempt_id=attempt_id,
+        progress_percent=0,
+        metadata_={},
+    )
+    attempt = _attempt(id=attempt_id, job_id=job.id, status="pending")
+    dispatch = DispatchOutbox(
+        id=uuid.uuid4(),
+        event_id=f"job_attempt:{attempt_id}:dispatch",
+        attempt_id=attempt_id,
+        task_name="jobs.run_attempt",
+        payload={"attempt_id": str(attempt_id)},
+        status="dead_letter",
+        publish_attempts=12,
+        max_publish_attempts=12,
+        next_attempt_at=None,
+        published_at=datetime.now(UTC) - timedelta(seconds=3),
+        dead_lettered_at=datetime.now(UTC),
+        last_error={"code": "TASKIQ_PUBLISH_FAILED"},
+    )
+    db = _FakeDB()
+    db.results.append(_OneRowResult((job, attempt, dispatch)))
+
+    replayed = await JobRepo.replay_dead_lettered_dispatch(
+        db,
+        job.id,
+        reason="manual_dispatch_replay",
+        operator="tester",
+    )
+
+    assert replayed == (job, attempt, dispatch)
+    assert db.flushed is True
+    assert job.status == "queued"
+    assert attempt.status == "pending"
+    assert dispatch.status == "retrying"
+    assert dispatch.publish_attempts == 0
+    assert dispatch.next_attempt_at is not None
+    assert dispatch.lease_token is None
+    assert dispatch.lease_expires_at is None
+    assert dispatch.leased_at is None
+    assert dispatch.published_at is None
+    assert dispatch.dead_lettered_at is None
+    assert dispatch.last_error is None
+    events = [obj for obj in db.added if isinstance(obj, JobEvent)]
+    assert len(events) == 1
+    assert events[0].event_type == "dispatch.replayed"
+    assert events[0].from_status == "dead_letter"
+    assert events[0].to_status == "retrying"
+    assert events[0].reason == "manual_dispatch_replay"
+    assert events[0].payload["operator"] == "tester"
+    assert events[0].payload["previous_publish_attempts"] == 12
 
 
 @pytest.mark.asyncio

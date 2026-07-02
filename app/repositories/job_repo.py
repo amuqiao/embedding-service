@@ -554,6 +554,183 @@ class JobRepo:
         return True
 
     @staticmethod
+    async def find_dead_lettered_pending_dispatches(db: AsyncSession, *, limit: int) -> list[DispatchOutbox]:
+        result = await db.execute(
+            select(DispatchOutbox)
+            .join(JobAttempt, JobAttempt.id == DispatchOutbox.attempt_id)
+            .join(Job, Job.id == JobAttempt.job_id)
+            .where(
+                Job.status == "queued",
+                Job.active_attempt_id == JobAttempt.id,
+                Job.deleted_at.is_(None),
+                JobAttempt.status == "pending",
+                DispatchOutbox.task_name == DISPATCH_TASK_NAME,
+                DispatchOutbox.status == "dead_letter",
+            )
+            .order_by(DispatchOutbox.dead_lettered_at.asc().nullsfirst(), DispatchOutbox.updated_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def mark_dead_lettered_dispatch_attempt_failed(
+        db: AsyncSession,
+        dispatch_id: uuid.UUID,
+        *,
+        error: dict[str, Any],
+    ) -> Job | None:
+        result = await db.execute(
+            select(Job, JobAttempt, DispatchOutbox)
+            .join(JobAttempt, JobAttempt.job_id == Job.id)
+            .join(DispatchOutbox, DispatchOutbox.attempt_id == JobAttempt.id)
+            .where(
+                DispatchOutbox.id == dispatch_id,
+                DispatchOutbox.task_name == DISPATCH_TASK_NAME,
+                DispatchOutbox.status == "dead_letter",
+                Job.status == "queued",
+                Job.active_attempt_id == JobAttempt.id,
+                Job.deleted_at.is_(None),
+                JobAttempt.status == "pending",
+            )
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        row = result.one_or_none()
+        if row is None:
+            return None
+        job, attempt, dispatch = row
+        now = datetime.now(timezone.utc)
+
+        attempt.status = "failed"
+        attempt.finished_at = now
+        attempt.error = error
+        attempt.error_kind = "dispatch_error"
+        attempt.failure_phase = "dispatch"
+        attempt.retry_eligible = False
+        attempt.retry_decision = "do_not_retry"
+        attempt.retry_decision_reason = "dispatch_publish_exhausted"
+        attempt.retry_decided_at = now
+        attempt.decision_source = "repository"
+        attempt.lease_token = None
+        attempt.lease_expires_at = None
+        attempt.updated_at = now
+
+        job.active_attempt_id = None
+        job.status = "failed"
+        job.progress_text = "任务发布失败"
+        job.progress_stage = "failed"
+        job.result = None
+        job.error = error
+        job.finished_at = now
+        job.updated_at = now
+
+        await JobRepo.ensure_terminal_callback_outbox(db, job, now=now)
+        db.add(
+            JobEvent(
+                job_id=job.id,
+                attempt_id=attempt.id,
+                event_type="attempt.failed",
+                from_status="pending",
+                to_status="failed",
+                payload={
+                    **error,
+                    "retry_eligible": False,
+                    "retry_decision": "do_not_retry",
+                    "retry_decision_reason": "dispatch_publish_exhausted",
+                    "dispatch_id": str(dispatch.id),
+                },
+            )
+        )
+        await db.flush()
+        return job
+
+    @staticmethod
+    async def get_dead_lettered_dispatch_replay_candidate(
+        db: AsyncSession,
+        job_id: uuid.UUID,
+    ) -> tuple[Job, JobAttempt, DispatchOutbox] | None:
+        result = await db.execute(
+            select(Job, JobAttempt, DispatchOutbox)
+            .join(JobAttempt, JobAttempt.job_id == Job.id)
+            .join(DispatchOutbox, DispatchOutbox.attempt_id == JobAttempt.id)
+            .where(
+                Job.id == job_id,
+                Job.status == "queued",
+                Job.active_attempt_id == JobAttempt.id,
+                Job.deleted_at.is_(None),
+                JobAttempt.status == "pending",
+                DispatchOutbox.task_name == DISPATCH_TASK_NAME,
+                DispatchOutbox.status == "dead_letter",
+            )
+            .limit(1)
+        )
+        return result.one_or_none()
+
+    @staticmethod
+    async def replay_dead_lettered_dispatch(
+        db: AsyncSession,
+        job_id: uuid.UUID,
+        *,
+        reason: str,
+        operator: str | None,
+    ) -> tuple[Job, JobAttempt, DispatchOutbox] | None:
+        result = await db.execute(
+            select(Job, JobAttempt, DispatchOutbox)
+            .join(JobAttempt, JobAttempt.job_id == Job.id)
+            .join(DispatchOutbox, DispatchOutbox.attempt_id == JobAttempt.id)
+            .where(
+                Job.id == job_id,
+                Job.status == "queued",
+                Job.active_attempt_id == JobAttempt.id,
+                Job.deleted_at.is_(None),
+                JobAttempt.status == "pending",
+                DispatchOutbox.task_name == DISPATCH_TASK_NAME,
+                DispatchOutbox.status == "dead_letter",
+            )
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        row = result.one_or_none()
+        if row is None:
+            return None
+        job, attempt, dispatch = row
+        now = datetime.now(timezone.utc)
+        previous_status = dispatch.status
+        previous_error = dispatch.last_error
+        previous_publish_attempts = dispatch.publish_attempts or 0
+
+        dispatch.status = "retrying"
+        dispatch.publish_attempts = 0
+        dispatch.next_attempt_at = now
+        dispatch.lease_token = None
+        dispatch.lease_expires_at = None
+        dispatch.leased_at = None
+        dispatch.published_at = None
+        dispatch.dead_lettered_at = None
+        dispatch.last_error = None
+        dispatch.updated_at = now
+        job.updated_at = now
+
+        db.add(
+            JobEvent(
+                job_id=job.id,
+                attempt_id=attempt.id,
+                event_type="dispatch.replayed",
+                from_status=previous_status,
+                to_status="retrying",
+                reason=reason,
+                payload={
+                    "dispatch_id": str(dispatch.id),
+                    "operator": operator,
+                    "previous_error": previous_error,
+                    "previous_publish_attempts": previous_publish_attempts,
+                },
+            )
+        )
+        await db.flush()
+        return job, attempt, dispatch
+
+    @staticmethod
     async def claim_attempt_for_execution(
         db: AsyncSession,
         attempt_id: uuid.UUID,

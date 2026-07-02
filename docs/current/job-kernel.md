@@ -513,6 +513,9 @@ publish failed
        next_attempt_at = now + publish_retry_delay_seconds
      否则
        status = dead_letter
+       recovery 将对应 pending attempt 和 Job 收敛为 failed
+       error.code = DISPATCH_PUBLISH_EXHAUSTED
+       如配置 callback，写 callback_outbox
 
 publish succeeded
   -> publish_attempts + 1
@@ -536,6 +539,17 @@ published but worker long time not claim
 `publish_attempts` 是总发布尝试次数，成功发布和失败发布都会增加。它不等同于“失败次数”。
 
 这些 retry 不消耗 execution attempt retry budget。也就是说，同一个 attempt 可能经历多次 dispatch publish retry，但仍然只是一条 execution attempt。
+
+dispatch `dead_letter` 是 publish retry budget 耗尽，不是 worker 执行业务失败。当前 recovery 会扫描 `queued` + active pending attempt + `dispatch_outbox.status=dead_letter` 的记录，并把 Job 终态收敛为 `failed`，避免永久 `queued` 占用 active capacity。
+
+人工 replay 入口是确认式写操作：
+
+```bash
+./scripts/job-ops.sh replay-dispatch <job_id>
+./scripts/job-ops.sh replay-dispatch <job_id> --confirm
+```
+
+该命令只重放尚未被 recovery 终态收敛的 `queued` + active pending attempt + `dispatch_outbox.status=dead_letter`。它不会重开已经 `failed` 的 Job，也不会撤销已经 delivered 的 callback。
 
 ### Callback Delivery Retry
 
@@ -688,6 +702,8 @@ child jobs 没有 active 或非终态记录
 ./scripts/jobs.sh deleted-summary
 ./scripts/jobs.sh deleted-list
 ./scripts/jobs.sh deleted-job <job_id>
+./scripts/job-ops.sh delete-family <root_job_id> --reason <reason> --confirm
+./scripts/job-ops.sh restore-family <root_job_id> --confirm
 ```
 
 Restore 也是 root-family 级内部机制：只能从 root job id 恢复整组 root + child，并同时恢复 root submission key。恢复前会检查 family 是否处于完整软删除状态、deleted submission key 是否存在，以及同一 `caller_id + client_request_id` 是否已被新的 active key 占用；冲突时 fail-fast，不静默覆盖。

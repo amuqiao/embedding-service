@@ -12,6 +12,7 @@ verify.sh       一次性验证任务
 deploy.sh       docker compose 部署形态
 k8s.sh          已部署 Pod 内手动运维
 jobs.sh         Job 只读查询与排障
+job-ops.sh      Job 写操作运维入口
 real-flow.sh    手动真实模型/对象存储流程验证
 tools.sh        无默认持久副作用的本地开发辅助工具
 ```

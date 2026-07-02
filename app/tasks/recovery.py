@@ -37,6 +37,7 @@ async def _run_recovery(db: AsyncSession) -> dict:
     workflow_advances = []
     workflow_reconciled = 0
     dispatch_reconciled = 0
+    dispatch_dead_letter_failed = 0
     callback_reconciled = 0
     ai_ledger_reconciled = 0
 
@@ -51,6 +52,7 @@ async def _run_recovery(db: AsyncSession) -> dict:
             "deleted": deleted,
             "workflow_reconciled": workflow_reconciled,
             "dispatch_reconciled": dispatch_reconciled,
+            "dispatch_dead_letter_failed": dispatch_dead_letter_failed,
             "callback_reconciled": callback_reconciled,
             "ai_ledger_reconciled": ai_ledger_reconciled,
             "locked": False,
@@ -131,6 +133,37 @@ async def _run_recovery(db: AsyncSession) -> dict:
             if next_attempt_at <= now:
                 dispatch_attempts.append(attempt.id)
             dispatch_reconciled += 1
+
+        dead_lettered_dispatches = await JobRepo.find_dead_lettered_pending_dispatches(
+            db,
+            limit=settings.job.recovery_batch_size,
+        )
+        for dispatch in dead_lettered_dispatches:
+            error = {
+                "code": "DISPATCH_PUBLISH_EXHAUSTED",
+                "message": "任务发布重试已耗尽，已收敛为失败",
+                "details": {
+                    "attempt_id": str(dispatch.attempt_id),
+                    "dispatch_id": str(dispatch.id),
+                    "dead_lettered_at": dispatch.dead_lettered_at.isoformat()
+                    if dispatch.dead_lettered_at
+                    else None,
+                    "last_error": dispatch.last_error,
+                },
+            }
+            failed_job = await JobRepo.mark_dead_lettered_dispatch_attempt_failed(
+                db,
+                dispatch.id,
+                error=error,
+            )
+            if failed_job is not None:
+                if failed_job.root_job_id is not None and failed_job.status == "failed":
+                    from app.workflows.orchestrator import advance_workflow_after_child_terminal
+
+                    workflow_advances.append(await advance_workflow_after_child_terminal(db, child_job=failed_job))
+                failed += 1
+                dispatch_dead_letter_failed += 1
+                logger.warning("recovery: failed dead-lettered dispatch attempt %s", dispatch.attempt_id)
 
         terminal_jobs_missing_callback = await JobRepo.find_terminal_root_jobs_missing_callback_outbox(
             db,
@@ -214,6 +247,7 @@ async def _run_recovery(db: AsyncSession) -> dict:
         "deleted": deleted,
         "workflow_reconciled": workflow_reconciled,
         "dispatch_reconciled": dispatch_reconciled,
+        "dispatch_dead_letter_failed": dispatch_dead_letter_failed,
         "callback_reconciled": callback_reconciled,
         "ai_ledger_reconciled": ai_ledger_reconciled,
         "locked": True,
