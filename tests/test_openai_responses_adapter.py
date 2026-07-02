@@ -149,6 +149,50 @@ async def test_openai_responses_adapter_generates_without_reference_images(monke
 
 
 @pytest.mark.asyncio
+async def test_openai_responses_image_adapter_includes_provider_usage_when_present(monkeypatch):
+    class FakeResponses:
+        async def create(self, **_kwargs):
+            return SimpleNamespace(
+                output=[
+                    SimpleNamespace(
+                        type="image_generation_call",
+                        result="cG5n",
+                        revised_prompt=None,
+                    )
+                ],
+                usage=SimpleNamespace(model_dump=lambda: {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}),
+            )
+
+    monkeypatch.setattr(
+        openai_responses_adapter,
+        "_client",
+        lambda **_kwargs: SimpleNamespace(responses=FakeResponses()),
+    )
+
+    result = await OpenAIResponsesAdapter().generate_image(
+        ImageGenerationRequest(
+            adapter_model="openai/gpt-image-2",
+            provider_model="gpt-image-2",
+            response_model="gpt-5.5",
+            prompt="draw title",
+            reference_images=[],
+            size="1024x1024",
+            quality="medium",
+            background="opaque",
+            output_format="png",
+            timeout_seconds=30,
+            api_key="test-key",
+            api_base=None,
+        )
+    )
+
+    assert result.usage == {
+        "image_generation_call_count": 1,
+        "provider_usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+    }
+
+
+@pytest.mark.asyncio
 async def test_openai_images_adapter_edits_with_provider_model(monkeypatch):
     recorded: dict = {}
 
@@ -230,3 +274,42 @@ async def test_openai_images_adapter_generates_without_reference_images(monkeypa
     assert recorded["model"] == "gpt-image-2"
     assert "image" not in recorded
     assert result.images == [b"png"]
+
+
+@pytest.mark.asyncio
+async def test_openai_images_adapter_includes_provider_usage_when_present(monkeypatch):
+    class FakeImages:
+        async def generate(self, **_kwargs):
+            return SimpleNamespace(
+                data=[SimpleNamespace(b64_json="cG5n", revised_prompt=None)],
+                usage=SimpleNamespace(model_dump=lambda: {"input_tokens": 3, "output_tokens": 5, "total_tokens": 8}),
+            )
+
+    monkeypatch.setattr(
+        openai_images_adapter,
+        "_client",
+        lambda **_kwargs: SimpleNamespace(images=FakeImages()),
+    )
+
+    result = await OpenAIImagesAdapter().generate_image(
+        ImageGenerationRequest(
+            adapter_model="openai/gpt-image-2",
+            provider_model="gpt-image-2",
+            response_model="gpt-5.5",
+            prompt="draw title",
+            reference_images=[],
+            size="1024x1024",
+            quality="medium",
+            background="opaque",
+            output_format="png",
+            timeout_seconds=30,
+            api_key="test-key",
+            api_base=None,
+        )
+    )
+
+    assert result.usage == {
+        "image_count": 1,
+        "api": "images",
+        "provider_usage": {"input_tokens": 3, "output_tokens": 5, "total_tokens": 8},
+    }

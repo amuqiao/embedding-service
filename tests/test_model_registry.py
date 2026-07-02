@@ -591,6 +591,26 @@ def test_poster_title_image_model_selection_reads_generation_image_adapter(tmp_p
     assert selection.image_generation_adapter == "openai_responses"
 
 
+def test_model_registry_requires_openai_images_for_poster_title_image_token_pricing(tmp_path, monkeypatch):
+    config_path = tmp_path / "models.yaml"
+    _write_model_config(config_path)
+    job_model_root = tmp_path / "job-types"
+    _write_job_model_selection(job_model_root)
+    test_settings = _build_settings(
+        OPENAI_API_KEY="test-key",
+        DEFAULT_MODEL_ID="custom-model",
+        MODEL_CONFIG_PATH=str(config_path),
+    )
+    monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
+    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
+    monkeypatch.setattr("app.jobs.registry.all_job_types", lambda: ["poster_title_image"])
+    monkeypatch.setattr(model_registry, "validate_price_matches_model", lambda **_kwargs: None)
+    monkeypatch.setattr(model_registry, "require_price", lambda _pricing_ref: SimpleNamespace(pricing_type="per_image_token"))
+
+    with pytest.raises(RuntimeError, match="per_image_token pricing requires openai_images"):
+        model_registry.validate_model_catalog()
+
+
 def test_model_registry_rejects_unknown_job_type(tmp_path, monkeypatch):
     config_path = tmp_path / "models.yaml"
     _write_model_config(config_path)

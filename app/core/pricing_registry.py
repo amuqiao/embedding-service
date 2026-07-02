@@ -38,6 +38,15 @@ class ImagePrice(PricingRule):
 
 
 @dataclass(frozen=True)
+class ImageTokenPrice(PricingRule):
+    text_input_per_1m: Decimal
+    cached_text_input_per_1m: Decimal
+    image_input_per_1m: Decimal
+    cached_image_input_per_1m: Decimal
+    image_output_per_1m: Decimal
+
+
+@dataclass(frozen=True)
 class SecondPrice(PricingRule):
     amount_per_second: Decimal
 
@@ -80,6 +89,9 @@ def _required_decimal(config: dict[str, Any], key: str, ref: str) -> Decimal:
 
 def _parse_common_fields(ref: str, config: dict[str, Any], *, version: str, currency: str) -> dict[str, str]:
     pricing_type = _required_str(config, "pricing_type", ref)
+    item_version = config.get("version")
+    if item_version is not None and (not isinstance(item_version, str) or not item_version.strip()):
+        raise RuntimeError(f"price {ref} requires string field: version")
     return {
         "ref": ref,
         "model_id": _required_str(config, "model_id", ref),
@@ -87,7 +99,7 @@ def _parse_common_fields(ref: str, config: dict[str, Any], *, version: str, curr
         "provider_model": _required_str(config, "provider_model", ref),
         "pricing_type": pricing_type,
         "currency": currency,
-        "version": version,
+        "version": item_version.strip() if isinstance(item_version, str) else version,
     }
 
 
@@ -99,6 +111,15 @@ def _parse_price(ref: str, config: dict[str, Any], *, version: str, currency: st
             return ImagePrice(
                 **common,
                 amount_per_image=_required_decimal(config, "amount_per_image", ref),
+            )
+        if pricing_type == "per_image_token":
+            return ImageTokenPrice(
+                **common,
+                text_input_per_1m=_required_decimal(config, "text_input_per_1m", ref),
+                cached_text_input_per_1m=_required_decimal(config, "cached_text_input_per_1m", ref),
+                image_input_per_1m=_required_decimal(config, "image_input_per_1m", ref),
+                cached_image_input_per_1m=_required_decimal(config, "cached_image_input_per_1m", ref),
+                image_output_per_1m=_required_decimal(config, "image_output_per_1m", ref),
             )
         if pricing_type == "per_second":
             return SecondPrice(
@@ -186,6 +207,27 @@ def calculate_cost(price: PricingRule, usage: UsageRecord) -> Decimal:
         if not isinstance(usage, ImageUsageRecord):
             raise RuntimeError("per_image pricing requires image usage")
         return _quantize_money(Decimal(usage.image_count) * price.amount_per_image)
+    if isinstance(price, ImageTokenPrice):
+        if not isinstance(usage, ImageUsageRecord):
+            raise RuntimeError("per_image_token pricing requires image usage")
+        if usage.total_tokens is None:
+            raise RuntimeError("per_image_token pricing requires image token usage")
+        if usage.text_input_tokens is None:
+            raise RuntimeError("per_image_token pricing requires text_input_tokens")
+        if usage.image_input_tokens is None:
+            raise RuntimeError("per_image_token pricing requires image_input_tokens")
+        if usage.image_output_tokens is None:
+            raise RuntimeError("per_image_token pricing requires image_output_tokens")
+        billable_text_input = Decimal(usage.text_input_tokens - usage.cached_text_input_tokens)
+        billable_image_input = Decimal(usage.image_input_tokens - usage.cached_image_input_tokens)
+        amount = (
+            billable_text_input * price.text_input_per_1m
+            + Decimal(usage.cached_text_input_tokens) * price.cached_text_input_per_1m
+            + billable_image_input * price.image_input_per_1m
+            + Decimal(usage.cached_image_input_tokens) * price.cached_image_input_per_1m
+            + Decimal(usage.image_output_tokens) * price.image_output_per_1m
+        ) / ONE_MILLION
+        return _quantize_money(amount)
     if isinstance(price, SecondPrice):
         if not isinstance(usage, AudioUsageRecord | VideoUsageRecord):
             raise RuntimeError("per_second pricing requires audio or video usage")

@@ -34,6 +34,24 @@ failure path
 
 `app/tasks/recovery.py` 会把超时停留在 `pending` 的 AI ledger 行收敛为失败状态，让 billing 显式表达不完整或失败，不伪造 0 成本成功。
 
+## 稳定合同与扩展边界
+
+billing 模块只消费标准化后的 `usage_units` 和已经冻结的 `cost_amount`，不消费 provider 原始 usage，也不关心具体 adapter 类型。
+
+当前链路的职责边界是：
+
+| 层级 | 当前职责 |
+|---|---|
+| adapter | 调用 provider SDK，并把 provider 返回的 raw usage 放入 adapter result |
+| `UsageNormalizer` | 把 adapter result 标准化为 `UsageRecord`，并产出可聚合的 `usage_units` |
+| `pricing_registry` | 根据 `pricing_type` 和标准化后的 `UsageRecord` 计算单次调用成本 |
+| ledger | 冻结单次 AI 调用的 `usage_units`、`pricing_ref`、`pricing_version`、`cost_amount` 和生命周期状态 |
+| billing | 按 scope 聚合 ledger 行，生成 billing read model 和公开投影 |
+
+新增模型时，优先扩展模型配置、价格配置和 adapter / normalizer 的 provider usage 映射。只有新增当前 `pricing_registry` 不支持的计价方式，或公开 billing 投影需要新增稳定字段时，才应修改 billing 合同。
+
+例如当前 `gpt-image-2` 使用 `per_image_token` 计费，adapter 必须能提供 Images API 语义的图片 token usage；不应把 Responses API 的通用 usage 直接当成图片计费 usage。billing 聚合层仍只读取标准化后的 `usage_units` 和 `cost_amount`。
+
 ## Ledger 字段边界
 
 | 字段类别 | 当前事实 |

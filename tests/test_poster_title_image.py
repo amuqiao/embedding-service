@@ -603,7 +603,7 @@ def test_poster_title_image_create_request_does_not_require_runtime_prompt_paylo
         "operation": "poster_title_image",
         "style_probe_model_id": "gpt-5.5",
         "generation_model_id": "gpt-image-2",
-        "image_adapter": "openai_responses",
+        "image_adapter": "openai_images",
     }
 
 
@@ -858,6 +858,10 @@ def test_poster_title_image_response_model_requires_image_generation_tool(monkey
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.poster_title_image_style_probe_model_id",
         lambda: "gpt-4o",
+    )
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.poster_title_image_generation_image_adapter",
+        lambda: "openai_responses",
     )
 
     with pytest.raises(AppError, match="image_generation tool"):
@@ -2067,9 +2071,20 @@ def test_job_cost_maps_terminal_billing_projection():
         scope_id="job-1",
         status="estimated",
         currency="USD",
-        total_cost_amount="0.04000000",
-        usage_units={"image_count": 1},
-        pricing_refs=["openai:gpt-image-2@2026-06-23"],
+        total_cost_amount="0.00596500",
+        usage_units={
+            "image_count": 1,
+            "input_tokens": 17,
+            "cached_input_tokens": 0,
+            "output_tokens": 196,
+            "total_tokens": 213,
+            "text_input_tokens": 17,
+            "cached_text_input_tokens": 0,
+            "image_input_tokens": 0,
+            "cached_image_input_tokens": 0,
+            "image_output_tokens": 196,
+        },
+        pricing_refs=["openai:gpt-image-2@2026-07-02"],
         ai_call_count=1,
         billable_call_count=1,
         unbillable_call_count=0,
@@ -2079,7 +2094,7 @@ def test_job_cost_maps_terminal_billing_projection():
     cost = job_cost_from_billing(billing)
 
     assert cost is not None
-    assert cost.model_dump() == {"currency": "USD", "amount": "0.04000000", "final": True}
+    assert cost.model_dump() == {"currency": "USD", "amount": "0.00596500", "final": True}
 
 
 def test_job_envelope_rejects_non_terminal_cost():
@@ -2093,7 +2108,7 @@ def test_job_envelope_rejects_non_terminal_cost():
                 "job_progress": {"stage": "calling_model", "percent": 50},
                 "job_result": None,
                 "job_error": None,
-                "cost": {"currency": "USD", "amount": "0.04000000", "final": True},
+                "cost": {"currency": "USD", "amount": "0.00596500", "final": True},
                 "callback": {"status": "not_configured", "attempt": 0},
                 "status_url": "/api/v1/ai-jobs/jobs/test",
                 "created_at": datetime.now(timezone.utc),

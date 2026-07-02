@@ -6,7 +6,7 @@ import yaml
 
 from app.core.config import settings
 from app.core.exceptions import ValidationAppError
-from app.core.pricing_registry import validate_price_matches_model
+from app.core.pricing_registry import require_price, validate_price_matches_model
 from app.integrations.ai_adapters.registry import (
     validate_image_generation_adapter,
     validate_model_adapter,
@@ -585,6 +585,12 @@ def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry
             generation_model = model_by_id[model_id]
             if poster_selection.image_generation_adapter in {"openai_responses", "openai_images"} and generation_model.provider != "openai":
                 raise RuntimeError("poster_title_image generation.image_adapter requires OpenAI image models")
+            generation_price = require_price(generation_model.pricing_ref)
+            if (
+                generation_price.pricing_type == "per_image_token"
+                and poster_selection.image_generation_adapter != "openai_images"
+            ):
+                raise RuntimeError("poster_title_image per_image_token pricing requires openai_images image_adapter")
             if generation_model.model_type != "image":
                 raise RuntimeError("poster_title_image public_model_selection must reference image models")
             if "image_edit" not in generation_model.capabilities:

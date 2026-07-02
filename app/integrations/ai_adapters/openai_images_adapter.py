@@ -58,6 +58,19 @@ def _image_bytes_from_response(response: Any) -> tuple[list[bytes], str | None]:
     return images, revised_prompt
 
 
+def _usage_dict(response: Any) -> dict[str, Any] | None:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    if hasattr(usage, "model_dump"):
+        dumped = usage.model_dump()
+        if isinstance(dumped, dict):
+            return dumped
+    if isinstance(usage, dict):
+        return usage
+    raise RuntimeError("OpenAI Images usage payload must be an object")
+
+
 class OpenAIImagesAdapter:
     async def generate_image(self, request: ImageGenerationRequest) -> ImageGenerationResult:
         client = _client(
@@ -88,8 +101,12 @@ class OpenAIImagesAdapter:
             response = await client.images.generate(**common)
 
         images, revised_prompt = _image_bytes_from_response(response)
+        usage: dict[str, Any] = {"image_count": len(images), "api": "images"}
+        provider_usage = _usage_dict(response)
+        if provider_usage is not None:
+            usage["provider_usage"] = provider_usage
         return ImageGenerationResult(
             images=images,
             revised_prompt=revised_prompt,
-            usage={"image_count": len(images), "api": "images"},
+            usage=usage,
         )

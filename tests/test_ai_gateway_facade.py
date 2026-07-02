@@ -6,7 +6,7 @@ import pytest
 
 from app.core.exceptions import AppError
 from app.core.error_registry import get_error_spec
-from app.core.pricing_registry import CallPrice, ImagePrice, TokenPrice
+from app.core.pricing_registry import CallPrice, ImagePrice, ImageTokenPrice, TokenPrice
 from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
 from app.services import ai_capability_kernel
 from app.services import ai_gateway_facade
@@ -344,6 +344,179 @@ async def test_generate_image_with_ledger_includes_image_adapter_in_hash_and_pro
 
     assert provider_calls == ["openai_responses", "openai_images"]
     assert pending_calls[0]["request_hash"] != pending_calls[1]["request_hash"]
+
+
+@pytest.mark.asyncio
+async def test_generate_image_with_ledger_freezes_openai_images_token_usage_and_cost(monkeypatch):
+    session_factory = _FakeSessionFactory()
+    call_id = uuid.uuid4()
+    recorded: dict = {}
+    price = ImageTokenPrice(
+        ref="openai:gpt-image-2@2026-07-02",
+        model_id="custom-image-model",
+        provider="openai",
+        provider_model="custom-image-model",
+        pricing_type="per_image_token",
+        version="2026-07-02",
+        currency="USD",
+        text_input_per_1m=Decimal("5.00"),
+        cached_text_input_per_1m=Decimal("1.25"),
+        image_input_per_1m=Decimal("8.00"),
+        cached_image_input_per_1m=Decimal("2.00"),
+        image_output_per_1m=Decimal("30.00"),
+    )
+
+    async def fake_create_pending(*_args, **_kwargs):
+        return SimpleNamespace(id=call_id)
+
+    async def fake_generate_image(*_args, **_kwargs):
+        return ImageGenerationResult(
+            images=[b"png"],
+            usage={
+                "image_count": 1,
+                "api": "images",
+                "provider_usage": {
+                    "input_tokens": 17,
+                    "input_tokens_details": {
+                        "image_tokens": 0,
+                        "text_tokens": 17,
+                    },
+                    "output_tokens": 196,
+                    "output_tokens_details": {
+                        "image_tokens": 196,
+                        "text_tokens": 0,
+                    },
+                    "total_tokens": 213,
+                },
+            },
+        )
+
+    async def fake_mark_succeeded(_db, received_call_id, **kwargs):
+        recorded["call_id"] = received_call_id
+        recorded.update(kwargs)
+        return True
+
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_image_model", lambda _model_id: _image_model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: price)
+    monkeypatch.setattr(ai_gateway_facade.PROVIDER_GATEWAY, "generate_image", fake_generate_image)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fake_mark_succeeded)
+
+    await ai_gateway_facade.generate_image_with_ledger(
+        caller_id="caller-1",
+        scope_type="job",
+        scope_id="00000000-0000-0000-0000-000000000001",
+        operation="poster_title_image.generate_title",
+        model_id="custom-image-model",
+        response_model="gpt-5.5",
+        prompt="draw",
+        reference_images=[],
+        size="1024x1024",
+        quality="low",
+        background="auto",
+        output_format="png",
+        job_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        attempt_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        job_type="poster_title_image_generate_item",
+        ledger_session_factory=session_factory,
+        image_adapter="openai_images",
+    )
+
+    assert recorded["call_id"] == call_id
+    assert recorded["usage_units"] == {
+        "image_count": 1,
+        "input_tokens": 17,
+        "cached_input_tokens": 0,
+        "output_tokens": 196,
+        "total_tokens": 213,
+        "text_input_tokens": 17,
+        "cached_text_input_tokens": 0,
+        "image_input_tokens": 0,
+        "cached_image_input_tokens": 0,
+        "image_output_tokens": 196,
+    }
+    assert recorded["cost_amount"] == Decimal("0.00596500")
+    assert recorded["currency"] == "USD"
+
+
+@pytest.mark.asyncio
+async def test_generate_image_with_ledger_fails_token_pricing_without_provider_usage(monkeypatch):
+    session_factory = _FakeSessionFactory()
+    call_id = uuid.uuid4()
+    recorded: dict = {}
+    price = ImageTokenPrice(
+        ref="openai:gpt-image-2@2026-07-02",
+        model_id="custom-image-model",
+        provider="openai",
+        provider_model="custom-image-model",
+        pricing_type="per_image_token",
+        version="2026-07-02",
+        currency="USD",
+        text_input_per_1m=Decimal("5.00"),
+        cached_text_input_per_1m=Decimal("1.25"),
+        image_input_per_1m=Decimal("8.00"),
+        cached_image_input_per_1m=Decimal("2.00"),
+        image_output_per_1m=Decimal("30.00"),
+    )
+
+    async def fake_create_pending(*_args, **_kwargs):
+        return SimpleNamespace(id=call_id)
+
+    async def fake_generate_image(*_args, **_kwargs):
+        return ImageGenerationResult(
+            images=[b"png"],
+            usage={
+                "image_count": 1,
+                "api": "images",
+                "provider_usage": {
+                    "input_tokens": 17,
+                    "output_tokens": 196,
+                    "total_tokens": 213,
+                },
+            },
+        )
+
+    async def fake_mark_failed(_db, received_call_id, **kwargs):
+        recorded["call_id"] = received_call_id
+        recorded.update(kwargs)
+        return True
+
+    async def fail_mark_succeeded(*_args, **_kwargs):
+        raise AssertionError("missing image token usage must not be marked succeeded")
+
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_image_model", lambda _model_id: _image_model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: price)
+    monkeypatch.setattr(ai_gateway_facade.PROVIDER_GATEWAY, "generate_image", fake_generate_image)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+
+    with pytest.raises(AppError) as exc:
+        await ai_gateway_facade.generate_image_with_ledger(
+            caller_id="caller-1",
+            scope_type="job",
+            scope_id="00000000-0000-0000-0000-000000000001",
+            operation="poster_title_image.generate_title",
+            model_id="custom-image-model",
+            response_model="gpt-5.5",
+            prompt="draw",
+            reference_images=[],
+            size="1024x1024",
+            quality="low",
+            background="auto",
+            output_format="png",
+            job_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+            attempt_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+            job_type="poster_title_image_generate_item",
+            ledger_session_factory=session_factory,
+            image_adapter="openai_images",
+        )
+
+    assert exc.value.code == "MODEL_COST_CALCULATION_FAILED"
+    assert recorded["call_id"] == call_id
+    assert recorded["failure_phase"] == "pricing"
+    assert recorded["billable_status"] == "unknown"
+    assert recorded["cost_calculation_status"] == "failed"
 
 
 @pytest.mark.parametrize(

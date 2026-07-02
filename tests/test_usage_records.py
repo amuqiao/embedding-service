@@ -33,6 +33,31 @@ def test_usage_records_expose_stable_units_for_supported_media():
     assert video.usage_units() == {"duration_ms": 2500}
 
 
+def test_image_usage_record_exposes_token_units_when_present():
+    image = ImageUsageRecord(
+        image_count=1,
+        input_tokens=17,
+        output_tokens=196,
+        total_tokens=213,
+        text_input_tokens=17,
+        image_input_tokens=0,
+        image_output_tokens=196,
+    )
+
+    assert image.usage_units() == {
+        "image_count": 1,
+        "input_tokens": 17,
+        "cached_input_tokens": 0,
+        "output_tokens": 196,
+        "total_tokens": 213,
+        "text_input_tokens": 17,
+        "cached_text_input_tokens": 0,
+        "image_input_tokens": 0,
+        "cached_image_input_tokens": 0,
+        "image_output_tokens": 196,
+    }
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -50,6 +75,52 @@ def test_text_usage_record_rejects_invalid_token_shape(kwargs):
 def test_usage_records_reject_invalid_non_text_units():
     with pytest.raises(ValidationError):
         ImageUsageRecord(image_count=True)
+    with pytest.raises(ValidationError):
+        ImageUsageRecord(image_count=1, input_tokens=1, output_tokens=1)
+    with pytest.raises(ValidationError):
+        ImageUsageRecord(image_count=1, input_tokens=1, output_tokens=1, total_tokens=3)
+    with pytest.raises(ValidationError):
+        ImageUsageRecord(image_count=1, input_tokens=17, output_tokens=196, total_tokens=213)
+    with pytest.raises(ValidationError):
+        ImageUsageRecord(
+            image_count=1,
+            input_tokens=17,
+            output_tokens=196,
+            total_tokens=213,
+            text_input_tokens=0,
+            image_input_tokens=0,
+            image_output_tokens=196,
+        )
+    with pytest.raises(ValidationError):
+        ImageUsageRecord(
+            image_count=1,
+            input_tokens=17,
+            output_tokens=196,
+            total_tokens=213,
+            text_input_tokens=17,
+            image_input_tokens=0,
+            image_output_tokens=0,
+        )
+    with pytest.raises(ValidationError):
+        ImageUsageRecord(
+            image_count=1,
+            input_tokens=2,
+            output_tokens=1,
+            total_tokens=3,
+            text_input_tokens=1,
+            image_input_tokens=2,
+        )
+    with pytest.raises(ValidationError):
+        ImageUsageRecord(
+            image_count=1,
+            input_tokens=2,
+            cached_input_tokens=1,
+            output_tokens=1,
+            total_tokens=3,
+            text_input_tokens=2,
+            image_input_tokens=0,
+            image_output_tokens=1,
+        )
     with pytest.raises(ValidationError):
         AudioUsageRecord(duration_ms=-1)
     with pytest.raises(ValidationError):

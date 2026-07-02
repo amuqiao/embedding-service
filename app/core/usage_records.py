@@ -56,14 +56,84 @@ class TextUsageRecord(UsageRecordBase):
 class ImageUsageRecord(UsageRecordBase):
     kind: Literal["image"] = "image"
     image_count: int
+    input_tokens: int | None = None
+    cached_input_tokens: int = 0
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    text_input_tokens: int | None = None
+    cached_text_input_tokens: int = 0
+    image_input_tokens: int | None = None
+    cached_image_input_tokens: int = 0
+    image_output_tokens: int | None = None
 
-    @field_validator("image_count", mode="before")
+    @field_validator(
+        "image_count",
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "text_input_tokens",
+        "cached_text_input_tokens",
+        "image_input_tokens",
+        "cached_image_input_tokens",
+        "image_output_tokens",
+        mode="before",
+    )
     @classmethod
-    def _validate_image_count(cls, value: Any, info: ValidationInfo) -> int:
+    def _validate_image_usage_int(cls, value: Any, info: ValidationInfo) -> int | None:
+        if value is None and info.field_name != "image_count":
+            return None
         return _strict_non_negative_int(value, info.field_name)
 
+    @model_validator(mode="after")
+    def _validate_image_token_relationships(self) -> ImageUsageRecord:
+        token_fields = (self.input_tokens, self.output_tokens, self.total_tokens)
+        if any(value is None for value in token_fields):
+            if any(value is not None for value in token_fields):
+                raise ValueError("image token usage requires input_tokens, output_tokens, and total_tokens")
+            return self
+        if self.cached_input_tokens > self.input_tokens:
+            raise ValueError("cached_input_tokens must not exceed input_tokens")
+        if self.cached_text_input_tokens > (self.text_input_tokens or 0):
+            raise ValueError("cached_text_input_tokens must not exceed text_input_tokens")
+        if self.cached_image_input_tokens > (self.image_input_tokens or 0):
+            raise ValueError("cached_image_input_tokens must not exceed image_input_tokens")
+        cached_detail_total = self.cached_text_input_tokens + self.cached_image_input_tokens
+        if self.cached_input_tokens != cached_detail_total:
+            raise ValueError("cached_text_input_tokens + cached_image_input_tokens must equal cached_input_tokens")
+        if self.total_tokens != self.input_tokens + self.output_tokens:
+            raise ValueError("total_tokens must equal input_tokens + output_tokens")
+        if self.text_input_tokens is None:
+            raise ValueError("image token usage requires text_input_tokens")
+        if self.image_input_tokens is None:
+            raise ValueError("image token usage requires image_input_tokens")
+        if self.image_output_tokens is None:
+            raise ValueError("image token usage requires image_output_tokens")
+        input_detail_total = self.text_input_tokens + self.image_input_tokens
+        if input_detail_total != self.input_tokens:
+            raise ValueError("text_input_tokens + image_input_tokens must equal input_tokens")
+        if self.image_output_tokens != self.output_tokens:
+            raise ValueError("image_output_tokens must equal output_tokens")
+        return self
+
     def usage_units(self) -> dict[str, int]:
-        return {"image_count": self.image_count}
+        units = {"image_count": self.image_count}
+        if self.total_tokens is None:
+            return units
+        units.update(
+            {
+                "input_tokens": self.input_tokens or 0,
+                "cached_input_tokens": self.cached_input_tokens,
+                "output_tokens": self.output_tokens or 0,
+                "total_tokens": self.total_tokens,
+                "text_input_tokens": self.text_input_tokens or 0,
+                "cached_text_input_tokens": self.cached_text_input_tokens,
+                "image_input_tokens": self.image_input_tokens or 0,
+                "cached_image_input_tokens": self.cached_image_input_tokens,
+                "image_output_tokens": self.image_output_tokens or 0,
+            }
+        )
+        return units
 
 
 class AudioUsageRecord(UsageRecordBase):

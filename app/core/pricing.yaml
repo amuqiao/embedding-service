@@ -64,9 +64,18 @@ prices:
     cached_input_per_1m: "0.50"
     output_per_1m: "8.00"
 
-  openai:gpt-image-2@2026-06-23:
+  openai:gpt-image-2@2026-07-02:
     model_id: gpt-image-2
     provider: openai
     provider_model: gpt-image-2
-    pricing_type: per_image
-    amount_per_image: "0.04"
+    version: "2026-07-02"
+    # Official pricing source checked 2026-07-02:
+    # https://platform.openai.com/docs/pricing
+    # Images API usage schema:
+    # https://platform.openai.com/docs/api-reference/images/create
+    pricing_type: per_image_token
+    text_input_per_1m: "5.00"
+    cached_text_input_per_1m: "1.25"
+    image_input_per_1m: "8.00"
+    cached_image_input_per_1m: "2.00"
+    image_output_per_1m: "30.00"

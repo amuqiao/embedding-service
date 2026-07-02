@@ -8,7 +8,8 @@ from typer.testing import CliRunner
 
 from scripts.real_flow.cli import app
 from app.integrations.aliyun_oss import AliyunOSSConfig
-from scripts.real_flow.flows import llm_job_billing, oss_image_upload, poster_title_image
+from app.integrations.ai_adapters.base import ImageGenerationResult
+from scripts.real_flow.flows import adapter_image_probe, llm_job_billing, oss_image_upload, poster_title_image
 
 
 runner = CliRunner()
@@ -424,6 +425,144 @@ def test_oss_upload_image_cli_requires_explicit_image():
 
     assert result.exit_code == 2
     assert "OSS image upload requires --image" in result.stderr
+
+
+def test_adapter_image_probe_cli_requires_confirm_cost():
+    result = runner.invoke(app, ["adapter-image-probe"])
+
+    assert result.exit_code == 2
+    assert "adapter image probe requires --confirm-cost" in result.stderr
+
+
+def test_adapter_image_probe_cli_accepts_adapter_options(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(adapter_image_probe, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "adapter-image-probe",
+            "--confirm-cost",
+            "--env-file",
+            "env_test/.env",
+            "--models-config",
+            "app/jobs/types/poster_title_image/models.yaml",
+            "--prompt",
+            "draw a title",
+            "--reference",
+            ".data/title/reference.png",
+            "--reference-content-type",
+            "image/png",
+            "--provider-model",
+            "gpt-image-2",
+            "--response-model",
+            "gpt-5.5",
+            "--size",
+            "1024x1024",
+            "--quality",
+            "low",
+            "--background",
+            "auto",
+            "--output-format",
+            "png",
+            "--timeout-seconds",
+            "45",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "confirm_cost": True,
+        "env_file": "env_test/.env",
+        "models_config": "app/jobs/types/poster_title_image/models.yaml",
+        "prompt": "draw a title",
+        "reference_image": ".data/title/reference.png",
+        "reference_content_type": "image/png",
+        "provider_model": "gpt-image-2",
+        "response_model": "gpt-5.5",
+        "size": "1024x1024",
+        "quality": "low",
+        "background": "auto",
+        "output_format": "png",
+        "timeout_seconds": 45,
+        "json_output": True,
+    }
+
+
+def test_adapter_image_probe_collects_adapter_errors(monkeypatch, capsys, tmp_path):
+    calls = []
+    config_path = tmp_path / "poster-models.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "version: test",
+                "job_type: poster_title_image",
+                "public_model_selection:",
+                "  default_model_id: gpt-image-from-config",
+                "internal_models:",
+                "  style_probe:",
+                "    model_id: gpt-response-from-config",
+                "generation:",
+                "  image_adapter: openai_responses",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    async def fake_run_adapter(adapter_name, _request):
+        calls.append(adapter_name)
+        if adapter_name == "openai_responses":
+            raise RuntimeError("responses failed")
+        return adapter_image_probe._result_payload(
+            adapter_name,
+            ImageGenerationResult(images=[b"png"], usage={"provider_usage": {"total_tokens": 8}}),
+        )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        adapter_image_probe,
+        "_provider_model_for_model_id",
+        lambda model_id: {
+            "gpt-image-from-config": "provider-image-from-config",
+            "gpt-response-from-config": "provider-response-from-config",
+        }[model_id],
+    )
+    monkeypatch.setattr(adapter_image_probe, "_run_adapter", fake_run_adapter)
+
+    with pytest.raises(adapter_image_probe.FlowError, match="one or more image adapters failed") as exc_info:
+        adapter_image_probe.run(
+            confirm_cost=True,
+            env_file=None,
+            models_config=str(config_path),
+            prompt="draw a title",
+            reference_image=None,
+            reference_content_type=None,
+            provider_model=None,
+            response_model=None,
+            size="1024x1024",
+            quality="low",
+            background="auto",
+            output_format="png",
+            timeout_seconds=30,
+            json_output=True,
+        )
+
+    assert exc_info.value.exit_code == 4
+    assert calls == ["openai_responses", "openai_images"]
+    payload = json.loads(capsys.readouterr().out)
+    assert [result["status"] for result in payload["results"]] == ["failed", "succeeded"]
+    assert payload["summary"]["configured_image_adapter"] == "openai_responses"
+    assert payload["summary"]["provider_model_id"] == "gpt-image-from-config"
+    assert payload["summary"]["provider_model"] == "provider-image-from-config"
+    assert payload["summary"]["response_model_id"] == "gpt-response-from-config"
+    assert payload["summary"]["response_model"] == "provider-response-from-config"
+    assert payload["results"][0]["error"]["message"] == "responses failed"
+    assert payload["results"][1]["usage"] == {"provider_usage": {"total_tokens": 8}}
 
 
 def test_oss_image_upload_accepts_standard_jpeg_mime_and_rejects_jpg_alias(tmp_path):
@@ -1151,9 +1290,20 @@ def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, c
                     "billing": {
                         "status": "estimated",
                         "currency": "USD",
-                        "total_cost_amount": "0.04000000",
-                        "usage_units": {"image_count": 1},
-                        "pricing_refs": ["openai:gpt-image-2@2026-06-23"],
+                        "total_cost_amount": "0.00596500",
+                        "usage_units": {
+                            "image_count": 1,
+                            "input_tokens": 17,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 196,
+                            "total_tokens": 213,
+                            "text_input_tokens": 17,
+                            "cached_text_input_tokens": 0,
+                            "image_input_tokens": 0,
+                            "cached_image_input_tokens": 0,
+                            "image_output_tokens": 196,
+                        },
+                        "pricing_refs": ["openai:gpt-image-2@2026-07-02"],
                         "ai_call_count": 2,
                         "billable_call_count": 2,
                         "failed_call_count": 0,
@@ -1173,7 +1323,7 @@ def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, c
                     "job_id": "poster-job-1",
                     "job_status": "succeeded",
                     "job_type": "poster_title_image",
-                    "cost": {"currency": "USD", "amount": "0.04000000", "final": True},
+                    "cost": {"currency": "USD", "amount": "0.00596500", "final": True},
                     "job_result": {
                         "items": [
                             {
@@ -1289,8 +1439,19 @@ def test_poster_title_image_downloads_all_output_artifacts(tmp_path, monkeypatch
                     "billing": {
                         "status": "estimated",
                         "currency": "USD",
-                        "total_cost_amount": "0.04000000",
-                        "usage_units": {"image_count": 3},
+                        "total_cost_amount": "0.01789500",
+                        "usage_units": {
+                            "image_count": 3,
+                            "input_tokens": 51,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 588,
+                            "total_tokens": 639,
+                            "text_input_tokens": 51,
+                            "cached_text_input_tokens": 0,
+                            "image_input_tokens": 0,
+                            "cached_image_input_tokens": 0,
+                            "image_output_tokens": 588,
+                        },
                         "pricing_refs": [],
                         "ai_call_count": 4,
                         "billable_call_count": 4,

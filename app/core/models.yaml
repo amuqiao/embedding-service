@@ -219,7 +219,7 @@ models:
     provider: openai
     provider_model: gpt-image-2
     adapter_model: openai/gpt-image-2
-    pricing_ref: openai:gpt-image-2@2026-06-23
+    pricing_ref: openai:gpt-image-2@2026-07-02
     enabled: true
     requires_env:
       - OPENAI_API_KEY

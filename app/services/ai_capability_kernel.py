@@ -76,6 +76,17 @@ def _nested_int(data: dict[str, Any], path: tuple[str, ...]) -> int:
     return int(current)
 
 
+def _optional_nested_int(data: dict[str, Any], path: tuple[str, ...]) -> int | None:
+    current: Any = data
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current.get(key)
+    if isinstance(current, bool) or not isinstance(current, int | float):
+        return None
+    return int(current)
+
+
 def normalize_text_result_usage(result: TextGenerationResult) -> TextUsageRecord:
     if result.usage is None or result.prompt_tokens is None or result.completion_tokens is None:
         raise AppError(
@@ -289,7 +300,40 @@ class UsageNormalizer:
     def normalize_image(self, result: ImageGenerationResult) -> ImageUsageRecord:
         if not result.images:
             raise AppError("MODEL_OUTPUT_INVALID", "provider response did not include generated images")
-        return ImageUsageRecord(image_count=len(result.images), raw_usage=result.usage or {})
+        raw_usage = result.usage or {}
+        if raw_usage.get("api") != "images":
+            return ImageUsageRecord(image_count=len(result.images), raw_usage=raw_usage)
+        provider_usage = raw_usage.get("provider_usage")
+        if not isinstance(provider_usage, dict):
+            return ImageUsageRecord(image_count=len(result.images), raw_usage=raw_usage)
+        input_tokens = _optional_nested_int(provider_usage, ("input_tokens",))
+        output_tokens = _optional_nested_int(provider_usage, ("output_tokens",))
+        total_tokens = _optional_nested_int(provider_usage, ("total_tokens",))
+        if input_tokens is None or output_tokens is None or total_tokens is None:
+            return ImageUsageRecord(image_count=len(result.images), raw_usage=raw_usage)
+        text_input_tokens = _optional_nested_int(provider_usage, ("input_tokens_details", "text_tokens"))
+        image_input_tokens = _optional_nested_int(provider_usage, ("input_tokens_details", "image_tokens"))
+        if text_input_tokens is None or image_input_tokens is None:
+            return ImageUsageRecord(image_count=len(result.images), raw_usage=raw_usage)
+        cached_input_tokens = _nested_int(provider_usage, ("input_tokens_details", "cached_tokens"))
+        cached_text_input_tokens = _nested_int(provider_usage, ("input_tokens_details", "cached_text_tokens"))
+        cached_image_input_tokens = _nested_int(provider_usage, ("input_tokens_details", "cached_image_tokens"))
+        if cached_input_tokens != cached_text_input_tokens + cached_image_input_tokens:
+            return ImageUsageRecord(image_count=len(result.images), raw_usage=raw_usage)
+        image_output_tokens = _optional_nested_int(provider_usage, ("output_tokens_details", "image_tokens"))
+        return ImageUsageRecord(
+            image_count=len(result.images),
+            input_tokens=input_tokens,
+            cached_input_tokens=cached_input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            text_input_tokens=text_input_tokens,
+            cached_text_input_tokens=cached_text_input_tokens,
+            image_input_tokens=image_input_tokens,
+            cached_image_input_tokens=cached_image_input_tokens,
+            image_output_tokens=image_output_tokens if image_output_tokens is not None else output_tokens,
+            raw_usage=raw_usage,
+        )
 
 
 class TypedPricingResolver:

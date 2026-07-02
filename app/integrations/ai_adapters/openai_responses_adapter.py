@@ -139,8 +139,12 @@ class OpenAIResponsesAdapter:
                 value = getattr(image_call, "revised_prompt", None)
                 revised_prompt = value if isinstance(value, str) and value else None
 
+        usage: dict[str, Any] = {"image_generation_call_count": len(image_calls)}
+        provider_usage = _usage_dict(response)
+        if provider_usage is not None:
+            usage["provider_usage"] = provider_usage
         return ImageGenerationResult(
             images=images,
             revised_prompt=revised_prompt,
-            usage={"image_generation_call_count": len(image_calls)},
+            usage=usage,
         )

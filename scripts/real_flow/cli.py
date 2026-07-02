@@ -4,7 +4,7 @@ from typing import Annotated
 
 import typer
 
-from scripts.real_flow.flows import llm_job_billing, oss_image_upload, poster_title_image
+from scripts.real_flow.flows import adapter_image_probe, llm_job_billing, oss_image_upload, poster_title_image
 
 
 POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
@@ -186,10 +186,43 @@ OSS_UPLOAD_IMAGE_HELP_EPILOG = """\b
   ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png --emit-poster-args
 """
 
+ADAPTER_IMAGE_PROBE_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/real-flow.sh adapter-image-probe \\
+    --confirm-cost \\
+    --models-config app/jobs/types/poster_title_image/models.yaml \\
+    --json
+
+\b
+  ./scripts/real-flow.sh adapter-image-probe \\
+    --confirm-cost \\
+    --models-config app/jobs/types/poster_title_image/models.yaml \\
+    --prompt "Generate a simple transparent title image saying Hola" \\
+    --size 1024x1024 \\
+    --quality low \\
+    --json
+
+\b
+  ./scripts/real-flow.sh adapter-image-probe \\
+    --confirm-cost \\
+    --reference .data/title/英语.png \\
+    --reference-content-type image/png \\
+    --json
+
+\b
+用途：
+  直接调用本仓库封装的 openai_images 与 openai_responses 两个 image adapter。
+  每次执行都会调用两个 adapter；generation.image_adapter 指定的 adapter 会排第一，另一个 adapter 排第二。
+  默认从 poster_title_image models.yaml 读取 generation.image_adapter、default_model_id 和 style_probe model；可用 --models-config 指定配置文件。
+  输出 adapter 返回的 usage（SDK 返回时包含 provider_usage）、revised_prompt、图片数量，以及每张图片的 sha256 和 size_bytes。
+  不经过服务 HTTP Job，不查询 billing，不打印图片二进制。
+"""
+
 
 HELP_EPILOG = f"""\b
 作用域：
-  手动验证真实业务流程。命令会调用本地 API、创建真实 Job、等待 worker 执行，并查询结果证据。
+  手动验证真实业务流程。Job 类命令会调用本地 API、创建真实 Job、等待 worker 执行，并查询结果证据。
+  adapter-image-probe 会直接调用本仓库封装的 provider adapter，不经过本地 API/worker。
   本入口允许真实 LLM 调用，可能产生费用；不会被 ./scripts/verify.sh check 默认执行。
 
 \b
@@ -209,6 +242,7 @@ HELP_EPILOG = f"""\b
   ./scripts/real-flow.sh llm-job-billing --confirm-cost --model-id gpt-5.4-mini
   ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini
   ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png
+  ./scripts/real-flow.sh adapter-image-probe --confirm-cost --json
   ./scripts/real-flow.sh poster-title-image --confirm-cost --reference .data/title/英语.png --language es --title-text "Cuando el amor se alejo" --json
 
 \b
@@ -221,6 +255,7 @@ HELP_EPILOG = f"""\b
 \b
 副作用与保护边界：
   真实模型 Job 命令必须显式传入 --confirm-cost。
+  adapter-image-probe 必须显式传入 --confirm-cost，会直接调用真实 OpenAI image adapter。
   oss-upload-image 必须显式传入 --confirm-upload。
   poster-title-image 在 STORAGE_BACKEND=aliyun_oss 且使用本地参考图时也必须传入 --confirm-upload。
   非本机 --api-url 必须显式传入 --allow-remote-api。
@@ -529,6 +564,91 @@ def oss_upload_image_command(
             env_file=env_file,
         )
     except oss_image_upload.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+
+
+@app.command(
+    "adapter-image-probe",
+    help="直接调用 openai_images 与 openai_responses 两个 image adapter，并打印 adapter 返回摘要。",
+    epilog=ADAPTER_IMAGE_PROBE_HELP_EPILOG,
+)
+def adapter_image_probe_command(
+    confirm_cost: Annotated[
+        bool,
+        typer.Option("--confirm-cost", help="确认本命令会直接调用真实 OpenAI image adapter 并可能产生费用。"),
+    ] = False,
+    env_file: Annotated[
+        str | None,
+        typer.Option("--env-file", help="显式配置文件路径；默认读取仓库根目录 .env，运行时环境变量优先。"),
+    ] = None,
+    models_config: Annotated[
+        str | None,
+        typer.Option("--models-config", help="poster_title_image models.yaml 路径；默认使用内置配置。"),
+    ] = None,
+    prompt: Annotated[
+        str,
+        typer.Option("--prompt", help="传给两个 image adapter 的 prompt。"),
+    ] = "Generate a simple transparent title image with the text Hola.",
+    reference_image: Annotated[
+        str | None,
+        typer.Option("--reference", "--reference-image", help="可选本地参考图；传入后两个 adapter 都走 edit 路径。"),
+    ] = None,
+    reference_content_type: Annotated[
+        str | None,
+        typer.Option("--reference-content-type", help="参考图 MIME type；默认按扩展名推断。"),
+    ] = None,
+    provider_model: Annotated[
+        str | None,
+        typer.Option("--provider-model", help="覆盖图片生成 provider model；默认读取 models.yaml public_model_selection.default_model_id。"),
+    ] = None,
+    response_model: Annotated[
+        str | None,
+        typer.Option("--response-model", help="覆盖 openai_responses adapter 的 response model；默认读取 models.yaml internal_models.style_probe.model_id。"),
+    ] = None,
+    size: Annotated[
+        str,
+        typer.Option("--size", help="图片尺寸。"),
+    ] = "1024x1024",
+    quality: Annotated[
+        str,
+        typer.Option("--quality", help="图片质量。"),
+    ] = "low",
+    background: Annotated[
+        str,
+        typer.Option("--background", help="背景参数。"),
+    ] = "auto",
+    output_format: Annotated[
+        str,
+        typer.Option("--output-format", help="输出格式。"),
+    ] = "png",
+    timeout_seconds: Annotated[
+        int | None,
+        typer.Option("--timeout-seconds", min=1, help="模型调用超时；默认读取 MODEL_CALL_TIMEOUT_SECONDS 或 300。"),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="输出机器可读 JSON。"),
+    ] = False,
+) -> None:
+    try:
+        adapter_image_probe.run(
+            confirm_cost=confirm_cost,
+            env_file=env_file,
+            models_config=models_config,
+            prompt=prompt,
+            reference_image=reference_image,
+            reference_content_type=reference_content_type,
+            provider_model=provider_model,
+            response_model=response_model,
+            size=size,
+            quality=quality,
+            background=background,
+            output_format=output_format,
+            timeout_seconds=timeout_seconds,
+            json_output=json_output,
+        )
+    except adapter_image_probe.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(exc.exit_code) from exc
 
