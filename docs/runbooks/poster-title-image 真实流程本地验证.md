@@ -182,11 +182,7 @@ SERVICE_API_KEY='<测试环境 API token>' \
   --json
 ```
 
-如果本地配置也是 `STORAGE_BACKEND=aliyun_oss`，并且传的是本地 `--reference` 图片，需要额外加：
-
-```bash
---confirm-upload
-```
+上面的命令已经包含 `--confirm-upload`，适用于本地配置为 `STORAGE_BACKEND=aliyun_oss` 且传本地 `--reference` 图片的场景。如果已经有 URL Ref JSON，改用 `--reference-url-ref-json`，不需要上传确认。
 
 ## 可选旧路径：一条命令上传并创建 Job
 
@@ -400,8 +396,22 @@ URL Ref JSON 示例：
     "job_status": "succeeded",
     "billing_status": "estimated",
     "output_count": 1,
-    "outputs": [],
-    "artifacts": [],
+    "outputs": [
+      {
+        "item_id": "es",
+        "language": "es",
+        "image_index": 1,
+        "public_url": "https://...",
+        "content_type": "image/png",
+        "sha256": "..."
+      }
+    ],
+    "artifacts": [
+      {
+        "local_path": ".data/real-flow/poster-title-image/<job_id>/es-es/01-title-layer.png",
+        "sha256_verified": true
+      }
+    ],
     "image_inspection": {
       "enabled": true,
       "require_transparent_background": true,
@@ -420,6 +430,8 @@ URL Ref JSON 示例：
 - `artifacts[].sha256_verified`：下载文件与服务端 `sha256` 是否一致。
 - `artifacts[].image_inspection`：本地图片检测详情，包括格式、尺寸、alpha 和透明背景。
 - `image_inspection`：本次下载图片检测的整体汇总。
+- `responses.get_job.data.job.job_result.items[].images[].width/height`：服务端返回的输出图尺寸。
+- `artifacts[].image_inspection.result.width/height`：下载到本地后检测出的输出图尺寸。
 
 如果没有传 `--download-outputs`，脚本不会下载图片，也不会生成 `artifacts` 或下载图片检测汇总。
 
@@ -498,7 +510,21 @@ worker 当前读取参考图使用 `public_url`。如果 Job 已创建但 worker
 查看近期运行中的 Job：
 
 ```bash
-./scripts/jobs.sh list --status queued,running --since 10m
+./scripts/jobs.sh list --job-type poster_title_image --caller-id default --status queued,running --since 30m --limit 10
+```
+
+如果还没有拿到 `job_id`，先查最近的 root Job：
+
+```bash
+./scripts/jobs.sh list --job-type poster_title_image --caller-id default --since 30m --limit 10
+```
+
+`jobs.sh` 是只读数据库查询入口，不通过 HTTP API 查询；`real-flow.sh --api-url` 只影响创建和轮询 Job 的 API 地址，不影响 `jobs.sh`。
+
+拿到 `job_id` 后查看 workflow children：
+
+```bash
+./scripts/jobs.sh workflow <job_id>
 ```
 
 ### 报 job scope_id must equal scope_job_id
@@ -555,7 +581,16 @@ job_id   = child_job_id
 传本地 `--reference` 且对象存储是 `aliyun_oss` 时，脚本会把参考图上传到 OSS。为了避免误上传，必须显式传：
 
 ```bash
---confirm-upload
+./scripts/real-flow.sh poster-title-image \
+  --confirm-cost \
+  --confirm-upload \
+  --reference .data/title/True_Heiress_Never_Lies.png \
+  --language es \
+  --title-text "Cuando el amor se alejo" \
+  --api-url http://127.0.0.1:18200 \
+  --caller-id default \
+  --download-outputs \
+  --json
 ```
 
 如果不想上传，先用 `oss-upload-image --json-ref-only` 生成 URL Ref，再用 `--reference-url-ref-json` 创建 Job。
