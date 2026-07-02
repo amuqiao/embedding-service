@@ -172,6 +172,7 @@ SERVICE_API_KEY='<测试环境 API token>' \
 ```bash
 ./scripts/real-flow.sh poster-title-image \
   --confirm-cost \
+  --confirm-upload \
   --reference .data/title/True_Heiress_Never_Lies.png \
   --language es \
   --title-text "Cuando el amor se alejo" \
