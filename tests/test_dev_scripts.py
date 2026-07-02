@@ -1360,7 +1360,12 @@ def test_jobs_guide_is_available_without_db():
         check=True,
     )
 
-    assert "Job 排障四层模型" in result.stdout
+    assert "Job 排障命令骨架" in result.stdout
+    assert "按问题找命令" in result.stdout
+    assert "命令分级" in result.stdout
+    assert "一级入口" in result.stdout
+    assert "二级诊断" in result.stdout
+    assert "明细证据" in result.stdout
     assert "系统态" in result.stdout
     assert "恢复态" in result.stdout
     assert "运输和运行时" in result.stdout

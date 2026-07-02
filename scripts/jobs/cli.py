@@ -275,68 +275,74 @@ Exit Codes:
   4  查询失败或证据不可达
 """
 
-GUIDE_TEXT = """Job 排障四层模型
+GUIDE_TEXT = """Job 排障命令骨架
 
-1. 系统态
-   先判断 Job 系统是否可用。
-   常用命令：
-     ./scripts/jobs.sh overview --since 1h
-     ./scripts/jobs.sh doctor --since 1h
-     ./scripts/jobs.sh gate
-     ./scripts/jobs.sh capacity --since 30m
-     ./scripts/jobs.sh pressure --since 20m
-     ./scripts/jobs.sh ingress --since 30m --bucket 1m
-   重点字段：
-     active_jobs、queued、running_active、failed、dispatch_due、callback_due、stuck。
+先按问题找入口，不要先记命令名。
 
-2. 恢复态
-   不要只看一张快照，用连续采样判断系统是否正在变好。
-   常用命令：
-     ./scripts/jobs.sh observe --interval 60 --samples 5
-     ./scripts/jobs.sh drain --since 30m --strict
-     ./scripts/jobs.sh stuck --older-than 10m
-   判断方式：
-     queued 或 active_jobs 下降、stuck 减少、failure 不再增长、callback due 下降，才说明在恢复。
+按问题找命令
+  系统现在健康吗？
+    首选：./scripts/jobs.sh overview --since 1h
+    辅助：./scripts/jobs.sh doctor --since 1h
+    明细：./scripts/jobs.sh summary --since 1h
 
-3. 运输和运行时
-   DB 只说明业务事实，不能单独证明 Redis broker 和 worker 正在消费。
-   常用命令：
-     ./scripts/jobs.sh broker
-     ./scripts/jobs.sh runtime
-   重点字段：
-     Redis key type、length、pending、consumer groups、WORKER_CONCURRENCY、Taskiq 进程、recovery loop、CPU/memory cgroup。
+  真正 active 积压是多少？
+    首选：./scripts/jobs.sh gate
+    辅助：./scripts/jobs.sh capacity --since 30m
 
-4. 单 Job 轨迹
-   不只看 status，要看 Job 卡在生命周期哪一段。
-   常用命令：
-     ./scripts/jobs.sh trace <job_id>
-     ./scripts/jobs.sh inspect <job_id>
-     ./scripts/jobs.sh diagnose <job_id>
-     ./scripts/jobs.sh workflow <job_id>
-   轨迹模型：
-     created -> queued -> dispatch published -> attempt claimed -> running heartbeat -> terminal -> callback delivered
+  系统是否正在恢复？
+    首选：./scripts/jobs.sh observe --interval 60 --samples 5
+    辅助：./scripts/jobs.sh drain --since 30m --strict
+    明细：./scripts/jobs.sh stuck --older-than 10m
 
-常用路径
-  系统快照：
-    ./scripts/jobs.sh overview --since 1h
+  调用方流量和处理吞吐怎样？
+    首选：./scripts/jobs.sh ingress --since 30m --bucket 1m
+    辅助：./scripts/jobs.sh latency --since 30m
 
-  判断是否恢复：
-    ./scripts/jobs.sh observe --interval 60 --samples 5
+  能不能加并发或 pod？
+    首选：./scripts/jobs.sh capacity --worker-pods 4 --worker-concurrency 30 --api-pods 2 --db-max-connections 100
+    辅助：./scripts/jobs.sh runtime
 
-  判断 Redis/worker 是否消费：
-    ./scripts/jobs.sh broker
-    ./scripts/jobs.sh runtime
+  Redis/Taskiq 和 worker 是否真的在消费？
+    首选：./scripts/jobs.sh broker
+    首选：./scripts/jobs.sh runtime
 
-  判断失败是否集中：
-    ./scripts/jobs.sh failures --since 1h
-    ./scripts/jobs.sh callbacks-summary --since 1h
+  失败和 callback 是否集中异常？
+    首选：./scripts/jobs.sh failures --since 1h
+    首选：./scripts/jobs.sh callbacks-summary --since 1h
 
-  判断能不能加并发或 pod：
-    ./scripts/jobs.sh capacity --worker-pods 4 --worker-concurrency 30 --api-pods 2 --db-max-connections 100
+  单个 Job 卡在哪？
+    首选：./scripts/jobs.sh trace <job_id>
+    辅助：./scripts/jobs.sh inspect <job_id>
+    明细：./scripts/jobs.sh timeline <job_id> --limit 50
+    明细：./scripts/jobs.sh attempts <job_id>
+    明细：./scripts/jobs.sh callbacks <job_id>
 
-  分析单个 Job：
-    ./scripts/jobs.sh trace <job_id>
-    ./scripts/jobs.sh inspect <job_id>
+命令分级
+  一级入口
+    overview / observe / broker / runtime / trace
+
+  二级诊断
+    doctor / gate / capacity / ingress / latency / failures / callbacks-summary / stuck / drain / pressure
+
+  明细证据
+    summary / list / inspect / diagnose / workflow / timeline / attempts / callbacks / payload
+
+四层模型
+  系统态
+    overview / doctor / gate / capacity / pressure / ingress
+    看 active_jobs、queued、running_active、failed、dispatch_due、callback_due、stuck。
+
+  恢复态
+    observe / drain / stuck
+    看 queued 或 active_jobs 是否下降、stuck 是否减少、failure 和 callback_due 是否停止增长。
+
+  运输和运行时
+    broker / runtime
+    看 Redis key type、length、pending、consumer groups、WORKER_CONCURRENCY、Taskiq 进程、recovery loop、CPU/memory cgroup。
+
+  单 Job 轨迹
+    trace / inspect / diagnose / workflow / timeline / attempts / callbacks
+    看 created -> queued -> dispatch published -> attempt claimed -> running heartbeat -> terminal -> callback delivered。
 
 更多细节
   ./scripts/jobs.sh <command> -h

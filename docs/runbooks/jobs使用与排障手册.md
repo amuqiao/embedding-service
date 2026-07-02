@@ -6,7 +6,7 @@
 
 ## 先建立心智模型
 
-异步 Job 的排障不是从命令名开始，而是从“证据在哪一层”开始。
+异步 Job 的排障不是从命令名开始，而是从“现在要回答什么问题、证据在哪一层”开始。
 
 ```text
 外部请求
@@ -18,39 +18,61 @@
   -> job_audit_events         状态流转证据
 ```
 
-对应到查询思路：
+先按问题找入口：
 
 ```text
-先看整体有没有异常
-  -> ./scripts/jobs.sh
-  -> ./scripts/jobs.sh overview --since 1h
+系统现在健康吗？
+  首选 -> ./scripts/jobs.sh overview --since 1h
+  辅助 -> ./scripts/jobs.sh doctor --since 1h
+  明细 -> ./scripts/jobs.sh summary --since 1h
 
-判断是不是正在恢复
-  -> ./scripts/jobs.sh observe --interval 60 --samples 5
+真正 active 积压是多少？
+  首选 -> ./scripts/jobs.sh gate
+  辅助 -> ./scripts/jobs.sh capacity --since 30m
 
-再看当前全局是否还有未结束且占用处理名额的 Job
-  -> ./scripts/jobs.sh gate
+系统是否正在恢复？
+  首选 -> ./scripts/jobs.sh observe --interval 60 --samples 5
+  辅助 -> ./scripts/jobs.sh drain --since 30m --strict
+  明细 -> ./scripts/jobs.sh stuck --older-than 10m
 
-查运输层和当前 Pod 运行时
-  -> ./scripts/jobs.sh broker
-  -> ./scripts/jobs.sh runtime
+调用方流量和处理吞吐怎样？
+  首选 -> ./scripts/jobs.sh ingress --since 30m --bucket 1m
+  辅助 -> ./scripts/jobs.sh latency --since 30m
 
-再找样本
-  -> ./scripts/jobs.sh list --status queued,running --scope family --limit 20
-  -> ./scripts/jobs.sh list --status failed --since 1h --limit 20
-  -> ./scripts/jobs.sh failures --since 1h
-  -> ./scripts/jobs.sh callbacks-summary --since 1h
+能不能加并发或 pod？
+  首选 -> ./scripts/jobs.sh capacity --worker-pods 4 --worker-concurrency 30 --api-pods 2 --db-max-connections 100
+  辅助 -> ./scripts/jobs.sh runtime
 
-拿到 job_id 后看单 Job
-  -> ./scripts/jobs.sh inspect <job_id>
-  -> ./scripts/jobs.sh trace <job_id>
-  -> ./scripts/jobs.sh workflow <job_id>
+Redis/Taskiq 和 worker 是否真的在消费？
+  首选 -> ./scripts/jobs.sh broker
+  首选 -> ./scripts/jobs.sh runtime
 
-只有明确需要原始入参/出参时
-  -> ./scripts/jobs.sh payload <job_id> --full
+失败和 callback 是否集中异常？
+  首选 -> ./scripts/jobs.sh failures --since 1h
+  首选 -> ./scripts/jobs.sh callbacks-summary --since 1h
+
+单个 Job 卡在哪？
+  首选 -> ./scripts/jobs.sh trace <job_id>
+  辅助 -> ./scripts/jobs.sh inspect <job_id>
+  明细 -> ./scripts/jobs.sh timeline <job_id> --limit 50
+  明细 -> ./scripts/jobs.sh attempts <job_id>
+  明细 -> ./scripts/jobs.sh callbacks <job_id>
 ```
 
-可以把 `jobs.sh` 当成四层只读运维入口：
+命令分级：
+
+```text
+一级入口
+  overview / observe / broker / runtime / trace
+
+二级诊断
+  doctor / gate / capacity / ingress / latency / failures / callbacks-summary / stuck / drain / pressure
+
+明细证据
+  summary / list / inspect / diagnose / workflow / timeline / attempts / callbacks / payload
+```
+
+也可以把 `jobs.sh` 当成四层只读运维入口：
 
 ```text
 系统态
