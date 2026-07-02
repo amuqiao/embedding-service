@@ -57,6 +57,22 @@ class _OneRowResult:
         return self.value
 
 
+class _NestedTransaction:
+    def __init__(self, db):
+        self.db = db
+
+    async def __aenter__(self):
+        self.db.nested_begins += 1
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.db.nested_commits += 1
+        else:
+            self.db.nested_rollbacks += 1
+        return False
+
+
 class _FakeDB:
     def __init__(self):
         self.statements = []
@@ -64,6 +80,9 @@ class _FakeDB:
         self.results = []
         self.flushed = False
         self.added = []
+        self.nested_begins = 0
+        self.nested_commits = 0
+        self.nested_rollbacks = 0
 
     async def execute(self, statement, *args, **kwargs):
         self.statements.append(statement)
@@ -80,6 +99,9 @@ class _FakeDB:
 
     def add(self, obj):
         self.added.append(obj)
+
+    def begin_nested(self):
+        return _NestedTransaction(self)
 
 
 class _DefaultOffResultSnapshotHandler:
@@ -181,31 +203,84 @@ def _attempt(
 @pytest.mark.asyncio
 async def test_cleanup_expired_jobs_soft_deletes_only_settled_terminal_jobs():
     db = _FakeDB()
+    root_id = uuid.uuid4()
+    db.results.extend([_ScalarListResult([root_id]), _RowCountResult(1), _CleanupResult()])
 
     rowcount = await JobRepo.cleanup_expired_jobs(db)
 
     assert rowcount == 3
-    assert len(db.statements) == 2
-    submission_key_update = db.statements[0]
+    assert db.nested_begins == 1
+    assert db.nested_commits == 1
+    assert db.nested_rollbacks == 0
+    assert len(db.statements) == 3
+    root_select_sql = _compile(db.statements[0])
+    assert "SELECT job_aggregates.id" in root_select_sql
+    assert "FOR UPDATE SKIP LOCKED" in root_select_sql
+    assert "job_submission_keys.deleted_at IS NULL" in root_select_sql
+    assert "callback_outbox.event_type =" in root_select_sql
+    submission_key_update = db.statements[1]
     assert submission_key_update.__visit_name__ == "update"
     submission_key_sql = _compile(submission_key_update)
     assert "UPDATE job_submission_keys SET" in submission_key_sql
     assert "deleted_at=now()" in submission_key_sql
     assert "deleted_reason=" in submission_key_sql
     assert "job_submission_keys.deleted_at IS NULL" in submission_key_sql
-    assert "callback_outbox.event_type =" in submission_key_sql
 
-    job_update = db.statements[1]
+    job_update = db.statements[2]
     assert job_update.__visit_name__ == "update"
 
     job_sql = _compile(job_update)
     assert "UPDATE job_aggregates SET" in job_sql
     assert "deleted_at" in job_sql
-    assert "job_aggregates.status IN" in job_sql
-    assert "callback_outbox.status IN" in job_sql
-    assert "callback_outbox.event_type =" in job_sql
-    assert "job_submission_keys.deleted_at IS NULL" in job_sql
+    assert "job_aggregates.id IN" in job_sql
+    assert "job_aggregates.root_job_id IN" in job_sql
+    assert "job_submission_keys" not in job_sql
     assert "job_aggregates.deleted_at IS NULL" in job_sql
+
+
+@pytest.mark.asyncio
+async def test_cleanup_expired_jobs_returns_zero_without_candidates():
+    db = _FakeDB()
+    db.results.append(_ScalarListResult([]))
+
+    rowcount = await JobRepo.cleanup_expired_jobs(db)
+
+    assert rowcount == 0
+    assert len(db.statements) == 1
+    assert db.flushed is False
+    assert db.nested_begins == 1
+    assert db.nested_commits == 1
+    assert db.nested_rollbacks == 0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_expired_jobs_rolls_back_when_submission_key_count_mismatches():
+    db = _FakeDB()
+    db.results.extend([_ScalarListResult([uuid.uuid4(), uuid.uuid4()]), _RowCountResult(1)])
+
+    with pytest.raises(ValueError, match="active submission key count mismatch"):
+        await JobRepo.cleanup_expired_jobs(db)
+
+    assert len(db.statements) == 2
+    assert db.flushed is False
+    assert db.nested_begins == 1
+    assert db.nested_commits == 0
+    assert db.nested_rollbacks == 1
+
+
+@pytest.mark.asyncio
+async def test_cleanup_expired_jobs_rolls_back_when_family_update_affects_no_jobs():
+    db = _FakeDB()
+    db.results.extend([_ScalarListResult([uuid.uuid4()]), _RowCountResult(1), _RowCountResult(0)])
+
+    with pytest.raises(ValueError, match="family update affected fewer rows than roots"):
+        await JobRepo.cleanup_expired_jobs(db)
+
+    assert len(db.statements) == 3
+    assert db.flushed is False
+    assert db.nested_begins == 1
+    assert db.nested_commits == 0
+    assert db.nested_rollbacks == 1
 
 
 @pytest.mark.asyncio
@@ -250,6 +325,9 @@ async def test_soft_delete_root_family_updates_family_and_submission_key():
     rowcount = await JobRepo.soft_delete_root_family(db, root_id, reason="manual", now=now)
 
     assert rowcount == 3
+    assert db.nested_begins == 1
+    assert db.nested_commits == 1
+    assert db.nested_rollbacks == 0
     assert len(db.statements) == 3
     root_select_sql = _compile(db.statements[0])
     key_update_sql = _compile(db.statements[1])
@@ -300,6 +378,36 @@ async def test_soft_delete_root_family_requires_active_submission_key_update():
 
     with pytest.raises(ValueError, match="active submission key is missing"):
         await JobRepo.soft_delete_root_family(db, root_id, reason="manual")
+
+    assert db.nested_begins == 1
+    assert db.nested_commits == 0
+    assert db.nested_rollbacks == 1
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_root_family_rolls_back_when_family_update_affects_no_jobs():
+    root_id = uuid.uuid4()
+    root = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="request-1",
+        job_type="test.echo",
+        status="failed",
+        progress_percent=0,
+        metadata_={},
+        job_params_ref=_job_params_ref(),
+        job_params_hash=_job_params_hash(),
+    )
+    db = _FakeDB()
+    db.results.extend([_ScalarResult(root), _RowCountResult(1), _RowCountResult(0)])
+
+    with pytest.raises(ValueError, match="family update affected no jobs"):
+        await JobRepo.soft_delete_root_family(db, root_id, reason="manual")
+
+    assert db.flushed is False
+    assert db.nested_begins == 1
+    assert db.nested_commits == 0
+    assert db.nested_rollbacks == 1
 
 
 @pytest.mark.asyncio
@@ -430,12 +538,17 @@ async def test_restore_root_family_locks_submission_key_and_restores_family():
             _ScalarListResult([key]),
             _CleanupResult(),
             _ScalarResult(None),
+            _RowCountResult(3),
+            _RowCountResult(1),
         ]
     )
 
     rowcount = await JobRepo.restore_root_family(db, root_id)
 
     assert rowcount == 3
+    assert db.nested_begins == 1
+    assert db.nested_commits == 1
+    assert db.nested_rollbacks == 0
     lock_sql = _compile(db.statements[3])
     assert "pg_advisory_xact_lock" in lock_sql
     family_update_sql = _compile(db.statements[5])
@@ -444,6 +557,53 @@ async def test_restore_root_family_locks_submission_key_and_restores_family():
     assert "deleted_at=%(deleted_at)s" in family_update_sql
     assert "UPDATE job_submission_keys SET" in key_update_sql
     assert "deleted_at=%(deleted_at)s" in key_update_sql
+
+
+@pytest.mark.asyncio
+async def test_restore_root_family_rolls_back_when_submission_key_restore_count_mismatches():
+    root_id = uuid.uuid4()
+    root = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="request-1",
+        job_type="test.echo",
+        status="failed",
+        progress_percent=0,
+        metadata_={},
+        job_params_ref=_job_params_ref(),
+        job_params_hash=_job_params_hash(),
+        deleted_at=datetime.now(UTC),
+    )
+    key = JobSubmissionKey(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        key_kind="client_request_id",
+        key_value="request-1",
+        request_fingerprint="sha256:" + "a" * 64,
+        job_id=root_id,
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        deleted_at=datetime.now(UTC),
+    )
+    db = _FakeDB()
+    db.results.extend(
+        [
+            _ScalarResult(root),
+            _ScalarResult(None),
+            _ScalarListResult([key]),
+            _CleanupResult(),
+            _ScalarResult(None),
+            _RowCountResult(3),
+            _RowCountResult(0),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="deleted submission key restore count mismatch"):
+        await JobRepo.restore_root_family(db, root_id)
+
+    assert db.flushed is False
+    assert db.nested_begins == 1
+    assert db.nested_commits == 0
+    assert db.nested_rollbacks == 1
 
 
 @pytest.mark.asyncio
