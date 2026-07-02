@@ -1330,7 +1330,9 @@ async def test_poster_title_image_workflow_root_public_result_uses_join_result(m
                             "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/output/title.png",
                             "content_type": "image/png",
                             "sha256": "c" * 64,
-                        }
+                        },
+                        "width": 40,
+                        "height": 40,
                     }
                 ],
                 "error": None,

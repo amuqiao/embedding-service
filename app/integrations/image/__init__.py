@@ -1,4 +1,4 @@
-from app.integrations.image.png_chroma_key import remove_green_background
+from app.integrations.image.png_chroma_key import ProcessedImage, remove_green_background
 from app.integrations.image.policies import (
     POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
     POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES,
@@ -17,6 +17,7 @@ from app.integrations.image.validation import ImageValidationPolicy, ImageValida
 __all__ = [
     "ImageValidationPolicy",
     "ImageValidationResult",
+    "ProcessedImage",
     "POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES",
     "POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES",
     "POSTER_TITLE_IMAGE_REFERENCE_MAX_HEIGHT",

@@ -587,6 +587,8 @@ class PosterTitleImageObject(StrictBaseModel):
 
 class PosterTitleImageImage(StrictBaseModel):
     object: PosterTitleImageObject
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
 
 
 class PosterTitleImageError(StrictBaseModel):

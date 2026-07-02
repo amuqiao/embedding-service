@@ -1187,7 +1187,9 @@ def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, c
                                             "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/output/title.png",
                                             "content_type": "image/png",
                                             "sha256": "b" * 64,
-                                        }
+                                        },
+                                        "width": 40,
+                                        "height": 40,
                                     }
                                 ],
                             }
@@ -1315,8 +1317,8 @@ def test_poster_title_image_downloads_all_output_artifacts(tmp_path, monkeypatch
                                 "language": "es",
                                 "status": "succeeded",
                                 "images": [
-                                    {"object": output_object(objects[0][2], objects[0][3])},
-                                    {"object": output_object(objects[1][2], objects[1][3])},
+                                    {"object": output_object(objects[0][2], objects[0][3]), "width": 40, "height": 40},
+                                    {"object": output_object(objects[1][2], objects[1][3]), "width": 40, "height": 40},
                                 ],
                             },
                             {
@@ -1324,7 +1326,7 @@ def test_poster_title_image_downloads_all_output_artifacts(tmp_path, monkeypatch
                                 "language": "pt",
                                 "status": "succeeded",
                                 "images": [
-                                    {"object": output_object(objects[2][2], objects[2][3])},
+                                    {"object": output_object(objects[2][2], objects[2][3]), "width": 40, "height": 40},
                                 ],
                             },
                         ]
@@ -1423,7 +1425,9 @@ def test_poster_title_image_download_uses_signed_url_when_public_url_is_private(
                                     ),
                                     "content_type": "image/png",
                                     "sha256": poster_title_image._bare_sha256(data),
-                                }
+                                },
+                                "width": 40,
+                                "height": 40,
                             }
                         ],
                     }
@@ -1492,7 +1496,9 @@ def test_poster_title_image_download_signed_fallback_supports_cdn_public_url(tmp
                                     ),
                                     "content_type": "image/png",
                                     "sha256": poster_title_image._bare_sha256(data),
-                                }
+                                },
+                                "width": 40,
+                                "height": 40,
                             }
                         ],
                     }
@@ -1539,7 +1545,9 @@ def test_poster_title_image_download_rejects_non_transparent_background(tmp_path
                                         "internal_url": f"https://local-dev.oss-local-internal.aliyuncs.com/{key}",
                                         "content_type": "image/png",
                                         "sha256": poster_title_image._bare_sha256(data),
-                                    }
+                                    },
+                                    "width": 40,
+                                    "height": 40,
                                 }
                             ],
                         }

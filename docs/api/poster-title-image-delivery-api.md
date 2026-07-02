@@ -725,7 +725,9 @@ Callback payload 不套 HTTP success envelope：
                 "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/es/title-layer.png",
                 "content_type": "image/png",
                 "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-              }
+              },
+              "width": 1024,
+              "height": 1024
             }
           ],
           "error": null
@@ -741,7 +743,9 @@ Callback payload 不套 HTTP success envelope：
                 "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/pt/title-layer.png",
                 "content_type": "image/png",
                 "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-              }
+              },
+              "width": 1024,
+              "height": 1024
             }
           ],
           "error": null
@@ -862,7 +866,9 @@ GET /api/v1/ai-jobs/jobs/{job_id}
                   "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/es/title-layer.png",
                   "content_type": "image/png",
                   "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-                }
+                },
+                "width": 1024,
+                "height": 1024
               }
             ],
             "error": null
@@ -935,7 +941,9 @@ GET /api/v1/ai-jobs/jobs/{job_id}
                   "internal_url": "https://cms-aicg-sz.oss-cn-shenzhen-internal.aliyuncs.com/aicg/dev_root/cms_poster_title/ai-jobs/6f78785a-8ade-4ef5-9677-f0f776f01933/poster-title/8b88ba9d-eb4b-4f6c-ab79-da28e12d0e70/es/title-layer.png",
                   "content_type": "image/png",
                   "sha256": "068688a4d7f3ba970b03a619e4989401b4fa069225286842dc1c047823ef5d56"
-                }
+                },
+                "width": 1024,
+                "height": 1024
               }
             ],
             "error": null
@@ -1052,6 +1060,8 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | `job_result.items[].status` | string | 当前实现对外返回 `succeeded` |
 | `job_result.items[].images[]` | array | 生成的标题图片列表 |
 | `job_result.items[].images[].object` | object | 标题图片 OSS URL Ref；`content_type` 必须等于请求 item `model_options.output_format` 映射后的 MIME |
+| `job_result.items[].images[].width` | integer | 标题图片最终 PNG 宽度，单位为像素 |
+| `job_result.items[].images[].height` | integer | 标题图片最终 PNG 高度，单位为像素 |
 | `job_result.items[].error` | object 或 null | item 失败原因 |
 | `job_result.duration_ms.ai_model` | integer | 已完成内部 AI 节点的 provider 调用耗时累计 |
 | `job_result.duration_ms.total` | integer | 已完成内部 AI 节点的服务端执行耗时累计，不包含排队等待时间 |
@@ -1086,7 +1096,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 - `batch_summary.succeeded` 必须等于 `status=succeeded` 的 item 数。当前实现中 `failed=0`、`running=0`、`pending=0`。
 - `job_status=succeeded` 时，所有 item 的 `status` 必须为 `succeeded`，且 `running=0`、`pending=0`、`failed=0`。
 - `job_status=failed` 时，失败原因在 `job.job_error`；已经成功生成的 item 仍可继续通过 `job_result` 返回。
-- `status=succeeded` 的 item 必须返回该请求 item `model_options.draw_count` 个标题图片对象；每个图片对象的 `object` 字段承载 `OSS URL Ref`，`images[]` 顺序稳定。
+- `status=succeeded` 的 item 必须返回该请求 item `model_options.draw_count` 个标题图片对象；每个图片对象必须包含承载 `OSS URL Ref` 的 `object` 字段，以及最终 PNG 的 `width` 和 `height`，`images[]` 顺序稳定。
 - 如果某个 item 无法产出请求 item `model_options.draw_count` 个标题图片，该 item 不能标记为 `succeeded`；首版不对外暴露部分成功候选图。
 - 当前实现不在 `job_result` 中返回失败 item；失败终态的 Job 级错误见 `job.job_error`。
-- 首版不返回图片 `width`、`height`、文件大小、海报底图、合成海报或贴图坐标。
+- 首版不返回文件大小、海报底图、合成海报或贴图坐标。

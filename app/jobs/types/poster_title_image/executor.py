@@ -762,13 +762,13 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
             )
             if len(generated.images) != 1:
                 raise AppError("MODEL_OUTPUT_INVALID", "image provider returned unexpected image count")
-            image_bytes = transparent_title_layer_from_green_screen_bytes(generated.images[0])
+            title_layer = transparent_title_layer_from_green_screen_bytes(generated.images[0])
             key = _output_key_for_item_id(job, item.item_id, image_index)
             written = storage.write_bytes(
                 bucket=output_target["oss_bucket"],
                 region=output_target["oss_region"],
                 key=key,
-                data=image_bytes,
+                data=title_layer.data,
                 content_type="image/png",
                 content_disposition=_attachment_content_disposition(
                     _download_filename_for_item_id(job, item.item_id, image_index)
@@ -793,7 +793,7 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
                 oss_key=written["oss_key"],
                 content_type="image/png",
                 content_hash=written["content_hash"],
-                bytes=len(image_bytes),
+                bytes=len(title_layer.data),
             )
             obj = oss_url_ref_from_output_object(
                 bucket=str(written["oss_bucket"]),
@@ -803,7 +803,13 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
                 content_hash=str(written["content_hash"]),
                 public_endpoint=settings.storage.oss_public_endpoint or None,
             )
-            images.append(PosterTitleImageImage(object=PosterTitleImageObject.model_validate(obj)))
+            images.append(
+                PosterTitleImageImage(
+                    object=PosterTitleImageObject.model_validate(obj),
+                    width=title_layer.width,
+                    height=title_layer.height,
+                )
+            )
         elapsed_ms = int((time.monotonic() - started) * 1000)
         log_event(
             logger,

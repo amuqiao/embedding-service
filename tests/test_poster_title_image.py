@@ -123,6 +123,10 @@ def _url_ref(
     }
 
 
+def _result_image(key: str, data: bytes, *, width: int = 40, height: int = 40) -> dict:
+    return {"object": _url_ref(key, data), "width": width, "height": height}
+
+
 def _params(ref: dict, *, model_id: str | None = None) -> dict:
     item = {
         "item_id": "es",
@@ -826,9 +830,12 @@ def test_poster_title_image_images_adapter_does_not_require_image_generation_too
 
 
 def test_remove_green_background_matches_poc_chroma_key_strategy():
-    data = remove_green_background(_png_bytes())
-    result = Image.open(io.BytesIO(data)).convert("RGBA")
+    processed = remove_green_background(_png_bytes())
+    result = Image.open(io.BytesIO(processed.data)).convert("RGBA")
 
+    assert processed.width == 40
+    assert processed.height == 40
+    assert result.size == (processed.width, processed.height)
     assert result.getpixel((0, 0))[3] == 0
     assert result.getpixel((20, 20))[3] == 255
 
@@ -854,7 +861,10 @@ def test_transparent_title_layer_postprocess_supports_bytes_file_and_oss_url(tmp
     )
 
     for output in [from_bytes, from_file, from_oss_url]:
-        result = Image.open(io.BytesIO(output)).convert("RGBA")
+        assert output.width == 40
+        assert output.height == 40
+        result = Image.open(io.BytesIO(output.data)).convert("RGBA")
+        assert result.size == (output.width, output.height)
         assert result.getpixel((0, 0))[3] == 0
         assert result.getpixel((20, 20))[3] == 255
 
@@ -1151,11 +1161,14 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
 
     item = result["item"]
     assert item["status"] == "succeeded"
-    obj = item["images"][0]["object"]
+    image = item["images"][0]
+    obj = image["object"]
     assert opened_urls == [reference_ref["public_url"]]
     assert obj["public_url"].startswith("https://aigc-datas.epubgame.com/")
     assert obj["internal_url"].startswith(f"https://{output_bucket}.oss-{output_region}-internal.aliyuncs.com/")
     assert obj["content_type"] == "image/png"
+    assert image["width"] == 40
+    assert image["height"] == 40
     assert len(recorded) == 1
     assert recorded[0]["model_id"] == "gpt-image-2"
     assert recorded[0]["image_adapter"] == "openai_images"
@@ -1324,6 +1337,7 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
 
     assert len(recorded) == 2
     assert len(result["item"]["images"]) == 2
+    assert [(image["width"], image["height"]) for image in result["item"]["images"]] == [(40, 40), (40, 40)]
     keys = [
         "ai-jobs/job-1/poster-title/{}/es/title-layer.png".format(root_id),
         "ai-jobs/job-1/poster-title/{}/es/title-layer-2.png".format(root_id),
@@ -1362,13 +1376,13 @@ async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeyp
         "item_id": "es",
         "language": "es",
         "status": "succeeded",
-        "images": [{"object": _url_ref("out/es.png", b"es")}],
+        "images": [_result_image("out/es.png", b"es")],
     }
     second_result = {
         "item_id": "fr",
         "language": "fr",
         "status": "succeeded",
-        "images": [{"object": _url_ref("out/fr.png", b"fr")}],
+        "images": [_result_image("out/fr.png", b"fr")],
     }
 
     async def fake_workflow_children(_job, _db):
@@ -1441,7 +1455,7 @@ async def test_poster_title_image_running_result_contains_only_succeeded_items(m
         "item_id": "es",
         "language": "es",
         "status": "succeeded",
-        "images": [{"object": _url_ref("out/es.png", b"es")}],
+        "images": [_result_image("out/es.png", b"es")],
         "error": None,
     }
     root_id = uuid.uuid4()
@@ -1544,7 +1558,7 @@ async def test_poster_title_image_failed_result_reuses_succeeded_item_subset(mon
         "item_id": "es",
         "language": "es",
         "status": "succeeded",
-        "images": [{"object": _url_ref("out/es.png", b"es")}],
+        "images": [_result_image("out/es.png", b"es")],
         "error": None,
     }
     root_id = uuid.uuid4()
@@ -1600,7 +1614,7 @@ async def test_get_job_response_projects_poster_title_image_running_result(monke
         "item_id": "es",
         "language": "es",
         "status": "succeeded",
-        "images": [{"object": _url_ref("out/es.png", b"es")}],
+        "images": [_result_image("out/es.png", b"es")],
         "error": None,
     }
     job = Job(
@@ -1672,7 +1686,7 @@ async def test_get_job_response_preserves_succeeded_items_when_poster_title_imag
         "item_id": "es",
         "language": "es",
         "status": "succeeded",
-        "images": [{"object": _url_ref("out/es.png", b"es")}],
+        "images": [_result_image("out/es.png", b"es")],
         "error": None,
     }
     job = Job(
@@ -1745,6 +1759,110 @@ async def test_get_job_response_preserves_succeeded_items_when_poster_title_imag
         "pending": 0,
     }
     assert [item["item_id"] for item in response.job_result["items"]] == ["es"]
+
+
+def test_callback_body_preserves_poster_title_image_dimensions():
+    from app.services.callbacks import build_callback_body
+
+    root_id = uuid.uuid4()
+    result = {
+        "schema_version": "default",
+        "job_type": "poster_title_image",
+        "batch_summary": {"total": 1, "succeeded": 1, "failed": 0, "running": 0, "pending": 0},
+        "items": [
+            {
+                "item_id": "es",
+                "language": "es",
+                "status": "succeeded",
+                "images": [_result_image("out/es.png", b"es", width=96, height=48)],
+                "error": None,
+            }
+        ],
+        "duration_ms": {"ai_model": 5, "total": 6},
+    }
+    job = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="poster-1",
+        job_type="poster_title_image",
+        status="succeeded",
+        progress_percent=100,
+        **_job_params_fields(_params(_url_ref("reference/title.png", _transparent_reference_png_bytes()))),
+        result=result,
+        created_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+    )
+
+    body = build_callback_body(job)
+
+    image = body["job"]["job_result"]["items"][0]["images"][0]
+    assert image["width"] == 96
+    assert image["height"] == 48
+
+
+@pytest.mark.asyncio
+async def test_callback_body_for_failed_poster_title_image_snapshot_preserves_dimensions(monkeypatch):
+    from app.jobs.types.poster_title_image import PosterTitleImageJob
+    from app.jobs.types.poster_title_image.executor import _item_node_key
+    from app.services.callbacks import build_callback_body_for_job
+
+    ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
+    params = _params(ref)
+    params["items"].append(
+        {
+            **params["items"][0],
+            "item_id": "fr",
+            "language": "fr",
+            "title_text": "Quand l'amour s'eloigne",
+        }
+    )
+    root_id = uuid.uuid4()
+    succeeded_item = {
+        "item_id": "es",
+        "language": "es",
+        "status": "succeeded",
+        "images": [_result_image("out/es.png", b"es", width=96, height=48)],
+        "error": None,
+    }
+    job = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="poster-1",
+        job_type="poster_title_image",
+        status="failed",
+        progress_percent=100,
+        progress_stage="failed",
+        **_job_params_fields(params),
+        error={"code": "WORKFLOW_CHILD_FAILED", "message": "workflow child job failed"},
+        created_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+    )
+
+    async def fake_list_internal_children(_db, *, root_job_id, statuses=None):
+        assert root_job_id == root_id
+        return [
+            SimpleNamespace(
+                workflow_node_key=_item_node_key("es"),
+                job_type="poster_title_image_generate_item",
+                status="succeeded",
+                result={"item": succeeded_item, "duration_ms": {"ai_model": 5, "total": 6}},
+            ),
+            SimpleNamespace(
+                workflow_node_key=_item_node_key("fr"),
+                job_type="poster_title_image_generate_item",
+                status="failed",
+                result=None,
+            ),
+        ]
+
+    monkeypatch.setattr("app.repositories.job_repo.JobRepo.list_internal_children", fake_list_internal_children)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: PosterTitleImageJob())
+
+    body = await build_callback_body_for_job(job, object())
+
+    image = body["job"]["job_result"]["items"][0]["images"][0]
+    assert image["width"] == 96
+    assert image["height"] == 48
 
 
 @pytest.mark.asyncio

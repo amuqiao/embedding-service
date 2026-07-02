@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image
 
 
-def remove_green_background(data: bytes, *, transition_span: int = 25, green_ratio: float = 1.05) -> bytes:
+@dataclass(frozen=True)
+class ProcessedImage:
+    data: bytes
+    width: int
+    height: int
+
+
+def remove_green_background(data: bytes, *, transition_span: int = 25, green_ratio: float = 1.05) -> ProcessedImage:
     rgb = np.array(Image.open(io.BytesIO(data)).convert("RGB"), dtype=np.float32)
     height, width = rgb.shape[:2]
     corner_n = min(10, height, width)
@@ -43,4 +51,4 @@ def remove_green_background(data: bytes, *, transition_span: int = 25, green_rat
 
     buf = io.BytesIO()
     Image.fromarray(rgba.astype(np.uint8), "RGBA").save(buf, format="PNG")
-    return buf.getvalue()
+    return ProcessedImage(data=buf.getvalue(), width=width, height=height)

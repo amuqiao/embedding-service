@@ -459,7 +459,9 @@ GET /api/v1/ai-jobs/jobs/{job_id}
                   "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/es/title-layer.png",
                   "content_type": "image/png",
                   "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-                }
+                },
+                "width": 1024,
+                "height": 1024
               }
             ],
             "error": null
@@ -526,7 +528,9 @@ GET /api/v1/ai-jobs/jobs/{job_id}
                   "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/es/title-layer.png",
                   "content_type": "image/png",
                   "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-                }
+                },
+                "width": 1024,
+                "height": 1024
               }
             ],
             "error": null
@@ -542,7 +546,9 @@ GET /api/v1/ai-jobs/jobs/{job_id}
                   "internal_url": "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster-title/018f9a7f/pt/title-layer.png",
                   "content_type": "image/png",
                   "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-                }
+                },
+                "width": 1024,
+                "height": 1024
               }
             ],
             "error": null
@@ -639,6 +645,8 @@ Result fields:
 | `job_result.items[].status` | 当前实现对外返回 `succeeded` |
 | `job_result.items[].images[]` | item 输出标题图片列表 |
 | `job_result.items[].images[].object` | 标题图片 OSS URL ref；`content_type` 必须等于请求 item `model_options.output_format` 映射后的 MIME |
+| `job_result.items[].images[].width` | 标题图片最终 PNG 宽度，单位为像素 |
+| `job_result.items[].images[].height` | 标题图片最终 PNG 高度，单位为像素 |
 | `job_result.items[].error` | item 失败原因；成功时为 `null` |
 | `job_result.duration_ms.ai_model` | 已完成内部 AI 节点的 provider 调用耗时累计 |
 | `job_result.duration_ms.total` | 已完成内部 AI 节点的服务端执行耗时累计，不包含排队等待时间 |
@@ -656,10 +664,10 @@ Result rules:
 - `batch_summary` 必须与 `items[].status` 一致；`total = pending + running + succeeded + failed`。部分结果快照只包含成功 item，因此 `total=succeeded`，`failed=0`、`running=0`、`pending=0`。
 - `job_status=succeeded` 时，所有 item 的 `status` 必须为 `succeeded`，且 `running=0`、`pending=0`、`failed=0`。
 - `job_status=failed` 时，失败原因在 `job.job_error`；已经成功生成的 item 仍可继续通过 `job_result` 返回。
-- `status=succeeded` 的 item 必须返回该请求 item `model_options.draw_count` 个标题图片 OSS object。
+- `status=succeeded` 的 item 必须返回该请求 item `model_options.draw_count` 个标题图片对象；每个图片对象必须包含 `object`、`width` 和 `height`。
 - `images[]` 数组顺序是稳定候选顺序；同一 Job 的后续轮询和终态响应不得重排已经公开的图片。
 - 如果某个 item 无法产出请求 item `model_options.draw_count` 个标题图片，该 item 不能标记为 `succeeded`；首版不对外暴露部分成功候选图。
-- 首版不返回海报底图、合成海报、贴图坐标或图片尺寸元数据。
+- 首版不返回海报底图、合成海报、贴图坐标或文件大小。
 - 当前实现不在 `job_result` 中返回失败 item；失败终态的 Job 级错误见 `job.job_error`。
 - `duration_ms.ai_model` 统计已完成内部 AI 节点的 provider 调用耗时累计；`duration_ms.total` 统计已完成内部 AI 节点的服务端执行耗时累计，不包含排队等待时间。
 - token、图片、视频、音频和调用次数等计费明细不在 `job_result` 中返回。
