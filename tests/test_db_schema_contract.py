@@ -240,6 +240,22 @@ def test_current_orm_binds_callback_events_none_as_sql_null():
     assert Job.__table__.columns["callback_events"].type.none_as_null is True
 
 
+def test_current_orm_declares_soft_delete_submission_key_lifecycle():
+    columns = JobSubmissionKey.__table__.columns
+    assert "deleted_at" in columns
+    assert "deleted_reason" in columns
+
+    constraints = {constraint.name for constraint in JobSubmissionKey.__table__.constraints if constraint.name}
+    assert "uq_job_submission_keys_caller_kind_value" not in constraints
+
+    indexes = {index.name: index for index in JobSubmissionKey.__table__.indexes}
+    active_unique = indexes["uq_job_submission_keys_active_caller_kind_value"]
+    assert active_unique.unique is True
+    assert [column.name for column in active_unique.columns] == ["caller_id", "key_kind", "key_value"]
+    assert str(active_unique.dialect_options["postgresql"]["where"]) == "deleted_at IS NULL"
+    assert "ix_job_submission_keys_deleted_at" in indexes
+
+
 def test_cleanup_migration_tightens_legacy_status_constraints():
     migration_0013 = Path("alembic/versions/0013_cleanup_legacy_job_kernel_state.py").read_text()
     migration_0014 = Path("alembic/versions/0014_cleanup_unused_job_shell_fields.py").read_text()
@@ -247,6 +263,7 @@ def test_cleanup_migration_tightens_legacy_status_constraints():
     migration_0016 = Path("alembic/versions/0016_add_job_workflow_lineage.py").read_text()
     migration_0018 = Path("alembic/versions/0018_job_retry_kernel_hardening.py").read_text()
     migration_0019 = Path("alembic/versions/0019_job_kernel_db_invariants.py").read_text()
+    migration_0020 = Path("alembic/versions/0020_soft_delete_submission_keys.py").read_text()
 
     assert "cannot tighten jobs.status constraint while legacy statuses exist" in migration_0013
     assert "cannot tighten job_attempts.status constraint while legacy statuses exist" in migration_0013
@@ -322,3 +339,10 @@ def test_cleanup_migration_tightens_legacy_status_constraints():
     assert "UPDATE callback_outbox" in migration_0019
     assert "SET leased_at = COALESCE(leased_at, updated_at, created_at, now())" in migration_0019
     assert "SET status = 'retrying'" in migration_0019
+
+    assert 'down_revision: str | Sequence[str] | None = "0019_job_kernel_db_invariants"' in migration_0020
+    assert '"job_submission_keys", sa.Column("deleted_at"' in migration_0020
+    assert '"job_submission_keys", sa.Column("deleted_reason"' in migration_0020
+    assert '"uq_job_submission_keys_active_caller_kind_value"' in migration_0020
+    assert "postgresql_where=sa.text(\"deleted_at IS NULL\")" in migration_0020
+    assert '"uq_job_submission_keys_caller_kind_value"' in migration_0020

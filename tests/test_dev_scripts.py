@@ -1345,6 +1345,9 @@ def test_jobs_cli_help_is_available_without_db():
     assert "payload" in result.stdout
     assert "guide" in result.stdout
     assert "dashboard" in result.stdout
+    assert "deleted-summary" in result.stdout
+    assert "deleted-list" in result.stdout
+    assert "deleted-job" in result.stdout
     assert "30s、10m、24h、7d" in result.stdout
     assert "常用排障顺序" in result.stdout
     assert "./scripts/jobs.sh dashboard --since 1h" in result.stdout
@@ -4329,6 +4332,62 @@ def test_jobs_list_query_lineage_scope_sql_contract(monkeypatch, record_scope, e
         assert item in sql
     for item in unexpected:
         assert item not in sql
+
+
+def test_jobs_deleted_list_query_uses_deleted_view(monkeypatch):
+    captured_sql: list[str] = []
+
+    def fake_fetch_all(conn, sql, params):
+        captured_sql.append(sql)
+        return []
+
+    monkeypatch.setattr(queries, "_fetch_all", fake_fetch_all)
+
+    queries.deleted_jobs(
+        None,
+        job_type=None,
+        caller_id=None,
+        client_request_id=None,
+        deleted_since=None,
+        limit=20,
+        record_scope="root",
+    )
+
+    sql = captured_sql[0]
+    assert "WHERE j.deleted_at IS NOT NULL" in sql
+    assert "j.root_job_id IS NULL" in sql
+    assert "j.workflow_node_key IS NULL" in sql
+    assert "j.client_request_id IS NOT NULL" in sql
+
+
+def test_jobs_deleted_summary_reports_consistency_counters(monkeypatch):
+    captured_sql: list[str] = []
+
+    def fake_fetch_one(conn, sql, params):
+        captured_sql.append(sql)
+        return {}
+
+    def fake_fetch_all(conn, sql, params):
+        captured_sql.append(sql)
+        return []
+
+    monkeypatch.setattr(queries, "_fetch_one", fake_fetch_one)
+    monkeypatch.setattr(queries, "_fetch_all", fake_fetch_all)
+
+    queries.deleted_summary(
+        None,
+        job_type=None,
+        caller_id=None,
+        deleted_since=None,
+        record_scope="all",
+    )
+
+    joined_sql = "\n".join(captured_sql)
+    assert "WHERE j.deleted_at IS NOT NULL" in joined_sql
+    assert "deleted_root_active_submission_keys" in joined_sql
+    assert "active_root_deleted_submission_keys" in joined_sql
+    assert "deleted_active_jobs" in joined_sql
+    assert "deleted_child_active_jobs" in joined_sql
 
 
 def test_jobs_family_scope_filters_root_family_not_only_same_job_type(monkeypatch):

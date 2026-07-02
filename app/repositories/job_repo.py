@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, delete, func, or_, select, text, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -36,6 +36,7 @@ class JobRepo:
                 JobSubmissionKey.caller_id == caller_id,
                 JobSubmissionKey.key_kind == SUBMISSION_KEY_KIND_CLIENT_REQUEST_ID,
                 JobSubmissionKey.key_value == client_request_id,
+                JobSubmissionKey.deleted_at.is_(None),
                 Job.deleted_at.is_(None),
                 Job.root_job_id.is_(None),
                 Job.workflow_node_key.is_(None),
@@ -1514,29 +1515,241 @@ class JobRepo:
         return result.scalar_one()
 
     @staticmethod
-    async def cleanup_expired_jobs(db: AsyncSession) -> int:
-        """软删除过期且生命周期已收敛的 Job 记录（expires_at <= now）。"""
+    async def soft_delete_root_family(
+        db: AsyncSession,
+        root_job_id: uuid.UUID,
+        *,
+        reason: str,
+        now: datetime | None = None,
+    ) -> int:
+        """Soft-delete a settled public root Job and its internal child Jobs."""
+        now = now or datetime.now(timezone.utc)
         settled_callback_exists = (
             select(CallbackOutbox.id)
             .where(
                 CallbackOutbox.job_id == Job.id,
-                CallbackOutbox.event_type.in_(["job.succeeded", "job.failed"]),
+                or_(
+                    and_(Job.status == "succeeded", CallbackOutbox.event_type == "job.succeeded"),
+                    and_(Job.status == "failed", CallbackOutbox.event_type == "job.failed"),
+                ),
                 CallbackOutbox.status.in_(["delivered", "skipped", "dead_letter"]),
             )
             .exists()
         )
-        expired_settled_jobs = select(Job.id).where(
-            Job.expires_at <= func.now(),
+        active_submission_key_exists = (
+            select(JobSubmissionKey.id)
+            .where(
+                JobSubmissionKey.job_id == root_job_id,
+                JobSubmissionKey.deleted_at.is_(None),
+            )
+            .exists()
+        )
+        unsettled_child_exists = (
+            select(Job.id)
+            .where(
+                Job.root_job_id == root_job_id,
+                Job.deleted_at.is_(None),
+                or_(
+                    Job.status.not_in(["succeeded", "failed"]),
+                    Job.active_attempt_id.is_not(None),
+                ),
+            )
+            .exists()
+        )
+        root_result = await db.execute(
+            select(Job)
+            .where(
+                Job.id == root_job_id,
+                Job.root_job_id.is_(None),
+                Job.workflow_node_key.is_(None),
+                Job.client_request_id.is_not(None),
+                Job.deleted_at.is_(None),
+                Job.status.in_(["succeeded", "failed"]),
+                Job.active_attempt_id.is_(None),
+                or_(Job.callback_url.is_(None), settled_callback_exists),
+                active_submission_key_exists,
+                ~unsettled_child_exists,
+            )
+            .with_for_update(skip_locked=True)
+        )
+        root = root_result.scalar_one_or_none()
+        if root is None:
+            return 0
+
+        key_result = await db.execute(
+            update(JobSubmissionKey)
+            .where(
+                JobSubmissionKey.job_id == root_job_id,
+                JobSubmissionKey.deleted_at.is_(None),
+            )
+            .values(deleted_at=now, deleted_reason=reason)
+        )
+        if key_result.rowcount != 1:
+            raise ValueError("cannot soft-delete root job family: active submission key is missing")
+
+        family_result = await db.execute(
+            update(Job)
+            .where(
+                or_(Job.id == root_job_id, Job.root_job_id == root_job_id),
+                Job.deleted_at.is_(None),
+            )
+            .values(
+                delete_requested_at=now,
+                deleted_at=now,
+                deleted_reason=reason,
+                updated_at=now,
+            )
+        )
+        await db.flush()
+        return family_result.rowcount
+
+    @staticmethod
+    async def restore_root_family(db: AsyncSession, root_job_id: uuid.UUID) -> int:
+        """Restore a soft-deleted public root Job family if its submission key is free."""
+        root_result = await db.execute(
+            select(Job)
+            .where(
+                Job.id == root_job_id,
+                Job.root_job_id.is_(None),
+                Job.workflow_node_key.is_(None),
+                Job.client_request_id.is_not(None),
+                Job.deleted_at.is_not(None),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        root = root_result.scalar_one_or_none()
+        if root is None:
+            return 0
+
+        active_family_member_result = await db.execute(
+            select(Job.id)
+            .where(
+                or_(Job.id == root_job_id, Job.root_job_id == root_job_id),
+                Job.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+        if active_family_member_result.scalar_one_or_none() is not None:
+            raise ValueError("cannot restore root job family: family is only partially soft-deleted")
+
+        deleted_keys_result = await db.execute(
+            select(JobSubmissionKey)
+            .where(
+                JobSubmissionKey.job_id == root_job_id,
+                JobSubmissionKey.deleted_at.is_not(None),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        deleted_keys = list(deleted_keys_result.scalars().all())
+        if not deleted_keys:
+            raise ValueError("cannot restore root job family: deleted submission key is missing")
+        for key in deleted_keys:
+            if key.key_kind == SUBMISSION_KEY_KIND_CLIENT_REQUEST_ID:
+                await JobRepo.advisory_lock_for_client_request(db, key.caller_id, key.key_value)
+            conflict_result = await db.execute(
+                select(JobSubmissionKey.id)
+                .where(
+                    JobSubmissionKey.caller_id == key.caller_id,
+                    JobSubmissionKey.key_kind == key.key_kind,
+                    JobSubmissionKey.key_value == key.key_value,
+                    JobSubmissionKey.deleted_at.is_(None),
+                    JobSubmissionKey.id != key.id,
+                )
+                .limit(1)
+            )
+            if conflict_result.scalar_one_or_none() is not None:
+                raise ValueError(
+                    "cannot restore root job family: submission key is already used by an active job"
+                )
+
+        family_result = await db.execute(
+            update(Job)
+            .where(
+                or_(Job.id == root_job_id, Job.root_job_id == root_job_id),
+                Job.deleted_at.is_not(None),
+            )
+            .values(
+                delete_requested_at=None,
+                deleted_at=None,
+                deleted_reason=None,
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.execute(
+            update(JobSubmissionKey)
+            .where(JobSubmissionKey.job_id == root_job_id, JobSubmissionKey.deleted_at.is_not(None))
+            .values(deleted_at=None, deleted_reason=None)
+        )
+        await db.flush()
+        return family_result.rowcount
+
+    @staticmethod
+    async def cleanup_expired_jobs(db: AsyncSession) -> int:
+        """软删除过期且生命周期已收敛的 root Job family（expires_at <= now）。"""
+        settled_callback_exists = (
+            select(CallbackOutbox.id)
+            .where(
+                CallbackOutbox.job_id == Job.id,
+                or_(
+                    and_(Job.status == "succeeded", CallbackOutbox.event_type == "job.succeeded"),
+                    and_(Job.status == "failed", CallbackOutbox.event_type == "job.failed"),
+                ),
+                CallbackOutbox.status.in_(["delivered", "skipped", "dead_letter"]),
+            )
+            .exists()
+        )
+        root = Job
+        child = Job.__table__.alias("child")
+        unsettled_child_exists = (
+            select(child.c.id)
+            .where(
+                child.c.root_job_id == root.id,
+                child.c.deleted_at.is_(None),
+                or_(
+                    child.c.status.not_in(["succeeded", "failed"]),
+                    child.c.active_attempt_id.is_not(None),
+                ),
+            )
+            .exists()
+        )
+        active_submission_key_exists = (
+            select(JobSubmissionKey.id)
+            .where(
+                JobSubmissionKey.job_id == root.id,
+                JobSubmissionKey.deleted_at.is_(None),
+            )
+            .exists()
+        )
+        expired_settled_roots = select(root.id).where(
+            root.expires_at <= func.now(),
+            root.deleted_at.is_(None),
+            root.root_job_id.is_(None),
+            root.workflow_node_key.is_(None),
+            root.client_request_id.is_not(None),
+            root.status.in_(["succeeded", "failed"]),
+            root.active_attempt_id.is_(None),
+            or_(root.callback_url.is_(None), settled_callback_exists),
+            active_submission_key_exists,
+            ~unsettled_child_exists,
+        ).subquery()
+        expired_settled_family = select(Job.id).where(
             Job.deleted_at.is_(None),
-            Job.status.in_(["succeeded", "failed"]),
-            or_(Job.callback_url.is_(None), settled_callback_exists),
+            or_(
+                Job.id.in_(select(expired_settled_roots.c.id)),
+                Job.root_job_id.in_(select(expired_settled_roots.c.id)),
+            ),
         ).subquery()
         await db.execute(
-            delete(JobSubmissionKey).where(JobSubmissionKey.job_id.in_(select(expired_settled_jobs.c.id)))
+            update(JobSubmissionKey)
+            .where(
+                JobSubmissionKey.job_id.in_(select(expired_settled_roots.c.id)),
+                JobSubmissionKey.deleted_at.is_(None),
+            )
+            .values(deleted_at=func.now(), deleted_reason="expired")
         )
         result = await db.execute(
             update(Job)
-            .where(Job.id.in_(select(expired_settled_jobs.c.id)))
+            .where(Job.id.in_(select(expired_settled_family.c.id)))
             .values(
                 delete_requested_at=func.now(),
                 deleted_at=func.now(),

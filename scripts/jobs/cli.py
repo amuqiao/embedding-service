@@ -29,6 +29,24 @@ LIST_HELP_EPILOG = """\b
   ./scripts/jobs.sh list --scope child --status failed --json
 """
 
+DELETED_SUMMARY_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/jobs.sh deleted-summary
+  ./scripts/jobs.sh deleted-summary --since-deleted 7d --json
+"""
+
+DELETED_LIST_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/jobs.sh deleted-list --limit 20
+  ./scripts/jobs.sh deleted-list --scope family --since-deleted 7d --json
+"""
+
+DELETED_JOB_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/jobs.sh deleted-job <job_id>
+  ./scripts/jobs.sh deleted-job <job_id> --json
+"""
+
 SHOW_HELP_EPILOG = """\b
 常用示例：
   ./scripts/jobs.sh job <job_id>
@@ -482,6 +500,55 @@ def _jobs_columns() -> list[tuple[str, str]]:
         ("created_at", "created_at"),
         ("age", "age"),
         ("duration", "duration"),
+    ]
+
+
+def _deleted_job_columns() -> list[tuple[str, str]]:
+    return [
+        ("job_id", "job_id"),
+        ("record_scope", "scope"),
+        ("family_root_job_id", "family_root"),
+        ("workflow_node_key", "node"),
+        ("status", "status"),
+        ("job_type", "job_type"),
+        ("caller_id", "caller"),
+        ("client_request_id", "client_request_id"),
+        ("created_at", "created_at"),
+        ("finished_at", "finished_at"),
+        ("expires_at", "expires_at"),
+        ("deleted_at", "deleted_at"),
+        ("deleted_reason", "reason"),
+    ]
+
+
+def _deleted_summary_columns() -> list[tuple[str, str]]:
+    return [
+        ("total_deleted", "total_deleted"),
+        ("root_deleted", "root_deleted"),
+        ("child_deleted", "child_deleted"),
+        ("family_count", "family_count"),
+        ("oldest_deleted_at", "oldest_deleted_at"),
+        ("newest_deleted_at", "newest_deleted_at"),
+    ]
+
+
+def _deleted_group_columns(group_key: str) -> list[tuple[str, str]]:
+    return [(group_key, group_key), ("count", "count")]
+
+
+def _deleted_key_columns() -> list[tuple[str, str]]:
+    return [
+        ("total_deleted", "total_deleted"),
+        ("expired_deleted", "expired_deleted"),
+    ]
+
+
+def _deleted_inconsistency_columns() -> list[tuple[str, str]]:
+    return [
+        ("deleted_root_active_submission_keys", "deleted_root_active_keys"),
+        ("active_root_deleted_submission_keys", "active_root_deleted_keys"),
+        ("deleted_active_jobs", "deleted_active_jobs"),
+        ("deleted_child_active_jobs", "deleted_child_active_jobs"),
     ]
 
 
@@ -2040,6 +2107,52 @@ def _render_jobs_result(*, rows: list[dict], scope: dict[str, Any]) -> None:
         ),
     )
     formatters.print_table(rows, _jobs_columns())
+
+
+def _render_deleted_summary(payload: dict[str, Any]) -> None:
+    scope = payload["scope"]
+    formatters.section("Deleted Job Summary")
+    formatters.event(
+        "OK",
+        "deleted",
+        "since_deleted=%s scope=%s job_type=%s caller_id=%s"
+        % (
+            scope.get("since_deleted") or "all",
+            scope.get("record_scope") or "-",
+            scope.get("job_type") or "-",
+            scope.get("caller_id") or "-",
+        ),
+    )
+    summary = payload["summary"]
+    formatters.section("Counts")
+    formatters.print_table([summary.get("counts") or {}], _deleted_summary_columns())
+    formatters.section("By Reason")
+    formatters.print_table(summary.get("by_reason") or [], _deleted_group_columns("deleted_reason"))
+    formatters.section("By Status")
+    formatters.print_table(summary.get("by_status") or [], _deleted_group_columns("status"))
+    formatters.section("By Job Type")
+    formatters.print_table(summary.get("by_job_type") or [], _deleted_group_columns("job_type"))
+    formatters.section("Submission Keys")
+    formatters.print_table([summary.get("submission_keys") or {}], _deleted_key_columns())
+    formatters.section("Consistency")
+    formatters.print_table([summary.get("inconsistencies") or {}], _deleted_inconsistency_columns())
+
+
+def _render_deleted_jobs_result(*, rows: list[dict], scope: dict[str, Any]) -> None:
+    formatters.section("Deleted Jobs")
+    formatters.event(
+        "OK",
+        "deleted",
+        "count=%s since_deleted=%s scope=%s job_type=%s caller_id=%s"
+        % (
+            len(rows),
+            scope.get("since_deleted") or "all",
+            scope.get("record_scope") or "-",
+            scope.get("job_type") or "-",
+            scope.get("caller_id") or "-",
+        ),
+    )
+    formatters.print_table(rows, _deleted_job_columns())
 
 
 def _retry_policy_summary(spec: dict[str, Any]) -> str:
@@ -4128,6 +4241,109 @@ def list_jobs(
         formatters.print_json({"scope": scope_payload, "jobs": rows})
         return
     _render_jobs_result(rows=rows, scope=scope_payload)
+
+
+@app.command("deleted-summary", help="查看软删除 Job 数量和一致性摘要。", epilog=DELETED_SUMMARY_HELP_EPILOG)
+def deleted_summary(
+    since_deleted: Annotated[
+        str | None,
+        typer.Option("--since-deleted", help="只查看指定窗口内软删除的 Job，例如 7d。"),
+    ] = None,
+    job_type: Annotated[str | None, typer.Option("--job-type", help="按 root/job_type 过滤。")] = None,
+    caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 root/caller_id 过滤。")] = None,
+    record_scope: ScopeOption = "all",
+    json_output: JsonOption = False,
+) -> None:
+    try:
+        since_delta = parse_optional_duration(since_deleted)
+        parsed_scope = parse_record_scope(record_scope)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    since_at = datetime.now(timezone.utc) - since_delta if since_delta else None
+    summary = _with_connection(
+        lambda conn: queries.deleted_summary(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            deleted_since=since_at,
+            record_scope=parsed_scope,
+        )
+    )
+    payload = {
+        "scope": {
+            "since_deleted": since_deleted,
+            "record_scope": parsed_scope,
+            "job_type": job_type,
+            "caller_id": caller_id,
+        },
+        "summary": summary,
+    }
+    if json_output:
+        formatters.print_json(payload)
+        return
+    _render_deleted_summary(payload)
+
+
+@app.command("deleted-list", help="查看软删除 Job 摘要。", epilog=DELETED_LIST_HELP_EPILOG)
+def deleted_list(
+    job_type: Annotated[str | None, typer.Option("--job-type", help="按 root/job_type 过滤。")] = None,
+    caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 root/caller_id 过滤。")] = None,
+    client_request_id: Annotated[
+        str | None,
+        typer.Option("--client-request-id", help="按 root/client_request_id 过滤。"),
+    ] = None,
+    since_deleted: Annotated[
+        str | None,
+        typer.Option("--since-deleted", help="只查看指定窗口内软删除的 Job，例如 7d。"),
+    ] = None,
+    record_scope: ScopeOption = "root",
+    limit: LimitOption = 20,
+    json_output: JsonOption = False,
+) -> None:
+    try:
+        since_delta = parse_optional_duration(since_deleted)
+        parsed_scope = parse_record_scope(record_scope)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    since_at = datetime.now(timezone.utc) - since_delta if since_delta else None
+    rows = _with_connection(
+        lambda conn: queries.deleted_jobs(
+            conn,
+            job_type=job_type,
+            caller_id=caller_id,
+            client_request_id=client_request_id,
+            deleted_since=since_at,
+            limit=limit,
+            record_scope=parsed_scope,
+        )
+    )
+    scope_payload = {
+        "record_scope": parsed_scope,
+        "since_deleted": since_deleted,
+        "job_type": job_type,
+        "caller_id": caller_id,
+        "client_request_id": client_request_id,
+    }
+    if json_output:
+        formatters.print_json({"scope": scope_payload, "jobs": rows})
+        return
+    _render_deleted_jobs_result(rows=rows, scope=scope_payload)
+
+
+@app.command("deleted-job", help="查看单个软删除 Job 的审计摘要。", epilog=DELETED_JOB_HELP_EPILOG)
+def deleted_job(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
+    job = _with_connection(lambda conn: queries.get_deleted_job(conn, job_id))
+    if job is None:
+        print(f"ERROR: deleted job not found: {job_id}", file=sys.stderr)
+        raise typer.Exit(3)
+    if json_output:
+        formatters.print_json({"job": _job_summary(job)})
+        return
+    formatters.section("Deleted Job")
+    formatters.event("OK", "deleted", f"job_id={job_id}")
+    formatters.print_table([job], _deleted_job_columns())
 
 
 @app.command(help="查看单个 Job 权威状态。", epilog=SHOW_HELP_EPILOG)

@@ -199,6 +199,53 @@ Recovery 是周期性补偿扫描。它不替代 worker，也不重放已成功�
 
 因此 recovery 的边界是“补偿已落库事实”，不是“根据外部世界猜测业务是否成功”。如果 provider 实际已经完成但本服务没有可信 terminal 事实，recovery 不会凭空补出成功结果。
 
+### Root family 软删除
+
+Job soft delete 是 root-family 级可见性机制，不是执行重试、状态回滚或物理删除。
+
+```text
+普通 Job
+  root job = public Job 本身
+
+Workflow Job
+  root job = public root Job
+  child jobs = root_job_id 指向该 root 的 internal Jobs
+
+soft delete(root_job_id)
+  -> root + child 的 job_aggregates.deleted_at / deleted_reason 同事务写入
+  -> root 的 job_submission_keys.deleted_at / deleted_reason 同事务写入
+  -> attempts / dispatch / callback / audit 不单独写 deleted_at
+```
+
+当前删除状态事实源分两层：
+
+| 表 | 软删除职责 |
+|---|---|
+| `job_aggregates` | Job family 是否退出正常运行和查询视图的事实源；root 与 child 必须按同一个 root 操作同向变化 |
+| `job_submission_keys` | 幂等键生命周期事实源；只对 `deleted_at IS NULL` 的 key 保持 `caller_id + key_kind + key_value` 唯一 |
+
+`job_execution_attempts`、`dispatch_outbox`、`callback_outbox` 和 `job_audit_events` 不维护独立 deleted 状态。它们是否出现在普通查询中，由关联的 `job_aggregates.deleted_at` 决定。这样可以避免 attempt 被隐藏但 Job 仍可见、或 callback 被隐藏但 root 仍显示未投递这类半删除状态。
+
+自动过期清理只软删除已收敛的 public root family：
+
+```text
+root expires_at <= now()
+root status in succeeded / failed
+root active_attempt_id is null
+callback 未配置，或终态 callback 已 delivered / skipped / dead_letter
+child jobs 没有 active 或非终态记录
+```
+
+不满足这些条件时，cleanup 不会把 Job family 软删除。被软删除的 Job 不参与 API 普通查询、worker/recovery 推进、`jobs.sh list/show/summary/stuck/gate` 等正常排障视图。内部只读审计使用专门入口：
+
+```bash
+./scripts/jobs.sh deleted-summary
+./scripts/jobs.sh deleted-list
+./scripts/jobs.sh deleted-job <job_id>
+```
+
+Restore 也是 root-family 级内部机制：只能从 root job id 恢复整组 root + child，并同时恢复 root submission key。恢复前会检查 family 是否处于完整软删除状态、deleted submission key 是否存在，以及同一 `caller_id + client_request_id` 是否已被新的 active key 占用；冲突时 fail-fast，不静默覆盖。
+
 ### Timeout / Lease 边界
 
 当前已生效的执行等待边界分成两条：AI 调用等待由 `MODEL_CALL_TIMEOUT_SECONDS` 控制；attempt 执行权由 lease / heartbeat 和派生的 stale running threshold 控制。

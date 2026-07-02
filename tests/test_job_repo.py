@@ -4,12 +4,17 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from app.models.job import CallbackOutbox, DispatchOutbox, Job, JobAttempt, JobEvent
+from app.models.job import CallbackOutbox, DispatchOutbox, Job, JobAttempt, JobEvent, JobSubmissionKey
 from app.repositories.job_repo import JobRepo
 
 
 class _CleanupResult:
     rowcount = 3
+
+
+class _RowCountResult:
+    def __init__(self, rowcount):
+        self.rowcount = rowcount
 
 
 class _ScalarResult:
@@ -181,12 +186,14 @@ async def test_cleanup_expired_jobs_soft_deletes_only_settled_terminal_jobs():
 
     assert rowcount == 3
     assert len(db.statements) == 2
-    submission_key_delete = db.statements[0]
-    assert submission_key_delete.__visit_name__ == "delete"
-    submission_key_delete_sql = _compile(submission_key_delete)
-    assert "DELETE FROM job_submission_keys" in submission_key_delete_sql
-    assert "job_aggregates.expires_at <= now()" in submission_key_delete_sql
-    assert "job_aggregates.deleted_at IS NULL" in submission_key_delete_sql
+    submission_key_update = db.statements[0]
+    assert submission_key_update.__visit_name__ == "update"
+    submission_key_sql = _compile(submission_key_update)
+    assert "UPDATE job_submission_keys SET" in submission_key_sql
+    assert "deleted_at=now()" in submission_key_sql
+    assert "deleted_reason=" in submission_key_sql
+    assert "job_submission_keys.deleted_at IS NULL" in submission_key_sql
+    assert "callback_outbox.event_type =" in submission_key_sql
 
     job_update = db.statements[1]
     assert job_update.__visit_name__ == "update"
@@ -196,6 +203,8 @@ async def test_cleanup_expired_jobs_soft_deletes_only_settled_terminal_jobs():
     assert "deleted_at" in job_sql
     assert "job_aggregates.status IN" in job_sql
     assert "callback_outbox.status IN" in job_sql
+    assert "callback_outbox.event_type =" in job_sql
+    assert "job_submission_keys.deleted_at IS NULL" in job_sql
     assert "job_aggregates.deleted_at IS NULL" in job_sql
 
 
@@ -214,9 +223,227 @@ async def test_get_submission_by_client_request_keeps_expired_key_visible_until_
     sql = _compile(db.statements[0])
     assert "job_submission_keys.expires_at >" not in sql
     assert "job_submission_keys.key_value" in sql
+    assert "job_submission_keys.deleted_at IS NULL" in sql
     assert "job_aggregates.deleted_at IS NULL" in sql
     assert "job_aggregates.root_job_id IS NULL" in sql
     assert "job_aggregates.workflow_node_key IS NULL" in sql
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_root_family_updates_family_and_submission_key():
+    root_id = uuid.uuid4()
+    now = datetime.now(UTC)
+    root = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="request-1",
+        job_type="test.echo",
+        status="failed",
+        progress_percent=0,
+        metadata_={},
+        job_params_ref=_job_params_ref(),
+        job_params_hash=_job_params_hash(),
+    )
+    db = _FakeDB()
+    db.results.extend([_ScalarResult(root), _RowCountResult(1), _CleanupResult()])
+
+    rowcount = await JobRepo.soft_delete_root_family(db, root_id, reason="manual", now=now)
+
+    assert rowcount == 3
+    assert len(db.statements) == 3
+    root_select_sql = _compile(db.statements[0])
+    key_update_sql = _compile(db.statements[1])
+    family_update_sql = _compile(db.statements[2])
+    assert "job_aggregates.root_job_id IS NULL" in root_select_sql
+    assert "job_aggregates.workflow_node_key IS NULL" in root_select_sql
+    assert "job_aggregates.status IN" in root_select_sql
+    assert "job_aggregates.active_attempt_id IS NULL" in root_select_sql
+    assert "job_aggregates.status =" in root_select_sql
+    assert "callback_outbox.event_type =" in root_select_sql
+    assert "job_submission_keys.deleted_at IS NULL" in root_select_sql
+    assert "UPDATE job_aggregates SET" in family_update_sql
+    assert "job_aggregates.id =" in family_update_sql
+    assert "job_aggregates.root_job_id =" in family_update_sql
+    assert "job_aggregates.deleted_at IS NULL" in family_update_sql
+    assert "UPDATE job_submission_keys SET" in key_update_sql
+    assert "job_submission_keys.job_id =" in key_update_sql
+    assert "job_submission_keys.deleted_at IS NULL" in key_update_sql
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_root_family_returns_zero_when_root_not_eligible():
+    db = _FakeDB()
+    db.results.append(_ScalarResult(None))
+
+    rowcount = await JobRepo.soft_delete_root_family(db, uuid.uuid4(), reason="manual")
+
+    assert rowcount == 0
+    assert len(db.statements) == 1
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_root_family_requires_active_submission_key_update():
+    root_id = uuid.uuid4()
+    root = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="request-1",
+        job_type="test.echo",
+        status="failed",
+        progress_percent=0,
+        metadata_={},
+        job_params_ref=_job_params_ref(),
+        job_params_hash=_job_params_hash(),
+    )
+    db = _FakeDB()
+    db.results.extend([_ScalarResult(root), _RowCountResult(0)])
+
+    with pytest.raises(ValueError, match="active submission key is missing"):
+        await JobRepo.soft_delete_root_family(db, root_id, reason="manual")
+
+
+@pytest.mark.asyncio
+async def test_restore_root_family_requires_deleted_submission_key():
+    root_id = uuid.uuid4()
+    root = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="request-1",
+        job_type="test.echo",
+        status="failed",
+        progress_percent=0,
+        metadata_={},
+        job_params_ref=_job_params_ref(),
+        job_params_hash=_job_params_hash(),
+        deleted_at=datetime.now(UTC),
+    )
+    db = _FakeDB()
+    db.results.extend(
+        [
+            _ScalarResult(root),
+            _ScalarResult(None),
+            _ScalarListResult([]),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="deleted submission key is missing"):
+        await JobRepo.restore_root_family(db, root_id)
+
+
+@pytest.mark.asyncio
+async def test_restore_root_family_rejects_partially_deleted_family():
+    root_id = uuid.uuid4()
+    root = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="request-1",
+        job_type="test.echo",
+        status="failed",
+        progress_percent=0,
+        metadata_={},
+        job_params_ref=_job_params_ref(),
+        job_params_hash=_job_params_hash(),
+        deleted_at=datetime.now(UTC),
+    )
+    db = _FakeDB()
+    db.results.extend(
+        [
+            _ScalarResult(root),
+            _ScalarResult(uuid.uuid4()),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="family is only partially soft-deleted"):
+        await JobRepo.restore_root_family(db, root_id)
+
+
+@pytest.mark.asyncio
+async def test_restore_root_family_rejects_active_submission_key_conflict():
+    root_id = uuid.uuid4()
+    root = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="request-1",
+        job_type="test.echo",
+        status="failed",
+        progress_percent=0,
+        metadata_={},
+        job_params_ref=_job_params_ref(),
+        job_params_hash=_job_params_hash(),
+        deleted_at=datetime.now(UTC),
+    )
+    key = JobSubmissionKey(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        key_kind="client_request_id",
+        key_value="request-1",
+        request_fingerprint="sha256:" + "a" * 64,
+        job_id=root_id,
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        deleted_at=datetime.now(UTC),
+    )
+    db = _FakeDB()
+    db.results.extend(
+        [
+            _ScalarResult(root),
+            _ScalarResult(None),
+            _ScalarListResult([key]),
+            _CleanupResult(),
+            _ScalarResult(uuid.uuid4()),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="submission key is already used"):
+        await JobRepo.restore_root_family(db, root_id)
+
+
+@pytest.mark.asyncio
+async def test_restore_root_family_locks_submission_key_and_restores_family():
+    root_id = uuid.uuid4()
+    root = Job(
+        id=root_id,
+        caller_id="caller-1",
+        client_request_id="request-1",
+        job_type="test.echo",
+        status="failed",
+        progress_percent=0,
+        metadata_={},
+        job_params_ref=_job_params_ref(),
+        job_params_hash=_job_params_hash(),
+        deleted_at=datetime.now(UTC),
+    )
+    key = JobSubmissionKey(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        key_kind="client_request_id",
+        key_value="request-1",
+        request_fingerprint="sha256:" + "a" * 64,
+        job_id=root_id,
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        deleted_at=datetime.now(UTC),
+    )
+    db = _FakeDB()
+    db.results.extend(
+        [
+            _ScalarResult(root),
+            _ScalarResult(None),
+            _ScalarListResult([key]),
+            _CleanupResult(),
+            _ScalarResult(None),
+        ]
+    )
+
+    rowcount = await JobRepo.restore_root_family(db, root_id)
+
+    assert rowcount == 3
+    lock_sql = _compile(db.statements[3])
+    assert "pg_advisory_xact_lock" in lock_sql
+    family_update_sql = _compile(db.statements[5])
+    key_update_sql = _compile(db.statements[6])
+    assert "UPDATE job_aggregates SET" in family_update_sql
+    assert "deleted_at=%(deleted_at)s" in family_update_sql
+    assert "UPDATE job_submission_keys SET" in key_update_sql
+    assert "deleted_at=%(deleted_at)s" in key_update_sql
 
 
 @pytest.mark.asyncio

@@ -219,6 +219,295 @@ def list_jobs(
     )
 
 
+def _deleted_common_filters(
+    *,
+    table_alias: str,
+    job_type: str | None,
+    caller_id: str | None,
+    client_request_id: str | None = None,
+    deleted_since: datetime | None = None,
+    record_scope: str = "root",
+) -> tuple[str, dict[str, Any]]:
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    if record_scope == "family":
+        family_clauses = [
+            "root.deleted_at IS NOT NULL",
+            "root.root_job_id IS NULL",
+            "root.workflow_node_key IS NULL",
+            "root.client_request_id IS NOT NULL",
+            f"({table_alias}.id = root.id OR {table_alias}.root_job_id = root.id)",
+        ]
+        if job_type is not None:
+            family_clauses.append("root.job_type = %(job_type)s")
+            params["job_type"] = job_type
+        if caller_id is not None:
+            family_clauses.append("root.caller_id = %(caller_id)s")
+            params["caller_id"] = caller_id
+        if client_request_id is not None:
+            family_clauses.append("root.client_request_id = %(client_request_id)s")
+            params["client_request_id"] = client_request_id
+        if deleted_since is not None:
+            family_clauses.append("root.deleted_at >= %(deleted_since)s")
+            params["deleted_since"] = deleted_since
+        clauses.append(
+            "AND EXISTS (\n  SELECT 1\n  FROM job_aggregates root\n  WHERE "
+            + "\n    AND ".join(family_clauses)
+            + "\n)"
+        )
+        return "\n".join(clauses), params
+
+    lineage_sql = _lineage_scope_clause(table_alias, record_scope)
+    if lineage_sql:
+        clauses.append(lineage_sql)
+    if job_type is not None:
+        clauses.append(f"AND {table_alias}.job_type = %(job_type)s")
+        params["job_type"] = job_type
+    if caller_id is not None:
+        clauses.append(f"AND {table_alias}.caller_id = %(caller_id)s")
+        params["caller_id"] = caller_id
+    if client_request_id is not None:
+        clauses.append(f"AND {table_alias}.client_request_id = %(client_request_id)s")
+        params["client_request_id"] = client_request_id
+    if deleted_since is not None:
+        clauses.append(f"AND {table_alias}.deleted_at >= %(deleted_since)s")
+        params["deleted_since"] = deleted_since
+    return "\n".join(clauses), params
+
+
+def deleted_jobs(
+    conn: connection,
+    *,
+    job_type: str | None,
+    caller_id: str | None,
+    client_request_id: str | None,
+    deleted_since: datetime | None,
+    limit: int,
+    record_scope: str = "root",
+) -> list[dict]:
+    filters, params = _deleted_common_filters(
+        table_alias="j",
+        job_type=job_type,
+        caller_id=caller_id,
+        client_request_id=client_request_id,
+        deleted_since=deleted_since,
+        record_scope=record_scope,
+    )
+    params["limit"] = limit
+    return _fetch_all(
+        conn,
+        f"""
+        SELECT
+          j.id::text AS job_id,
+          CASE WHEN j.root_job_id IS NULL THEN 'root' ELSE 'child' END AS record_scope,
+          COALESCE(j.root_job_id, j.id)::text AS family_root_job_id,
+          j.root_job_id::text AS root_job_id,
+          j.workflow_node_key,
+          j.status,
+          j.job_type,
+          j.caller_id,
+          j.client_request_id,
+          j.progress_percent,
+          j.progress_stage,
+          j.created_at,
+          j.finished_at,
+          j.expires_at,
+          j.delete_requested_at,
+          j.deleted_at,
+          j.deleted_reason
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NOT NULL
+        {filters}
+        ORDER BY j.deleted_at DESC, j.created_at DESC
+        LIMIT %(limit)s
+        """,
+        params,
+    )
+
+
+def deleted_summary(
+    conn: connection,
+    *,
+    job_type: str | None,
+    caller_id: str | None,
+    deleted_since: datetime | None,
+    record_scope: str = "all",
+) -> dict[str, Any]:
+    filters, params = _deleted_common_filters(
+        table_alias="j",
+        job_type=job_type,
+        caller_id=caller_id,
+        deleted_since=deleted_since,
+        record_scope=record_scope,
+    )
+    counts = _fetch_one(
+        conn,
+        f"""
+        SELECT
+          count(*) AS total_deleted,
+          count(*) FILTER (WHERE j.root_job_id IS NULL) AS root_deleted,
+          count(*) FILTER (WHERE j.root_job_id IS NOT NULL) AS child_deleted,
+          count(DISTINCT COALESCE(j.root_job_id, j.id)) AS family_count,
+          min(j.deleted_at) AS oldest_deleted_at,
+          max(j.deleted_at) AS newest_deleted_at
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NOT NULL
+        {filters}
+        """,
+        params,
+    ) or {}
+    by_reason = _fetch_all(
+        conn,
+        f"""
+        SELECT COALESCE(j.deleted_reason, '-') AS deleted_reason, count(*) AS count
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NOT NULL
+        {filters}
+        GROUP BY 1
+        ORDER BY count DESC, deleted_reason ASC
+        """,
+        params,
+    )
+    by_status = _fetch_all(
+        conn,
+        f"""
+        SELECT j.status, count(*) AS count
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NOT NULL
+        {filters}
+        GROUP BY j.status
+        ORDER BY count DESC, j.status ASC
+        """,
+        params,
+    )
+    by_job_type = _fetch_all(
+        conn,
+        f"""
+        SELECT j.job_type, count(*) AS count
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NOT NULL
+        {filters}
+        GROUP BY j.job_type
+        ORDER BY count DESC, j.job_type ASC
+        """,
+        params,
+    )
+    key_counts = _fetch_one(
+        conn,
+        f"""
+        SELECT
+          count(*) AS total_deleted,
+          count(*) FILTER (WHERE sk.deleted_reason = 'expired') AS expired_deleted
+        FROM job_submission_keys sk
+        JOIN job_aggregates j ON j.id = sk.job_id
+        WHERE sk.deleted_at IS NOT NULL
+        {filters}
+        """,
+        params,
+    ) or {}
+    consistency_clauses = [
+        "j.root_job_id IS NULL",
+        "j.workflow_node_key IS NULL",
+        "j.client_request_id IS NOT NULL",
+    ]
+    consistency_params: dict[str, Any] = {}
+    if job_type is not None:
+        consistency_clauses.append("j.job_type = %(job_type)s")
+        consistency_params["job_type"] = job_type
+    if caller_id is not None:
+        consistency_clauses.append("j.caller_id = %(caller_id)s")
+        consistency_params["caller_id"] = caller_id
+    if deleted_since is not None:
+        consistency_clauses.append("(j.deleted_at >= %(deleted_since)s OR sk.deleted_at >= %(deleted_since)s)")
+        consistency_params["deleted_since"] = deleted_since
+    child_consistency_clauses = [
+        "child.root_job_id = root.id",
+        "child.deleted_at IS NOT NULL",
+        "(child.status NOT IN ('succeeded', 'failed') OR child.active_attempt_id IS NOT NULL)",
+    ]
+    if job_type is not None:
+        child_consistency_clauses.append("root.job_type = %(job_type)s")
+    if caller_id is not None:
+        child_consistency_clauses.append("root.caller_id = %(caller_id)s")
+    if deleted_since is not None:
+        child_consistency_clauses.append("(root.deleted_at >= %(deleted_since)s OR child.deleted_at >= %(deleted_since)s)")
+    inconsistencies = _fetch_one(
+        conn,
+        f"""
+        SELECT
+          count(*) FILTER (
+            WHERE j.deleted_at IS NOT NULL
+              AND sk.id IS NOT NULL
+              AND sk.deleted_at IS NULL
+          ) AS deleted_root_active_submission_keys,
+          count(*) FILTER (
+            WHERE j.deleted_at IS NULL
+              AND sk.id IS NOT NULL
+              AND sk.deleted_at IS NOT NULL
+          ) AS active_root_deleted_submission_keys,
+          count(*) FILTER (
+            WHERE j.deleted_at IS NOT NULL
+              AND (j.status NOT IN ('succeeded', 'failed') OR j.active_attempt_id IS NOT NULL)
+          ) AS deleted_active_jobs,
+          (
+            SELECT count(*)
+            FROM job_aggregates child
+            JOIN job_aggregates root ON root.id = child.root_job_id
+            WHERE {" AND ".join(child_consistency_clauses)}
+          ) AS deleted_child_active_jobs
+        FROM job_aggregates j
+        LEFT JOIN job_submission_keys sk ON sk.job_id = j.id
+        WHERE {" AND ".join(consistency_clauses)}
+        """,
+        consistency_params,
+    ) or {}
+    return {
+        "counts": counts,
+        "by_reason": by_reason,
+        "by_status": by_status,
+        "by_job_type": by_job_type,
+        "submission_keys": key_counts,
+        "inconsistencies": inconsistencies,
+    }
+
+
+def get_deleted_job(conn: connection, job_id: str) -> dict | None:
+    return _fetch_one(
+        conn,
+        """
+        SELECT
+          j.*,
+          COALESCE(j.root_job_id, j.id)::text AS family_root_job_id,
+          CASE WHEN j.root_job_id IS NULL THEN 'root' ELSE 'child' END AS record_scope,
+          COALESCE(attempt_counts.total, 0) AS attempt_count,
+          COALESCE(callback_counts.total, 0) AS callback_count,
+          COALESCE(child_counts.total, 0) AS child_count,
+          COALESCE(child_counts.deleted, 0) AS deleted_child_count
+        FROM job_aggregates j
+        LEFT JOIN LATERAL (
+          SELECT count(*) AS total
+          FROM job_execution_attempts a
+          WHERE a.job_id = j.id
+        ) attempt_counts ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT count(*) AS total
+          FROM callback_outbox c
+          WHERE c.job_id = j.id
+        ) callback_counts ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            count(*) AS total,
+            count(*) FILTER (WHERE child.deleted_at IS NOT NULL) AS deleted
+          FROM job_aggregates child
+          WHERE child.root_job_id = j.id
+        ) child_counts ON TRUE
+        WHERE j.id = %(job_id)s
+          AND j.deleted_at IS NOT NULL
+        """,
+        {"job_id": job_id},
+    )
+
+
 def get_job(conn: connection, job_id: str) -> dict | None:
     return _fetch_one(
         conn,

@@ -132,9 +132,17 @@ class Job(Base):
 class JobSubmissionKey(Base):
     __tablename__ = "job_submission_keys"
     __table_args__ = (
-        UniqueConstraint("caller_id", "key_kind", "key_value", name="uq_job_submission_keys_caller_kind_value"),
+        Index(
+            "uq_job_submission_keys_active_caller_kind_value",
+            "caller_id",
+            "key_kind",
+            "key_value",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         Index("ix_job_submission_keys_job_id", "job_id"),
         Index("ix_job_submission_keys_expires_at", "expires_at"),
+        Index("ix_job_submission_keys_deleted_at", "deleted_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -147,6 +155,8 @@ class JobSubmissionKey(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class JobAttempt(Base):
