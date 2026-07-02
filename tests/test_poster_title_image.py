@@ -37,6 +37,7 @@ from app.schemas.jobs import (
     JobEnvelope,
     POSTER_TITLE_IMAGE_MAX_TITLE_LINES,
     PosterTitleImageParams,
+    PosterTitleImageStyleProbeRuntimeFields,
 )
 from app.services.billing import job_cost_from_billing
 from app.services.job_runtime import build_runtime_snapshot, payload_hash, write_runtime_json
@@ -262,6 +263,55 @@ def test_poster_title_image_params_apply_delivery_contract_constraints():
     invalid["items"][0]["language"] = "id"
     with pytest.raises(ValueError, match="language"):
         PosterTitleImageParams.model_validate(invalid)
+
+
+def test_poster_title_image_runtime_fields_preserve_system_alias():
+    from app.jobs.types.poster_title_image import (
+        PosterTitleImageGenerateItemJob,
+        PosterTitleImageJoinJob,
+        PosterTitleImageStyleProbeJob,
+    )
+
+    ref = _url_ref("reference/title.png", b"x")
+    item = _params(ref)["items"][0]
+    style_probe_params = {
+        "style_key": "style-1",
+        "reference_image": ref,
+        "style_prompt": "describe style",
+        "style_probe_model_id": "gpt-5.5",
+        "image_adapter": "openai_responses",
+    }
+    generate_item_params = {
+        "item": item,
+        "probe_node_key": "probe.0",
+        "style_probe_model_id": "gpt-5.5",
+        "image_adapter": "openai_responses",
+    }
+
+    runtime_fields = [
+        PosterTitleImageJob().runtime_job_fields(_params(ref)),
+        PosterTitleImageStyleProbeJob().runtime_job_fields(style_probe_params),
+        PosterTitleImageGenerateItemJob().runtime_job_fields(generate_item_params),
+        PosterTitleImageJoinJob().runtime_job_fields({"items": [item]}),
+    ]
+
+    for fields in runtime_fields:
+        assert "_system" not in fields
+        assert "system" not in fields
+
+    validated = PosterTitleImageStyleProbeRuntimeFields.model_validate(
+        {
+            **runtime_fields[1],
+            "_system": {"trigger_request_id": "req-probe-1"},
+        }
+    )
+
+    assert validated.system is not None
+    assert validated.system.trigger_request_id == "req-probe-1"
+    assert validated.model_dump(by_alias=True, exclude_none=True) == {
+        **runtime_fields[1],
+        "_system": {"trigger_request_id": "req-probe-1"},
+    }
 
 
 def test_poster_title_image_params_allow_duplicate_language_with_unique_item_id():
@@ -1150,6 +1200,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
                 "generation_model_id": "gpt-image-2",
                 "style_probe_model_id": "gpt-5.5",
                 "image_adapter": "openai_images",
+                "_system": {"trigger_request_id": "req-generate-1"},
             },
             output_target=output_target,
         ),
@@ -1177,6 +1228,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     assert recorded[0]["output_format"] == "png"
     assert recorded[0]["scope_id"] == str(root_id)
     assert recorded[0]["scope_job_id"] == root_id
+    assert recorded[0]["request_id"] == "req-generate-1"
     assert GREEN_BACKGROUND_TEXT in recorded[0]["prompt"]
     assert "poster-title layer" in recorded[0]["prompt"]
     assert "poster title text only" in recorded[0]["prompt"]
@@ -1200,7 +1252,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     assert f"event={LogEvent.POSTER_TITLE_IMAGE_ITEM_COMPLETED}" in messages
     assert f"job_id={job_id}" in messages
     assert f"root_job_id={root_id}" in messages
-    assert "trigger_request_id=" in messages
+    assert "trigger_request_id=req-generate-1" in messages
     assert "caller_id=caller-1" in messages
     assert "job_type=poster_title_image_generate_item" in messages
     assert "item_id=es" in messages
@@ -1927,6 +1979,7 @@ async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, 
                 "operation": "poster_title_image_style_probe",
                 "style_probe_model_id": "gpt-5.5",
                 "image_adapter": "openai_responses",
+                "_system": {"trigger_request_id": "req-probe-1"},
             },
             output_target={"type": "oss_prefix", "oss_bucket": "local-dev", "oss_region": "local", "oss_prefix": "ai-jobs/"},
         ),
@@ -1940,12 +1993,13 @@ async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, 
     assert result["style_desc"] == "bold stone title letters"
     assert recorded_probe_kwargs["model_id"] == "gpt-5.5"
     assert recorded_probe_kwargs["image_adapter"] == "openai_responses"
+    assert recorded_probe_kwargs["request_id"] == "req-probe-1"
     messages = "\n".join(record.getMessage() for record in caplog.records)
     assert f"event={LogEvent.POSTER_TITLE_IMAGE_STYLE_PROBE_COMPLETED}" in messages
     assert f"job_id={job_id}" in messages
     assert f"root_job_id={root_id}" in messages
     assert f"attempt_id={attempt_id}" in messages
-    assert "trigger_request_id=-" in messages
+    assert "trigger_request_id=req-probe-1" in messages
     assert "caller_id=caller-1" in messages
     assert "job_type=poster_title_image_style_probe" in messages
     assert "workflow_node_key=probe.0" in messages

@@ -49,6 +49,7 @@ from app.schemas.jobs import (
     PosterTitleImageStyleProbeParams,
     PosterTitleImageStyleProbeResult,
     PosterTitleImageStyleProbeRuntimeFields,
+    RuntimeSystemFields,
 )
 from app.schemas.meta import LanguagesResponse, ModelsResponse, PromptTemplateResponseData
 
@@ -81,6 +82,7 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
         JobRealLlmDoubleEchoParams,
         JobRealLlmDoubleEchoRuntimeFields,
         JobRealLlmDoubleEchoResult,
+        RuntimeSystemFields,
         OssUrlRef,
         PosterTitleImageReferenceImage,
         PosterTitleImageModelOptions,

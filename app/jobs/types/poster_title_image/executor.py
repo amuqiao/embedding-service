@@ -554,7 +554,7 @@ class PosterTitleImageJob(JobExecutor):
             style_probe_model_id=_style_probe_model_id(),
             generation_model_id=_generation_model_id_from_params(params),
             image_adapter=image_adapter,
-        ).model_dump()
+        ).model_dump(by_alias=True, exclude_none=True)
 
     async def build_result_snapshot(self, status: str, job: Job, db: AsyncSession) -> dict[str, Any] | None:
         return await _build_result_snapshot(job, db)
@@ -631,7 +631,7 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
         return PosterTitleImageStyleProbeRuntimeFields(
             style_probe_model_id=params.style_probe_model_id,
             image_adapter=params.image_adapter,
-        ).model_dump()
+        ).model_dump(by_alias=True, exclude_none=True)
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:
         params = PosterTitleImageStyleProbeParams.model_validate(job_params_from_job(job))
@@ -703,7 +703,7 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
             generation_model_id=params.item.model_id or _generation_default_model_id(),
             style_probe_model_id=params.style_probe_model_id,
             image_adapter=params.image_adapter,
-        ).model_dump()
+        ).model_dump(by_alias=True, exclude_none=True)
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:
         params = PosterTitleImageGenerateItemParams.model_validate(job_params_from_job(job))
@@ -859,7 +859,7 @@ class PosterTitleImageJoinJob(JobExecutor):
         return PosterTitleImageJoinParams.model_validate(job_params).model_dump()
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
-        return PosterTitleImageJoinRuntimeFields().model_dump()
+        return PosterTitleImageJoinRuntimeFields().model_dump(by_alias=True, exclude_none=True)
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:
         params = PosterTitleImageJoinParams.model_validate(job_params_from_job(job))

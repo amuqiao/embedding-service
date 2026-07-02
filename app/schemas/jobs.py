@@ -220,6 +220,17 @@ class JobResult(StrictBaseModel):
         return artifacts
 
 
+class RuntimeSystemFields(StrictBaseModel):
+    trigger_request_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class RuntimeFieldsBase(StrictBaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    # Workflow orchestration injects internal request metadata into persisted runtime fields.
+    system: RuntimeSystemFields | None = Field(default=None, alias="_system")
+
+
 class JobTestAddParams(StrictBaseModel):
     a: NumberValue
     b: NumberValue
@@ -522,7 +533,7 @@ class PosterTitleImageParams(StrictBaseModel):
         return self
 
 
-class PosterTitleImageRuntimeFields(StrictBaseModel):
+class PosterTitleImageRuntimeFields(RuntimeFieldsBase):
     operation: Literal["poster_title_image"] = "poster_title_image"
     style_probe_model_id: str = Field(min_length=1, max_length=128)
     generation_model_id: str = Field(min_length=1, max_length=128)
@@ -537,7 +548,7 @@ class PosterTitleImageStyleProbeParams(StrictBaseModel):
     image_adapter: str = Field(min_length=1, max_length=128)
 
 
-class PosterTitleImageStyleProbeRuntimeFields(StrictBaseModel):
+class PosterTitleImageStyleProbeRuntimeFields(RuntimeFieldsBase):
     operation: Literal["poster_title_image_style_probe"] = "poster_title_image_style_probe"
     style_probe_model_id: str = Field(min_length=1, max_length=128)
     image_adapter: str = Field(min_length=1, max_length=128)
@@ -561,7 +572,7 @@ class PosterTitleImageGenerateItemParams(StrictBaseModel):
     image_adapter: str = Field(min_length=1, max_length=128)
 
 
-class PosterTitleImageGenerateItemRuntimeFields(StrictBaseModel):
+class PosterTitleImageGenerateItemRuntimeFields(RuntimeFieldsBase):
     operation: Literal["poster_title_image_generate_item"] = "poster_title_image_generate_item"
     generation_model_id: str = Field(min_length=1, max_length=128)
     style_probe_model_id: str = Field(min_length=1, max_length=128)
@@ -627,7 +638,7 @@ class PosterTitleImageJoinParams(StrictBaseModel):
         return self
 
 
-class PosterTitleImageJoinRuntimeFields(StrictBaseModel):
+class PosterTitleImageJoinRuntimeFields(RuntimeFieldsBase):
     operation: Literal["poster_title_image_join"] = "poster_title_image_join"
 
 
