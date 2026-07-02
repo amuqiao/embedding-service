@@ -107,7 +107,7 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/k8s.sh" --help >/dev/null
   event "OK" "k8s.sh" "help"
   assert_generated_commands_help "jobs.sh" "$ROOT_DIR/scripts/jobs.sh" \
-    guide overview observe broker runtime list show job inspect trace payload diagnose workflow timeline attempts callbacks callbacks-summary stuck drain pressure summary doctor failures latency ingress capacity types
+    guide dashboard overview observe broker runtime list show job inspect trace payload diagnose workflow timeline attempts callbacks callbacks-summary stuck drain pressure summary doctor failures latency ingress capacity types
   event "OK" "jobs.sh" "help"
   assert_generated_commands_help "real-flow.sh" "$ROOT_DIR/scripts/real-flow.sh" \
     doctor llm-job-billing llm-job-double-billing oss-upload-image poster-title-image
@@ -133,6 +133,7 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/verify.sh" env-config --help >/dev/null
   "$ROOT_DIR/scripts/tools.sh" secret --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" guide --help >/dev/null
+  "$ROOT_DIR/scripts/jobs.sh" dashboard --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" observe --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" broker --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" runtime --help >/dev/null

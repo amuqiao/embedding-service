@@ -124,6 +124,17 @@ OBSERVE_HELP_EPILOG = """\b
   ./scripts/jobs.sh observe --since 30m --caller-id default --json
 """
 
+DASHBOARD_HELP_EPILOG = """\b
+说明：
+  dashboard 汇总 DB 业务事实源中的系统数量、容量、吞吐、耗时和 stuck 样本。
+  不读取 Redis broker 或 Pod runtime；运输层和运行时请继续使用 broker / runtime。
+
+\b
+常用示例：
+  ./scripts/jobs.sh dashboard --since 1h
+  ./scripts/jobs.sh dashboard --since 1h --bucket 1m --caller-id default --json
+"""
+
 BROKER_HELP_EPILOG = """\b
 常用示例：
   ./scripts/jobs.sh broker
@@ -230,13 +241,14 @@ HELP_EPILOG = """\b
 
 \b
 四层模型：
-  系统态           overview / doctor / gate / capacity / pressure / ingress
+  系统态           dashboard / overview / doctor / gate / capacity / pressure / ingress
   恢复态           observe / drain / stuck
   运输和运行时     broker / runtime
   单 Job 轨迹      trace / inspect / diagnose / workflow / attempts / callbacks / timeline
 
 \b
 常用排障顺序：
+  ./scripts/jobs.sh dashboard --since 1h
   ./scripts/jobs.sh overview --since 1h
   ./scripts/jobs.sh observe --interval 60 --samples 5
   ./scripts/jobs.sh broker
@@ -246,7 +258,7 @@ HELP_EPILOG = """\b
 
 \b
 常见问题：
-  当前是否健康？         overview / doctor / gate
+  当前是否健康？         dashboard / overview / doctor / gate
   是否正在恢复？         observe
   Redis/worker 是否消费？ broker / runtime
   调用方流量是否变大？    ingress
@@ -281,7 +293,8 @@ GUIDE_TEXT = """Job 排障命令骨架
 
 按问题找命令
   系统现在健康吗？
-    首选：./scripts/jobs.sh overview --since 1h
+    首选：./scripts/jobs.sh dashboard --since 1h
+    辅助：./scripts/jobs.sh overview --since 1h
     辅助：./scripts/jobs.sh doctor --since 1h
     明细：./scripts/jobs.sh summary --since 1h
 
@@ -319,7 +332,7 @@ GUIDE_TEXT = """Job 排障命令骨架
 
 命令分级
   一级入口
-    overview / observe / broker / runtime / trace
+    dashboard / overview / observe / broker / runtime / trace
 
   二级诊断
     doctor / gate / capacity / ingress / latency / failures / callbacks-summary / stuck / drain / pressure
@@ -329,7 +342,7 @@ GUIDE_TEXT = """Job 排障命令骨架
 
 四层模型
   系统态
-    overview / doctor / gate / capacity / pressure / ingress
+    dashboard / overview / doctor / gate / capacity / pressure / ingress
     看 active_jobs、queued、running_active、failed、dispatch_due、callback_due、stuck。
 
   恢复态
@@ -383,6 +396,13 @@ ScopeOption = Annotated[
     typer.Option(
         "--scope",
         help="Job 记录范围：root、child、family 或 all；默认按命令选择最常用口径。",
+    ),
+]
+StuckScopeOption = Annotated[
+    str,
+    typer.Option(
+        "--stuck-scope",
+        help="stuck 样本记录范围：root、child、family 或 all；默认 family。",
     ),
 ]
 
@@ -3347,6 +3367,59 @@ def _render_observe_human(payload: dict[str, Any]) -> None:
         print(f"- {item}")
 
 
+def _dashboard_status(payload: dict[str, Any]) -> dict[str, str]:
+    diagnosis = _diagnose_summary(payload["summary"])
+    status = diagnosis["status"]
+    message = "summary=%s" % status
+    stuck_count = len((payload.get("stuck") or {}).get("items") or [])
+    if stuck_count:
+        if status == "ok":
+            status = "warning"
+        message = f"{message} stuck_sample={stuck_count}"
+    return {"status": status, "message": message}
+
+
+def _render_dashboard_human(payload: dict[str, Any]) -> None:
+    scope = payload["scope"]
+    summary = payload["summary"]
+    capacity = payload["capacity"]
+    stuck = payload["stuck"]
+    status = _dashboard_status(payload)
+    formatters.section("Job Dashboard")
+    formatters.event(
+        status["status"].upper(),
+        "dashboard",
+        "since=%s bucket=%s record_scope=%s job_type=%s caller_id=%s - %s"
+        % (
+            scope["since"],
+            scope["bucket"],
+            scope["record_scope"],
+            scope.get("job_type") or "-",
+            scope.get("caller_id") or "-",
+            status["message"],
+        ),
+    )
+    formatters.section("Job Counts")
+    formatters.print_table([summary["jobs"]], _summary_job_columns())
+    formatters.section("Attempts")
+    formatters.print_table([summary["attempts"]], _summary_attempt_columns())
+    formatters.section("Dispatch")
+    formatters.print_table([summary["dispatch"]], _summary_dispatch_columns())
+    formatters.section("Callbacks")
+    formatters.print_table([summary["callbacks"]], _summary_callback_columns())
+    _render_capacity_human(capacity, title="Capacity")
+    formatters.section("Ingress")
+    formatters.print_table(payload["ingress"]["ingress"], _ingress_columns(), empty_message="no job events")
+    formatters.section("Latency")
+    formatters.print_table(payload["latency"]["latency"], _latency_columns(), empty_message="no latency data")
+    formatters.section("Stuck Sample")
+    formatters.event("OK", "stuck", f"sample_count={len(stuck['items'])} older_than={scope['older_than']} record_scope={scope['stuck_scope']}")
+    formatters.print_table(stuck["items"], _stuck_columns(), empty_message="no stuck records")
+    formatters.section("Notes")
+    for key, value in payload["notes"].items():
+        print(f"- {key}: {value}")
+
+
 def _decode_redis(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
@@ -4725,6 +4798,50 @@ def observe(
         formatters.print_json(payload)
         return
     _render_observe_human(payload)
+
+
+@app.command(help="查看 Job 系统数量、容量、吞吐、耗时和 stuck 样本大盘。", epilog=DASHBOARD_HELP_EPILOG)
+def dashboard(
+    since: Annotated[str, typer.Option("--since", help="统计窗口，例如 1h。")] = "1h",
+    bucket: Annotated[str, typer.Option("--bucket", help="吞吐时间桶，例如 1m、5m。")] = "1m",
+    older_than: Annotated[str, typer.Option("--older-than", help="stuck 判定窗口，例如 10m。")] = "10m",
+    job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤窗口证据。")] = None,
+    caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤窗口证据。")] = None,
+    max_active_jobs: Annotated[
+        int | None,
+        typer.Option("--max-active-jobs", min=0, help="用于计算 active 占用比例；默认读取环境或 .env。"),
+    ] = None,
+    record_scope: ScopeOption = "root",
+    stuck_scope: StuckScopeOption = "family",
+    stuck_limit: Annotated[int, typer.Option("--stuck-limit", min=1, max=100, help="stuck 样本条数。")] = 20,
+    json_output: JsonOption = False,
+) -> None:
+    try:
+        parsed_record_scope = parse_record_scope(record_scope)
+    except ValueError as exc:
+        print(f"ERROR: --scope {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    try:
+        parsed_stuck_scope = parse_record_scope(stuck_scope)
+    except ValueError as exc:
+        print(f"ERROR: --stuck-scope {exc}", file=sys.stderr)
+        raise typer.Exit(2) from exc
+    limit = max_active_jobs if max_active_jobs is not None else _env_max_active_jobs()
+    payload = _dashboard_payload(
+        since=since,
+        bucket=bucket,
+        older_than=older_than,
+        job_type=job_type,
+        caller_id=caller_id,
+        max_active_jobs=limit,
+        record_scope=parsed_record_scope,
+        stuck_scope=parsed_stuck_scope,
+        stuck_limit=stuck_limit,
+    )
+    if json_output:
+        formatters.print_json(payload)
+        return
+    _render_dashboard_human(payload)
 
 
 @app.command(help="查看 Redis/Taskiq broker 只读运输层状态。", epilog=BROKER_HELP_EPILOG)

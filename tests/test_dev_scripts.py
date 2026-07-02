@@ -1344,8 +1344,10 @@ def test_jobs_cli_help_is_available_without_db():
     assert "gate" in result.stdout
     assert "payload" in result.stdout
     assert "guide" in result.stdout
+    assert "dashboard" in result.stdout
     assert "30s、10m、24h、7d" in result.stdout
     assert "常用排障顺序" in result.stdout
+    assert "./scripts/jobs.sh dashboard --since 1h" in result.stdout
     assert "./scripts/jobs.sh observe --interval 60 --samples 5" in result.stdout
     assert "./scripts/jobs.sh guide" in result.stdout
     assert "Scope：" not in result.stdout
@@ -1368,6 +1370,7 @@ def test_jobs_guide_is_available_without_db():
     assert "二级诊断" in result.stdout
     assert "明细证据" in result.stdout
     assert "系统态" in result.stdout
+    assert "dashboard / overview" in result.stdout
     assert "恢复态" in result.stdout
     assert "运输和运行时" in result.stdout
     assert "单 Job 轨迹" in result.stdout
@@ -1833,6 +1836,7 @@ def test_jobs_summary_uses_subcommand_since_after_callback_simplification(monkey
     ("command", "expected"),
     [
         (["guide", "-h"], "./scripts/jobs.sh guide"),
+        (["dashboard", "-h"], "./scripts/jobs.sh dashboard --since 1h"),
         (["overview", "-h"], "./scripts/jobs.sh overview --since 10m"),
         (["job", "-h"], "./scripts/jobs.sh job <job_id>"),
         (["workflow", "-h"], "./scripts/jobs.sh workflow <job_id>"),
@@ -4045,6 +4049,149 @@ def test_jobs_dashboard_payload_composes_db_evidence_without_runtime_reads(monke
     assert captured["ingress"]["bucket_seconds"] == 60
     assert captured["latency"]["group_by"] == "all"
     assert captured["stuck"]["record_scope"] == "family"
+
+
+def test_jobs_dashboard_json_uses_aggregated_payload(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_dashboard_payload(**kwargs):
+        captured.update(kwargs)
+        return {
+            "scope": {
+                "since": kwargs["since"],
+                "seconds": 3600.0,
+                "bucket": kwargs["bucket"],
+                "bucket_seconds": 60,
+                "older_than": kwargs["older_than"],
+                "job_type": kwargs["job_type"],
+                "caller_id": kwargs["caller_id"],
+                "record_scope": kwargs["record_scope"],
+                "stuck_scope": kwargs["stuck_scope"],
+            },
+            "summary": {
+                "jobs": {"total": 4, "queued": 1, "running_active": 1, "succeeded": 1, "failed": 1},
+                "attempts": {},
+                "dispatch": {},
+                "callbacks": {},
+                "by_job_type": [],
+            },
+            "capacity": {"current": {"active_jobs": 2}, "window": {}, "estimated": {}, "scope": {"current": "global_gate"}},
+            "ingress": {"ingress": [{"created": 4, "started": 3, "terminal": 2, "failed": 1}]},
+            "latency": {"latency": [{"group_key": "all", "total": 2}]},
+            "stuck": {"items": []},
+            "notes": {"transport_runtime": "dashboard 基础 payload 不读取 Redis、/proc 或 cgroup；broker/runtime 仍是显式检查。"},
+        }
+
+    monkeypatch.setattr("scripts.jobs.cli._env_max_active_jobs", lambda: 500)
+    monkeypatch.setattr("scripts.jobs.cli._dashboard_payload", fake_dashboard_payload)
+
+    result = RUNNER.invoke(
+        jobs_cli_app,
+        [
+            "dashboard",
+            "--since",
+            "1h",
+            "--bucket",
+            "1m",
+            "--caller-id",
+            "default",
+            "--scope",
+            "all",
+            "--stuck-scope",
+            "root",
+            "--stuck-limit",
+            "5",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["scope"]["since"] == "1h"
+    assert payload["summary"]["jobs"]["queued"] == 1
+    assert payload["ingress"]["ingress"][0]["terminal"] == 2
+    assert captured["max_active_jobs"] == 500
+    assert captured["record_scope"] == "all"
+    assert captured["stuck_scope"] == "root"
+    assert captured["stuck_limit"] == 5
+
+
+def test_jobs_dashboard_human_renders_core_sections(monkeypatch):
+    monkeypatch.setattr("scripts.jobs.cli._env_max_active_jobs", lambda: 500)
+    monkeypatch.setattr(
+        "scripts.jobs.cli._dashboard_payload",
+        lambda **kwargs: {
+            "scope": {
+                "since": kwargs["since"],
+                "seconds": 3600.0,
+                "bucket": kwargs["bucket"],
+                "bucket_seconds": 60,
+                "older_than": kwargs["older_than"],
+                "job_type": kwargs["job_type"],
+                "caller_id": kwargs["caller_id"],
+                "record_scope": kwargs["record_scope"],
+                "stuck_scope": kwargs["stuck_scope"],
+            },
+            "summary": {
+                "scope": {"since": kwargs["since"], "record_scope": kwargs["record_scope"]},
+                "jobs": {
+                    "total": 4,
+                    "queued": 1,
+                    "running": 1,
+                    "running_active": 1,
+                    "running_inactive": 0,
+                    "succeeded": 1,
+                    "failed": 1,
+                    "cancelled": 0,
+                },
+                "attempts": {"total": 2, "queued": 0, "running": 1, "succeeded": 1, "failed": 0, "claimable_published": 0, "lease_expired": 0},
+                "dispatch": {"queued": 0, "publishing": 0, "published": 1, "failed": 0, "dead_letter": 0, "due": 0},
+                "callbacks": {"pending": 0, "delivering": 0, "delivered": 1, "failed": 0, "dead_letter": 0, "due": 0},
+                "by_job_type": [],
+            },
+            "capacity": {
+                "scope": {"current": "global_gate", "window": {"since": kwargs["since"], "record_scope": kwargs["record_scope"]}},
+                "max_active_jobs": 500,
+                "current": {"active_jobs": 2, "queued": 1, "running": 1, "running_active": 1, "running_inactive": 0},
+                "window": {"accepted_jobs": 4, "terminal_jobs": 2, "accepted_submit_rps": 1.0},
+                "estimated": {"active_ratio": 0.004, "headroom": 498, "active_jobs_needed_upper_bound": 3.0},
+                "notes": {},
+                "db_connection_budget": None,
+                "recommendation": {"risk": "ok", "message": "ok"},
+            },
+            "ingress": {"ingress": [{"bucket_at": datetime(2026, 7, 1, tzinfo=timezone.utc), "created": 4, "started": 3, "terminal": 2, "failed": 1}]},
+            "latency": {"latency": [{"group_key": "all", "total": 2, "lifecycle_p95_seconds": 12.0}]},
+            "stuck": {"items": []},
+            "notes": {"transport_runtime": "dashboard 基础 payload 不读取 Redis、/proc 或 cgroup；broker/runtime 仍是显式检查。"},
+        },
+    )
+
+    result = RUNNER.invoke(jobs_cli_app, ["dashboard", "--since", "1h"])
+
+    assert result.exit_code == 0
+    assert "Job Dashboard" in result.stdout
+    assert "WARNING" in result.stdout
+    assert "Job Counts" in result.stdout
+    assert "Capacity" in result.stdout
+    assert "Ingress" in result.stdout
+    assert "Latency" in result.stdout
+    assert "Stuck Sample" in result.stdout
+    assert "broker/runtime" in result.stdout
+
+
+def test_jobs_dashboard_rejects_invalid_stuck_scope_with_targeted_error():
+    result = RUNNER.invoke(jobs_cli_app, ["dashboard", "--stuck-scope", "nope", "--json"])
+
+    assert result.exit_code == 2
+    assert "--stuck-scope" in result.stderr
+
+
+def test_jobs_dashboard_rejects_invalid_record_scope_with_targeted_error():
+    result = RUNNER.invoke(jobs_cli_app, ["dashboard", "--scope", "nope", "--json"])
+
+    assert result.exit_code == 2
+    assert "--scope" in result.stderr
+    assert "--stuck-scope" not in result.stderr
 
 
 def test_jobs_capacity_json_separates_global_current_from_window(monkeypatch):
