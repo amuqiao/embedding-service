@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import DateTime, String, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ops_dashboard.health_rules import health_verdict
@@ -20,6 +20,11 @@ AND {alias}.root_job_id IS NOT NULL
 AND {alias}.workflow_node_key IS NOT NULL
 AND {alias}.client_request_id IS NULL
 """
+OPTIONAL_FILTER_BIND_TYPES = {
+    "job_type": String(),
+    "caller_id": String(),
+    "since_at": DateTime(timezone=True),
+}
 
 
 def _now() -> datetime:
@@ -83,13 +88,24 @@ def _base_params(filters: DashboardFilters) -> dict[str, Any]:
     }
 
 
+def _typed_text(sql: str):
+    statement = text(sql)
+    existing_params = statement.compile().params
+    bindparams = [
+        bindparam(key, type_=param_type)
+        for key, param_type in OPTIONAL_FILTER_BIND_TYPES.items()
+        if key in existing_params
+    ]
+    return statement.bindparams(*bindparams) if bindparams else statement
+
+
 async def _one(db: AsyncSession, sql: str, params: dict[str, Any]) -> dict[str, Any]:
-    row = (await db.execute(text(sql), params)).mappings().first()
+    row = (await db.execute(_typed_text(sql), params)).mappings().first()
     return dict(row) if row else {}
 
 
 async def _all(db: AsyncSession, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = (await db.execute(text(sql), params)).mappings().all()
+    rows = (await db.execute(_typed_text(sql), params)).mappings().all()
     return [dict(row) for row in rows]
 
 

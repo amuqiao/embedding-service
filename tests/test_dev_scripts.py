@@ -1453,9 +1453,10 @@ def test_k8s_cli_help_is_available_without_db():
     assert "K8s Pod 内手动运维入口" in result.stdout
     assert "check postgres" in result.stdout
     assert "check redis" in result.stdout
+    assert "check dashboard" in result.stdout
     assert "check oss --confirm" in result.stdout
     assert "current 和 heads 无副作用检查" in result.stdout
-    assert "check 是无副作用一键检查" in result.stdout
+    assert "不包含 check dashboard / check oss" in result.stdout
     assert "PUT / GET / HEAD" in result.stdout
     assert "PUT / GET / HEAD / DELETE" not in result.stdout
     assert "current" in result.stdout
@@ -1476,6 +1477,17 @@ def test_k8s_check_oss_prints_url_ref_without_delete_requirement():
     assert "delete_checked=false" in oss_check
 
 
+def test_k8s_check_dashboard_runs_read_model_without_default_binding():
+    script = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
+    dashboard_check = script.split("run_check_dashboard() {", 1)[1].split("\n}\n\nrun_check_oss()", 1)[0]
+
+    assert "settings.ops_dashboard.enabled" in dashboard_check
+    assert "read_model.overview_data" in dashboard_check
+    assert "read_model.failures_data" in dashboard_check
+    assert "SKIP dashboard disabled" in dashboard_check
+    assert "replay" not in dashboard_check
+
+
 def test_k8s_default_check_stays_side_effect_free():
     script = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
     default_check = script.split('    "")', 1)[1].split("      ;;\n    postgres)", 1)[0]
@@ -1484,6 +1496,7 @@ def test_k8s_default_check_stays_side_effect_free():
     assert "run_check_redis" in default_check
     assert "run_current" in default_check
     assert "run_heads" in default_check
+    assert "run_check_dashboard" not in default_check
     assert "run_check_oss" not in default_check
     assert "run_migrate" not in default_check
 
@@ -1546,6 +1559,7 @@ printf 'alembic %s\\n' "$*" >> {tmp_path / "calls.log"}
         "alembic heads",
     ]
     assert "OSS" not in result.stdout
+    assert "Ops Dashboard" not in result.stdout
     assert "upgrade" not in result.stdout
 
 

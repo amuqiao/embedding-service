@@ -2,7 +2,7 @@
 # k8s.sh - K8s Pod 内手动运维入口
 #
 # 运行环境：Bash；需要在已注入应用环境变量的 K8s Pod 内执行。
-# 作用域：只提供 Pod 内连接检查、OSS 连通性检查、Alembic 迁移和迁移状态查询。
+# 作用域：只提供 Pod 内连接检查、OSS 连通性检查、dashboard read model 检查、Alembic 迁移和迁移状态查询。
 # 约束：不创建或管理 Kubernetes 资源，不调用 kubectl，不管理 API/worker 生命周期。
 # 输出：按生产排障需要打印完整连接串和解析结果；Alembic 输出透传。
 
@@ -22,7 +22,7 @@ usage() {
 作用域：
   本脚本是 K8s Pod 内手动运维入口。
   进入已部署的 api 或 worker Pod 后，使用同一份应用代码和同一组环境变量连接外部依赖。
-  只负责 PostgreSQL / Redis / OSS 连接检查、Alembic 迁移状态查询和手动执行迁移。
+  只负责 PostgreSQL / Redis / OSS 连接检查、dashboard read model 检查、Alembic 迁移状态查询和手动执行迁移。
 
 不负责：
   不创建 Job、Pod、Deployment、Secret、ConfigMap。
@@ -41,6 +41,7 @@ usage() {
   check               聚合执行 PostgreSQL、Redis、Alembic current 和 heads 无副作用检查。
   check postgres      检查 DATABASE_URL 解析结果，并执行 PostgreSQL SELECT 1。
   check redis         检查 REDIS_URL 解析结果，并执行 Redis PING。
+  check dashboard     检查 ops_dashboard 有效配置，并执行 dashboard read model。
   check oss --confirm 检查 OSS 配置，并执行临时对象 PUT / GET / HEAD。
   current             查看当前数据库 Alembic revision。
   heads               查看代码中的 Alembic head revision。
@@ -49,7 +50,7 @@ usage() {
   help                显示帮助。
 
 输出：
-  stdout: 连接串解析结果、连通性证据、Alembic 输出和 OSS URL Ref。
+  stdout: 连接串解析结果、连通性证据、dashboard read model 结果、Alembic 输出和 OSS URL Ref。
   stderr: 非 Pod 环境、缺少依赖、缺少配置、连接失败或迁移失败详情。
 
 副作用与保护边界：
@@ -57,13 +58,14 @@ usage() {
   生产多副本部署时，只应在一个 Pod 内执行一次 migrate。
   执行迁移前应确认当前 Pod 运行的是要发布的代码版本。
   check 和 check postgres / redis 会输出明文连接串和密码，只应在受控终端中执行。
-  check 是无副作用一键检查，不包含 check oss，也不会执行 migrate。
+  check 是无副作用一键检查，不包含 check dashboard / check oss，也不会执行 migrate。
   check oss 是远程写入动作，必须显式传入 --confirm；会留下对象，需要按输出 key 手动清理或配置生命周期清理。
 
 常用示例：
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check postgres
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check redis
+  kubectl exec -it <api-pod> -- ./scripts/k8s.sh check dashboard
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check oss --confirm
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh current
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh migrate --confirm
@@ -83,20 +85,21 @@ command_usage() {
       cat <<EOF
 用法：
   ./scripts/k8s.sh check
-  ./scripts/k8s.sh check <postgres|redis|oss> [--confirm]
+  ./scripts/k8s.sh check <postgres|redis|dashboard|oss> [--confirm]
   ./scripts/k8s.sh check -h|--help
 
 作用域：
   聚合执行 PostgreSQL、Redis、Alembic current 和 heads 无副作用检查。
 
 副作用与保护边界：
-  check 不包含 check oss，也不会执行 migrate。
+  check 不包含 check dashboard / check oss，也不会执行 migrate。
   check postgres / redis 会输出明文连接串和密码。
 
 常用示例：
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check postgres
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check redis
+  kubectl exec -it <api-pod> -- ./scripts/k8s.sh check dashboard
 EOF
       ;;
     check:postgres|check:redis)
@@ -113,6 +116,24 @@ EOF
 
 常用示例：
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check ${target}
+EOF
+      ;;
+    check:dashboard)
+      cat <<EOF
+用法：
+  ./scripts/k8s.sh check dashboard
+  ./scripts/k8s.sh check dashboard -h|--help
+
+作用域：
+  检查 ops_dashboard 有效配置，并直接执行 overview / failures read model。
+  适合定位 dashboard 页面 500、SQL prepare、配置加载和数据库读模型问题。
+
+副作用与保护边界：
+  只读 DB 查询；不调用 Job 写路径，不 replay dispatch / callback。
+  不包含在默认 check 中，必须显式执行。
+
+常用示例：
+  kubectl exec -it <api-pod> -- ./scripts/k8s.sh check dashboard
 EOF
       ;;
     check:oss)
@@ -369,6 +390,74 @@ print(f"OK redis ping={ping}")
 PY
 }
 
+run_check_dashboard() {
+  require_no_args "check dashboard" "$@"
+  prepare_check_runtime
+  section "Ops Dashboard"
+  "$PYTHON_BIN" <<'PY'
+import asyncio
+import traceback
+
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.core.config import ROOT_DIR, settings
+from app.ops_dashboard import read_model
+from app.ops_dashboard.schemas import DashboardFilters
+
+
+def print_setting(name: str, value: object) -> None:
+    print(f"{name}={value}")
+
+
+async def main() -> int:
+    dotenv_path = ROOT_DIR / ".env"
+    print_setting("ROOT_DIR", ROOT_DIR)
+    print_setting("DOTENV", dotenv_path)
+    print_setting("DOTENV_EXISTS", dotenv_path.exists())
+    print_setting("OPS_DASHBOARD_ENABLED", settings.ops_dashboard.enabled)
+    print_setting("OPS_DASHBOARD_REQUIRE_AUTH", settings.ops_dashboard.require_auth)
+    print_setting("OPS_DASHBOARD_REFRESH_SECONDS", settings.ops_dashboard.refresh_seconds)
+    print_setting("OPS_DASHBOARD_MAX_WINDOW_SECONDS", settings.ops_dashboard.max_window_seconds)
+    print_setting("OPS_DASHBOARD_QUERY_TIMEOUT_SECONDS", settings.ops_dashboard.query_timeout_seconds)
+
+    if not settings.ops_dashboard.enabled:
+        print("SKIP dashboard disabled")
+        return 0
+
+    engine = create_async_engine(settings.database.url)
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with Session() as db:
+            filters = DashboardFilters(window="1h", bucket="1m")
+            checks = [
+                (
+                    "overview",
+                    lambda: read_model.overview_data(
+                        db,
+                        filters,
+                        max_active_jobs=settings.job.max_active_jobs,
+                    ),
+                ),
+                ("failures", lambda: read_model.failures_data(db, filters)),
+            ]
+            for name, call in checks:
+                try:
+                    payload = await call()
+                except Exception:
+                    print(f"ERROR dashboard {name} read_model")
+                    traceback.print_exc()
+                    return 1
+                keys = ",".join(sorted(payload.keys())) if isinstance(payload, dict) else type(payload).__name__
+                print(f"OK dashboard {name} read_model keys={keys}")
+    finally:
+        await engine.dispose()
+    return 0
+
+
+raise SystemExit(asyncio.run(main()))
+PY
+}
+
 run_check_oss() {
   [[ "${1:-}" == "--confirm" ]] || die "check oss requires --confirm because it writes a temporary OSS object" 2
   shift
@@ -491,12 +580,16 @@ run_check() {
       shift
       run_check_redis "$@"
       ;;
+    dashboard)
+      shift
+      run_check_dashboard "$@"
+      ;;
     oss)
       shift
       run_check_oss "$@"
       ;;
     *)
-      die "check target must be postgres, redis, or oss" 2
+      die "check target must be postgres, redis, dashboard, or oss" 2
       ;;
   esac
 }

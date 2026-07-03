@@ -369,13 +369,62 @@ class _RowsResult:
 
 class _RecordingDB:
     def __init__(self):
+        self.statement_objects = []
         self.statements = []
         self.params = []
 
     async def execute(self, statement, params=None):
+        self.statement_objects.append(statement)
         self.statements.append(str(statement))
         self.params.append(params or {})
         return _RowsResult()
+
+
+def _bind_type_name(statement, key):
+    bind = statement._bindparams[key]  # noqa: SLF001 - test verifies SQLAlchemy text bind contract.
+    return bind.type.__class__.__name__
+
+
+def test_ops_dashboard_typed_text_only_binds_existing_filter_params():
+    from app.ops_dashboard import read_model
+
+    no_filter = read_model._typed_text("select 1")  # noqa: SLF001 - test locks internal read-model helper.
+    partial = read_model._typed_text("select :job_type")  # noqa: SLF001
+
+    assert no_filter._bindparams == {}  # noqa: SLF001
+    assert sorted(partial._bindparams) == ["job_type"]  # noqa: SLF001
+    assert _bind_type_name(partial, "job_type") == "String"
+
+
+def test_ops_dashboard_optional_filter_binds_are_all_typed():
+    from app.ops_dashboard import read_model
+
+    source = Path(read_model.__file__).read_text(encoding="utf-8")
+    optional_params = set(re.findall(r":([a-z_]+)\s+IS\s+NULL", source))
+
+    assert optional_params
+    assert optional_params <= set(read_model.OPTIONAL_FILTER_BIND_TYPES)
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_read_model_binds_optional_filter_types_for_asyncpg():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB()
+
+    await read_model.summary(db, DashboardFilters())
+    await read_model.ingress(db, DashboardFilters())
+
+    for statement in db.statement_objects:
+        assert _bind_type_name(statement, "job_type") == "String"
+        assert _bind_type_name(statement, "caller_id") == "String"
+        assert _bind_type_name(statement, "since_at") == "DateTime"
+
+    combined_sql = "\n".join(db.statements)
+    assert ":job_type IS NULL" in combined_sql
+    assert ":caller_id IS NULL" in combined_sql
+    assert ":since_at IS NULL" in combined_sql
 
 
 @pytest.mark.asyncio
