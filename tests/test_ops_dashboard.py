@@ -1,6 +1,8 @@
+import re
 import sys
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -120,6 +122,46 @@ def test_ops_dashboard_static_file_rejects_traversal():
         ops_router._static_file("../router.py")
 
     assert exc_info.value.status_code == 404
+
+
+def test_ops_dashboard_static_dashboard_js_declares_chart_contract():
+    script = Path("app/ops_dashboard/static/dashboard.js").read_text(encoding="utf-8")
+    page = Path("app/ops_dashboard/static/index.html").read_text(encoding="utf-8")
+
+    assert "const CHART_TYPES = Object.freeze" in script
+    assert "const CHART_RENDERERS = Object.freeze" in script
+    assert "const PANEL_REGISTRY = Object.freeze" in script
+    assert "const PANEL_DATA_ADAPTERS = Object.freeze" in script
+    assert "Unknown chartType" in script
+
+    expected_chart_types = {"stat_card", "line", "stacked_bar", "horizontal_bar", "table"}
+    renderer_body = re.search(r"const CHART_RENDERERS = Object\.freeze\(\{(?P<body>.*?)\n  \}\);", script, re.S)
+    assert renderer_body is not None
+    renderer_types = set(re.findall(r"^\s{4}([a-z_]+):", renderer_body.group("body"), re.M))
+    assert renderer_types == expected_chart_types
+
+    panel_body = re.search(r"const PANEL_REGISTRY = Object\.freeze\(\{(?P<body>.*?)\n  \}\);", script, re.S)
+    assert panel_body is not None
+    panel_source = panel_body.group("body")
+    panel_chart_types = set(re.findall(r'chartType:\s*"([^"]+)"', panel_source))
+    assert panel_chart_types <= renderer_types
+
+    assert panel_source.count('chartType: "stat_card"') == panel_source.count("cards:")
+    assert panel_source.count('chartType: "line"') == panel_source.count("series:")
+    assert panel_source.count('chartType: "table"') == panel_source.count("columns:")
+    assert "rows:" not in panel_source
+
+    for field in ["key:", "question:", "chartType:", "target:", "dataPath:", "series:", "columns:", "adapter:"]:
+        assert field in script
+
+    for target in re.findall(r'target:\s*"([^"]+)"', panel_source):
+        assert f'id="{target}"' in page or f'id="{target}"' in script
+
+    adapter_body = re.search(r"const PANEL_DATA_ADAPTERS = Object\.freeze\(\{(?P<body>.*?)\n  \}\);", script, re.S)
+    assert adapter_body is not None
+    adapters = set(re.findall(r"^\s{4}([a-z0-9_]+):", adapter_body.group("body"), re.M))
+    panel_adapters = set(re.findall(r'adapter:\s*"([^"]+)"', panel_source))
+    assert panel_adapters <= adapters
 
 
 def test_ops_dashboard_overview_route_returns_read_model_payload(monkeypatch):

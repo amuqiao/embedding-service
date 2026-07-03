@@ -14,6 +14,245 @@
 
   const charts = new Map();
 
+  const CHART_TYPES = Object.freeze({
+    stat_card: { answers: "现在怎么样" },
+    line: { answers: "趋势如何" },
+    stacked_bar: { answers: "构成随时间怎么变" },
+    horizontal_bar: { answers: "谁最多或哪段最重" },
+    table: { answers: "具体是哪几个" },
+  });
+
+  const CHART_RENDERERS = Object.freeze({
+    stat_card: renderStatCards,
+    line: renderLinePanel,
+    stacked_bar: renderStackedBarPanel,
+    horizontal_bar: renderHorizontalBarPanel,
+    table: renderTablePanel,
+  });
+
+  const PANEL_REGISTRY = Object.freeze({
+    overview: [
+      {
+        key: "current_state",
+        question: "现在怎么样",
+        chartType: "stat_card",
+        target: "stat-grid",
+        cards: [
+          {
+            label: "active_jobs",
+            valuePath: "capacity.current.active_jobs",
+            subPrefix: "headroom",
+            subPath: "capacity.current.headroom",
+          },
+          { label: "queued", valuePath: "summary.jobs.queued", sub: "root window" },
+          {
+            label: "running_active",
+            valuePath: "summary.jobs.running_active",
+            sub: "active attempts",
+          },
+          { label: "failed", valuePath: "summary.jobs.failed", sub: "window" },
+          { label: "stuck", valuePath: "stuck.count", sub: "older than 10m" },
+          { label: "callback_due", valuePath: "summary.callbacks.due", sub: "due now" },
+        ],
+      },
+      {
+        key: "ingress_trend",
+        question: "趋势如何",
+        chartType: "line",
+        target: "ingress-chart",
+        dataPath: "ingress",
+        xField: "bucket_at",
+        series: [
+          { name: "created", field: "created" },
+          { name: "terminal", field: "terminal" },
+          { name: "failed", field: "failed" },
+        ],
+        colors: ["#1769aa", "#12805c", "#c9342f"],
+      },
+      {
+        key: "latency_p95",
+        question: "哪段最重",
+        chartType: "horizontal_bar",
+        target: "latency-chart",
+        adapter: "latency_p95_rows",
+        labelField: "label",
+        valueField: "value",
+        valueSuffix: "s",
+        color: "#087f8c",
+        left: 84,
+      },
+      {
+        key: "stuck_samples",
+        question: "具体是哪几个",
+        chartType: "table",
+        target: "stuck-table",
+        dataPath: "stuck.sample",
+        emptyText: "未发现 stuck 样本",
+        columns: [
+          { key: "issue", label: "issue" },
+          { key: "job_id", label: "job_id", render: jobLink },
+          { key: "job_status", label: "status", render: statusBadge },
+          { key: "job_type", label: "job_type" },
+          { key: "since_at", label: "since_at", value: (row) => formatDate(row.since_at) },
+        ],
+      },
+    ],
+    failures: [
+      {
+        key: "failure_groups_rank",
+        question: "谁最多",
+        chartType: "horizontal_bar",
+        target: "failure-chart",
+        dataPath: "failure_groups",
+        labelField: "error_code",
+        valueField: "count",
+        maxItems: 8,
+        color: "#c9342f",
+        left: 130,
+      },
+      {
+        key: "failure_groups_table",
+        question: "谁最多",
+        chartType: "table",
+        target: "failure-groups",
+        dataPath: "failure_groups",
+        emptyText: "当前窗口没有 failure groups",
+        columns: [
+          { key: "error_code", label: "error_code" },
+          { key: "error_kind", label: "error_kind" },
+          { key: "failure_phase", label: "phase" },
+          { key: "count", label: "count" },
+          { key: "detail_type", label: "detail_type" },
+          { key: "newest_updated_at", label: "newest", value: (row) => formatDate(row.newest_updated_at) },
+        ],
+      },
+      {
+        key: "failed_samples",
+        question: "具体是哪几个",
+        chartType: "table",
+        target: "failed-samples",
+        dataPath: "failed_samples",
+        emptyText: "当前窗口没有 failed Job",
+        columns: [
+          { key: "job_id", label: "job_id", render: jobLink },
+          { key: "job_type", label: "job_type" },
+          { key: "progress_percent", label: "%" },
+          { key: "progress_stage", label: "stage" },
+          { key: "updated_at", label: "updated", value: (row) => formatDate(row.updated_at) },
+        ],
+      },
+      {
+        key: "callback_outbox",
+        question: "具体是哪几个",
+        chartType: "table",
+        target: "callbacks-table",
+        dataPath: "callbacks",
+        emptyText: "当前窗口没有 callback outbox",
+        columns: [
+          { key: "status", label: "status", render: statusBadge },
+          { key: "count", label: "count" },
+          { key: "due", label: "due" },
+          { key: "next_attempt_at", label: "next", value: (row) => formatDate(row.next_attempt_at) },
+        ],
+      },
+    ],
+    job_trace: [
+      {
+        key: "trace_attempts",
+        question: "这个 Job 是否触发重试机制",
+        chartType: "table",
+        target: "trace-attempts",
+        dataPath: "attempts",
+        emptyText: "没有 attempts",
+        columns: [
+          { key: "purpose_attempt_no", label: "no" },
+          { key: "purpose", label: "purpose" },
+          { key: "status", label: "status", render: statusBadge },
+          { key: "failure_phase", label: "phase" },
+          { key: "retry_eligible", label: "eligible" },
+          { key: "retry_decision", label: "decision" },
+          { key: "retry_decision_reason", label: "reason", wrap: true },
+          { key: "policy_max_attempts", label: "max" },
+        ],
+      },
+      {
+        key: "trace_ai_calls",
+        question: "模型调用证据是什么",
+        chartType: "table",
+        target: "trace-ai-calls",
+        dataPath: "ai_calls",
+        emptyText: "没有 AI call ledger",
+        columns: [
+          { key: "status", label: "status", render: statusBadge },
+          { key: "operation", label: "operation" },
+          { key: "model_id", label: "model" },
+          { key: "error_code", label: "error_code" },
+          { key: "duration_ms", label: "ms" },
+          { key: "billable_status", label: "billable" },
+          { key: "error_message", label: "message", wrap: true },
+        ],
+      },
+      {
+        key: "trace_children",
+        question: "子任务具体是哪几个",
+        chartType: "table",
+        target: "trace-children",
+        dataPath: "workflow_children",
+        emptyText: "没有 workflow children",
+        columns: [
+          { key: "workflow_node_key", label: "node", wrap: true },
+          { key: "job_id", label: "job_id", render: jobLink },
+          { key: "status", label: "status", render: statusBadge },
+          { key: "job_type", label: "job_type" },
+          { key: "progress_percent", label: "%" },
+          { key: "updated_at", label: "updated", value: (row) => formatDate(row.updated_at) },
+        ],
+      },
+      {
+        key: "trace_timeline",
+        question: "这个 Job 卡在哪一步",
+        chartType: "table",
+        target: "trace-timeline",
+        dataPath: "timeline",
+        emptyText: "没有 timeline events",
+        columns: [
+          { key: "created_at", label: "created_at", value: (row) => formatDate(row.created_at) },
+          { key: "event_type", label: "event" },
+          { key: "from_status", label: "from" },
+          { key: "to_status", label: "to" },
+          { key: "reason", label: "reason" },
+          { key: "payload_summary", label: "payload", value: (row) => JSON.stringify(row.payload_summary), wrap: true },
+        ],
+      },
+      {
+        key: "trace_callbacks",
+        question: "终态是否已经通知调用方",
+        chartType: "table",
+        target: "trace-callbacks",
+        dataPath: "callbacks",
+        emptyText: "没有 callbacks",
+        columns: [
+          { key: "event_type", label: "event" },
+          { key: "status", label: "status", render: statusBadge },
+          { key: "delivery_attempts", label: "attempts" },
+          { key: "last_http_status", label: "http" },
+          { key: "last_error_message", label: "last_error", wrap: true },
+        ],
+      },
+    ],
+  });
+
+  const PANEL_DATA_ADAPTERS = Object.freeze({
+    latency_p95_rows: (payload) => {
+      const row = (getPath(payload, "latency") || [])[0] || {};
+      return [
+        { label: "queue", value: row.queue_wait_p95_seconds },
+        { label: "run", value: row.run_p95_seconds },
+        { label: "lifecycle", value: row.lifecycle_p95_seconds },
+      ];
+    },
+  });
+
   function $(selector) {
     return document.querySelector(selector);
   }
@@ -85,27 +324,59 @@
     $("#status-line").innerHTML = `<div class="error-state">查询失败：${escapeHtml(message)}</div>`;
   }
 
-  function renderStats(payload) {
-    const jobs = payload.summary?.jobs || {};
-    const callbacks = payload.summary?.callbacks || {};
-    const gate = payload.capacity?.current || {};
-    const stuck = payload.stuck || {};
-    const cards = [
-      ["active_jobs", gate.active_jobs, `headroom ${gate.headroom ?? "-"}`],
-      ["queued", jobs.queued, "root window"],
-      ["running_active", jobs.running_active, "active attempts"],
-      ["failed", jobs.failed, "window"],
-      ["stuck", stuck.count, "older than 10m"],
-      ["callback_due", callbacks.due, "due now"],
-    ];
-    $("#stat-grid").innerHTML = cards
-      .map(([label, value, sub]) => `
+  function getPath(source, path) {
+    if (!path) return source;
+    return String(path)
+      .split(".")
+      .reduce((current, key) => (current === null || current === undefined ? undefined : current[key]), source);
+  }
+
+  function targetId(target) {
+    return String(target).replace(/^#/, "");
+  }
+
+  function targetSelector(target) {
+    return String(target).startsWith("#") ? String(target) : `#${target}`;
+  }
+
+  function panelRows(panel, payload) {
+    if (!panel.adapter) {
+      return getPath(payload, panel.dataPath);
+    }
+    const adapter = PANEL_DATA_ADAPTERS[panel.adapter];
+    if (!adapter) {
+      throw new Error(`Unknown panel adapter: ${panel.adapter}`);
+    }
+    return adapter(payload);
+  }
+
+  function renderPanels(section, payload) {
+    for (const panel of PANEL_REGISTRY[section] || []) {
+      renderPanel(panel, payload);
+    }
+  }
+
+  function renderPanel(panel, payload) {
+    const renderer = CHART_RENDERERS[panel.chartType];
+    if (!renderer) {
+      throw new Error(`Unknown chartType: ${panel.chartType}`);
+    }
+    renderer(panel, payload);
+  }
+
+  function renderStatCards(panel, payload) {
+    $(targetSelector(panel.target)).innerHTML = panel.cards
+      .map((card) => {
+        const value = getPath(payload, card.valuePath);
+        const sub = card.subPath ? `${card.subPrefix || ""} ${compact(getPath(payload, card.subPath))}`.trim() : card.sub;
+        return `
         <article class="stat-card">
-          <div class="label">${escapeHtml(label)}</div>
+          <div class="label">${escapeHtml(card.label)}</div>
           <div class="value">${escapeHtml(number(value))}</div>
           <div class="sub">${escapeHtml(sub)}</div>
         </article>
-      `)
+      `;
+      })
       .join("");
   }
 
@@ -130,7 +401,8 @@
     el.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
   }
 
-  function ensureChart(id) {
+  function ensureChart(target) {
+    const id = targetId(target);
     const el = document.getElementById(id);
     if (!el || !window.echarts) return null;
     const previous = charts.get(id);
@@ -140,13 +412,14 @@
     return chart;
   }
 
-  function renderFallbackChart(id, rows, labelKey, valueKeys) {
-    const el = document.getElementById(id);
+  function renderFallbackChart(target, rows, labelKey, valueKeys) {
+    const el = document.getElementById(targetId(target));
     if (!el) return;
-    const max = Math.max(1, ...rows.flatMap((row) => valueKeys.map((key) => number(row[key]))));
+    const safeRows = rows || [];
+    const max = Math.max(1, ...safeRows.flatMap((row) => valueKeys.map((key) => number(row[key]))));
     el.innerHTML = `
       <div class="fallback-chart">
-        ${rows.map((row) => `
+        ${safeRows.map((row) => `
           <div class="fallback-row">
             <span>${escapeHtml(compact(row[labelKey]))}</span>
             <div>
@@ -160,74 +433,88 @@
     `;
   }
 
-  function renderIngressChart(rows) {
+  function renderLinePanel(panel, payload) {
+    const rows = panelRows(panel, payload) || [];
     if (!window.echarts) {
-      renderFallbackChart("ingress-chart", rows || [], "bucket_at", ["created", "terminal", "failed"]);
+      renderFallbackChart(panel.target, rows, panel.xField, panel.series.map((series) => series.field));
       return;
     }
-    const chart = ensureChart("ingress-chart");
-    const labels = (rows || []).map((row) => formatDate(row.bucket_at));
+    const chart = ensureChart(panel.target);
+    const labels = rows.map((row) => formatDate(row[panel.xField]));
     chart.setOption({
-      color: ["#1769aa", "#12805c", "#c9342f", "#6554c0"],
+      color: panel.colors,
       tooltip: { trigger: "axis" },
       legend: { top: 0 },
       grid: { left: 36, right: 18, top: 42, bottom: 38 },
       xAxis: { type: "category", data: labels, boundaryGap: false },
       yAxis: { type: "value", minInterval: 1 },
-      series: ["created", "terminal", "failed"].map((name) => ({
-        name,
+      series: panel.series.map((series) => ({
+        name: series.name,
         type: "line",
         smooth: true,
         showSymbol: false,
         lineStyle: { width: 3 },
         areaStyle: { opacity: 0.08 },
-        data: (rows || []).map((row) => number(row[name])),
+        data: rows.map((row) => number(row[series.field])),
       })),
     });
   }
 
-  function renderLatencyChart(rows) {
-    const row = (rows || [])[0] || {};
-    const data = [
-      ["queue", row.queue_wait_p95_seconds],
-      ["run", row.run_p95_seconds],
-      ["lifecycle", row.lifecycle_p95_seconds],
-    ];
+  function renderStackedBarPanel(panel, payload) {
+    const rows = panelRows(panel, payload) || [];
     if (!window.echarts) {
-      renderFallbackChart(
-        "latency-chart",
-        data.map(([label, value]) => ({ label, value })),
-        "label",
-        ["value"],
-      );
+      renderFallbackChart(panel.target, rows, panel.xField, panel.series.map((series) => series.field));
       return;
     }
-    const chart = ensureChart("latency-chart");
+    const chart = ensureChart(panel.target);
     chart.setOption({
-      color: ["#087f8c"],
-      tooltip: { trigger: "axis", valueFormatter: (value) => `${Number(value || 0).toFixed(2)}s` },
-      grid: { left: 58, right: 18, top: 20, bottom: 34 },
-      xAxis: { type: "category", data: data.map(([label]) => label) },
-      yAxis: { type: "value", axisLabel: { formatter: "{value}s" } },
-      series: [{ type: "bar", barWidth: 34, data: data.map(([, value]) => Number(value || 0).toFixed(3)) }],
+      color: panel.colors,
+      tooltip: { trigger: "axis" },
+      legend: { top: 0 },
+      grid: { left: 42, right: 18, top: 42, bottom: 38 },
+      xAxis: { type: "category", data: rows.map((row) => compact(row[panel.xField])) },
+      yAxis: { type: "value", minInterval: 1 },
+      series: panel.series.map((series) => ({
+        name: series.name,
+        type: "bar",
+        stack: panel.stack || "total",
+        data: rows.map((row) => number(row[series.field])),
+      })),
     });
   }
 
-  function renderFailureChart(rows) {
-    const top = (rows || []).slice(0, 8);
+  function renderHorizontalBarPanel(panel, payload) {
+    const rows = (panelRows(panel, payload) || []).slice(0, panel.maxItems || undefined);
     if (!window.echarts) {
-      renderFallbackChart("failure-chart", top, "error_code", ["count"]);
+      renderFallbackChart(panel.target, rows, panel.labelField, [panel.valueField]);
       return;
     }
-    const chart = ensureChart("failure-chart");
+    const chart = ensureChart(panel.target);
+    const suffix = panel.valueSuffix || "";
     chart.setOption({
-      color: ["#c9342f"],
-      tooltip: { trigger: "axis" },
-      grid: { left: 130, right: 18, top: 18, bottom: 24 },
-      xAxis: { type: "value", minInterval: 1 },
-      yAxis: { type: "category", data: top.map((row) => row.error_code || "-") },
-      series: [{ type: "bar", data: top.map((row) => number(row.count)), barWidth: 18 }],
+      color: [panel.color],
+      tooltip: {
+        trigger: "axis",
+        valueFormatter: (value) => `${Number(value || 0).toFixed(suffix ? 2 : 0)}${suffix}`,
+      },
+      grid: { left: panel.left || 110, right: 18, top: 18, bottom: 24 },
+      xAxis: {
+        type: "value",
+        minInterval: suffix ? undefined : 1,
+        axisLabel: { formatter: suffix ? `{value}${suffix}` : "{value}" },
+      },
+      yAxis: {
+        type: "category",
+        inverse: true,
+        data: rows.map((row) => compact(row[panel.labelField])),
+      },
+      series: [{ type: "bar", data: rows.map((row) => number(row[panel.valueField])), barWidth: 18 }],
     });
+  }
+
+  function renderTablePanel(panel, payload) {
+    const rows = panelRows(panel, payload) || [];
+    renderTable(targetSelector(panel.target), rows, panel.columns, panel.emptyText);
   }
 
   function renderSignals(payload) {
@@ -241,17 +528,8 @@
   async function loadOverview() {
     const payload = await fetchJson(`${BASE}/sections/overview/data?${filterQuery()}`);
     setStatus(payload);
-    renderStats(payload);
-    renderIngressChart(payload.ingress || []);
-    renderLatencyChart(payload.latency || []);
+    renderPanels("overview", payload);
     renderSignals(payload);
-    renderTable("#stuck-table", payload.stuck?.sample || [], [
-      { key: "issue", label: "issue" },
-      { key: "job_id", label: "job_id", render: jobLink },
-      { key: "job_status", label: "status", render: statusBadge },
-      { key: "job_type", label: "job_type" },
-      { key: "since_at", label: "since_at", value: (row) => formatDate(row.since_at) },
-    ], "未发现 stuck 样本");
   }
 
   function jobLink(value) {
@@ -264,28 +542,7 @@
     const payload = await fetchJson(`${BASE}/sections/failures/data?${filterQuery()}`);
     const source = payload.mock_data ? `<span class="badge warning">data_source: mock</span>` : `<span class="badge neutral">data_source: live</span>`;
     $("#status-line").innerHTML = `<div>${source}</div><div><strong>generated_at:</strong> ${escapeHtml(formatDate(payload.generated_at))}</div>`;
-    renderFailureChart(payload.failure_groups || []);
-    renderTable("#failure-groups", payload.failure_groups || [], [
-      { key: "error_code", label: "error_code" },
-      { key: "error_kind", label: "error_kind" },
-      { key: "failure_phase", label: "phase" },
-      { key: "count", label: "count" },
-      { key: "detail_type", label: "detail_type" },
-      { key: "newest_updated_at", label: "newest", value: (row) => formatDate(row.newest_updated_at) },
-    ], "当前窗口没有 failure groups");
-    renderTable("#failed-samples", payload.failed_samples || [], [
-      { key: "job_id", label: "job_id", render: jobLink },
-      { key: "job_type", label: "job_type" },
-      { key: "progress_percent", label: "%" },
-      { key: "progress_stage", label: "stage" },
-      { key: "updated_at", label: "updated", value: (row) => formatDate(row.updated_at) },
-    ], "当前窗口没有 failed Job");
-    renderTable("#callbacks-table", payload.callbacks || [], [
-      { key: "status", label: "status", render: statusBadge },
-      { key: "count", label: "count" },
-      { key: "due", label: "due" },
-      { key: "next_attempt_at", label: "next", value: (row) => formatDate(row.next_attempt_at) },
-    ], "当前窗口没有 callback outbox");
+    renderPanels("failures", payload);
   }
 
   async function loadJobTrace(jobId) {
@@ -344,48 +601,7 @@
   }
 
   function renderTraceTables(payload) {
-    renderTable("#trace-attempts", payload.attempts || [], [
-      { key: "purpose_attempt_no", label: "no" },
-      { key: "purpose", label: "purpose" },
-      { key: "status", label: "status", render: statusBadge },
-      { key: "failure_phase", label: "phase" },
-      { key: "retry_eligible", label: "eligible" },
-      { key: "retry_decision", label: "decision" },
-      { key: "retry_decision_reason", label: "reason", wrap: true },
-      { key: "policy_max_attempts", label: "max" },
-    ], "没有 attempts");
-    renderTable("#trace-ai-calls", payload.ai_calls || [], [
-      { key: "status", label: "status", render: statusBadge },
-      { key: "operation", label: "operation" },
-      { key: "model_id", label: "model" },
-      { key: "error_code", label: "error_code" },
-      { key: "duration_ms", label: "ms" },
-      { key: "billable_status", label: "billable" },
-      { key: "error_message", label: "message", wrap: true },
-    ], "没有 AI call ledger");
-    renderTable("#trace-children", payload.workflow_children || [], [
-      { key: "workflow_node_key", label: "node", wrap: true },
-      { key: "job_id", label: "job_id", render: jobLink },
-      { key: "status", label: "status", render: statusBadge },
-      { key: "job_type", label: "job_type" },
-      { key: "progress_percent", label: "%" },
-      { key: "updated_at", label: "updated", value: (row) => formatDate(row.updated_at) },
-    ], "没有 workflow children");
-    renderTable("#trace-timeline", payload.timeline || [], [
-      { key: "created_at", label: "created_at", value: (row) => formatDate(row.created_at) },
-      { key: "event_type", label: "event" },
-      { key: "from_status", label: "from" },
-      { key: "to_status", label: "to" },
-      { key: "reason", label: "reason" },
-      { key: "payload_summary", label: "payload", value: (row) => JSON.stringify(row.payload_summary), wrap: true },
-    ], "没有 timeline events");
-    renderTable("#trace-callbacks", payload.callbacks || [], [
-      { key: "event_type", label: "event" },
-      { key: "status", label: "status", render: statusBadge },
-      { key: "delivery_attempts", label: "attempts" },
-      { key: "last_http_status", label: "http" },
-      { key: "last_error_message", label: "last_error", wrap: true },
-    ], "没有 callbacks");
+    renderPanels("job_trace", payload);
   }
 
   function switchSection(section) {
