@@ -19,12 +19,18 @@ class _ScalarResult:
 class _FakeDB:
     def __init__(self):
         self.commits = 0
+        self.rollbacks = 0
+        self.statements: list[str] = []
 
-    async def execute(self, _statement):
+    async def execute(self, statement):
+        self.statements.append(str(statement))
         return _ScalarResult(True)
 
     async def commit(self):
         self.commits += 1
+
+    async def rollback(self):
+        self.rollbacks += 1
 
 
 async def _no_attempts(*_args, **_kwargs):
@@ -126,6 +132,26 @@ async def test_recovery_republishes_due_attempts(monkeypatch):
     assert result["recovered"] == 1
     assert result["failed"] == 0
     assert published == [attempt_id]
+
+
+@pytest.mark.asyncio
+async def test_recovery_rolls_back_before_unlock_and_preserves_original_error(monkeypatch):
+    db = _FakeDB()
+
+    async def fail_stale_scan(*_args, **_kwargs):
+        raise RuntimeError("stale scan failed")
+
+    _patch_common_recovery(monkeypatch, stale_attempts=fail_stale_scan)
+
+    with pytest.raises(RuntimeError, match="stale scan failed"):
+        await _run_recovery(db)
+
+    assert db.rollbacks == 1
+    assert db.commits == 1
+    assert db.statements == [
+        "SELECT pg_try_advisory_lock(hashtext('job_recovery_loop'))",
+        "SELECT pg_advisory_unlock(hashtext('job_recovery_loop'))",
+    ]
 
 
 @pytest.mark.asyncio

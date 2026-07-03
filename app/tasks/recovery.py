@@ -40,6 +40,7 @@ async def _run_recovery(db: AsyncSession) -> dict:
     dispatch_dead_letter_failed = 0
     callback_reconciled = 0
     ai_ledger_reconciled = 0
+    locked = False
 
     lock_result = await db.execute(text("SELECT pg_try_advisory_lock(hashtext('job_recovery_loop'))"))
     locked = bool(lock_result.scalar_one())
@@ -205,9 +206,13 @@ async def _run_recovery(db: AsyncSession) -> dict:
 
         deleted = await JobRepo.cleanup_expired_jobs(db)
         await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     finally:
-        await db.execute(text("SELECT pg_advisory_unlock(hashtext('job_recovery_loop'))"))
-        await db.commit()
+        if locked:
+            await db.execute(text("SELECT pg_advisory_unlock(hashtext('job_recovery_loop'))"))
+            await db.commit()
 
     if dispatch_attempts:
         from app.tasks.jobs import publish_job_attempt
