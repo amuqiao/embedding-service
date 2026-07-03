@@ -48,6 +48,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/dev/services.sh" \
     "$ROOT_DIR/scripts/deploy.sh" \
     "$ROOT_DIR/scripts/k8s.sh" \
+    "$ROOT_DIR/scripts/load.sh" \
     "$ROOT_DIR/scripts/jobs.sh" \
     "$ROOT_DIR/scripts/real-flow.sh" \
     "$ROOT_DIR/scripts/tools.sh" \
@@ -112,6 +113,9 @@ run_cli_smoke() {
   assert_generated_commands_help "real-flow.sh" "$ROOT_DIR/scripts/real-flow.sh" \
     doctor llm-job-billing llm-job-double-billing oss-upload-image poster-title-image
   event "OK" "real-flow.sh" "help"
+  assert_generated_commands_help "load.sh" "$ROOT_DIR/scripts/load.sh" \
+    guide scenarios list smoke run ui report pressure drain
+  event "OK" "load.sh" "help"
   "$ROOT_DIR/scripts/tools.sh" --help >/dev/null
   event "OK" "tools.sh" "help"
   "$ROOT_DIR/deploy/release-test.sh" --help >/dev/null
@@ -145,6 +149,14 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/real-flow.sh" doctor --help >/dev/null
   "$ROOT_DIR/scripts/real-flow.sh" llm-job-billing --confirm-cost --help >/dev/null
   "$ROOT_DIR/scripts/real-flow.sh" oss-upload-image --confirm-upload --help >/dev/null
+  "$ROOT_DIR/scripts/load.sh" guide --help >/dev/null
+  "$ROOT_DIR/scripts/load.sh" scenarios --help >/dev/null
+  "$ROOT_DIR/scripts/load.sh" smoke --help >/dev/null
+  "$ROOT_DIR/scripts/load.sh" run --help >/dev/null
+  "$ROOT_DIR/scripts/load.sh" ui --help >/dev/null
+  "$ROOT_DIR/scripts/load.sh" report --help >/dev/null
+  "$ROOT_DIR/scripts/load.sh" pressure --help >/dev/null
+  "$ROOT_DIR/scripts/load.sh" drain --help >/dev/null
   "$ROOT_DIR/deploy/release-test.sh" prepare --help >/dev/null
   "$ROOT_DIR/deploy/release-test.sh" --push --help >/dev/null
   "$ROOT_DIR/deploy/release-master.sh" prepare --help >/dev/null
@@ -172,7 +184,11 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/verify/oss_config_check.py" \
     "$ROOT_DIR/scripts/verify/registry_check.py" \
     "$ROOT_DIR/scripts/verify/workflow_modes_smoke.py" \
+    "$ROOT_DIR/scripts/load/__init__.py" \
+    "$ROOT_DIR/scripts/load/cli.py" \
     "$ROOT_DIR/scripts/load/locustfile.py" \
+    "$ROOT_DIR/scripts/load/scenarios.py" \
+    "$ROOT_DIR/scripts/load/support.py" \
     "$ROOT_DIR/scripts/jobs/__init__.py" \
     "$ROOT_DIR/scripts/jobs/cli.py" \
     "$ROOT_DIR/scripts/jobs/db.py" \

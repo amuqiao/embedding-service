@@ -13,55 +13,45 @@ import gevent
 from locust import HttpUser, between, events, task
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
 JOB_COUNTER = count()
+TERMINAL_STATUSES = {"succeeded", "failed"}
 
 
-def load_dotenv() -> dict[str, str]:
-    env_path = ROOT_DIR / ".env"
-    if not env_path.exists():
-        return {}
-    values: dict[str, str] = {}
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        values[key.strip()] = value.strip().strip("'\"")
-    return values
+class LoadConfigError(RuntimeError):
+    pass
 
 
-DOTENV = load_dotenv()
+def env_required(name: str) -> str:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        raise LoadConfigError(f"{name} is required; run this load test through ./scripts/load.sh")
+    return value
 
 
-def env_value(name: str, default: str | None = None) -> str | None:
-    return os.environ.get(name) or DOTENV.get(name) or default
+def env_optional(name: str, default: str | None = None) -> str | None:
+    return os.environ.get(name) or default
 
 
 def env_float(name: str, default: float) -> float:
-    value = env_value(name)
+    value = env_optional(name)
     if value is None:
         return default
     return float(value)
 
 
-def is_true(value: str | None) -> bool:
-    return value in {"true", "True", "TRUE"}
-
-
-def api_prefix() -> str:
-    return (env_value("SERVICE_API_PREFIX", "/api/v1/ai-jobs") or "").rstrip("/")
+def env_bool(name: str, default: bool = False) -> bool:
+    value = env_optional(name)
+    if value is None:
+        return default
+    return value in {"true", "True", "TRUE", "1", "yes", "YES"}
 
 
 def build_headers() -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    if not is_true(env_value("DISABLE_HTTP_AUTH_HEADER")):
-        token = env_value("SERVICE_API_KEY")
-        if not token or token.startswith("<"):
-            raise RuntimeError("SERVICE_API_KEY is required unless DISABLE_HTTP_AUTH_HEADER=true")
-        headers["Authorization"] = f"Bearer {token}"
-    if not is_true(env_value("DISABLE_CALLER_ID_HEADER")):
-        headers["X-AI-Service-Caller-ID"] = env_value("LOAD_CALLER_ID", "locust-load") or "locust-load"
+    if env_bool("LOAD_INTERNAL_AUTH_ENABLED"):
+        headers["Authorization"] = f"Bearer {env_required('LOAD_INTERNAL_AUTH_TOKEN')}"
+    if env_bool("LOAD_INTERNAL_CALLER_HEADER_ENABLED"):
+        headers["X-AI-Service-Caller-ID"] = env_required("LOAD_INTERNAL_CALLER_ID")
     return headers
 
 
@@ -74,38 +64,107 @@ def job_from_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
     return job
 
 
-class JobLoadUser(HttpUser):
-    wait_time = between(env_float("LOAD_WAIT_MIN_SECONDS", 0.1), env_float("LOAD_WAIT_MAX_SECONDS", 1.0))
+def load_query_job_ids() -> list[str]:
+    inline = env_optional("LOAD_INTERNAL_QUERY_JOB_IDS")
+    if inline:
+        return [validated_job_id(item.strip()) for item in inline.split(",") if item.strip()]
+    file_path = env_optional("LOAD_INTERNAL_QUERY_JOB_IDS_FILE")
+    if not file_path:
+        return []
+    path = Path(file_path)
+    return [validated_job_id(line.strip()) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def validated_job_id(value: str) -> str:
+    try:
+        return str(uuid.UUID(value))
+    except ValueError as exc:
+        raise LoadConfigError(f"query job id must be UUID: {value[:80]}") from exc
+
+
+def failure_message(response) -> str:
+    request_id = response.headers.get("x-request-id") or response.headers.get("X-Request-ID") or "-"
+    code = "-"
+    try:
+        data = response.json()
+        if isinstance(data, dict):
+            code = str(data.get("code") or "-")
+    except Exception:  # noqa: BLE001 - failure path must not leak body.
+        pass
+    return f"HTTP {response.status_code} code={code} request_id={request_id}"
+
+
+def build_job_params(job_type: str, sequence: int) -> dict[str, Any]:
+    raw = env_optional("LOAD_INTERNAL_JOB_PARAMS_JSON")
+    if raw:
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            raise LoadConfigError("LOAD_INTERNAL_JOB_PARAMS_JSON must be an object")
+        return value
+    if job_type == "job_test_echo":
+        return {
+            "message": f"load-{sequence}",
+            "repeat": int(env_optional("LOAD_INTERNAL_ECHO_REPEAT", "1") or "1"),
+            "sleep_seconds": env_float("LOAD_INTERNAL_ECHO_SLEEP_SECONDS", 15.0),
+        }
+    if job_type == "job_test_workflow":
+        return {
+            "mode": env_optional("LOAD_INTERNAL_WORKFLOW_MODE", "group") or "group",
+            "label": f"load-{sequence}",
+            "sleep_seconds": env_float("LOAD_INTERNAL_WORKFLOW_SLEEP_SECONDS", 15.0),
+        }
+    raise LoadConfigError("custom job_type requires LOAD_INTERNAL_JOB_PARAMS_JSON")
+
+
+class ProjectLoadUser(HttpUser):
+    wait_time = between(
+        env_float("LOAD_INTERNAL_WAIT_MIN_SECONDS", 0.1),
+        env_float("LOAD_INTERNAL_WAIT_MAX_SECONDS", 1.0),
+    )
 
     def on_start(self) -> None:
+        self.scenario_key = env_required("LOAD_INTERNAL_SCENARIO_KEY")
+        self.scenario_kind = env_required("LOAD_INTERNAL_SCENARIO_KIND")
+        self.api_prefix = env_required("LOAD_INTERNAL_API_PREFIX").rstrip("/")
         self.headers = build_headers()
-        self.jobs_path = f"{api_prefix()}/jobs"
-        self.scenario = env_value("LOAD_SCENARIO", "flow")
-        self.job_type = env_value("LOAD_JOB_TYPE", "job_test_echo")
-        self.poll_interval = env_float("LOAD_POLL_INTERVAL_SECONDS", 0.5)
-        self.flow_timeout = env_float("LOAD_FLOW_TIMEOUT_SECONDS", 30.0)
-        self.query_job_ids = self._load_query_job_ids()
-        if self.scenario not in {"submit", "query", "flow"}:
-            raise RuntimeError("LOAD_SCENARIO must be one of: submit, query, flow")
-        if self.scenario == "query" and not self.query_job_ids:
-            raise RuntimeError("LOAD_QUERY_JOB_IDS or LOAD_QUERY_JOB_IDS_FILE is required when LOAD_SCENARIO=query")
+        self.jobs_path = f"{self.api_prefix}/jobs"
+        self.job_type = env_optional("LOAD_INTERNAL_JOB_TYPE")
+        self.query_job_ids = load_query_job_ids()
+        self.poll_interval = env_float("LOAD_INTERNAL_POLL_INTERVAL_SECONDS", 0.5)
+        self.flow_timeout = env_float("LOAD_INTERNAL_FLOW_TIMEOUT_SECONDS", 45.0)
+        self.http_method = env_optional("LOAD_INTERNAL_HTTP_METHOD", "GET") or "GET"
+        self.http_path = env_optional("LOAD_INTERNAL_HTTP_PATH", "") or ""
+
+        if self.scenario_kind in {"job_submit", "job_flow"} and not self.job_type:
+            raise LoadConfigError(f"{self.scenario_key} requires LOAD_INTERNAL_JOB_TYPE")
+        if self.scenario_kind == "job_query" and not self.query_job_ids:
+            raise LoadConfigError(f"{self.scenario_key} requires query job ids")
+        if self.scenario_kind == "api_request" and not self.http_path.startswith("/"):
+            raise LoadConfigError("api_request requires an absolute LOAD_INTERNAL_HTTP_PATH")
 
     @task
     def run_scenario(self) -> None:
-        if self.scenario == "submit":
+        if self.scenario_kind == "job_submit":
             self.submit_job()
-        elif self.scenario == "query":
+        elif self.scenario_kind == "job_query":
             self.query_job(random.choice(self.query_job_ids))
+        elif self.scenario_kind == "job_flow":
+            self.run_job_flow()
+        elif self.scenario_kind == "api_request":
+            self.run_api_request()
         else:
-            self.run_flow()
+            raise LoadConfigError(f"unsupported scenario kind: {self.scenario_kind}")
 
     def submit_job(self) -> dict[str, Any] | None:
         sequence = next(JOB_COUNTER)
         payload = {
-            "client_request_id": f"locust-{uuid.uuid4()}-{sequence}",
+            "client_request_id": f"load-{self.scenario_key}-{uuid.uuid4()}-{sequence}",
             "job_type": self.job_type,
-            "job_params": self.job_params(sequence),
-            "metadata": {"source": "scripts/load/locustfile.py", "scenario": self.scenario},
+            "job_params": build_job_params(str(self.job_type), sequence),
+            "metadata": {
+                "source": "scripts/load.sh",
+                "scenario_key": self.scenario_key,
+            },
             "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
         }
         with self.client.post(
@@ -117,7 +176,7 @@ class JobLoadUser(HttpUser):
         ) as response:
             try:
                 if response.status_code >= 400:
-                    raise ValueError(f"HTTP {response.status_code}: {response.text[:300]}")
+                    raise ValueError(failure_message(response))
                 return job_from_envelope(response.json())
             except Exception as exc:
                 response.failure(str(exc))
@@ -132,13 +191,13 @@ class JobLoadUser(HttpUser):
         ) as response:
             try:
                 if response.status_code >= 400:
-                    raise ValueError(f"HTTP {response.status_code}: {response.text[:300]}")
+                    raise ValueError(failure_message(response))
                 return job_from_envelope(response.json())
             except Exception as exc:
                 response.failure(str(exc))
                 return None
 
-    def run_flow(self) -> None:
+    def run_job_flow(self) -> None:
         started = time.perf_counter()
         job = self.submit_job()
         if not job:
@@ -148,7 +207,7 @@ class JobLoadUser(HttpUser):
         deadline = time.monotonic() + self.flow_timeout
         while time.monotonic() < deadline:
             last_job = self.query_job(job_id) or last_job
-            if last_job["job_status"] in {"succeeded", "failed"}:
+            if last_job["job_status"] in TERMINAL_STATUSES:
                 break
             gevent.sleep(self.poll_interval)
 
@@ -163,35 +222,14 @@ class JobLoadUser(HttpUser):
             exception=exception,
         )
 
-    def job_params(self, sequence: int) -> dict[str, Any]:
-        if self.job_type == "job_test_echo":
-            return {
-                "message": f"load-{sequence}",
-                "repeat": int(env_value("LOAD_ECHO_REPEAT", "1") or "1"),
-                "sleep_seconds": env_float("LOAD_ECHO_SLEEP_SECONDS", 15.0),
-            }
-        if self.job_type == "job_test_workflow":
-            return {
-                "mode": env_value("LOAD_WORKFLOW_MODE", "group"),
-                "label": f"load-{sequence}",
-                "sleep_seconds": env_float("LOAD_WORKFLOW_SLEEP_SECONDS", 15.0),
-            }
-        raw = env_value("LOAD_JOB_PARAMS_JSON")
-        if not raw:
-            raise RuntimeError(
-                "LOAD_JOB_PARAMS_JSON is required when LOAD_JOB_TYPE is not job_test_echo or job_test_workflow"
-            )
-        return json.loads(raw)
-
-    def _load_query_job_ids(self) -> list[str]:
-        inline = env_value("LOAD_QUERY_JOB_IDS")
-        if inline:
-            return [item.strip() for item in inline.split(",") if item.strip()]
-        file_path = env_value("LOAD_QUERY_JOB_IDS_FILE")
-        if not file_path:
-            return []
-        return [
-            line.strip()
-            for line in Path(file_path).read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+    def run_api_request(self) -> None:
+        name = f"{self.http_method} {self.http_path}"
+        with self.client.request(
+            self.http_method,
+            self.http_path,
+            headers=self.headers,
+            name=name,
+            catch_response=True,
+        ) as response:
+            if response.status_code >= 400:
+                response.failure(failure_message(response))

@@ -17,8 +17,7 @@
 | [`current/template-project-config.md`](current/template-project-config.md) | 复制模板成为真实业务项目时，项目身份、数据库名、compose 命名空间和对象存储命名空间的替换清单 |
 | [`current/script-entrypoint-contract.md`](current/script-entrypoint-contract.md) | 当前脚本入口 `-h`、子命令 help、输出、副作用、示例和验证的 envelope 合同 |
 | [`current/ops-dashboard.md`](current/ops-dashboard.md) | 当前只读 `ops_dashboard` 路由、前端 Chart Contract、Panel Registry 和 Job 运维展示边界 |
-| [`current/job-load-testing.md`](current/job-load-testing.md) | Job 发布、查询和完整异步流程的 Locust 压测选型、执行、指标和评估方法 |
-| [`current/job-load-test-plan.md`](current/job-load-test-plan.md) | Job 压测的分阶段执行命令、浏览器实时查看和离线报告查看方法 |
+| [`current/job-load-testing.md`](current/job-load-testing.md) | Job 发布、查询和完整异步流程的压测入口、执行计划、指标和评估方法 |
 | [`runbooks/compose-full-dev-operations.md`](runbooks/compose-full-dev-operations.md) | 开发环境使用 `compose-full` 启动服务后，查看状态、容器内排障脚本和日志的操作手册 |
 | [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` overview、root/family scope、Job/workflow 查询和常见排障顺序 |
 | [`runbooks/标题生成链路.md`](runbooks/标题生成链路.md) | `poster_title_image` 从接单、style probe、生图、OSS 写入、join 到结果快照的链路定位和排障顺序 |
