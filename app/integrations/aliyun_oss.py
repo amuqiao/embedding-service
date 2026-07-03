@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from email.utils import formatdate
+from xml.etree import ElementTree
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,25 @@ class AliyunOSSConfig:
 
 class AliyunOSSError(Exception):
     pass
+
+
+def _endpoint_mismatch_hint(*, body: str, config: AliyunOSSConfig) -> str:
+    try:
+        root = ElementTree.fromstring(body)
+    except ElementTree.ParseError:
+        return ""
+    code = (root.findtext("Code") or "").strip()
+    recommended_endpoint = (root.findtext("Endpoint") or "").strip()
+    if code != "AccessDenied" or not recommended_endpoint:
+        return ""
+    return (
+        " OSS endpoint mismatch: "
+        f"configured_endpoint={config.normalized_endpoint} "
+        f"bucket={config.bucket} "
+        f"configured_region={config.region} "
+        f"recommended_endpoint={recommended_endpoint}. "
+        "Check OSS_REGION and OSS_ENDPOINT in the selected env file."
+    )
 
 
 def normalize_object_key(project_root: str, key: str) -> str:
@@ -130,7 +150,8 @@ class AliyunOSSClient:
                 return response.status, response.read(), dict(response.headers.items())
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", "replace")
-            raise AliyunOSSError(f"{method} failed: status={exc.code} body={body}") from exc
+            hint = _endpoint_mismatch_hint(body=body, config=self.config)
+            raise AliyunOSSError(f"{method} failed: status={exc.code} body={body}{hint}") from exc
         except urllib.error.URLError as exc:
             raise AliyunOSSError(f"{method} failed: {exc.reason}") from exc
 

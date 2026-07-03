@@ -1,6 +1,10 @@
+from io import BytesIO
+import urllib.error
 from urllib.parse import parse_qs, urlparse
 
-from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig
+import pytest
+
+from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
 
 
 def test_aliyun_oss_client_get_object_applies_project_root(monkeypatch):
@@ -91,6 +95,47 @@ def test_aliyun_oss_client_put_object_sends_content_disposition(monkeypatch):
             },
         )
     ]
+
+
+def test_aliyun_oss_client_explains_bucket_endpoint_mismatch(monkeypatch):
+    client = AliyunOSSClient(
+        AliyunOSSConfig(
+            bucket="aigc-datas",
+            region="ap-southeast-1",
+            access_key_id="id",
+            access_key_secret="secret",
+            endpoint="oss-ap-southeast-1.aliyuncs.com",
+        )
+    )
+    error_body = b"""<?xml version="1.0" encoding="UTF-8"?>
+<Error>
+  <Code>AccessDenied</Code>
+  <Message>The bucket you are attempting to access must be addressed using the specified endpoint.</Message>
+  <Bucket>aigc-datas</Bucket>
+  <Endpoint>oss-us-west-1.aliyuncs.com</Endpoint>
+</Error>
+"""
+
+    def fake_urlopen(_req, timeout):
+        raise urllib.error.HTTPError(
+            url="https://aigc-datas.oss-ap-southeast-1.aliyuncs.com/key.png",
+            code=403,
+            msg="Forbidden",
+            hdrs={},
+            fp=BytesIO(error_body),
+        )
+
+    monkeypatch.setattr("app.integrations.aliyun_oss.urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(AliyunOSSError) as exc_info:
+        client.put_object("key.png", b"png", content_type="image/png")
+
+    message = str(exc_info.value)
+    assert "OSS endpoint mismatch" in message
+    assert "configured_endpoint=oss-ap-southeast-1.aliyuncs.com" in message
+    assert "configured_region=ap-southeast-1" in message
+    assert "recommended_endpoint=oss-us-west-1.aliyuncs.com" in message
+    assert "Check OSS_REGION and OSS_ENDPOINT in the selected env file." in message
 
 
 def test_aliyun_oss_client_signed_headers_include_content_disposition():
