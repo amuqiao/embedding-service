@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -16,10 +17,40 @@ PROVIDER_GATEWAY = kernel.ProviderGateway()
 USAGE_NORMALIZER = kernel.UsageNormalizer()
 TYPED_PRICING_RESOLVER = kernel.TypedPricingResolver()
 USAGE_LEDGER_WRITER = kernel.UsageLedgerWriter()
+_TRANSIENT_PROVIDER_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+_PROVIDER_STATUS_RE = re.compile(r"(?:Error code|status)[=:]?\s*(\d{3})", re.IGNORECASE)
 
 
 def _ledger_session_factory(ledger_session_factory: Callable[[], Any] | None) -> Callable[[], Any]:
     return ledger_session_factory if ledger_session_factory is not None else get_session_factory()
+
+
+def _provider_status_code(exc: Exception) -> int | None:
+    raw_status = getattr(exc, "status_code", None)
+    if raw_status is None:
+        response = getattr(exc, "response", None)
+        raw_status = getattr(response, "status_code", None)
+    try:
+        if raw_status is not None:
+            return int(raw_status)
+    except (TypeError, ValueError):
+        pass
+
+    match = _PROVIDER_STATUS_RE.search(str(exc))
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _provider_failure_error(exc: Exception) -> AppError:
+    status_code = _provider_status_code(exc)
+    if status_code is not None and status_code in _TRANSIENT_PROVIDER_STATUS_CODES:
+        return AppError(
+            "AI_PROVIDER_FAILED",
+            "ai provider transient failure",
+            details={"provider_status_code": status_code},
+        )
+    return AppError("MODEL_CALL_FAILED", "ai provider failed")
 
 
 async def generate_text_with_ledger(
@@ -90,15 +121,16 @@ async def generate_text_with_ledger(
         )
         raise AppError("MODEL_CALL_TIMEOUT", "model call timeout") from exc
     except Exception as exc:
+        error = _provider_failure_error(exc)
         await USAGE_LEDGER_WRITER.mark_failed(
             ledger_session_factory,
             call_id,
             failure_phase="provider",
-            error_code="MODEL_CALL_FAILED",
+            error_code=error.code,
             error_message=str(exc) or type(exc).__name__,
             billable_status="unknown",
         )
-        raise AppError("MODEL_CALL_FAILED", "ai provider failed") from exc
+        raise error from exc
 
     response_hash, output_size_bytes = kernel.hash_text(result.text)
     try:
@@ -232,15 +264,16 @@ async def generate_text_with_images_with_ledger(
         )
         raise AppError("MODEL_CALL_TIMEOUT", "model call timeout") from exc
     except Exception as exc:
+        error = _provider_failure_error(exc)
         await USAGE_LEDGER_WRITER.mark_failed(
             ledger_session_factory,
             call_id,
             failure_phase="provider",
-            error_code="MODEL_CALL_FAILED",
+            error_code=error.code,
             error_message=str(exc) or type(exc).__name__,
             billable_status="unknown",
         )
-        raise AppError("MODEL_CALL_FAILED", "ai provider failed") from exc
+        raise error from exc
 
     response_hash, output_size_bytes = kernel.hash_text(result.text)
     try:
@@ -391,15 +424,16 @@ async def generate_image_with_ledger(
         )
         raise AppError("MODEL_CALL_TIMEOUT", "model call timeout") from exc
     except Exception as exc:
+        error = _provider_failure_error(exc)
         await USAGE_LEDGER_WRITER.mark_failed(
             ledger_session_factory,
             call_id,
             failure_phase="provider",
-            error_code="MODEL_CALL_FAILED",
+            error_code=error.code,
             error_message=str(exc) or type(exc).__name__,
             billable_status="unknown",
         )
-        raise AppError("MODEL_CALL_FAILED", "ai provider failed") from exc
+        raise error from exc
 
     try:
         usage_record = USAGE_NORMALIZER.normalize_image(result)

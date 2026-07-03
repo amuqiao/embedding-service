@@ -1064,6 +1064,7 @@ def attempts(conn: connection, job_id: str) -> list[dict]:
                a.worker_id, a.lease_token::text, a.leased_at, a.lease_expires_at,
                a.heartbeat_at, a.started_at, a.finished_at, a.timeout_seconds,
                a.error, a.error_kind, a.failure_phase, a.retry_eligible, a.retry_decision,
+               a.retry_decision_reason, a.policy_max_attempts, a.policy_retryable_error_codes,
                a.next_attempt_scheduled_at,
                a.created_at, a.updated_at
         FROM job_execution_attempts a
@@ -1072,6 +1073,57 @@ def attempts(conn: connection, job_id: str) -> list[dict]:
         WHERE a.job_id = %(job_id)s
           AND j.deleted_at IS NULL
         ORDER BY a.purpose ASC, a.purpose_attempt_no ASC, a.created_at ASC
+        """,
+        {"job_id": job_id},
+    )
+
+
+def ai_calls(conn: connection, job_id: str) -> list[dict]:
+    return _fetch_all(
+        conn,
+        """
+        SELECT
+          l.id::text,
+          l.job_id::text,
+          l.attempt_id::text,
+          l.caller_id,
+          l.scope_type,
+          l.scope_id,
+          l.operation,
+          l.step_name,
+          l.request_id,
+          l.trace_id,
+          l.job_type,
+          l.model_id,
+          l.provider,
+          l.provider_model,
+          l.litellm_model,
+          l.status,
+          l.failure_phase,
+          l.error_code,
+          l.error_message,
+          l.request_hash,
+          l.response_hash,
+          l.input_size_bytes,
+          l.output_size_bytes,
+          l.usage_detail,
+          l.usage_units,
+          l.cost_amount,
+          l.currency,
+          l.pricing_ref,
+          l.pricing_version,
+          l.cost_calculation_status,
+          l.billable_status,
+          l.started_at,
+          l.completed_at,
+          l.duration_ms,
+          l.created_at,
+          l.updated_at
+        FROM ai_call_ledger_entries l
+        JOIN job_aggregates j ON j.id = l.job_id
+        WHERE (l.job_id = %(job_id)s OR l.scope_id = %(job_id)s)
+          AND j.deleted_at IS NULL
+        ORDER BY l.created_at ASC, l.id ASC
         """,
         {"job_id": job_id},
     )

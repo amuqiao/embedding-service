@@ -76,11 +76,12 @@ POSTER_TITLE_IMAGE_JOIN_JOB_TYPE = "poster_title_image_join"
 POSTER_TITLE_IMAGE_BUSINESS_RETRY_POLICY = JobRetryPolicy(
     business_execution=ExecutionRetryPolicy(
         domain="business_execution",
-        max_attempts=2,
+        max_attempts=3,
         retry_delay_seconds=15,
         backoff_kind="fixed",
         retryable_error_codes=frozenset(
             {
+                "AI_PROVIDER_FAILED",
                 "MODEL_CALL_TIMEOUT",
                 "OSS_FETCH_FAILED",
                 "OSS_WRITE_FAILED",

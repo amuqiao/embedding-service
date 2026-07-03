@@ -279,6 +279,7 @@ async def test_workflow_child_validation_rejects_non_text_model_for_custom_text_
     [
         (["JOB_TIMEOUT"], "JOB_TIMEOUT", True),
         (["JOB_TIMEOUT"], "MODEL_CALL_FAILED", False),
+        (["AI_PROVIDER_FAILED"], "AI_PROVIDER_FAILED", True),
         (["JOB_TIMEOUT"], "AI_LEDGER_UPDATE_FAILED", False),
         ([], "JOB_TIMEOUT", False),
     ],

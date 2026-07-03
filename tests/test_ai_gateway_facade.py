@@ -848,6 +848,169 @@ async def test_gateway_marks_provider_failure_as_failed_unknown(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gateway_marks_transient_provider_status_as_ai_provider_failed(monkeypatch):
+    session_factory = _FakeSessionFactory()
+    call_id = uuid.uuid4()
+    recorded: dict = {}
+
+    class ProviderStatusError(RuntimeError):
+        status_code = 502
+
+    async def fake_create_pending(*_args, **_kwargs):
+        return SimpleNamespace(id=call_id)
+
+    async def fake_generate_text(*_args, **_kwargs):
+        raise ProviderStatusError("Error code: 502 - origin_bad_gateway")
+
+    async def fake_mark_failed(_db, received_call_id, **kwargs):
+        recorded["call_id"] = received_call_id
+        recorded.update(kwargs)
+        return True
+
+    async def fail_mark_succeeded(*_args, **_kwargs):
+        raise AssertionError("provider failure must not be marked succeeded")
+
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+    monkeypatch.setattr(ai_capability_kernel, "require_text_generation_adapter", lambda adapter_name: SimpleNamespace(generate_text=fake_generate_text))
+
+    with pytest.raises(AppError) as exc:
+        await _call(session_factory)
+
+    assert exc.value.code == "AI_PROVIDER_FAILED"
+    assert exc.value.status_code == 502
+    assert exc.value.details == {"provider_status_code": 502}
+    assert recorded["call_id"] == call_id
+    assert recorded["failure_phase"] == "provider"
+    assert recorded["error_code"] == "AI_PROVIDER_FAILED"
+    assert recorded["error_message"] == "Error code: 502 - origin_bad_gateway"
+    assert recorded["billable_status"] == "unknown"
+    assert [session.commits for session in session_factory.sessions] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_generate_image_with_ledger_marks_provider_429_as_ai_provider_failed(monkeypatch):
+    session_factory = _FakeSessionFactory()
+    call_id = uuid.uuid4()
+    recorded: dict = {}
+    price = ImageTokenPrice(
+        ref="openai:gpt-image-2@2026-07-02",
+        model_id="custom-image-model",
+        provider="openai",
+        provider_model="custom-image-model",
+        pricing_type="per_image_token",
+        version="2026-07-02",
+        currency="USD",
+        text_input_per_1m=Decimal("5.00"),
+        cached_text_input_per_1m=Decimal("1.25"),
+        image_input_per_1m=Decimal("8.00"),
+        cached_image_input_per_1m=Decimal("2.00"),
+        image_output_per_1m=Decimal("30.00"),
+    )
+
+    class ProviderRateLimitError(RuntimeError):
+        status_code = 429
+
+    async def fake_create_pending(*_args, **_kwargs):
+        return SimpleNamespace(id=call_id)
+
+    async def fake_generate_image(*_args, **_kwargs):
+        raise ProviderRateLimitError("Error code: 429 - rate limited")
+
+    async def fake_mark_failed(_db, received_call_id, **kwargs):
+        recorded["call_id"] = received_call_id
+        recorded.update(kwargs)
+        return True
+
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_image_model", lambda _model_id: _image_model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: price)
+    monkeypatch.setattr(ai_gateway_facade.PROVIDER_GATEWAY, "generate_image", fake_generate_image)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_failed", fake_mark_failed)
+
+    with pytest.raises(AppError) as exc:
+        await ai_gateway_facade.generate_image_with_ledger(
+            caller_id="caller-1",
+            scope_type="job",
+            scope_id="00000000-0000-0000-0000-000000000001",
+            operation="poster_title_image.generate_title",
+            model_id="custom-image-model",
+            response_model="gpt-5.5",
+            prompt="draw",
+            reference_images=[],
+            size="1024x1024",
+            quality="low",
+            background="auto",
+            output_format="png",
+            job_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+            attempt_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+            job_type="poster_title_image_generate_item",
+            ledger_session_factory=session_factory,
+            image_adapter="openai_images",
+        )
+
+    assert exc.value.code == "AI_PROVIDER_FAILED"
+    assert exc.value.details == {"provider_status_code": 429}
+    assert recorded["call_id"] == call_id
+    assert recorded["failure_phase"] == "provider"
+    assert recorded["error_code"] == "AI_PROVIDER_FAILED"
+    assert recorded["error_message"] == "Error code: 429 - rate limited"
+    assert recorded["billable_status"] == "unknown"
+    assert [session.commits for session in session_factory.sessions] == [1, 1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [409, 501])
+async def test_gateway_keeps_non_transient_provider_status_as_model_call_failed(monkeypatch, status_code):
+    session_factory = _FakeSessionFactory()
+    call_id = uuid.uuid4()
+    recorded: dict = {}
+
+    class ProviderStatusError(RuntimeError):
+        pass
+
+    ProviderStatusError.status_code = status_code
+
+    async def fake_create_pending(*_args, **_kwargs):
+        return SimpleNamespace(id=call_id)
+
+    async def fake_generate_text(*_args, **_kwargs):
+        raise ProviderStatusError(f"Error code: {status_code} - not retryable")
+
+    async def fake_mark_failed(_db, received_call_id, **kwargs):
+        recorded["call_id"] = received_call_id
+        recorded.update(kwargs)
+        return True
+
+    async def fail_mark_succeeded(*_args, **_kwargs):
+        raise AssertionError("provider failure must not be marked succeeded")
+
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: _model())
+    monkeypatch.setattr(ai_capability_kernel, "require_price", lambda _pricing_ref: _price())
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "create_pending", fake_create_pending)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_failed", fake_mark_failed)
+    monkeypatch.setattr(ai_capability_kernel.AiCallLogRepo, "mark_succeeded", fail_mark_succeeded)
+    monkeypatch.setattr(
+        ai_capability_kernel,
+        "require_text_generation_adapter",
+        lambda adapter_name: SimpleNamespace(generate_text=fake_generate_text),
+    )
+
+    with pytest.raises(AppError) as exc:
+        await _call(session_factory)
+
+    assert exc.value.code == "MODEL_CALL_FAILED"
+    assert recorded["call_id"] == call_id
+    assert recorded["failure_phase"] == "provider"
+    assert recorded["error_code"] == "MODEL_CALL_FAILED"
+    assert recorded["error_message"] == f"Error code: {status_code} - not retryable"
+    assert recorded["billable_status"] == "unknown"
+
+
+@pytest.mark.asyncio
 async def test_gateway_does_not_replay_provider_when_terminal_ledger_update_fails(monkeypatch):
     session_factory = _FakeSessionFactory()
     call_id = uuid.uuid4()

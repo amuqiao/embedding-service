@@ -92,6 +92,12 @@ ATTEMPTS_HELP_EPILOG = """\b
   ./scripts/jobs.sh attempts <job_id> --json
 """
 
+AI_CALLS_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/jobs.sh ai-calls <job_id>
+  ./scripts/jobs.sh ai-calls <job_id> --json
+"""
+
 CALLBACKS_HELP_EPILOG = """\b
 常用示例：
   ./scripts/jobs.sh callbacks <job_id>
@@ -262,7 +268,7 @@ HELP_EPILOG = """\b
   系统态           dashboard / overview / doctor / gate / capacity / pressure / ingress
   恢复态           observe / drain / stuck
   运输和运行时     broker / runtime
-  单 Job 轨迹      trace / inspect / diagnose / workflow / attempts / callbacks / timeline
+  单 Job 轨迹      trace / inspect / diagnose / workflow / attempts / ai-calls / callbacks / timeline
 
 \b
 常用排障顺序：
@@ -346,6 +352,7 @@ GUIDE_TEXT = """Job 排障命令骨架
     辅助：./scripts/jobs.sh inspect <job_id>
     明细：./scripts/jobs.sh timeline <job_id> --limit 50
     明细：./scripts/jobs.sh attempts <job_id>
+    明细：./scripts/jobs.sh ai-calls <job_id>
     明细：./scripts/jobs.sh callbacks <job_id>
 
 命令分级
@@ -356,7 +363,7 @@ GUIDE_TEXT = """Job 排障命令骨架
     doctor / gate / capacity / ingress / latency / failures / callbacks-summary / stuck / drain / pressure
 
   明细证据
-    summary / list / inspect / diagnose / workflow / timeline / attempts / callbacks / payload
+    summary / list / inspect / diagnose / workflow / timeline / attempts / ai-calls / callbacks / payload
 
 四层模型
   系统态
@@ -372,7 +379,7 @@ GUIDE_TEXT = """Job 排障命令骨架
     看 Redis key type、length、pending、consumer groups、WORKER_CONCURRENCY、Taskiq 进程、recovery loop、CPU/memory cgroup。
 
   单 Job 轨迹
-    trace / inspect / diagnose / workflow / timeline / attempts / callbacks
+    trace / inspect / diagnose / workflow / timeline / attempts / ai-calls / callbacks
     看 created -> queued -> dispatch published -> attempt claimed -> running heartbeat -> terminal -> callback delivered。
 
 更多细节
@@ -564,6 +571,31 @@ def _attempt_columns() -> list[tuple[str, str]]:
         ("heartbeat_at", "heartbeat_at"),
         ("lease_expires_at", "lease_expires_at"),
         ("failure_phase", "failure_phase"),
+        ("retry_eligible", "retry_eligible"),
+        ("retry_decision", "retry_decision"),
+        ("retry_decision_reason", "retry_reason"),
+        ("policy_max_attempts", "policy_max"),
+        ("policy_retryable_error_codes", "retryable_codes"),
+    ]
+
+
+def _ai_call_columns() -> list[tuple[str, str]]:
+    return [
+        ("id", "ai_call_id"),
+        ("attempt_id", "attempt_id"),
+        ("operation", "operation"),
+        ("step_name", "step"),
+        ("model_id", "model_id"),
+        ("provider", "provider"),
+        ("provider_model", "provider_model"),
+        ("status", "status"),
+        ("failure_phase", "failure_phase"),
+        ("error_code", "error_code"),
+        ("duration_ms", "duration_ms"),
+        ("cost_amount", "cost"),
+        ("billable_status", "billable"),
+        ("started_at", "started_at"),
+        ("completed_at", "completed_at"),
     ]
 
 
@@ -1560,6 +1592,73 @@ def _event_types(timeline: list[dict]) -> set[str]:
     return {str(row.get("event_type")) for row in timeline if row.get("event_type") is not None}
 
 
+def _retry_decision_evidence(attempt: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "attempt_id": attempt.get("id"),
+        "attempt_no": attempt.get("attempt_no") or attempt.get("purpose_attempt_no"),
+        "error_kind": attempt.get("error_kind"),
+        "failure_phase": attempt.get("failure_phase"),
+        "retry_eligible": attempt.get("retry_eligible"),
+        "retry_decision": attempt.get("retry_decision"),
+        "retry_decision_reason": attempt.get("retry_decision_reason"),
+        "policy_max_attempts": attempt.get("policy_max_attempts"),
+        "policy_retryable_error_codes": attempt.get("policy_retryable_error_codes"),
+        "next_attempt_scheduled_at": attempt.get("next_attempt_scheduled_at"),
+    }
+
+
+def _retry_not_retried_message(attempt: dict[str, Any]) -> str:
+    reason = attempt.get("retry_decision_reason")
+    if reason == "policy_exhausted":
+        return "failed attempt 未重试：已达到 retry policy 最大 attempt 数。"
+    if reason == "not_retry_eligible":
+        return "failed attempt 未重试：错误未被当前 retry policy 判定为可重试。"
+    if reason == "dispatch_publish_exhausted":
+        return "failed attempt 未重试：dispatch 发布重试已耗尽。"
+    if reason == "force_mark_failed":
+        return "failed attempt 未重试：运维动作强制标记失败。"
+    if reason:
+        return f"failed attempt 未重试：retry_decision_reason={reason}。"
+    if attempt.get("retry_eligible") is False:
+        return "failed attempt 未重试：retry_eligible=false，但未记录更细的 retry_decision_reason。"
+    return "failed attempt 未重试：retry_decision=do_not_retry，但未记录更细的 retry_decision_reason。"
+
+
+def _ai_call_summary(ai_calls: list[dict]) -> dict[str, Any]:
+    by_status: dict[str, int] = {}
+    by_error_code: dict[str, int] = {}
+    for row in ai_calls:
+        status = str(row.get("status") or "unknown")
+        by_status[status] = by_status.get(status, 0) + 1
+        error_code = row.get("error_code")
+        if error_code:
+            key = str(error_code)
+            by_error_code[key] = by_error_code.get(key, 0) + 1
+    return {
+        "total": len(ai_calls),
+        "by_status": by_status,
+        "by_error_code": by_error_code,
+        "sample": [
+            {
+                "ai_call_id": row.get("id"),
+                "attempt_id": row.get("attempt_id"),
+                "operation": row.get("operation"),
+                "step_name": row.get("step_name"),
+                "model_id": row.get("model_id"),
+                "provider": row.get("provider"),
+                "provider_model": row.get("provider_model"),
+                "status": row.get("status"),
+                "failure_phase": row.get("failure_phase"),
+                "error_code": row.get("error_code"),
+                "duration_ms": row.get("duration_ms"),
+                "cost_amount": row.get("cost_amount"),
+                "billable_status": row.get("billable_status"),
+            }
+            for row in ai_calls[:5]
+        ],
+    }
+
+
 def _diagnose_job(
     payload: dict[str, Any],
     *,
@@ -1568,6 +1667,7 @@ def _diagnose_job(
 ) -> dict[str, Any]:
     job = payload["job"]
     attempts = payload.get("attempts") or []
+    ai_calls = payload.get("ai_calls") or []
     callbacks = payload.get("callbacks") or []
     timeline = payload.get("timeline") or []
     children = payload.get("children") or []
@@ -1692,17 +1792,50 @@ def _diagnose_job(
                 )
         elif attempt_status == "failed":
             severity = "info" if job_status == "succeeded" else "warning"
+            retry_evidence = _retry_decision_evidence(attempt)
             add(
                 severity,
                 "attempt",
                 "attempt_failed",
-                "存在 failed attempt；如果 Job 已 succeeded，这是历史重试证据，否则查看 error_kind、failure_phase 和 retry_decision。",
-                {
-                    "attempt_id": attempt_id,
-                    "error_kind": attempt.get("error_kind"),
-                    "failure_phase": attempt.get("failure_phase"),
-                    "retry_decision": attempt.get("retry_decision"),
-                },
+                "存在 failed attempt；evidence 中包含 error_kind、failure_phase、retry_decision 和 retry policy 快照。",
+                retry_evidence,
+            )
+            if attempt.get("retry_decision") == "do_not_retry" or attempt.get("retry_eligible") is False:
+                add(
+                    severity,
+                    "attempt",
+                    "attempt_not_retried",
+                    _retry_not_retried_message(attempt),
+                    retry_evidence,
+                )
+
+    if ai_calls:
+        summary = _ai_call_summary(ai_calls)
+        failed_ai_calls = summary["by_status"].get("failed", 0)
+        pending_ai_calls = summary["by_status"].get("pending", 0)
+        if failed_ai_calls:
+            add(
+                "info" if job_status == "succeeded" else "warning",
+                "ai_call",
+                "ai_call_ledger_failed",
+                "AI call ledger 中存在 failed 调用；查看 ai-calls 明细可定位 provider、model、error_code 和 failure_phase。",
+                summary,
+            )
+        elif pending_ai_calls and job_status in {"succeeded", "failed"}:
+            add(
+                "warning",
+                "ai_call",
+                "ai_call_ledger_pending_after_terminal",
+                "Job 已终态但 AI call ledger 仍有 pending 记录；检查 ledger terminal update 或 recovery reconcile。",
+                summary,
+            )
+        else:
+            add(
+                "info",
+                "ai_call",
+                "ai_call_ledger_present",
+                "AI call ledger 已记录，可用 ai-calls 查看 provider、model、用量、成本和错误证据。",
+                summary,
             )
 
     for callback in callbacks:
@@ -1780,6 +1913,8 @@ def _diagnose_job(
         )
     if signals & {"running_attempt_lease_expired", "active_attempt_running", "attempt_failed"}:
         next_checks.append(f"./scripts/jobs.sh attempts {job_id}")
+    if signals & {"attempt_failed", "attempt_not_retried", "ai_call_ledger_failed", "ai_call_ledger_pending_after_terminal", "ai_call_ledger_present"}:
+        next_checks.append(f"./scripts/jobs.sh ai-calls {job_id}")
     if signals & {"callback_dead_letter", "callback_lease_expired", "callback_due"}:
         next_checks.append(f"./scripts/jobs.sh callbacks {job_id}")
     if signals & {"job_waiting_children", "workflow_child_failed", "child_dispatch_dead_letter", "job_waiting_children_unchecked"}:
@@ -1797,14 +1932,15 @@ def _diagnose_job(
 def _render_inspect_human(payload: dict[str, Any], *, include_children: bool) -> None:
     job = payload["job"]
     attempts = payload["attempts"]
+    ai_calls = payload.get("ai_calls") or []
     callbacks = payload["callbacks"]
     timeline = payload["timeline"]
     formatters.section("Job Inspect")
     formatters.event(
         "OK",
         "job",
-        "attempts=%s callbacks=%s timeline=%s"
-        % (len(attempts), len(callbacks), len(timeline)),
+        "attempts=%s ai_calls=%s callbacks=%s timeline=%s"
+        % (len(attempts), len(ai_calls), len(callbacks), len(timeline)),
     )
     formatters.print_table([_job_inspect_row(job)], _job_inspect_columns())
 
@@ -1812,6 +1948,8 @@ def _render_inspect_human(payload: dict[str, Any], *, include_children: bool) ->
 
     formatters.section("Attempts")
     formatters.print_table(attempts, _attempt_columns(), empty_message="no attempts")
+    formatters.section("AI Calls")
+    formatters.print_table(ai_calls, _ai_call_columns(), empty_message="no ai calls")
     if callbacks:
         formatters.section("Callbacks")
         formatters.print_table(callbacks, _callback_columns(), empty_message="no callbacks")
@@ -1844,10 +1982,16 @@ def _render_diagnosis_human(diagnosis: dict[str, Any], *, title: str = "Job Diag
             print(f"- {item}")
 
 
+def _render_ai_calls_human(ai_calls: list[dict]) -> None:
+    formatters.section("AI Calls")
+    formatters.print_table(ai_calls, _ai_call_columns(), empty_message="no ai calls")
+
+
 def _inspect_json_payload(payload: dict[str, Any], *, include_children: bool) -> dict[str, Any]:
     result = {
         "job": _job_summary(payload["job"]),
         "attempts": payload["attempts"],
+        "ai_calls": payload.get("ai_calls") or [],
         "callbacks": payload["callbacks"],
         "timeline": payload["timeline"],
         "diagnosis": payload["diagnosis"],
@@ -4385,6 +4529,7 @@ def inspect(
         payload = {
             "job": job,
             "attempts": queries.attempts(conn, job_id),
+            "ai_calls": queries.ai_calls(conn, job_id),
             "callbacks": queries.callbacks(conn, job_id),
             "timeline": queries.timeline(conn, job_id, limit=events_limit),
         }
@@ -4476,6 +4621,7 @@ def diagnose(
         payload = {
             "job": job,
             "attempts": queries.attempts(conn, job_id),
+            "ai_calls": queries.ai_calls(conn, job_id),
             "callbacks": queries.callbacks(conn, job_id),
             "timeline": queries.timeline(conn, job_id, limit=events_limit),
         }
@@ -4483,6 +4629,7 @@ def diagnose(
             payload["children"] = queries.child_jobs(conn, job_id)
         return {
             "job_id": job_id,
+            "ai_calls": payload["ai_calls"],
             "diagnosis": _diagnose_job(payload, include_children=include_children, older_than=older_than_delta),
         }
 
@@ -4494,6 +4641,7 @@ def diagnose(
         formatters.print_json(payload)
         return
     _render_diagnosis_human(payload["diagnosis"])
+    _render_ai_calls_human(payload["ai_calls"])
 
 
 def _root_job_id_for(job: dict[str, Any]) -> str:
@@ -4623,6 +4771,19 @@ def attempts(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
         target="attempts",
         columns=_attempt_columns(),
         key="attempts",
+        json_output=json_output,
+    )
+
+
+@app.command("ai-calls", help="查看单个 Job 的 AI call ledger。", epilog=AI_CALLS_HELP_EPILOG)
+def ai_calls(job_id: JobIdArgument, json_output: JsonOption = False) -> None:
+    _run_related_collection(
+        job_id,
+        query_fn=queries.ai_calls,
+        section="AI Calls",
+        target="ai_calls",
+        columns=_ai_call_columns(),
+        key="ai_calls",
         json_output=json_output,
     )
 

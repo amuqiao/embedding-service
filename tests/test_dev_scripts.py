@@ -2044,6 +2044,7 @@ def test_jobs_inspect_include_children_human_output(monkeypatch):
     def fake_with_connection(action):
         monkeypatch.setattr(queries, "get_job", lambda _conn, _job_id: {"id": "root-job-1", "status": "running"})
         monkeypatch.setattr(queries, "attempts", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "ai_calls", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
 
@@ -2081,6 +2082,7 @@ def test_jobs_inspect_json_includes_children_only_when_requested(monkeypatch):
     def fake_with_connection(action):
         monkeypatch.setattr(queries, "get_job", lambda _conn, _job_id: {"id": "root-job-1", "status": "running"})
         monkeypatch.setattr(queries, "attempts", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "ai_calls", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
         monkeypatch.setattr(
@@ -2141,6 +2143,7 @@ def test_jobs_inspect_json_includes_single_job_diagnosis(monkeypatch):
                 }
             ],
         )
+        monkeypatch.setattr(queries, "ai_calls", lambda _conn, _job_id: [])
         monkeypatch.setattr(
             queries,
             "timeline",
@@ -2219,6 +2222,41 @@ def test_jobs_callbacks_json_outputs_full_callback_response_evidence(monkeypatch
     assert callback["last_error"]["response"]["error"] == contract_error
 
 
+def test_jobs_ai_calls_command_outputs_ledger(monkeypatch):
+    rows = [
+        {
+            "id": "ai-call-1",
+            "job_id": "job-1",
+            "attempt_id": "attempt-1",
+            "operation": "generate_image",
+            "step_name": "image",
+            "model_id": "openai-image",
+            "provider": "openai",
+            "provider_model": "gpt-image-1",
+            "status": "failed",
+            "failure_phase": "provider",
+            "error_code": "AI_PROVIDER_RATE_LIMIT",
+            "duration_ms": 1200,
+            "cost_amount": 0,
+            "billable_status": "not_billable",
+        }
+    ]
+    monkeypatch.setattr(queries, "get_job", lambda _conn, _job_id: {"id": "job-1", "status": "failed"})
+    monkeypatch.setattr(queries, "ai_calls", lambda _conn, _job_id: rows)
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", lambda action: action(None))
+
+    human = RUNNER.invoke(jobs_cli_app, ["ai-calls", "job-1"])
+    json_result = RUNNER.invoke(jobs_cli_app, ["ai-calls", "job-1", "--json"])
+
+    assert human.exit_code == 0
+    assert "== AI Calls ==" in human.stdout
+    assert "AI_PROVIDER_RATE_LIMIT" in human.stdout
+    assert json_result.exit_code == 0
+    payload = json.loads(json_result.stdout)
+    assert payload["job_id"] == "job-1"
+    assert payload["ai_calls"][0]["provider_model"] == "gpt-image-1"
+
+
 def test_jobs_trace_json_reports_phase_durations_and_current_phase(monkeypatch):
     created_at = datetime(2026, 7, 1, 1, 0, tzinfo=timezone.utc)
     started_at = datetime(2026, 7, 1, 1, 2, tzinfo=timezone.utc)
@@ -2250,6 +2288,7 @@ def test_jobs_trace_json_reports_phase_durations_and_current_phase(monkeypatch):
             ],
         )
         monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "ai_calls", lambda _conn, _job_id: [])
         monkeypatch.setattr(
             queries,
             "timeline",
@@ -2284,6 +2323,7 @@ def test_jobs_trace_include_children_summarizes_workflow(monkeypatch):
         )
         monkeypatch.setattr(queries, "attempts", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "ai_calls", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
         monkeypatch.setattr(
             queries,
@@ -2422,6 +2462,7 @@ def test_jobs_diagnose_command_outputs_human_and_json(monkeypatch):
             ],
         )
         monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "ai_calls", lambda _conn, _job_id: [])
         monkeypatch.setattr(
             queries,
             "timeline",
@@ -2471,6 +2512,7 @@ def test_jobs_diagnose_keeps_fresh_published_attempt_as_info(monkeypatch):
             ],
         )
         monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "ai_calls", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
         return action(None)
 
@@ -2522,6 +2564,7 @@ def test_jobs_diagnose_keeps_fresh_dispatch_and_callback_due_as_info(monkeypatch
                 }
             ],
         )
+        monkeypatch.setattr(queries, "ai_calls", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
         return action(None)
 
@@ -2564,6 +2607,7 @@ def test_jobs_diagnose_keeps_succeeded_job_failed_attempt_history_as_info(monkey
             ],
         )
         monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "ai_calls", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
         return action(None)
 
@@ -2577,6 +2621,80 @@ def test_jobs_diagnose_keeps_succeeded_job_failed_attempt_history_as_info(monkey
     finding = payload["diagnosis"]["findings"][0]
     assert finding["signal"] == "attempt_failed"
     assert finding["severity"] == "info"
+
+
+def test_jobs_diagnose_reports_not_retried_reason_and_ai_call_ledger(monkeypatch):
+    def fake_with_connection(action):
+        monkeypatch.setattr(
+            queries,
+            "get_job",
+            lambda _conn, _job_id: {
+                "id": "root-job-1",
+                "status": "failed",
+                "active_attempt_id": None,
+            },
+        )
+        monkeypatch.setattr(
+            queries,
+            "attempts",
+            lambda _conn, _job_id: [
+                {
+                    "id": "attempt-1",
+                    "attempt_no": 2,
+                    "status": "failed",
+                    "error_kind": "retryable",
+                    "failure_phase": "execute",
+                    "retry_eligible": True,
+                    "retry_decision": "do_not_retry",
+                    "retry_decision_reason": "policy_exhausted",
+                    "policy_max_attempts": 2,
+                    "policy_retryable_error_codes": ["AI_PROVIDER_RATE_LIMIT"],
+                    "next_attempt_scheduled_at": None,
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            queries,
+            "ai_calls",
+            lambda _conn, _job_id: [
+                {
+                    "id": "ai-call-1",
+                    "attempt_id": "attempt-1",
+                    "operation": "generate_text",
+                    "step_name": "title",
+                    "model_id": "openai-text",
+                    "provider": "openai",
+                    "provider_model": "gpt-4.1-mini",
+                    "status": "failed",
+                    "failure_phase": "provider",
+                    "error_code": "AI_PROVIDER_RATE_LIMIT",
+                    "duration_ms": 1200,
+                    "cost_amount": 0,
+                    "billable_status": "not_billable",
+                }
+            ],
+        )
+        monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
+        return action(None)
+
+    monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
+
+    human = RUNNER.invoke(jobs_cli_app, ["diagnose", "root-job-1"])
+    json_result = RUNNER.invoke(jobs_cli_app, ["diagnose", "root-job-1", "--json"])
+
+    assert human.exit_code == 0
+    assert "attempt_not_retried" in human.stdout
+    assert "AI_PROVIDER_RATE_LIMIT" in human.stdout
+    assert json_result.exit_code == 0
+    payload = json.loads(json_result.stdout)
+    findings = {item["signal"]: item for item in payload["diagnosis"]["findings"]}
+    assert findings["attempt_not_retried"]["message"] == "failed attempt 未重试：已达到 retry policy 最大 attempt 数。"
+    assert findings["attempt_not_retried"]["evidence"]["policy_max_attempts"] == 2
+    assert findings["attempt_not_retried"]["evidence"]["policy_retryable_error_codes"] == ["AI_PROVIDER_RATE_LIMIT"]
+    assert findings["ai_call_ledger_failed"]["evidence"]["by_error_code"] == {"AI_PROVIDER_RATE_LIMIT": 1}
+    assert "./scripts/jobs.sh ai-calls root-job-1" in payload["diagnosis"]["next_checks"]
+    assert payload["ai_calls"][0]["error_code"] == "AI_PROVIDER_RATE_LIMIT"
 
 
 def test_jobs_diagnose_includes_children_only_when_requested(monkeypatch):
@@ -2594,6 +2712,7 @@ def test_jobs_diagnose_includes_children_only_when_requested(monkeypatch):
         )
         monkeypatch.setattr(queries, "attempts", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "ai_calls", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
 
         def fake_child_jobs(_conn, _root_job_id):
@@ -2669,6 +2788,7 @@ def test_jobs_inspect_does_not_output_job_payload_fields(monkeypatch):
         )
         monkeypatch.setattr(queries, "attempts", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "callbacks", lambda _conn, _job_id: [])
+        monkeypatch.setattr(queries, "ai_calls", lambda _conn, _job_id: [])
         monkeypatch.setattr(queries, "timeline", lambda _conn, _job_id, *, limit: [])
         return action(None)
 
@@ -4570,6 +4690,49 @@ def test_jobs_timeline_returns_recent_events_in_chronological_display_order(monk
     assert "ORDER BY e.created_at DESC" in sql
     assert "LIMIT %(limit)s" in sql
     assert "ORDER BY created_at ASC" in sql
+
+
+def test_jobs_attempts_query_includes_retry_policy_fields(monkeypatch):
+    captured_sql: list[str] = []
+
+    def fake_fetch_all(conn, sql, params):
+        captured_sql.append(sql)
+        return []
+
+    monkeypatch.setattr(queries, "_fetch_all", fake_fetch_all)
+
+    queries.attempts(None, "job-1")
+
+    sql = captured_sql[0]
+    assert "a.retry_eligible" in sql
+    assert "a.retry_decision" in sql
+    assert "a.retry_decision_reason" in sql
+    assert "a.policy_max_attempts" in sql
+    assert "a.policy_retryable_error_codes" in sql
+
+
+def test_jobs_ai_calls_query_uses_ledger_table_and_job_scope(monkeypatch):
+    captured_sql: list[str] = []
+    captured_params: list[dict] = []
+
+    def fake_fetch_all(conn, sql, params):
+        captured_sql.append(sql)
+        captured_params.append(params)
+        return []
+
+    monkeypatch.setattr(queries, "_fetch_all", fake_fetch_all)
+
+    queries.ai_calls(None, "job-1")
+
+    sql = captured_sql[0]
+    assert "FROM ai_call_ledger_entries l" in sql
+    assert "JOIN job_aggregates j ON j.id = l.job_id" in sql
+    assert "l.job_id = %(job_id)s" in sql
+    assert "l.scope_id = %(job_id)s" in sql
+    assert "j.deleted_at IS NULL" in sql
+    assert "l.error_code" in sql
+    assert "l.cost_amount" in sql
+    assert captured_params[0] == {"job_id": "job-1"}
 
 
 def test_jobs_child_jobs_query_filters_internal_children(monkeypatch):

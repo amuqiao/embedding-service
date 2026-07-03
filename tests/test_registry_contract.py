@@ -293,10 +293,10 @@ def test_job_type_registry_exposes_required_metadata():
 def test_poster_title_image_retry_policy_is_scoped_to_transient_leaf_execution():
     register_all_job_types()
     specs = job_registry.all_job_type_specs()
-    retryable_codes = ["MODEL_CALL_TIMEOUT", "OSS_FETCH_FAILED", "OSS_WRITE_FAILED"]
+    retryable_codes = ["AI_PROVIDER_FAILED", "JOB_TIMEOUT", "MODEL_CALL_TIMEOUT", "OSS_FETCH_FAILED", "OSS_WRITE_FAILED"]
     expected_leaf_business = {
         "domain": "business_execution",
-        "max_attempts": 2,
+        "max_attempts": 3,
         "retry_delay_seconds": 15,
         "backoff_kind": "fixed",
         "retryable_error_codes": retryable_codes,

@@ -138,6 +138,7 @@ class JobExecutor(ABC):
             "JOB_EXECUTION_FAILED",
             "WORKFLOW_AFTER_SUCCESS_FAILED",
             "JOB_RUNTIME_NOT_SUPPORTED",
+            "AI_PROVIDER_FAILED",
             "MODEL_CALL_FAILED",
             "MODEL_OUTPUT_INVALID",
             "MODEL_CALL_TIMEOUT",
