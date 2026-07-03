@@ -17,3 +17,4 @@ storage/objects/
 logs/
 *.pid
 env_test/
+env_master/
