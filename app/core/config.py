@@ -69,7 +69,6 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "OPS_DASHBOARD_REFRESH_SECONDS": ("ops_dashboard", "refresh_seconds"),
     "OPS_DASHBOARD_MAX_WINDOW_SECONDS": ("ops_dashboard", "max_window_seconds"),
     "OPS_DASHBOARD_QUERY_TIMEOUT_SECONDS": ("ops_dashboard", "query_timeout_seconds"),
-    "OPS_DASHBOARD_MOCK_DATA_ENABLED": ("ops_dashboard", "mock_data_enabled"),
     "MAX_ACTIVE_JOBS": ("job", "max_active_jobs"),
     "OSS_INPUT_MAX_BYTES": ("job", "oss_input_max_bytes"),
     "POSTER_TITLE_IMAGE_MAX_ITEMS": ("job", "poster_title_image_max_items"),
@@ -82,6 +81,7 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
 }
 
 APPLICATION_ENV_KEYS = frozenset(APPLICATION_ENV_FIELD_MAP)
+REMOVED_APPLICATION_ENV_KEYS = frozenset({"OPS_DASHBOARD_MOCK_DATA_ENABLED"})
 LAUNCHER_ENV_KEYS: frozenset[str] = frozenset(
     {
         "API_HOST",
@@ -169,6 +169,10 @@ def _unknown_dotenv_keys(dotenv: dict[str, str]) -> list[str]:
     return sorted(key for key in dotenv if key != key.upper() or key not in allowed_keys)
 
 
+def _removed_process_env_keys() -> list[str]:
+    return sorted(key for key in os.environ if key in REMOVED_APPLICATION_ENV_KEYS)
+
+
 def _selected_env_file_path() -> Path | None:
     value = os.environ.get("ENV_FILE", "").strip()
     if not value:
@@ -210,6 +214,10 @@ def _flat_env_settings_source() -> dict[str, Any]:
     selected_env_path = _selected_env_file_path()
     if selected_env_path is not None and selected_env_path.resolve() != default_env_path.resolve():
         raw.update(_load_application_dotenv(selected_env_path))
+    removed_process_keys = _removed_process_env_keys()
+    if removed_process_keys:
+        joined = ", ".join(removed_process_keys)
+        raise ValueError(f"unsupported keys in process environment: {joined}")
     for key, value in os.environ.items():
         if key in APPLICATION_ENV_KEYS:
             raw[key] = value
@@ -460,9 +468,8 @@ class OpsDashboardSettings(ConfigSection):
     refresh_seconds: int = 15
     max_window_seconds: int = 86_400
     query_timeout_seconds: int = 2
-    mock_data_enabled: bool = False
 
-    @field_validator("enabled", "require_auth", "mock_data_enabled", mode="before")
+    @field_validator("enabled", "require_auth", mode="before")
     @classmethod
     def validate_ops_dashboard_flags(cls, value: object) -> object:
         if isinstance(value, bool):

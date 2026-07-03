@@ -1326,6 +1326,50 @@ def test_dev_status_service_reports_residual_worker_process(tmp_path):
     assert "pid=34567" in result.stdout
 
 
+def test_dev_status_service_reports_ops_dashboard_url_when_enabled(tmp_path):
+    logs_dir = tmp_path / "logs"
+    run_dir = tmp_path / "run"
+    logs_dir.mkdir()
+    run_dir.mkdir()
+    (logs_dir / "api.log").write_text("", encoding="utf-8")
+
+    env = _clean_root_env()
+    env.update(
+        {
+            "API_URL": "http://127.0.0.1:18200",
+            "OPS_DASHBOARD_ENABLED": "true",
+            "RUN_DIR": str(run_dir),
+            "LOG_DIR": str(logs_dir),
+        }
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                [
+                    "source scripts/dev/services.sh >/dev/null",
+                    "local_service_pids() { :; }",
+                    "status_service api",
+                ]
+            ),
+        ],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "dashboard:" in result.stdout
+    assert "http://127.0.0.1:18200/internal/jobs-dashboard" in result.stdout
+    assert "examples:" in result.stdout
+    assert "http://127.0.0.1:18200/internal/jobs-dashboard/examples" in result.stdout
+    assert "disabled" not in result.stdout
+
+
 def test_jobs_cli_help_is_available_without_db():
     result = subprocess.run(
         ["./scripts/jobs.sh", "--help"],

@@ -82,7 +82,6 @@ def test_ops_dashboard_defaults_and_overrides():
     assert default_settings.ops_dashboard.refresh_seconds == 15
     assert default_settings.ops_dashboard.max_window_seconds == 86_400
     assert default_settings.ops_dashboard.query_timeout_seconds == 2
-    assert default_settings.ops_dashboard.mock_data_enabled is False
 
     custom_settings = _build_settings(
         OPS_DASHBOARD_ENABLED=True,
@@ -90,7 +89,6 @@ def test_ops_dashboard_defaults_and_overrides():
         OPS_DASHBOARD_REFRESH_SECONDS=30,
         OPS_DASHBOARD_MAX_WINDOW_SECONDS=3_600,
         OPS_DASHBOARD_QUERY_TIMEOUT_SECONDS=1,
-        OPS_DASHBOARD_MOCK_DATA_ENABLED=True,
     )
 
     assert custom_settings.ops_dashboard.enabled is True
@@ -98,7 +96,6 @@ def test_ops_dashboard_defaults_and_overrides():
     assert custom_settings.ops_dashboard.refresh_seconds == 30
     assert custom_settings.ops_dashboard.max_window_seconds == 3_600
     assert custom_settings.ops_dashboard.query_timeout_seconds == 1
-    assert custom_settings.ops_dashboard.mock_data_enabled is True
 
 
 def test_ops_dashboard_rejects_invalid_controls():
@@ -110,12 +107,6 @@ def test_ops_dashboard_rejects_invalid_controls():
 
     with pytest.raises(ValidationError, match="OPS_DASHBOARD_QUERY_TIMEOUT_SECONDS"):
         _build_settings(OPS_DASHBOARD_QUERY_TIMEOUT_SECONDS=0)
-
-
-@pytest.mark.parametrize("value", ["1", "yes", "on"])
-def test_ops_dashboard_mock_data_flag_requires_explicit_boolean(value):
-    with pytest.raises(ValidationError, match="ops dashboard flags must be boolean true or false"):
-        _build_settings(OPS_DASHBOARD_MOCK_DATA_ENABLED=value)
 
 
 def test_app_env_defaults_and_release_envs():
@@ -511,6 +502,26 @@ def test_settings_dotenv_source_requires_explicit_env_file_to_exist(monkeypatch,
     monkeypatch.setenv("ENV_FILE", ".env.missing")
 
     with pytest.raises(ValueError, match="ENV_FILE not found"):
+        config_module._flat_env_settings_source()
+
+
+def test_settings_source_rejects_removed_application_env_key_from_dotenv(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text("OPS_DASHBOARD_MOCK_DATA_ENABLED=true\n", encoding="utf-8")
+    monkeypatch.setattr(config_module, "ROOT_DIR", tmp_path)
+    monkeypatch.delenv("ENV_FILE", raising=False)
+    monkeypatch.delenv("OPS_DASHBOARD_MOCK_DATA_ENABLED", raising=False)
+
+    with pytest.raises(ValueError, match="unsupported keys .*OPS_DASHBOARD_MOCK_DATA_ENABLED"):
+        config_module._flat_env_settings_source()
+
+
+def test_settings_source_rejects_removed_application_env_key_from_process_env(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    monkeypatch.setattr(config_module, "ROOT_DIR", tmp_path)
+    monkeypatch.delenv("ENV_FILE", raising=False)
+    monkeypatch.setenv("OPS_DASHBOARD_MOCK_DATA_ENABLED", "true")
+
+    with pytest.raises(ValueError, match="unsupported keys in process environment: OPS_DASHBOARD_MOCK_DATA_ENABLED"):
         config_module._flat_env_settings_source()
 
 

@@ -15,10 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import bearer_scheme, require_service_auth
+from app.ops_dashboard import read_model
 from app.ops_dashboard.config import get_dashboard_config
 from app.ops_dashboard.registry import section_config
 from app.ops_dashboard.schemas import DashboardFilters, VALID_BUCKETS, VALID_WINDOWS
-from app.ops_dashboard import mock_data, read_model
 
 router = APIRouter(tags=["ops-dashboard"], include_in_schema=False)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -58,9 +58,6 @@ async def _with_timeout(coro):
 
 
 async def get_dashboard_db():
-    if settings.ops_dashboard.mock_data_enabled:
-        yield None
-        return
     async for session in get_db():
         yield session
 
@@ -82,6 +79,11 @@ async def dashboard_page(_: OpsAccess):
     return _static_file("index.html")
 
 
+@router.get("/internal/jobs-dashboard/examples")
+async def dashboard_examples_page(_: OpsAccess):
+    return _static_file("examples.html")
+
+
 @router.get("/internal/jobs-dashboard/static/{path:path}")
 async def dashboard_static(path: str, _: OpsAccess):
     return _static_file(path)
@@ -96,8 +98,6 @@ async def dashboard_config(_: OpsAccess):
         "refresh_seconds": config.refresh_seconds,
         "max_window_seconds": config.max_window_seconds,
         "query_timeout_seconds": config.query_timeout_seconds,
-        "mock_data_enabled": config.mock_data_enabled,
-        "data_source": "mock" if config.mock_data_enabled else "live",
         "route_base": config.route_base,
         "sections": section_config(),
         "filters": {
@@ -112,14 +112,9 @@ async def dashboard_config(_: OpsAccess):
 @router.get("/internal/jobs-dashboard/sections/overview/data")
 async def overview_section(
     _: OpsAccess,
-    db: AsyncSession | None = Depends(get_dashboard_db),
+    db: AsyncSession = Depends(get_dashboard_db),
     filters: DashboardFilters = Depends(_filters),
 ):
-    if settings.ops_dashboard.mock_data_enabled:
-        return jsonable_encoder(
-            mock_data.overview_data(filters, max_active_jobs=settings.job.max_active_jobs)
-        )
-    assert db is not None
     payload = await _with_timeout(
         read_model.overview_data(db, filters, max_active_jobs=settings.job.max_active_jobs)
     )
@@ -129,12 +124,9 @@ async def overview_section(
 @router.get("/internal/jobs-dashboard/sections/failures/data")
 async def failures_section(
     _: OpsAccess,
-    db: AsyncSession | None = Depends(get_dashboard_db),
+    db: AsyncSession = Depends(get_dashboard_db),
     filters: DashboardFilters = Depends(_filters),
 ):
-    if settings.ops_dashboard.mock_data_enabled:
-        return jsonable_encoder(mock_data.failures_data(filters))
-    assert db is not None
     payload = await _with_timeout(read_model.failures_data(db, filters))
     return jsonable_encoder(payload)
 
@@ -143,12 +135,9 @@ async def failures_section(
 async def job_trace_data(
     job_id: uuid.UUID,
     _: OpsAccess,
-    db: AsyncSession | None = Depends(get_dashboard_db),
+    db: AsyncSession = Depends(get_dashboard_db),
     limit: int = Query(default=100, ge=1, le=200),
 ):
-    if settings.ops_dashboard.mock_data_enabled:
-        return jsonable_encoder(mock_data.job_trace_data(job_id, limit=limit))
-    assert db is not None
     payload = await _with_timeout(read_model.job_trace_data(db, job_id, limit=limit))
     if payload is None:
         raise HTTPException(status_code=404, detail="job not found")
@@ -158,20 +147,9 @@ async def job_trace_data(
 @router.get("/internal/jobs-dashboard/health")
 async def job_health(
     _: OpsAccess,
-    db: AsyncSession | None = Depends(get_dashboard_db),
+    db: AsyncSession = Depends(get_dashboard_db),
     filters: DashboardFilters = Depends(_filters),
 ):
-    if settings.ops_dashboard.mock_data_enabled:
-        payload = mock_data.overview_data(filters, max_active_jobs=settings.job.max_active_jobs)
-        return jsonable_encoder(
-            {
-                "mock_data": True,
-                "generated_at": payload["generated_at"],
-                "health": payload["health"],
-                "summary": payload["summary"],
-            }
-        )
-    assert db is not None
     payload = await _with_timeout(
         read_model.overview_data(db, filters, max_active_jobs=settings.job.max_active_jobs)
     )

@@ -14,6 +14,8 @@ source "$ROOT_DIR/scripts/lib/modes.sh"
 
 APP_SERVICES=(api worker)
 DEP_SERVICES=(postgres redis)
+API_DASHBOARD_URL="${API_DASHBOARD_URL:-${API_URL}/internal/jobs-dashboard}"
+API_DASHBOARD_EXAMPLES_URL="${API_DASHBOARD_EXAMPLES_URL:-${API_DASHBOARD_URL}/examples}"
 
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 cd "$ROOT_DIR"
@@ -53,6 +55,10 @@ bool_true() {
     true|True|TRUE) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+ops_dashboard_enabled() {
+  bool_true "$(app_env_value OPS_DASHBOARD_ENABLED)"
 }
 
 is_loopback_host() {
@@ -548,6 +554,13 @@ status_service() {
     detail "app" "$API_URL"
     detail "docs" "$API_DOCS_URL"
     detail "openapi" "$API_OPENAPI_URL"
+    if ops_dashboard_enabled; then
+      detail "dashboard" "$API_DASHBOARD_URL"
+      detail "examples" "$API_DASHBOARD_EXAMPLES_URL"
+    else
+      detail "dashboard" "$API_DASHBOARD_URL (disabled; set OPS_DASHBOARD_ENABLED=true)"
+      detail "examples" "$API_DASHBOARD_EXAMPLES_URL (disabled; set OPS_DASHBOARD_ENABLED=true)"
+    fi
     detail "health" "$API_HEALTH_URL"
     detail "log" "$display_log"
   else

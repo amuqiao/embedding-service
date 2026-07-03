@@ -12,7 +12,6 @@ class DashboardRuntimeConfig:
     refresh_seconds: int
     max_window_seconds: int
     query_timeout_seconds: int
-    mock_data_enabled: bool
     route_base: str = "/internal/jobs-dashboard"
 
 
@@ -23,5 +22,4 @@ def get_dashboard_config() -> DashboardRuntimeConfig:
         refresh_seconds=settings.ops_dashboard.refresh_seconds,
         max_window_seconds=settings.ops_dashboard.max_window_seconds,
         query_timeout_seconds=settings.ops_dashboard.query_timeout_seconds,
-        mock_data_enabled=settings.ops_dashboard.mock_data_enabled,
     )

@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from starlette.testclient import TestClient
 
 
-def _dashboard_settings(*, enabled=True, require_auth=False, timeout=2, mock_data=False):
+def _dashboard_settings(*, enabled=True, require_auth=False, timeout=2):
     return SimpleNamespace(
         ops_dashboard=SimpleNamespace(
             enabled=enabled,
@@ -19,7 +19,6 @@ def _dashboard_settings(*, enabled=True, require_auth=False, timeout=2, mock_dat
             refresh_seconds=15,
             max_window_seconds=86_400,
             query_timeout_seconds=timeout,
-            mock_data_enabled=mock_data,
         ),
         job=SimpleNamespace(max_active_jobs=1000),
     )
@@ -49,6 +48,7 @@ def test_include_optional_ops_dashboard_enabled_adds_internal_routes(monkeypatch
 
     paths = {getattr(route, "path", "") for route in application.routes}
     assert "/internal/jobs-dashboard" in paths
+    assert "/internal/jobs-dashboard/examples" in paths
     assert "/internal/jobs-dashboard/config" in paths
     assert "/internal/jobs-dashboard/health" in paths
 
@@ -92,8 +92,8 @@ def test_ops_dashboard_page_and_config_routes_work_without_auth(monkeypatch):
     assert "Job 观测面板" in page.text
     assert config.status_code == 200
     assert config.json()["route_base"] == "/internal/jobs-dashboard"
-    assert config.json()["mock_data_enabled"] is False
-    assert config.json()["data_source"] == "live"
+    assert "mock_data_enabled" not in config.json()
+    assert "data_source" not in config.json()
 
 
 def test_ops_dashboard_routes_are_hidden_from_openapi_and_get_only(monkeypatch):
@@ -125,17 +125,19 @@ def test_ops_dashboard_static_file_rejects_traversal():
 
 
 def test_ops_dashboard_static_dashboard_js_declares_chart_contract():
+    contract = Path("app/ops_dashboard/static/chart_contract.js").read_text(encoding="utf-8")
     script = Path("app/ops_dashboard/static/dashboard.js").read_text(encoding="utf-8")
     page = Path("app/ops_dashboard/static/index.html").read_text(encoding="utf-8")
 
-    assert "const CHART_TYPES = Object.freeze" in script
-    assert "const CHART_RENDERERS = Object.freeze" in script
+    assert "const CHART_TYPES = Object.freeze" in contract
+    assert "const CHART_RENDERERS = Object.freeze" in contract
     assert "const PANEL_REGISTRY = Object.freeze" in script
     assert "const PANEL_DATA_ADAPTERS = Object.freeze" in script
-    assert "Unknown chartType" in script
+    assert "Unknown chartType" in contract
+    assert "/internal/jobs-dashboard/static/chart_contract.js" in page
 
     expected_chart_types = {"stat_card", "line", "stacked_bar", "horizontal_bar", "table"}
-    renderer_body = re.search(r"const CHART_RENDERERS = Object\.freeze\(\{(?P<body>.*?)\n  \}\);", script, re.S)
+    renderer_body = re.search(r"const CHART_RENDERERS = Object\.freeze\(\{(?P<body>.*?)\n  \}\);", contract, re.S)
     assert renderer_body is not None
     renderer_types = set(re.findall(r"^\s{4}([a-z_]+):", renderer_body.group("body"), re.M))
     assert renderer_types == expected_chart_types
@@ -162,6 +164,41 @@ def test_ops_dashboard_static_dashboard_js_declares_chart_contract():
     adapters = set(re.findall(r"^\s{4}([a-z0-9_]+):", adapter_body.group("body"), re.M))
     panel_adapters = set(re.findall(r'adapter:\s*"([^"]+)"', panel_source))
     assert panel_adapters <= adapters
+
+
+def test_ops_dashboard_examples_page_declares_generic_chart_fixtures(monkeypatch):
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    application = FastAPI()
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        page = client.get("/internal/jobs-dashboard/examples")
+        script = client.get("/internal/jobs-dashboard/static/examples.js")
+        contract = client.get("/internal/jobs-dashboard/static/chart_contract.js")
+
+    assert page.status_code == 200
+    assert "Chart Contract Examples" in page.text
+    assert script.status_code == 200
+    assert contract.status_code == 200
+
+    examples_html = Path("app/ops_dashboard/static/examples.html").read_text(encoding="utf-8")
+    assert examples_html.index("chart_contract.js") < examples_html.index("examples.js")
+
+    examples_script = Path("app/ops_dashboard/static/examples.js").read_text(encoding="utf-8")
+    expected_chart_types = {"stat_card", "line", "stacked_bar", "horizontal_bar", "table"}
+    example_chart_types = set(re.findall(r'chartType:\s*"([^"]+)"', examples_script))
+    assert example_chart_types == expected_chart_types
+
+    forbidden_business_terms = {"job_id", "attempt_id", "callback", "poster_title_image"}
+    assert all(term not in examples_script for term in forbidden_business_terms)
+    forbidden_live_data_calls = {"fetch(", "/sections/", "/jobs/"}
+    assert all(term not in examples_script for term in forbidden_live_data_calls)
 
 
 def test_ops_dashboard_overview_route_returns_read_model_payload(monkeypatch):
@@ -226,12 +263,12 @@ def test_ops_dashboard_job_trace_returns_404_when_job_missing(monkeypatch):
     assert response.status_code == 404
 
 
-def test_ops_dashboard_failures_route_uses_live_read_model_when_mock_disabled(monkeypatch):
+def test_ops_dashboard_failures_route_returns_read_model_payload(monkeypatch):
     from app.ops_dashboard import config as ops_config
     from app.ops_dashboard import read_model
     from app.ops_dashboard import router as ops_router
 
-    settings = _dashboard_settings(require_auth=False, mock_data=False)
+    settings = _dashboard_settings(require_auth=False)
     monkeypatch.setattr(ops_router, "settings", settings)
     monkeypatch.setattr(ops_config, "settings", settings)
 
@@ -259,15 +296,14 @@ def test_ops_dashboard_failures_route_uses_live_read_model_when_mock_disabled(mo
 
     assert response.status_code == 200
     assert response.json()["failure_groups"][0]["error_code"] == "LIVE_ONLY"
-    assert "mock_data" not in response.json()
 
 
-def test_ops_dashboard_health_route_uses_live_read_model_when_mock_disabled(monkeypatch):
+def test_ops_dashboard_health_route_returns_read_model_payload(monkeypatch):
     from app.ops_dashboard import config as ops_config
     from app.ops_dashboard import read_model
     from app.ops_dashboard import router as ops_router
 
-    settings = _dashboard_settings(require_auth=False, mock_data=False)
+    settings = _dashboard_settings(require_auth=False)
     monkeypatch.setattr(ops_router, "settings", settings)
     monkeypatch.setattr(ops_config, "settings", settings)
 
@@ -294,7 +330,6 @@ def test_ops_dashboard_health_route_uses_live_read_model_when_mock_disabled(monk
 
     assert response.status_code == 200
     assert response.json()["health"]["reasons"] == ["live"]
-    assert "mock_data" not in response.json()
 
 
 def test_ops_dashboard_rejects_invalid_filter(monkeypatch):
@@ -316,40 +351,6 @@ def test_ops_dashboard_rejects_invalid_filter(monkeypatch):
         response = client.get("/internal/jobs-dashboard/sections/overview/data?window=7d")
 
     assert response.status_code == 400
-
-
-def test_ops_dashboard_mock_data_routes_skip_db_dependency(monkeypatch):
-    from app.ops_dashboard import config as ops_config
-    from app.ops_dashboard import router as ops_router
-
-    settings = _dashboard_settings(require_auth=False, mock_data=True)
-    monkeypatch.setattr(ops_router, "settings", settings)
-    monkeypatch.setattr(ops_config, "settings", settings)
-
-    application = FastAPI()
-    application.include_router(ops_router.router)
-
-    with TestClient(application) as client:
-        config = client.get("/internal/jobs-dashboard/config")
-        overview = client.get("/internal/jobs-dashboard/sections/overview/data")
-        failures = client.get("/internal/jobs-dashboard/sections/failures/data")
-        trace = client.get(f"/internal/jobs-dashboard/jobs/{uuid.uuid4()}/data")
-        health = client.get("/internal/jobs-dashboard/health")
-
-    assert config.status_code == 200
-    assert config.json()["mock_data_enabled"] is True
-    assert config.json()["data_source"] == "mock"
-    assert overview.status_code == 200
-    assert overview.json()["mock_data"] is True
-    assert overview.json()["ingress"]
-    assert failures.status_code == 200
-    assert failures.json()["mock_data"] is True
-    assert failures.json()["failure_groups"]
-    assert trace.status_code == 200
-    assert trace.json()["mock_data"] is True
-    assert trace.json()["job"]["status"] == "failed"
-    assert health.status_code == 200
-    assert health.json()["mock_data"] is True
 
 
 class _RowsResult:

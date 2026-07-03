@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chart Contract Examples</title>
+    <link rel="stylesheet" href="/internal/jobs-dashboard/static/dashboard.css" />
+    <script src="/internal/jobs-dashboard/static/vendor/echarts.min.js"></script>
+    <script defer src="/internal/jobs-dashboard/static/chart_contract.js"></script>
+    <script defer src="/internal/jobs-dashboard/static/examples.js"></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">CC</div>
+        <div>
+          <h1>Chart Examples</h1>
+          <p>Contract only</p>
+        </div>
+      </div>
+      <nav class="nav" aria-label="Example navigation">
+        <a class="nav-item active" href="/internal/jobs-dashboard/examples">图表样例</a>
+        <a class="nav-item" href="/internal/jobs-dashboard">返回 Dashboard</a>
+      </nav>
+      <div class="side-note">
+        示例数据只验证图表合同，不代表任何业务数据源。
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="toolbar">
+        <div>
+          <div class="eyebrow">static examples</div>
+          <h2>Chart Contract Examples</h2>
+        </div>
+      </header>
+
+      <section class="status-line" aria-live="polite">
+        <div><span class="badge neutral">sample</span> <strong>source:</strong> static chart fixtures</div>
+        <div><strong>purpose:</strong> renderer contract</div>
+      </section>
+
+      <section class="section active">
+        <div id="example-stats" class="stat-grid"></div>
+        <div class="panel-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Line</h3>
+              <span>trend sample</span>
+            </div>
+            <div id="example-line" class="chart"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Stacked Bar</h3>
+              <span>composition sample</span>
+            </div>
+            <div id="example-stacked" class="chart"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Horizontal Bar</h3>
+              <span>top-n sample</span>
+            </div>
+            <div id="example-rank" class="chart chart-compact"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Table</h3>
+              <span>detail sample</span>
+            </div>
+            <div id="example-table" class="table-wrap"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
