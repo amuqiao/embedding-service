@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 from app.core import config as config_module
 from app.core.database import get_db

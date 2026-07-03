@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 from app.core.database import get_db
 from app.core.security import require_service_auth

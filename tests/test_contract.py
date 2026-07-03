@@ -800,7 +800,7 @@ def test_openapi_omits_caller_id_header_when_caller_id_header_is_disabled(monkey
 
 
 def test_health_endpoints():
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     with TestClient(app) as client:
         health = client.get("/health")
@@ -816,7 +816,7 @@ def test_health_endpoints():
 
 
 def test_unknown_route_uses_unified_error_envelope():
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     with TestClient(app) as client:
         response = client.get("/definitely-not-found")
@@ -830,7 +830,7 @@ def test_unknown_route_uses_unified_error_envelope():
 
 
 def test_unauthorized_route_uses_unified_error_envelope(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -845,7 +845,7 @@ def test_unauthorized_route_uses_unified_error_envelope(monkeypatch):
 
 
 def test_models_route_allows_missing_authorization_when_auth_header_is_disabled(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -856,7 +856,7 @@ def test_models_route_allows_missing_authorization_when_auth_header_is_disabled(
 
 
 def test_prompt_templates_route_defaults_to_poster_title_image(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -886,7 +886,7 @@ def test_prompt_templates_route_defaults_to_poster_title_image(monkeypatch):
 
 
 def test_prompt_templates_route_filters_by_job_type(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -897,7 +897,7 @@ def test_prompt_templates_route_filters_by_job_type(monkeypatch):
 
 
 def test_prompt_templates_route_rejects_unknown_job_type(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -910,7 +910,7 @@ def test_prompt_templates_route_rejects_unknown_job_type(monkeypatch):
 
 
 def test_models_route_exposes_public_model_selection_metadata(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
     from app.api.routes import meta as meta_routes
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
@@ -1017,7 +1017,7 @@ def test_models_route_exposes_public_model_selection_metadata(monkeypatch):
 
 
 def test_models_route_filters_by_job_type(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -1032,7 +1032,7 @@ def test_models_route_filters_by_job_type(monkeypatch):
 
 
 def test_models_route_rejects_unknown_job_type(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -1045,7 +1045,7 @@ def test_models_route_rejects_unknown_job_type(monkeypatch):
 
 
 def test_languages_route_exposes_shared_language_catalog(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -1075,7 +1075,7 @@ def test_languages_route_exposes_shared_language_catalog(monkeypatch):
 
 
 def test_legal_request_id_allows_dot_and_colon(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -1091,7 +1091,7 @@ def test_legal_request_id_allows_dot_and_colon(monkeypatch):
 
 
 def test_missing_request_id_generates_unique_trace_id(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -1112,7 +1112,7 @@ def test_missing_request_id_generates_unique_trace_id(monkeypatch):
 
 
 def test_invalid_request_id_returns_error_envelope(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -1131,7 +1131,7 @@ def test_invalid_request_id_returns_error_envelope(monkeypatch):
 
 
 def test_empty_request_id_header_returns_error_envelope(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -1151,7 +1151,7 @@ def test_empty_request_id_header_returns_error_envelope(monkeypatch):
 
 
 def test_request_validation_error_uses_unified_error_envelope(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     _patch_security_settings(monkeypatch)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -1184,7 +1184,7 @@ def test_error_envelope_builder_uses_error_registry_status():
 
 
 def test_method_not_allowed_uses_unified_error_envelope():
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.post(f"{API_PREFIX}/models")
@@ -1198,7 +1198,7 @@ def test_method_not_allowed_uses_unified_error_envelope():
 
 
 def test_generic_http_exception_uses_unified_error_envelope():
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
     from starlette.exceptions import HTTPException as StarletteHTTPException
 
     route_path = "/__test__/http-error"
@@ -1219,7 +1219,7 @@ def test_generic_http_exception_uses_unified_error_envelope():
 
 
 def test_unhandled_exception_uses_unified_error_envelope():
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     route_path = "/__test__/unhandled-error"
     if not any(getattr(route, "path", "") == route_path for route in app.routes):

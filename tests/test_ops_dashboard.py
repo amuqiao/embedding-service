@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 
 def _dashboard_settings(*, enabled=True, require_auth=False, timeout=2, mock_data=False):

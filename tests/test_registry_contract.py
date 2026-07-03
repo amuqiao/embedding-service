@@ -645,7 +645,7 @@ def test_create_app_validates_registries_on_startup(monkeypatch):
 
 
 def test_api_lifespan_manages_database_engine(monkeypatch):
-    from fastapi.testclient import TestClient
+    from starlette.testclient import TestClient
 
     from app import main
 
