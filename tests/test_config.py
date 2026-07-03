@@ -74,6 +74,50 @@ def test_security_header_disable_flags_default_to_false():
     assert s.security.disable_caller_id_header is False
 
 
+def test_ops_dashboard_defaults_and_overrides():
+    default_settings = _build_settings()
+
+    assert default_settings.ops_dashboard.enabled is False
+    assert default_settings.ops_dashboard.require_auth is False
+    assert default_settings.ops_dashboard.refresh_seconds == 15
+    assert default_settings.ops_dashboard.max_window_seconds == 86_400
+    assert default_settings.ops_dashboard.query_timeout_seconds == 2
+    assert default_settings.ops_dashboard.mock_data_enabled is False
+
+    custom_settings = _build_settings(
+        OPS_DASHBOARD_ENABLED=True,
+        OPS_DASHBOARD_REQUIRE_AUTH=True,
+        OPS_DASHBOARD_REFRESH_SECONDS=30,
+        OPS_DASHBOARD_MAX_WINDOW_SECONDS=3_600,
+        OPS_DASHBOARD_QUERY_TIMEOUT_SECONDS=1,
+        OPS_DASHBOARD_MOCK_DATA_ENABLED=True,
+    )
+
+    assert custom_settings.ops_dashboard.enabled is True
+    assert custom_settings.ops_dashboard.require_auth is True
+    assert custom_settings.ops_dashboard.refresh_seconds == 30
+    assert custom_settings.ops_dashboard.max_window_seconds == 3_600
+    assert custom_settings.ops_dashboard.query_timeout_seconds == 1
+    assert custom_settings.ops_dashboard.mock_data_enabled is True
+
+
+def test_ops_dashboard_rejects_invalid_controls():
+    with pytest.raises(ValidationError, match="OPS_DASHBOARD_REFRESH_SECONDS"):
+        _build_settings(OPS_DASHBOARD_REFRESH_SECONDS=4)
+
+    with pytest.raises(ValidationError, match="OPS_DASHBOARD_MAX_WINDOW_SECONDS"):
+        _build_settings(OPS_DASHBOARD_MAX_WINDOW_SECONDS=599)
+
+    with pytest.raises(ValidationError, match="OPS_DASHBOARD_QUERY_TIMEOUT_SECONDS"):
+        _build_settings(OPS_DASHBOARD_QUERY_TIMEOUT_SECONDS=0)
+
+
+@pytest.mark.parametrize("value", ["1", "yes", "on"])
+def test_ops_dashboard_mock_data_flag_requires_explicit_boolean(value):
+    with pytest.raises(ValidationError, match="ops dashboard flags must be boolean true or false"):
+        _build_settings(OPS_DASHBOARD_MOCK_DATA_ENABLED=value)
+
+
 def test_app_env_defaults_and_release_envs():
     local = _build_settings()
     assert local.runtime.app_env == "local"

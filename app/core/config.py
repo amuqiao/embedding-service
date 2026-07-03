@@ -64,6 +64,12 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "BILLING_ENABLED": ("billing", "enabled"),
     "MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY": ("billing", "model_catalog_expose_billing_capability"),
     "PRICING_CONFIG_PATH": ("billing", "pricing_config_path_raw"),
+    "OPS_DASHBOARD_ENABLED": ("ops_dashboard", "enabled"),
+    "OPS_DASHBOARD_REQUIRE_AUTH": ("ops_dashboard", "require_auth"),
+    "OPS_DASHBOARD_REFRESH_SECONDS": ("ops_dashboard", "refresh_seconds"),
+    "OPS_DASHBOARD_MAX_WINDOW_SECONDS": ("ops_dashboard", "max_window_seconds"),
+    "OPS_DASHBOARD_QUERY_TIMEOUT_SECONDS": ("ops_dashboard", "query_timeout_seconds"),
+    "OPS_DASHBOARD_MOCK_DATA_ENABLED": ("ops_dashboard", "mock_data_enabled"),
     "MAX_ACTIVE_JOBS": ("job", "max_active_jobs"),
     "OSS_INPUT_MAX_BYTES": ("job", "oss_input_max_bytes"),
     "POSTER_TITLE_IMAGE_MAX_ITEMS": ("job", "poster_title_image_max_items"),
@@ -448,6 +454,38 @@ class BillingSettings(ConfigSection):
         return _resolve_repo_path(self.pricing_config_path_raw)
 
 
+class OpsDashboardSettings(ConfigSection):
+    enabled: bool = False
+    require_auth: bool = False
+    refresh_seconds: int = 15
+    max_window_seconds: int = 86_400
+    query_timeout_seconds: int = 2
+    mock_data_enabled: bool = False
+
+    @field_validator("enabled", "require_auth", "mock_data_enabled", mode="before")
+    @classmethod
+    def validate_ops_dashboard_flags(cls, value: object) -> object:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized == "true":
+                return True
+            if normalized == "false":
+                return False
+        raise ValueError("ops dashboard flags must be boolean true or false")
+
+    @model_validator(mode="after")
+    def validate_ops_dashboard(self) -> "OpsDashboardSettings":
+        if self.refresh_seconds < 5:
+            raise ValueError("OPS_DASHBOARD_REFRESH_SECONDS must be greater than or equal to 5")
+        if self.max_window_seconds < 600:
+            raise ValueError("OPS_DASHBOARD_MAX_WINDOW_SECONDS must be greater than or equal to 600")
+        if self.query_timeout_seconds <= 0:
+            raise ValueError("OPS_DASHBOARD_QUERY_TIMEOUT_SECONDS must be greater than 0")
+        return self
+
+
 class JobSettings(ConfigSection):
     max_active_jobs: int = 5000
     oss_input_max_bytes: int = 5_242_880
@@ -522,6 +560,7 @@ class Settings(BaseSettings):
     ai_provider: AIProviderSettings = Field(default_factory=AIProviderSettings)
     registry: RegistrySettings = Field(default_factory=RegistrySettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
+    ops_dashboard: OpsDashboardSettings = Field(default_factory=OpsDashboardSettings)
     job: JobSettings = Field(default_factory=JobSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 

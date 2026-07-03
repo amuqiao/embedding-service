@@ -384,6 +384,15 @@ def include_routes(application: FastAPI) -> None:
     application.include_router(jobs.router, prefix=API_PREFIX)
 
 
+def include_optional_ops_dashboard(application: FastAPI) -> None:
+    if not settings.ops_dashboard.enabled:
+        return
+
+    from app.ops_dashboard.router import router as ops_dashboard_router
+
+    application.include_router(ops_dashboard_router)
+
+
 def create_app() -> FastAPI:
     bootstrap_runtime()
     application = FastAPI(title=settings.service.title, version="0.1.0", lifespan=api_lifespan)
@@ -391,6 +400,7 @@ def create_app() -> FastAPI:
     install_middlewares(application)
     install_exception_handlers(application)
     include_routes(application)
+    include_optional_ops_dashboard(application)
     validate_all_registries(application)
     return application
 
