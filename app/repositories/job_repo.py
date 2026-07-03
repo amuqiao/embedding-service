@@ -178,6 +178,7 @@ class JobRepo:
         next_retry_at: datetime | None = None,
         last_error: dict[str, Any] | None = None,
         cost: dict[str, Any] | None = None,
+        usage: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         progress_stage = "completed" if job.status == "succeeded" else "failed"
         callback_status = "pending" if event_type in set(JobRepo._callback_events(job)) else "skipped"
@@ -201,6 +202,7 @@ class JobRepo:
                 "job_result": job_result,
                 "job_error": JobRepo._job_error_detail(job.error),
                 "cost": cost,
+                "usage": usage,
                 "callback": {
                     "status": callback_status,
                     "attempt": delivery_attempts,
@@ -232,11 +234,13 @@ class JobRepo:
         subscribed = event_type in set(JobRepo._callback_events(job))
         outbox_status = "pending" if subscribed else "skipped"
         event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{CALLBACK_EVENT_NAMESPACE}:{job.id}:{event_type}")
-        from app.services.billing import get_scope_billing, job_cost_from_billing
+        from app.services.billing import get_scope_billing, job_cost_from_billing, job_usage_from_billing
 
         billing = await get_scope_billing(db, scope_type="job", scope_id=str(job.id), caller_id=job.caller_id)
         mapped_cost = job_cost_from_billing(billing)
         cost = mapped_cost.model_dump() if mapped_cost is not None else None
+        mapped_usage = job_usage_from_billing(billing)
+        usage = mapped_usage.model_dump() if mapped_usage is not None else None
         projected_result = job.result
         if job.status == "failed":
             from app.jobs.factory import get_job_executor
@@ -260,6 +264,7 @@ class JobRepo:
                 now=now,
                 job_result=projected_result,
                 cost=cost,
+                usage=usage,
             ),
             max_delivery_attempts=settings.callback.max_delivery_attempts,
             request_timeout_seconds=settings.callback.delivery_timeout_seconds,

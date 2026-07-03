@@ -15,6 +15,7 @@
 >
 > | 版本 | 日期 | 修改内容 |
 > |---|---|---|
+> | `current + vNext review` | `2026-07-03` | 明确终态 Callback payload 中的 `job` 与任务查询 Job snapshot 结构一致，补齐 `job.usage` 合同。 |
 > | `current + vNext review` | `2026-07-02` | 任务查询 Job snapshot 增加 `job.usage` 轻量用量摘要投影；模型获取示例补齐 `parameters` 和 `notes`。 |
 > | `current + vNext review` | `2026-06-29` | 调整为调用方独立交付文档，移除其它文档依赖；模型获取接口使用 `job_type=poster_title_image` 返回标题图可选模型。 |
 > | `current + vNext review` | `2026-06-29` | 更新 dev 环境模型、语种、Prompt 模板和任务查询响应示例，对齐当前接口实际返回字段。 |
@@ -80,7 +81,7 @@ curl -sS -X GET "http://127.0.0.1:8100/api/v1/ai-jobs/models" \
 
 本文定义交付评审合同，用于双方评审接口形态；不表示所有字段、状态和路由都已经在当前服务实现中上线。
 
-当前服务已支持 `poster_title_image` 声明 `result_snapshot_statuses={"running","failed"}`，在 `running` 和 `failed` 状态返回已成功 item 的 `job_result` 增量快照。当前稳定费用查询入口是 `GET /jobs/{job_id}/billing`；`job.cost` 是 Job snapshot 和 Callback 中的 Job 级总费用快照，`job.usage` 是任务查询 Job snapshot 中的 Job 级用量摘要投影。
+当前服务已支持 `poster_title_image` 声明 `result_snapshot_statuses={"running","failed"}`，在 `running` 和 `failed` 状态返回已成功 item 的 `job_result` 增量快照。当前稳定费用查询入口是 `GET /jobs/{job_id}/billing`；`job.cost` 和 `job.usage` 是 Job snapshot 和 Callback 中的 Job 级费用与用量摘要投影。
 
 ## 1. 接入约定
 
@@ -201,7 +202,7 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 
 ### Usage
 
-`job.usage` 只返回任务查询 Job snapshot 的轻量用量摘要，不返回 provider 调用明细、输入输出 token 拆分、缓存 token、图片数、价格规则或诊断原因；需要完整聚合明细时查询 Job billing。
+`job.usage` 只返回 Job snapshot 的轻量用量摘要；任务查询响应和终态 Callback payload 中的 `job` 使用同一结构。不返回 provider 调用明细、输入输出 token 拆分、缓存 token、图片数、价格规则或诊断原因；需要完整聚合明细时查询 Job billing。
 
 ```json
 {
@@ -221,6 +222,7 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 
 - 非终态 Job 的 `usage` 为 `null`。
 - 终态 Job 可返回 `usage`；如果返回，`usage.final=true`。
+- 终态 Callback 只会携带终态 Job；如果返回 `usage`，同样必须满足 `usage.final=true`。
 - 如果用量摘要尚不可用，`usage=null`；用量聚合状态以 Job billing 的 `status` 为准。
 - `total_tokens=null` 表示没有可用 token 维度，不表示 token 消耗为 0。
 
@@ -861,6 +863,11 @@ Callback payload 不套 HTTP success envelope：
       "amount": "0.083400",
       "final": true
     },
+    "usage": {
+      "ai_call_count": 2,
+      "total_tokens": 1551,
+      "final": true
+    },
     "callback": {
       "status": "delivered",
       "attempt": 1,
@@ -878,8 +885,9 @@ Callback payload 不套 HTTP success envelope：
 规则：
 
 - `event` 允许 `job.succeeded`、`job.failed`。
-- Callback payload 顶层 `job` 使用 `JobEnvelope` 核心字段结构；当前终态 Callback 不返回 `job.usage`，调用方需要最新增量结果或用量摘要时，应以 `job.status_url` 再查询任务状态。
-- 终态 Callback payload 可返回 `job.cost`；如果返回，`job.cost.final=true`。
+- Callback payload 顶层 `job` 与 `GET /api/v1/ai-jobs/jobs/{job_id}` 成功响应中的 `data.job` 使用同一 Job snapshot 结构；字段定义、可空性和终态规则沿用第 6 节 `Job Fields` 与 `Query Rules`，无 Callback 专属删字段例外。
+- 终态 Callback payload 可返回 `job.cost` 和 `job.usage`；如果返回，`job.cost.final=true` 且 `job.usage.final=true`。
+- 如需 billing 状态、聚合明细或诊断信息，调用方应查询 `GET /jobs/{job_id}/billing`。
 - 调用方接收 Callback 时应返回 HTTP `2xx` 和 JSON body：`{"accepted": true}`。
 - Callback 失败不改变 Job 终态；调用方仍可通过任务查询接口获取最终结果。
 

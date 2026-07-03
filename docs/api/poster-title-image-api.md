@@ -7,7 +7,7 @@
 - 合同状态：current implementation with remaining vNext proposals。
 - 当前优先级：服务前缀、认证、HTTP envelope、通用错误和共享 Job 状态语义以 [`service-contract.md`](service-contract.md) 为准。
 - 已实现：`poster_title_image` 声明 `result_snapshot_statuses={"running","failed"}`，在 `running` 和 `failed` 状态可以返回非空 `job_result`，用于展示已经成功生成的标题图 item。
-- 当前费用查询以 [`service-contract.md`](service-contract.md) 中的 `/jobs/{job_id}/billing` 为准；`job.cost` 是 Job snapshot 和 Callback 中的 Job 级总费用快照。
+- 当前费用查询以 [`service-contract.md`](service-contract.md) 中的 `/jobs/{job_id}/billing` 为准；`job.cost` 和 `job.usage` 是 Job snapshot 和 Callback 中的 Job 级费用与用量摘要。
 
 ## Scope
 
@@ -16,8 +16,8 @@
 1. 模型列表：返回厂商和模型基础信息。
 2. 语言列表：返回基础语言目录。
 3. 默认提示词：查看服务支持的提示词模板入口；当前支持的查询维度以 [`service-contract.md`](service-contract.md) 为准。
-4. 生成图片：通过异步 Job 创建批量标题图生成任务，并通过轮询获取增量结果和终态，通过 Callback 获取终态通知和总费用。
-5. 费用查询：通过 Job billing 查询 Job scope 的费用聚合结果，读取总费用、计费状态和诊断信息。
+4. 生成图片：通过异步 Job 创建批量标题图生成任务，并通过轮询获取增量结果和终态，通过 Callback 获取终态通知、总费用和用量摘要。
+5. 费用查询：通过 Job billing 查询 Job scope 的费用与用量聚合结果，读取总费用、用量单位、计费状态和诊断信息。
 
 本文不暴露 provider 密钥、内部价格矩阵、绿底抠图策略、透明背景兼容细节、OSS 转存实现、worker 编排细节或 provider raw response。
 
@@ -27,9 +27,9 @@
 - 输入参考图和输出图片都使用 OSS URL ref；不直接传 base64、本地路径或临时签名 URL。
 - CPP 临时修改的提示词只对本次 Job 生效，不写回默认提示词模板。
 - `client_request_id` 使用 CPP 的 `requestID`，作为同一 caller 下的提交幂等键。
-- 轮询是主链路，Callback 是终态通知。终态 Job 查询和 Callback 可返回 Job 级总费用 `Cost`；Callback 失败不改变 Job 终态。
+- 轮询是主链路，Callback 是终态通知。终态 Job 查询和 Callback 可返回 Job 级总费用 `Cost` 和用量摘要 `Usage`；Callback 失败不改变 Job 终态。
 - 一个 `poster_title_image` Job 可以包含多个语言 item；每个 item 有独立参考图、模型参数和提示词覆盖。
-- `job.cost` 只返回 Job 级总费用 `Cost`：`currency`、`amount`、`final`。需要计费状态、调用次数、计费单位或诊断信息时查询 Job billing。
+- `job.cost` 只返回 Job 级总费用 `Cost`：`currency`、`amount`、`final`；`job.usage` 只返回 Job 级用量摘要 `Usage`：`ai_call_count`、`total_tokens`、`final`。需要计费状态、调用次数、计费单位或诊断信息时查询 Job billing。
 - 内部可以在 `aigc_api_logs`、AI call ledger 或等价日志中保留每次调用的 `provider`、`model`、`operation`、`usage_detail` 和成本明细；这些明细不属于外部 API 合同。
 
 ## Shared Types
@@ -94,6 +94,26 @@ Rules:
 - 独立费用查询使用 [`service-contract.md`](service-contract.md) 中的 `/jobs/{job_id}/billing`；费用是否可用由 `BillingEnvelope.status` 表达。
 - 如果费用尚不可用，`job.cost` 为 `null`；费用状态以 Job billing 的 `status` 为准。
 - 当费用计算失败且无法形成可信总数时，返回统一错误响应，不返回伪造的 0 成本成功。
+
+### Usage
+
+`job.usage` 只返回 Job 级轻量用量摘要；终态查询响应和终态 Callback payload 中的 `job` 使用同一结构。provider 调用明细、输入输出 token 拆分、缓存 token、图片数、价格规则或诊断原因以 Job billing 为准。
+
+```json
+{
+  "ai_call_count": 2,
+  "total_tokens": 1551,
+  "final": true
+}
+```
+
+字段规则：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---:|---:|---|
+| `ai_call_count` | integer | 是 | 该 Job scope 下已记录的 AI provider 调用次数 |
+| `total_tokens` | integer 或 null | 是 | 该 Job 的总 token 消耗；没有 token 维度或 provider 未返回 token 时为 `null` |
+| `final` | boolean | 是 | `true` 表示该用量摘要已经根据内部调用日志聚合完成 |
 
 ### Job Progress
 
@@ -408,9 +428,9 @@ Forbidden request fields:
 Rules:
 
 - 接单响应中的 `cost` 固定为 `null`。
-- Job 进入终态后，`GET /jobs/{job_id}` 和终态 Callback 可返回 `cost.final=true` 的 Job 级总费用。
+- Job 进入终态后，`GET /jobs/{job_id}` 和终态 Callback 可返回 `cost.final=true` 的 Job 级总费用，以及 `usage.final=true` 的 Job 级用量摘要。
 - 需要独立查询费用时，以 [`service-contract.md`](service-contract.md) 中的 `/jobs/{job_id}/billing` 为准。
-- `job.cost` 是 Job snapshot 中的总费用快照；Job billing 是费用状态、调用统计和诊断信息的稳定查询入口。
+- `job.cost` 和 `job.usage` 是 Job snapshot 中的费用与用量摘要；Job billing 是费用状态、调用统计、用量单位和诊断信息的稳定查询入口。
 
 ## 5. Poll Poster Title Image Job
 
@@ -565,6 +585,11 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         "amount": "0.083400",
         "final": true
       },
+      "usage": {
+        "ai_call_count": 2,
+        "total_tokens": 1551,
+        "final": true
+      },
       "callback": {
         "status": "delivered",
         "attempt": 1,
@@ -612,6 +637,11 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         "amount": "0.042800",
         "final": true
       },
+      "usage": {
+        "ai_call_count": 1,
+        "total_tokens": null,
+        "final": true
+      },
       "callback": {
         "status": "pending",
         "attempt": 0,
@@ -651,6 +681,7 @@ Result fields:
 | `job_result.duration_ms.ai_model` | 已完成内部 AI 节点的 provider 调用耗时累计 |
 | `job_result.duration_ms.total` | 已完成内部 AI 节点的服务端执行耗时累计，不包含排队等待时间 |
 | `job.cost` | Job 级总费用；非终态为 `null`，终态可返回 `Cost` |
+| `job.usage` | Job 级用量摘要；非终态为 `null`，终态可返回 `Usage` |
 
 Result rules:
 
@@ -673,6 +704,8 @@ Result rules:
 - token、图片、视频、音频和调用次数等计费明细不在 `job_result` 中返回。
 - `job_status=queued` 或 `job_status=running` 时，`job.cost` 必须为 `null`。
 - `job_status=succeeded` 或 `job_status=failed` 时，`job.cost` 可返回 `Cost`；如果返回，`cost.final=true`。
+- `job_status=queued` 或 `job_status=running` 时，`job.usage` 必须为 `null`。
+- `job_status=succeeded` 或 `job_status=failed` 时，`job.usage` 可返回 `Usage`；如果返回，`usage.final=true`。
 
 ## 6. Query Job Billing
 
@@ -684,7 +717,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}/billing
 
 ### Purpose
 
-CPP 用该接口查询单个 Job 的费用聚合结果。终态 `GET /jobs/{job_id}` 和终态 Callback 可以返回 `job.cost` 总费用快照；Job billing 用于独立刷新费用、补偿读取或排查费用状态。
+CPP 用该接口查询单个 Job 的费用与用量聚合结果。终态 `GET /jobs/{job_id}` 和终态 Callback 可以返回 `job.cost` 总费用快照和 `job.usage` 用量摘要；Job billing 用于独立刷新费用、补偿读取或排查费用状态。
 
 ### Response
 
@@ -723,7 +756,7 @@ Rules:
 - `billing.total_cost_amount` 是该 Job scope 内所有可计费内部调用的总费用。
 - `billing.status` 表达费用聚合状态；`estimated` 和 `not_billable` 表示总费用可用，`incomplete` 和 `failed` 表示不能把 `total_cost_amount` 当作最终费用使用。
 - Job billing 只允许在 Job 进入 `succeeded` 或 `failed` 后查询。
-- Job 终态响应和终态 Callback 中如果返回 `job.cost`，其 `final` 必须是 `true`。
+- Job 终态响应和终态 Callback 中如果返回 `job.cost` 或 `job.usage`，其 `final` 必须是 `true`。
 - 已失败的 Job 也可以有最终费用；是否收费由内部调用日志聚合决定。
 
 ## 7. Callback
@@ -732,9 +765,9 @@ Callback payload、签名和 delivery 语义沿用 [`service-contract.md`](servi
 
 Rules:
 
-- Callback payload 顶层 `job` 使用同一套 `JobEnvelope` 字段结构；调用方需要最新增量结果时，应以 `job.status_url` 再查询 `GET /jobs/{job_id}`。
-- 终态 Callback payload 可返回 `job.cost`；如果返回，`job.cost.final=true`。
-- CPP 收到终态 Callback 后，可以直接读取 payload 顶层 `job.cost`；需要费用状态、调用统计或诊断信息时查询 `GET /jobs/{job_id}/billing`。
+- Callback payload 顶层 `job` 与 `GET /api/v1/ai-jobs/jobs/{job_id}` 成功响应中的 `data.job` 使用同一套 `JobEnvelope` 字段结构；调用方需要最新增量结果时，应以 `job.status_url` 再查询 `GET /jobs/{job_id}`。
+- 终态 Callback payload 可返回 `job.cost` 和 `job.usage`；如果返回，`job.cost.final=true` 且 `job.usage.final=true`。
+- CPP 收到终态 Callback 后，可以直接读取 payload 顶层 `job.cost` 和 `job.usage`；需要费用状态、调用统计、用量单位或诊断信息时查询 `GET /jobs/{job_id}/billing`。
 
 ## 8. Error Codes
 

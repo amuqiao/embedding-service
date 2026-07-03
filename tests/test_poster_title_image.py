@@ -1849,7 +1849,7 @@ def test_callback_body_preserves_poster_title_image_dimensions():
         finished_at=datetime.now(timezone.utc),
     )
 
-    body = build_callback_body(job)
+    body = build_callback_body(job, cost=None, usage=None)
 
     image = body["job"]["job_result"]["items"][0]["images"][0]
     assert image["width"] == 96
@@ -1911,8 +1911,24 @@ async def test_callback_body_for_failed_poster_title_image_snapshot_preserves_di
             ),
         ]
 
+    async def fake_get_scope_billing(_db, *, scope_type, scope_id, caller_id):
+        return BillingEnvelope(
+            scope_type=scope_type,
+            scope_id=scope_id,
+            status="not_billable",
+            currency="USD",
+            total_cost_amount="0.00000000",
+            usage_units={},
+            pricing_refs=[],
+            ai_call_count=0,
+            billable_call_count=0,
+            unbillable_call_count=0,
+            failed_call_count=0,
+        )
+
     monkeypatch.setattr("app.repositories.job_repo.JobRepo.list_internal_children", fake_list_internal_children)
     monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: PosterTitleImageJob())
+    monkeypatch.setattr("app.services.billing.get_scope_billing", fake_get_scope_billing)
 
     body = await build_callback_body_for_job(job, object())
 

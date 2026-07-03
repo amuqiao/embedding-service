@@ -18,6 +18,7 @@ from app.services.jobs import _job_payload, trigger_request_id_from_job
 logger = logging.getLogger(__name__)
 CALLBACK_EVENT_NAMESPACE = "ai-job-callback"
 _CALLBACK_JOB_RESULT_UNSET = object()
+_CALLBACK_BILLING_UNSET = object()
 
 
 class CallbackDeliveryResult(BaseModel):
@@ -76,7 +77,11 @@ def build_callback_body(
     job: Job,
     *,
     job_result: dict[str, Any] | None | object = _CALLBACK_JOB_RESULT_UNSET,
+    cost: dict[str, Any] | None | object = _CALLBACK_BILLING_UNSET,
+    usage: dict[str, Any] | None | object = _CALLBACK_BILLING_UNSET,
 ) -> dict:
+    if cost is _CALLBACK_BILLING_UNSET or usage is _CALLBACK_BILLING_UNSET:
+        raise ValueError("callback billing projection must be provided")
     event = "job.succeeded" if job.status == "succeeded" else "job.failed"
     sent_at = datetime.now(timezone.utc)
     event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{CALLBACK_EVENT_NAMESPACE}:{job.id}:{event}")
@@ -90,26 +95,32 @@ def build_callback_body(
             "caller_id": job.caller_id,
             "job": _job_payload(
                 job,
+                cost=cost if isinstance(cost, dict) else None,
+                usage=usage if isinstance(usage, dict) else None,
                 job_result=_callback_job_result(job, job_result=job_result),
-                include_usage=False,
             ),
         }
     )
-    body = envelope.model_dump(mode="json")
-    body["job"].pop("usage", None)
-    return body
+    return envelope.model_dump(mode="json")
 
 
 async def build_callback_body_for_job(job: Job, db: Any) -> dict:
+    from app.services.billing import get_scope_billing, job_cost_from_billing, job_usage_from_billing
+
+    billing = await get_scope_billing(db, scope_type="job", scope_id=str(job.id), caller_id=job.caller_id)
+    mapped_cost = job_cost_from_billing(billing)
+    mapped_usage = job_usage_from_billing(billing)
+    cost = mapped_cost.model_dump() if mapped_cost is not None else None
+    usage = mapped_usage.model_dump() if mapped_usage is not None else None
     if job.status != "failed":
-        return build_callback_body(job)
+        return build_callback_body(job, cost=cost, usage=usage)
     from app.jobs.factory import get_job_executor
 
     handler = get_job_executor(job.job_type)
     projected_result = None
     if handler.supports_result_snapshot(job.status):
         projected_result = await handler.build_result_snapshot(job.status, job, db)
-    return build_callback_body(job, job_result=projected_result)
+    return build_callback_body(job, job_result=projected_result, cost=cost, usage=usage)
 
 
 def _header_value(headers: Any, name: str) -> str | None:
@@ -203,7 +214,7 @@ async def deliver_callback(
             events = set(callback_events)
             if event not in events:
                 return CallbackDeliveryResult(status="skipped")
-            callback_body = build_callback_body(job)
+            raise ValueError("callback payload must be provided by callback outbox")
         else:
             callback_body = payload
         body = json.dumps(callback_body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

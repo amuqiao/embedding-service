@@ -139,9 +139,13 @@ def _callback_outbox(
     )
 
 
+def _callback_payload(job: Job | None = None) -> dict:
+    return build_callback_body(job or _job(), cost=None, usage=None)
+
+
 def test_build_callback_body_uses_public_fields():
     job = _job()
-    body = build_callback_body(job)
+    body = build_callback_body(job, cost=None, usage=None)
 
     assert set(body) == {
         "event",
@@ -167,6 +171,7 @@ def test_build_callback_body_uses_public_fields():
         "job_result": {"a": 2, "b": 3, "result": 5},
         "job_error": None,
         "cost": None,
+        "usage": None,
         "callback": {
             "status": "pending",
             "attempt": 0,
@@ -204,7 +209,7 @@ def test_build_callback_body_drops_failed_result_without_snapshot_support(monkey
     job.result = {"unexpected": "stored"}
     job.error = {"code": "JOB_EXECUTION_FAILED", "message": "failed"}
 
-    body = build_callback_body(job)
+    body = build_callback_body(job, cost=None, usage=None)
 
     assert body["event"] == "job.failed"
     assert body["job"]["job_result"] is None
@@ -234,11 +239,13 @@ def test_build_callback_body_requires_projected_failed_snapshot_when_supported(m
     job.error = {"code": "JOB_EXECUTION_FAILED", "message": "failed"}
 
     with pytest.raises(ValueError, match="must be projected"):
-        build_callback_body(job)
+        build_callback_body(job, cost=None, usage=None)
 
 
 @pytest.mark.asyncio
 async def test_build_callback_body_for_job_projects_failed_snapshot(monkeypatch):
+    from app.schemas.billing import BillingEnvelope
+
     snapshot = {"items": [{"item_id": "es"}]}
 
     class Handler:
@@ -258,6 +265,23 @@ async def test_build_callback_body_for_job_projects_failed_snapshot(monkeypatch)
 
     monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: Handler())
     monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: Handler())
+
+    async def fake_get_scope_billing(_db, *, scope_type, scope_id, caller_id):
+        return BillingEnvelope(
+            scope_type=scope_type,
+            scope_id=scope_id,
+            status="not_billable",
+            currency="USD",
+            total_cost_amount="0.00000000",
+            usage_units={},
+            pricing_refs=[],
+            ai_call_count=0,
+            billable_call_count=0,
+            unbillable_call_count=0,
+            failed_call_count=0,
+        )
+
+    monkeypatch.setattr("app.services.billing.get_scope_billing", fake_get_scope_billing)
     job = _job()
     job.status = "failed"
     job.progress_percent = 80
@@ -269,6 +293,47 @@ async def test_build_callback_body_for_job_projects_failed_snapshot(monkeypatch)
 
     assert body["event"] == "job.failed"
     assert body["job"]["job_result"] == snapshot
+
+
+@pytest.mark.asyncio
+async def test_build_callback_body_for_job_exposes_terminal_billing_projection(monkeypatch):
+    from app.schemas.billing import BillingEnvelope
+
+    job = _job()
+
+    async def fake_get_scope_billing(_db, *, scope_type, scope_id, caller_id):
+        assert scope_type == "job"
+        assert scope_id == str(job.id)
+        assert caller_id == job.caller_id
+        return BillingEnvelope(
+            scope_type=scope_type,
+            scope_id=scope_id,
+            status="estimated",
+            currency="USD",
+            total_cost_amount="0.04491750",
+            usage_units={
+                "input_tokens": 1240,
+                "cached_input_tokens": 0,
+                "output_tokens": 311,
+                "total_tokens": 1551,
+            },
+            pricing_refs=["openai:gpt-test@2026-06-23"],
+            ai_call_count=2,
+            billable_call_count=2,
+            unbillable_call_count=0,
+            failed_call_count=0,
+        )
+
+    monkeypatch.setattr("app.services.billing.get_scope_billing", fake_get_scope_billing)
+
+    body = await build_callback_body_for_job(job, object())
+
+    assert body["job"]["cost"] == {"currency": "USD", "amount": "0.04491750", "final": True}
+    assert body["job"]["usage"] == {
+        "ai_call_count": 2,
+        "total_tokens": 1551,
+        "final": True,
+    }
 
 
 def test_build_callback_body_uses_arithmetic_public_result_schema(monkeypatch):
@@ -287,7 +352,7 @@ def test_build_callback_body_uses_arithmetic_public_result_schema(monkeypatch):
     }
     job.runtime_ref["payload"]["job_type"] = "arithmetic"
 
-    body = build_callback_body(job)
+    body = build_callback_body(job, cost=None, usage=None)
 
     assert body["job"]["job_type"] == "arithmetic"
     assert body["job"]["job_result"] == job.result
@@ -300,7 +365,7 @@ def test_build_callback_body_uses_arithmetic_public_result_schema(monkeypatch):
         "multiplication": 16,
     }
     with pytest.raises(AppError) as exc:
-        build_callback_body(job)
+        build_callback_body(job, cost=None, usage=None)
     assert exc.value.code == "JOB_VIEW_CONTRACT_INVALID"
 
 
@@ -389,9 +454,9 @@ def test_job_view_uses_shell_result_and_metadata():
 
 def test_build_callback_body_uses_next_attempt_number():
     job = _job()
-    first_body = build_callback_body(job)
+    first_body = build_callback_body(job, cost=None, usage=None)
 
-    body = build_callback_body(job)
+    body = build_callback_body(job, cost=None, usage=None)
 
     assert body["attempt"] == 1
     assert body["event_id"] == first_body["event_id"]
@@ -400,7 +465,7 @@ def test_build_callback_body_uses_next_attempt_number():
     job.result = None
     job.error = {"code": "JOB_EXECUTION_FAILED", "message": "failed"}
 
-    failed_body = build_callback_body(job)
+    failed_body = build_callback_body(job, cost=None, usage=None)
 
     assert failed_body["event"] == "job.failed"
     assert failed_body["event_id"] != first_body["event_id"]
@@ -472,6 +537,7 @@ async def test_deliver_callback_records_invalid_body_contract():
     assert result.status == "failed"
     assert result.attempts == 1
     assert result.last_error["code"] == "CALLBACK_BODY_INVALID"
+    assert "callback payload must be provided" in result.last_error["message"]
 
 
 @pytest.mark.asyncio
@@ -500,7 +566,7 @@ async def test_deliver_callback_tries_once_on_http_failure(monkeypatch):
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
 
-    result = await deliver_callback(_job())
+    result = await deliver_callback(_job(), payload=_callback_payload())
 
     assert attempts == 1
     assert result.status == "failed"
@@ -547,7 +613,7 @@ async def test_deliver_callback_uses_shell_callback_fields(monkeypatch):
     job = _job("https://shell.example.com/callback")
     job.callback_events = ["job.succeeded"]
 
-    result = await deliver_callback(job)
+    result = await deliver_callback(job, payload=_callback_payload(job))
 
     assert result.status == "delivered"
     assert posted["url"] == "https://shell.example.com/callback"
@@ -602,7 +668,7 @@ async def test_deliver_callback_records_ack_response_summary(monkeypatch):
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
 
-    result = await deliver_callback(_job())
+    result = await deliver_callback(_job(), payload=_callback_payload())
 
     assert result.status == "delivered"
     assert result.http_status == 200
@@ -657,7 +723,7 @@ async def test_deliver_callback_rejects_invalid_success_ack_contract(
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
 
-    result = await deliver_callback(_job())
+    result = await deliver_callback(_job(), payload=_callback_payload())
 
     assert result.status == "failed"
     assert result.attempts == 1
@@ -691,7 +757,7 @@ async def test_deliver_callback_rejects_negative_ack_response(monkeypatch):
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
 
-    result = await deliver_callback(_job())
+    result = await deliver_callback(_job(), payload=_callback_payload())
 
     assert result.status == "failed"
     assert result.attempts == 1
@@ -739,7 +805,7 @@ async def test_deliver_callback_uses_job_type_ack_validator(monkeypatch):
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
     monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _RejectingHandler())
 
-    result = await deliver_callback(_job())
+    result = await deliver_callback(_job(), payload=_callback_payload())
 
     assert result.status == "failed"
     assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
@@ -769,7 +835,7 @@ async def test_deliver_callback_rejects_unstructured_json_response(monkeypatch):
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
 
-    result = await deliver_callback(_job())
+    result = await deliver_callback(_job(), payload=_callback_payload())
 
     assert result.status == "failed"
     assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
@@ -799,7 +865,7 @@ async def test_deliver_callback_rejects_invalid_ack_response(monkeypatch):
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
 
-    result = await deliver_callback(_job())
+    result = await deliver_callback(_job(), payload=_callback_payload())
 
     assert result.status == "failed"
     assert result.attempts == 1
@@ -831,7 +897,7 @@ async def test_deliver_callback_rejects_partial_v1_like_body(monkeypatch):
 
     monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
 
-    result = await deliver_callback(_job())
+    result = await deliver_callback(_job(), payload=_callback_payload())
 
     assert result.status == "failed"
     assert result.last_error["code"] == "CALLBACK_RESPONSE_CONTRACT_INVALID"
@@ -852,13 +918,20 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
         {
             "id": callback_id,
             "lease_token": lease_token,
-            "payload": {"event": "job.succeeded", "job": {"job_type": job.job_type}},
-                "callback_url": job.callback_url,
-                "delivery_attempts": 0,
-                "last_error": None,
-                "next_attempt_at": None,
+            "payload": {
+                "event": "job.succeeded",
+                "job": {
+                    "job_type": job.job_type,
+                    "cost": {"currency": "USD", "amount": "0.04491750", "final": True},
+                    "usage": {"ai_call_count": 2, "total_tokens": 1551, "final": True},
+                },
             },
-        )()
+            "callback_url": job.callback_url,
+            "delivery_attempts": 0,
+            "last_error": None,
+            "next_attempt_at": None,
+        },
+    )()
     commits = 0
     recorded: dict = {}
 
@@ -885,6 +958,8 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
         assert sent_job is job
         assert payload["event"] == outbox.payload["event"]
         assert payload["job"]["job_type"] == job.job_type
+        assert payload["job"]["cost"] == outbox.payload["job"]["cost"]
+        assert payload["job"]["usage"] == outbox.payload["job"]["usage"]
         assert payload["job"]["callback"]["status"] == "delivering"
         assert payload["job"]["callback"]["attempt"] == 1
         assert payload["job"]["callback"]["next_retry_at"] is not None

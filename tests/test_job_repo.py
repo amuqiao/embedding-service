@@ -1336,6 +1336,11 @@ async def test_mark_succeeded_creates_pending_callback_outbox_for_subscribed_eve
     assert outboxes[0].payload["trigger_request_id"] == "req-trigger-1"
     assert outboxes[0].payload["job"]["callback"]["status"] == "pending"
     assert outboxes[0].payload["job"]["cost"]["final"] is True
+    assert outboxes[0].payload["job"]["usage"] == {
+        "ai_call_count": 0,
+        "total_tokens": None,
+        "final": True,
+    }
     assert outboxes[0].payload["job"]["job_progress"]["stage"] == "completed"
     assert outboxes[0].payload["job"]["job_status"] == "succeeded"
 
@@ -1413,6 +1418,11 @@ async def test_mark_failed_creates_skipped_callback_outbox_for_unsubscribed_even
         "retryable": False,
     }
     assert outboxes[0].payload["job"]["cost"]["final"] is True
+    assert outboxes[0].payload["job"]["usage"] == {
+        "ai_call_count": 0,
+        "total_tokens": None,
+        "final": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -1811,6 +1821,11 @@ async def test_mark_workflow_root_succeeded_finalizes_waiting_root_and_callback(
     assert outboxes[0].job_id == root.id
     assert outboxes[0].event_type == "job.succeeded"
     assert outboxes[0].payload["job"]["cost"]["final"] is True
+    assert outboxes[0].payload["job"]["usage"] == {
+        "ai_call_count": 0,
+        "total_tokens": None,
+        "final": True,
+    }
     assert events[-1].event_type == "workflow.root.succeeded"
     sql = _compile(db.statements[0])
     assert "job_aggregates.active_attempt_id IS NULL" in sql
@@ -1855,6 +1870,11 @@ async def test_mark_workflow_root_failed_finalizes_waiting_root_and_callback(mon
     assert outboxes[0].job_id == root.id
     assert outboxes[0].event_type == "job.failed"
     assert outboxes[0].payload["job"]["cost"]["final"] is True
+    assert outboxes[0].payload["job"]["usage"] == {
+        "ai_call_count": 0,
+        "total_tokens": None,
+        "final": True,
+    }
     assert events[-1].event_type == "workflow.root.failed"
 
 

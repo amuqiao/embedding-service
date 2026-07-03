@@ -96,12 +96,12 @@ HttpEnvelope[JobResponseData]
 
 `JobEnvelope` 状态字段规则：
 
-| `job_status` | `job_result` | `job_error` | `cost` |
-|---|---|---|---|
-| `queued` | 必须为 `null` | 必须为 `null` | 必须为 `null` |
-| `running` | 默认必须为 `null`；只有 `running` 属于具体 `job_type` 的 `result_snapshot_statuses` 时才允许非空 | 必须为 `null` | 必须为 `null` |
-| `succeeded` | 按具体 `job_type` 的公开结果 schema 返回 | 必须为 `null` | 可返回 Job 级费用快照 |
-| `failed` | 默认必须为 `null`；只有 `failed` 属于具体 `job_type` 的 `result_snapshot_statuses` 时才允许非空 | 必须非空 | 可返回 Job 级费用快照 |
+| `job_status` | `job_result` | `job_error` | `cost` | `usage` |
+|---|---|---|---|---|
+| `queued` | 必须为 `null` | 必须为 `null` | 必须为 `null` | 必须为 `null` |
+| `running` | 默认必须为 `null`；只有 `running` 属于具体 `job_type` 的 `result_snapshot_statuses` 时才允许非空 | 必须为 `null` | 必须为 `null` | 必须为 `null` |
+| `succeeded` | 按具体 `job_type` 的公开结果 schema 返回 | 必须为 `null` | 可返回 Job 级费用快照 | 可返回 Job 级用量摘要 |
+| `failed` | 默认必须为 `null`；只有 `failed` 属于具体 `job_type` 的 `result_snapshot_statuses` 时才允许非空 | 必须非空 | 可返回 Job 级费用快照 | 可返回 Job 级用量摘要 |
 
 `result_snapshot_statuses` 是 `job_type` 的能力声明，默认是空集合；当前只允许声明 `running` 和 `failed`。支持运行中或失败结果快照的 `job_type` 必须复用同一个公开 `job_result` schema，不暴露 internal child Job、workflow node、attempt 或 worker 细节。快照只表示当前已经可公开展示的业务结果；调用方仍必须以 `job_status` 判断 Job 是否终态。
 
@@ -164,7 +164,7 @@ CallbackEnvelope
 
 - `event` 只允许 `job.succeeded` 或 `job.failed`。
 - `event` 必须与 `job.job_status` 匹配。
-- `job` 必须是终态 Job snapshot。
+- `job` 必须是终态 Job snapshot，且与 `GET /api/v1/ai-jobs/jobs/{job_id}` 成功响应中的 `data.job` 使用同一 `JobEnvelope` 结构。
 - `event_id` 是 Callback 事件幂等键，调用方应按它去重。
 - `attempt` 当前是 Callback 事件 payload 中的尝试序号快照，不表示 Job 执行 attempt 编号，也不能作为重试次数事实源；调用方去重应使用 `event_id`。
 - Callback 投递成功或失败不改变 Job 终态。
