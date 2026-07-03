@@ -108,7 +108,7 @@ cat .run/reference-image.json
 }
 ```
 
-这里 `public_url` 应使用 CDN 域名，`internal_url` 仍是 OSS 内网地址。服务端当前读取参考图使用 `public_url`。
+这里 `public_url` 应使用 CDN 域名。服务端当前读取参考图使用 `public_url`，`internal_url` 是兼容保留字段，不要求是 OSS 内网地址。
 
 ### 3. 使用 URL Ref 创建真实 Job
 
@@ -488,7 +488,7 @@ worker 当前读取参考图使用 `public_url`。如果 Job 已创建但 worker
 - 确认 CDN 已回源到对应 bucket 和前缀。
 - 确认该对象路径对 CDN 可读。
 
-`internal_url` 用于保留对象身份和内网访问地址，不代表 worker 一定会优先读取它。
+`internal_url` 是兼容保留字段；worker 不读取它，也不使用它校验输入对象身份。
 
 ### 命令为什么不会立即返回
 

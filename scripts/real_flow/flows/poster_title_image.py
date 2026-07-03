@@ -495,6 +495,8 @@ def _canonical_output_ref(*, app_env: dict[str, str], output: dict[str, Any]):
         return canonical_ref_from_oss_url_ref(
             output,
             public_endpoint=llm_job_billing.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
+            public_endpoint_bucket=llm_job_billing.env_value("OSS_BUCKET", app_env) or None,
+            public_endpoint_region=llm_job_billing.env_value("OSS_REGION", app_env) or None,
         )
     except AppError as exc:
         raise FlowError(f"output object is not a supported OSS URL Ref: {exc.message}", exit_code=4) from exc

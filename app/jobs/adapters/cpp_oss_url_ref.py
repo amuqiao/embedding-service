@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from app.core.exceptions import AppError
-from app.integrations.object_storage.aliyun_url import parse_aliyun_oss_url
+from app.integrations.object_storage.aliyun_url import AliyunOSSObjectLocation, parse_aliyun_oss_url
 from app.integrations.object_storage import CanonicalObjectRef, bare_sha256
 
 
@@ -17,27 +17,22 @@ def canonical_ref_from_cpp_oss_url_ref(
     allowed_content_types: Collection[str] | None = None,
 ) -> CanonicalObjectRef:
     public_url = _required_str(payload, "public_url")
-    internal_url = _required_str(payload, "internal_url")
+    _required_str(payload, "internal_url")
     content_type = _required_str(payload, "content_type")
     sha256 = _required_bare_sha256(payload)
 
-    public_location = parse_aliyun_oss_url(public_url)
-    internal_location = parse_aliyun_oss_url(internal_url)
+    public_location = _parse_public_url_ref(public_url)
     if public_location.internal:
         raise AppError("INVALID_INPUT", "public_url must use a public OSS endpoint")
-    if not internal_location.internal:
-        raise AppError("INVALID_INPUT", "internal_url must use an internal OSS endpoint")
-    if public_location.object_identity != internal_location.object_identity:
-        raise AppError("INVALID_INPUT", "public_url and internal_url must reference the same OSS object")
-    _validate_allowed("OSS bucket", internal_location.bucket, allowed_buckets)
-    _validate_allowed("OSS region", internal_location.region, allowed_regions)
+    _validate_allowed("OSS bucket", public_location.bucket, allowed_buckets)
+    _validate_allowed("OSS region", public_location.region, allowed_regions)
     _validate_allowed("content_type", content_type, allowed_content_types)
 
     return CanonicalObjectRef(
         provider="aliyun_oss",
-        bucket=internal_location.bucket,
-        region=internal_location.region,
-        key=internal_location.key,
+        bucket=public_location.bucket,
+        region=public_location.region,
+        key=public_location.key,
         content_type=content_type,
         content_hash=f"sha256:{sha256}",
     )
@@ -103,6 +98,14 @@ def _required_str(payload: Mapping[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise AppError("INVALID_INPUT", f"{key} is required")
     return value.strip()
+
+
+def _parse_public_url_ref(url: str) -> AliyunOSSObjectLocation:
+    parsed = urlsplit(url.strip())
+    if parsed.fragment:
+        raise AppError("INVALID_INPUT", "OSS URL must not contain fragment")
+    unsigned_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    return parse_aliyun_oss_url(unsigned_url)
 
 
 def _required_bare_sha256(payload: Mapping[str, Any]) -> str:

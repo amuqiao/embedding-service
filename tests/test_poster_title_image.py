@@ -973,6 +973,7 @@ def test_poster_title_image_reference_read_uses_public_url_not_output_storage(mo
 
     data = _transparent_reference_png_bytes()
     ref = _url_ref("reference/title.png", data, bucket="cpp-rs-dev", region="ap-southeast-1")
+    ref["internal_url"] = ref["public_url"]
     calls = []
 
     class NoReadStorage:
@@ -1022,7 +1023,11 @@ def test_poster_title_image_reference_accepts_configured_cdn_public_url(monkeypa
                 poster_title_image_allowed_oss_buckets=("cpp-rs-dev",),
                 poster_title_image_allowed_oss_regions=("ap-southeast-1",),
             ),
-            storage=SimpleNamespace(oss_public_endpoint="aigc-datas.epubgame.com"),
+            storage=SimpleNamespace(
+                oss_public_endpoint="aigc-datas.epubgame.com",
+                oss_bucket="cpp-rs-dev",
+                oss_region="ap-southeast-1",
+            ),
         ),
     )
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.read_http_url_bytes", fake_read_http_url_bytes)

@@ -33,23 +33,40 @@ def test_cpp_oss_url_ref_adapter_normalizes_to_canonical_ref():
     assert ref.content_hash == f"sha256:{'c' * 64}"
 
 
-def test_cpp_oss_url_ref_adapter_rejects_query_string():
-    with pytest.raises(AppError, match="query string"):
-        canonical_ref_from_cpp_oss_url_ref(
-            _payload(public_url="https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/key.png?token=secret")
-        )
-
-
-def test_cpp_oss_url_ref_adapter_requires_same_object_identity():
-    with pytest.raises(AppError, match="same OSS object"):
-        canonical_ref_from_cpp_oss_url_ref(
-            _payload(
-                internal_url=(
-                    "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/"
-                    "ai-output/poster/other.png"
-                )
+def test_cpp_oss_url_ref_adapter_accepts_signed_public_url_query():
+    ref = canonical_ref_from_cpp_oss_url_ref(
+        _payload(
+            public_url=(
+                "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/"
+                "ai-output/poster/title-layer.png?x-oss-signature=secret"
             )
         )
+    )
+
+    assert ref.bucket == "cpp-rs-dev"
+    assert ref.region == "ap-southeast-1"
+    assert ref.key == "ai-output/poster/title-layer.png"
+
+
+def test_cpp_oss_url_ref_adapter_does_not_validate_input_internal_url():
+    ref = canonical_ref_from_cpp_oss_url_ref(
+        _payload(
+            internal_url=(
+                "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/"
+                "ai-output/poster/other.png?x-oss-signature=secret"
+            )
+        )
+    )
+
+    assert ref.key == "ai-output/poster/title-layer.png"
+
+
+def test_cpp_oss_url_ref_adapter_still_requires_internal_url_field():
+    payload = _payload()
+    payload.pop("internal_url")
+
+    with pytest.raises(AppError, match="internal_url is required"):
+        canonical_ref_from_cpp_oss_url_ref(payload)
 
 
 def test_cpp_oss_url_ref_adapter_requires_bare_sha256():

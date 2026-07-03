@@ -149,7 +149,7 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 
 ### OSS URL Ref
 
-图片输入和输出都使用 `OSS URL Ref`，不在接口中传 base64、本地路径或临时签名 URL。
+图片输入和输出都使用 `OSS URL Ref`，不在接口中传 base64 或本地路径。输入参考图如需对象存储签名，只放在 `public_url` query 中。
 
 ```json
 {
@@ -162,19 +162,18 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---:|---|
-| `public_url` | string | 是 | 公网 HTTPS OSS URL |
-| `internal_url` | string | 是 | 内网 HTTPS OSS internal URL |
+| `public_url` | string | 是 | 公网 HTTPS OSS URL；输入参考图可携带对象存储签名 query |
+| `internal_url` | string | 是 | 兼容保留字段；输入参考图不要求为 OSS internal URL，输出对象仍返回 AI 服务生成的内网 OSS URL |
 | `content_type` | string | 是 | MIME type，例如 `image/png`、`image/jpeg`、`image/webp` |
 | `sha256` | string | 是 | 同一个 OSS object 原始内容的小写 64 位 hex SHA-256，不带 `sha256:` 前缀 |
 
 规则：
 
-- URL 必须使用 `https`，不允许任何 query string 或 fragment，也不允许携带访问密钥或临时签名参数。
-- `public_url` 和 `internal_url` 必须指向同一个 OSS object；如果 bucket、object path 或等价对象身份不一致，服务返回 `INVALID_INPUT`。
+- URL 必须使用 `https`，不允许 fragment；输入参考图的 `public_url` 可以携带对象存储签名 query。
 - URL host 必须命中服务端配置的 OSS allowlist；不允许把该字段作为任意 URL 下载入口。
-- 服务读取输入对象时使用 `public_url`；`internal_url` 仍必须提供，并用于校验它和 `public_url` 指向同一个 OSS object。
+- 服务读取输入对象时使用 `public_url`；输入参考图的 `internal_url` 只作为兼容字段保留，不参与读取和 OSS object 身份校验。
 - 服务读取输入对象后必须校验 MIME、大小和 `sha256`；校验失败返回 `INVALID_INPUT`。
-- `sha256` 是对象原始内容的 hash，不是 URL 字符串的 hash；同一个 object 的 `public_url` 和 `internal_url` 共用一个 `sha256`。
+- `sha256` 是 `public_url` 下载到的对象原始内容 hash，不是 URL 字符串的 hash。
 
 ### Cost
 
@@ -741,8 +740,8 @@ POST /api/v1/ai-jobs/jobs
 | `job_params.items[].model_options.draw_count` | 1 到 4，且不能超过服务端 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` |
 | `job_params.items[].model_options.background` | `transparent` |
 | `job_params.items[].model_options.output_format` | `png` |
-| `job_params.items[].reference_image.public_url` | 必须，HTTPS OSS URL |
-| `job_params.items[].reference_image.internal_url` | 必须，HTTPS OSS internal URL |
+| `job_params.items[].reference_image.public_url` | 必须，HTTPS OSS URL；输入参考图可携带对象存储签名 query |
+| `job_params.items[].reference_image.internal_url` | 必须，兼容保留字段；输入参考图不要求为 OSS internal URL |
 | `job_params.items[].reference_image.content_type` | 必须，`image/png`、`image/jpeg` 或 `image/webp` |
 | `job_params.items[].reference_image.sha256` | 必须，同一个 OSS object 原始内容的小写 64 位 hex SHA-256 |
 | 输入图片 MIME | `image/png`、`image/jpeg`、`image/webp` |
@@ -765,7 +764,7 @@ POST /api/v1/ai-jobs/jobs
 - 首版 `output_format` 固定为 `png`，输出 OSS `content_type` 固定为 `image/png`。
 - 不允许传 provider API key、provider raw model name、价格规则、token 用量或其它内部字段。
 - 不传外层 `model_id`、`model_options`、`source`、`render_options`、`prompt_overrides` 或 `batch_options`。
-- 不传拆分的 `bucket`、`region`、`endpoint`、`object_key` 或临时签名参数；参考图只使用 `OSS URL Ref` 字段。
+- 不传拆分的 `bucket`、`region`、`endpoint`、`object_key` 或独立临时签名字段；参考图只使用 `OSS URL Ref` 字段，签名参数只能包含在 `public_url` 内。
 - 不传 `items[].layout`；视觉排版由 item 级提示词和服务内部规则共同决定，换行结构由 `title_text` 和服务端派生换行合同决定。
 - `items[].title_text` 是唯一调用方硬分行来源。未传 LF `\n` 时服务端允许模型按标题区域、画布和可读性自动换行；传入 LF `\n` 时，LF 所在位置就是调用方指定硬分行位置，服务端会要求模型按这些硬分行位置渲染。硬分行最大行数由当前服务端校验限制控制，默认 2；允许 LF 数量由最大行数减 1 派生，默认最多 1 个 LF。`prompt_overrides.additional_prompt` 和 `prompt_overrides.layout_rules` 只能补充视觉或风格偏好，不能控制 `title_text` 的换行合同或调整硬分行位置。
 

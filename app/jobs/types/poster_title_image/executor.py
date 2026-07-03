@@ -192,6 +192,8 @@ def _validate_reference_ref_payload(reference_image: Any) -> None:
             allowed_regions=settings.job.poster_title_image_allowed_oss_regions,
             allowed_content_types=POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
             public_endpoint=settings.storage.oss_public_endpoint or None,
+            public_endpoint_bucket=getattr(settings.storage, "oss_bucket", "") or None,
+            public_endpoint_region=getattr(settings.storage, "oss_region", "") or None,
         )
     except AppError as exc:
         _raise_reference_invalid_if_applicable(exc)
@@ -207,6 +209,8 @@ def _load_reference_image_from_ref(reference_image: Any) -> ImageInput:
             allowed_regions=settings.job.poster_title_image_allowed_oss_regions,
             allowed_content_types=POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
             public_endpoint=settings.storage.oss_public_endpoint or None,
+            public_endpoint_bucket=getattr(settings.storage, "oss_bucket", "") or None,
+            public_endpoint_region=getattr(settings.storage, "oss_region", "") or None,
         )
     except AppError as exc:
         _raise_reference_invalid_if_applicable(exc)
