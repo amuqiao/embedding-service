@@ -8,7 +8,7 @@
 
 Job 压测不是为了得到一个单独的 QPS 数字，而是回答三个问题：
 
-| 问题 | 对应场景 | 典型结论 |
+| 问题 | 对应 case | 典型结论 |
 |---|---|---|
 | 服务能不能接住创建请求 | `job-submit` | API、DB 写入、幂等键和 Taskiq publish 是否成为瓶颈 |
 | 查询接口能不能承受轮询 | `job-query` | DB 读、索引和响应序列化是否成为瓶颈 |
@@ -76,7 +76,7 @@ Locust 只是负载发生器和观察窗口，不是系统瓶颈判断本身。�
 
 先明确本轮要回答的问题，再设参数：
 
-| 目标 | 先用场景 | 参数重点 |
+| 目标 | 先用 case | 参数重点 |
 |---|---|---|
 | 测接单能力 | `job-submit` | 逐步增加 `--users` 和 `--spawn-rate`，观察 `POST /jobs` 错误率、p95/p99 和 queued 增长 |
 | 测查询能力 | `job-query` | 准备足够 Job ID，逐步增加 `--users` 和 `--spawn-rate`，观察 `GET /jobs/{job_id}` p95/p99 |
@@ -93,7 +93,7 @@ Locust 常用参数可以按以下方式理解：
 | `--poll-interval-seconds` | `job-flow` 轮询间隔 | 越短查询压力越大，也越接近实时观察；越长会拉高终态观测延迟 |
 | `--flow-timeout-seconds` | `job-flow` 单个 Job 等待终态的最长时间 | 应大于预期 Job 执行时间；太短会把慢 Job 统计为失败 |
 
-调参顺序建议是：先小并发确认场景正确，再逐步提高 `-u`，再调整 `-r` 和持续时间。不要一开始就把 `-u` 设很大，否则很难判断是 API、worker、数据库、Redis 还是负载机先到瓶颈。
+调参顺序建议是：先小并发确认 case 正确，再逐步提高 `-u`，再调整 `-r` 和持续时间。不要一开始就把 `-u` 设很大，否则很难判断是 API、worker、数据库、Redis 还是负载机先到瓶颈。
 
 ### Job 执行时间影响什么
 
@@ -109,7 +109,7 @@ Job 完成能力 ≈ worker 并发 / 单个 Job 平均执行时间
 
 | 层次 | 本文对应内容 | 主要回答的问题 |
 |---|---|---|
-| 负载入口 | `./scripts/load.sh` 场景、`--users`、`--spawn-rate`、`--time` | 要压哪条链路、压多少、压多久 |
+| 负载入口 | `./scripts/load.sh` case、profile、`--users`、`--spawn-rate`、`--time` | 要压哪条链路、用哪个 Job、压多少、压多久 |
 | 观察方式 | `run`、`ui`、`report`、`manifest`、CSV、HTML | 在终端、浏览器还是文件里看结果 |
 | 服务证据 | `scripts/jobs.sh`、API/worker/DB/Redis 指标 | 慢在接口、队列、worker 还是存储 |
 | 评估结论 | 指标门禁和瓶颈判断 | 这次结果是否有效，下一步该调哪里 |
@@ -127,10 +127,11 @@ Job 完成能力 ≈ worker 并发 / 单个 Job 平均执行时间
 mkdir -p .run/load
 ```
 
-查看当前注册的压测场景：
+查看当前注册的压测 case 和内置 profile：
 
 ```bash
-./scripts/load.sh scenarios
+./scripts/load.sh cases
+./scripts/load.sh profiles
 ```
 
 跑一轮 2 分钟的小流量端到端压测：
@@ -198,14 +199,14 @@ POST /jobs 创建 Job
 -> 统计 HTTP 延迟和 Job 端到端耗时
 ```
 
-Locust 的场景文件是 Python，容易表达有状态业务流；`./scripts/load.sh` 作为 Typer CLI 入口负责场景注册、安全确认、结果归档和压后诊断联动。第一版不引入 JMeter 测试计划、Grafana dashboard 或独立压测结果数据库；Locust 自带的执行引擎、CSV 和 web UI 已经能覆盖本服务当前压测目标。
+Locust 的内部 runner 是 Python，容易表达有状态业务流；`./scripts/load.sh` 作为 Typer CLI 入口负责 case 注册、profile 套用、安全确认、结果归档和压后诊断联动。第一版不引入 JMeter 测试计划、Grafana dashboard 或独立压测结果数据库；Locust 自带的执行引擎、CSV 和 web UI 已经能覆盖本服务当前压测目标。
 
 只有在以下情况才升级方案：
 
 - 公司已有 k6/Grafana/Kubernetes 压测平台，且压测结果必须进入统一平台。
 - 公司已有 JMeter 中台，且需要接入现有审批、调度和报表流程。
 - 需要多机、跨地域或百万级流量发生器。
-- 压测场景已经稳定到需要多机调度、统一报表存储或自动阈值门禁。
+- 压测 case 已经稳定到需要多机调度、统一报表存储或自动阈值门禁。
 
 ## 压测对象
 
@@ -220,11 +221,13 @@ GET  /api/v1/ai-jobs/jobs/{job_id}
 
 第一版默认使用内置 `job_test_echo`。它不调用真实模型，适合压测 API、数据库、Taskiq 发布、worker 消费和 Job 查询路径。需要压 workflow root / internal child / root finalize 链路时，使用内置 `job_test_workflow`。这些压测类型在 registry 中标记为 `visibility="demo"`，查看完整目录时使用 `./scripts/jobs.sh types --all`。不要一开始压真实模型 `job_type`，否则模型供应商延迟、限流和费用会掩盖服务自身瓶颈。
 
-## 场景结构
+## Case 与 Profile
 
-`./scripts/load.sh scenarios` 维护当前压测场景注册表：
+`case` 决定压哪条链路，`profile` 决定用哪个 `job_type` 和默认 `job_params`。这两层分开后，新增业务 Job 时通常只需要新增 profile，不需要修改 Locust runner。
 
-| 场景 | 作用 | 适用问题 |
+`./scripts/load.sh cases` 维护当前压测 case 注册表：
+
+| case | 作用 | 适用问题 |
 |---|---|---|
 | `job-submit` | 只创建 Job | API 和 DB 写入、幂等键、Taskiq publish 能承受多少接单流量 |
 | `job-query` | 只查询已有 Job | 查询接口、DB 读、索引和响应序列化能承受多少轮询流量 |
@@ -233,6 +236,29 @@ GET  /api/v1/ai-jobs/jobs/{job_id}
 | `api-health` | 压 `/health` | 基础 HTTP health 路径是否稳定 |
 
 真实业务评估应按顺序执行：先 `job-submit`，再 `job-query`，最后 `job-flow`。只看 `POST /jobs` QPS 不代表系统能完成 Job。
+
+查看内置 profile：
+
+```bash
+./scripts/load.sh profiles
+```
+
+生成业务 Job profile 模板：
+
+```bash
+./scripts/load.sh init poster-title-image \
+  --job-type poster_title_image
+```
+
+生成后编辑 `.run/load/profiles/poster-title-image.json`，填入 `job_params` 和默认压测参数。使用时可以省略 case，让 profile 的 `case` 字段决定默认链路：
+
+```bash
+./scripts/load.sh run --profile .run/load/profiles/poster-title-image.json --allow-real-job
+```
+
+profile 只保存压测对象和默认参数，不保存真实业务 Job 的执行确认。非 `job_test_*` 的 `job_type` 每次运行都必须显式传 `--allow-real-job`。
+
+如果只想临时覆盖，也可以继续用 `--job-type` 和 `--job-params-json-file`，但长期复用的业务压测建议沉淀为 profile。
 
 ## 准备环境
 
@@ -246,7 +272,8 @@ GET  /api/v1/ai-jobs/jobs/{job_id}
 
 ```bash
 ./scripts/load.sh -h
-./scripts/load.sh scenarios
+./scripts/load.sh cases
+./scripts/load.sh profiles
 ```
 
 启动本地依赖、API 和 worker：
@@ -373,7 +400,7 @@ http://127.0.0.1:8089
   --run-id job-flow
 ```
 
-`job-flow` 场景会额外上报 Locust 自定义指标：
+`job-flow` case 会额外上报 Locust 自定义指标：
 
 ```text
 JOB flow terminal latency
@@ -387,19 +414,20 @@ JOB flow terminal latency
 
 | 参数 | 默认值 | 说明 |
 |---|---:|---|
-| `--users` | 场景默认值 | Locust 用户并发 |
-| `--spawn-rate` | 场景默认值 | 每秒启动用户数 |
-| `--time` | 场景默认值 | 压测持续时间 |
-| `--job-type` | 场景默认值 | 压测使用的 `job_type` |
+| `--profile` | 无 | 内置 profile key 或 JSON profile 文件 |
+| `--users` | case/profile 默认值 | Locust 用户并发 |
+| `--spawn-rate` | case/profile 默认值 | 每秒启动用户数 |
+| `--time` | case/profile 默认值 | 压测持续时间 |
+| `--job-type` | case/profile 默认值 | 压测使用的 `job_type` |
 | `--job-params-json-file` | 无 | 非内置动态压测 job 时使用的 `job_params` JSON 文件 |
 | `--job-params-json` | 无 | 高风险 inline JSON，会出现在 shell history/ps；优先使用 `--job-params-json-file` |
 | `--echo-sleep-seconds` | `15` | `job_test_echo.sleep_seconds` |
 | `--echo-repeat` | `1` | `job_test_echo.repeat` |
 | `--workflow-mode` | `group` | `job_test_workflow.mode` |
 | `--workflow-sleep-seconds` | `15` | `job_test_workflow.sleep_seconds` |
-| `--poll-interval-seconds` | 场景默认值 | flow 轮询间隔 |
-| `--flow-timeout-seconds` | 场景默认值 | flow 单个 Job 等待终态超时 |
-| `--query-job-ids-file` | 无 | `job-query` 场景用 Job ID 文件 |
+| `--poll-interval-seconds` | case/profile 默认值 | flow 轮询间隔 |
+| `--flow-timeout-seconds` | case/profile 默认值 | flow 单个 Job 等待终态超时 |
+| `--query-job-ids-file` | 无 | `job-query` case 用 Job ID 文件 |
 | `--query-job-ids` | 无 | 逗号分隔 UUID job_id；大量输入优先使用 `--query-job-ids-file` |
 | `--caller-id` | `load-cli` | `X-AI-Service-Caller-ID` |
 
@@ -419,10 +447,9 @@ Workflow root / child 链路压测示例：
 其它业务 `job_type` 的压测示例：
 
 ```bash
-./scripts/load.sh run job-flow \
+./scripts/load.sh init your-profile --job-type your_job_type
+./scripts/load.sh run --profile .run/load/profiles/your-profile.json \
   --api-url http://127.0.0.1:8100 \
-  --job-type your_job_type \
-  --job-params-json-file .run/load/your-job-params.json \
   --allow-real-job \
   --users 10 \
   --spawn-rate 2 \
@@ -476,7 +503,7 @@ Workflow root / child 链路压测示例：
 - 目标 API、worker、PostgreSQL 和 Redis 都在被测环境运行。
 - Locust 机器没有 CPU 打满，负载发生器不是瓶颈。
 - 认证、caller、`job_type` 和 `job_params` 与预期一致。
-- `job-flow` 场景中 Job 能进入终态。
+- `job-flow` case 中 Job 能进入终态。
 
 再判断系统瓶颈：
 

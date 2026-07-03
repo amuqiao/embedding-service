@@ -123,8 +123,8 @@ class ProjectLoadUser(HttpUser):
     )
 
     def on_start(self) -> None:
-        self.scenario_key = env_required("LOAD_INTERNAL_SCENARIO_KEY")
-        self.scenario_kind = env_required("LOAD_INTERNAL_SCENARIO_KIND")
+        self.case_key = env_required("LOAD_INTERNAL_CASE_KEY")
+        self.case_kind = env_required("LOAD_INTERNAL_CASE_KIND")
         self.api_prefix = env_required("LOAD_INTERNAL_API_PREFIX").rstrip("/")
         self.headers = build_headers()
         self.jobs_path = f"{self.api_prefix}/jobs"
@@ -135,35 +135,35 @@ class ProjectLoadUser(HttpUser):
         self.http_method = env_optional("LOAD_INTERNAL_HTTP_METHOD", "GET") or "GET"
         self.http_path = env_optional("LOAD_INTERNAL_HTTP_PATH", "") or ""
 
-        if self.scenario_kind in {"job_submit", "job_flow"} and not self.job_type:
-            raise LoadConfigError(f"{self.scenario_key} requires LOAD_INTERNAL_JOB_TYPE")
-        if self.scenario_kind == "job_query" and not self.query_job_ids:
-            raise LoadConfigError(f"{self.scenario_key} requires query job ids")
-        if self.scenario_kind == "api_request" and not self.http_path.startswith("/"):
+        if self.case_kind in {"job_submit", "job_flow"} and not self.job_type:
+            raise LoadConfigError(f"{self.case_key} requires LOAD_INTERNAL_JOB_TYPE")
+        if self.case_kind == "job_query" and not self.query_job_ids:
+            raise LoadConfigError(f"{self.case_key} requires query job ids")
+        if self.case_kind == "api_request" and not self.http_path.startswith("/"):
             raise LoadConfigError("api_request requires an absolute LOAD_INTERNAL_HTTP_PATH")
 
     @task
-    def run_scenario(self) -> None:
-        if self.scenario_kind == "job_submit":
+    def run_case(self) -> None:
+        if self.case_kind == "job_submit":
             self.submit_job()
-        elif self.scenario_kind == "job_query":
+        elif self.case_kind == "job_query":
             self.query_job(random.choice(self.query_job_ids))
-        elif self.scenario_kind == "job_flow":
+        elif self.case_kind == "job_flow":
             self.run_job_flow()
-        elif self.scenario_kind == "api_request":
+        elif self.case_kind == "api_request":
             self.run_api_request()
         else:
-            raise LoadConfigError(f"unsupported scenario kind: {self.scenario_kind}")
+            raise LoadConfigError(f"unsupported case kind: {self.case_kind}")
 
     def submit_job(self) -> dict[str, Any] | None:
         sequence = next(JOB_COUNTER)
         payload = {
-            "client_request_id": f"load-{self.scenario_key}-{uuid.uuid4()}-{sequence}",
+            "client_request_id": f"load-{self.case_key}-{uuid.uuid4()}-{sequence}",
             "job_type": self.job_type,
             "job_params": build_job_params(str(self.job_type), sequence),
             "metadata": {
                 "source": "scripts/load.sh",
-                "scenario_key": self.scenario_key,
+                "case_key": self.case_key,
             },
             "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
         }

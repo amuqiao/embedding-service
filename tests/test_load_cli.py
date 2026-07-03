@@ -28,13 +28,30 @@ def _env_file(tmp_path: Path) -> Path:
     return path
 
 
-def test_scenarios_lists_registered_contract():
-    result = RUNNER.invoke(cli.app, ["scenarios", "--json"])
+def test_cases_lists_registered_contract():
+    result = RUNNER.invoke(cli.app, ["cases", "--json"])
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    keys = {item["key"] for item in payload["scenarios"]}
+    keys = {item["key"] for item in payload["cases"]}
     assert {"job-flow", "job-submit", "job-query", "workflow-flow", "api-health"} <= keys
+
+
+def test_list_alias_lists_cases():
+    result = RUNNER.invoke(cli.app, ["list", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert "cases" in payload
+
+
+def test_profiles_lists_builtin_profiles():
+    result = RUNNER.invoke(cli.app, ["profiles", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    keys = {item["key"] for item in payload["profiles"]}
+    assert {"echo", "workflow"} <= keys
 
 
 def test_run_rejects_non_demo_job_without_confirmation(tmp_path):
@@ -83,13 +100,14 @@ def test_run_dry_run_writes_manifest_without_token(tmp_path):
     payload = json.loads(result.output)
     manifest = json.loads((output_dir / "run-1" / "manifest.json").read_text(encoding="utf-8"))
     assert payload["status"] == "dry_run"
-    assert manifest["scenario_key"] == "job-flow"
+    assert manifest["case_key"] == "job-flow"
     assert manifest["job_type"] == "job_test_echo"
     assert "LOAD_INTERNAL_AUTH_TOKEN" not in json.dumps(manifest)
     assert manifest["paths"]["csv_prefix"].endswith("/run-1/locust")
+    assert f"--output-dir {output_dir}" in manifest["next_checks"][0]
 
 
-def test_query_scenario_requires_job_ids(tmp_path):
+def test_query_case_requires_job_ids(tmp_path):
     env_file = _env_file(tmp_path)
 
     result = RUNNER.invoke(
@@ -107,14 +125,14 @@ def test_query_scenario_requires_job_ids(tmp_path):
     assert "requires --query-job-ids" in result.stderr
 
 
-def test_unknown_scenario_returns_stable_error(tmp_path):
+def test_unknown_case_returns_stable_error(tmp_path):
     env_file = _env_file(tmp_path)
 
     result = RUNNER.invoke(
         cli.app,
         [
             "run",
-            "no-such-scenario",
+            "no-such-case",
             "--env-file",
             str(env_file),
             "--dry-run",
@@ -122,7 +140,7 @@ def test_unknown_scenario_returns_stable_error(tmp_path):
     )
 
     assert result.exit_code == 2
-    assert "ERROR: unknown load scenario" in result.stderr
+    assert "ERROR: unknown load case" in result.stderr
     assert "Traceback" not in result.stderr
 
 
@@ -150,8 +168,190 @@ def test_ui_query_accepts_job_ids(tmp_path):
     assert result.exit_code == 0
     manifest = json.loads((output_dir / "ui-query" / "manifest.json").read_text(encoding="utf-8"))
     assert "--autostart" in manifest["command"]
-    assert manifest["scenario_key"] == "job-query"
+    assert manifest["case_key"] == "job-query"
     assert manifest["query_job_ids_source"] == "inline"
+
+
+def test_run_builtin_profile_uses_profile_defaults(tmp_path):
+    env_file = _env_file(tmp_path)
+    output_dir = tmp_path / "load"
+
+    result = RUNNER.invoke(
+        cli.app,
+        [
+            "run",
+            "--profile",
+            "workflow",
+            "--env-file",
+            str(env_file),
+            "--run-id",
+            "profile-workflow",
+            "--output-dir",
+            str(output_dir),
+            "--dry-run",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["case_key"] == "workflow-flow"
+    assert payload["job_type"] == "job_test_workflow"
+    assert payload["profile"]["key"] == "workflow"
+    assert payload["flow_timeout_seconds"] == 90.0
+
+
+def test_run_file_profile_supplies_real_job_params(tmp_path):
+    env_file = _env_file(tmp_path)
+    output_dir = tmp_path / "load"
+    profile = tmp_path / "poster.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "key": "poster",
+                "job_type": "poster_title_image",
+                "case": "job-flow",
+                "job_params": {"items": []},
+                "defaults": {"users": 2, "spawn_rate": 1.0, "time": "30s", "flow_timeout_seconds": 120},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = RUNNER.invoke(
+        cli.app,
+        [
+            "run",
+            "--profile",
+            str(profile),
+            "--env-file",
+            str(env_file),
+            "--run-id",
+            "poster-profile",
+            "--output-dir",
+            str(output_dir),
+            "--allow-real-job",
+            "--dry-run",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["allow_real_job"] is True
+    assert payload["job_type"] == "poster_title_image"
+    assert payload["job_params_source"] == "profile"
+    assert payload["users"] == 2
+    assert payload["flow_timeout_seconds"] == 120.0
+
+
+def test_run_file_profile_requires_real_job_confirmation(tmp_path):
+    env_file = _env_file(tmp_path)
+    profile = tmp_path / "poster.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "key": "poster",
+                "job_type": "poster_title_image",
+                "case": "job-flow",
+                "job_params": {"items": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = RUNNER.invoke(
+        cli.app,
+        [
+            "run",
+            "--profile",
+            str(profile),
+            "--env-file",
+            str(env_file),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "pass --allow-real-job" in result.stderr
+
+
+def test_file_profile_requires_explicit_case(tmp_path):
+    env_file = _env_file(tmp_path)
+    profile = tmp_path / "poster.json"
+    profile.write_text(
+        json.dumps({"key": "poster", "job_type": "poster_title_image", "job_params": {}}),
+        encoding="utf-8",
+    )
+
+    result = RUNNER.invoke(
+        cli.app,
+        [
+            "run",
+            "--profile",
+            str(profile),
+            "--env-file",
+            str(env_file),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "profile case is required" in result.stderr
+
+
+def test_file_profile_rejects_unknown_keys(tmp_path):
+    env_file = _env_file(tmp_path)
+    profile = tmp_path / "poster.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "key": "poster",
+                "job_type": "poster_title_image",
+                "case": "job-flow",
+                "allow_real_job": True,
+                "job_params": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = RUNNER.invoke(
+        cli.app,
+        [
+            "run",
+            "--profile",
+            str(profile),
+            "--env-file",
+            str(env_file),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "unknown keys: allow_real_job" in result.stderr
+
+
+def test_init_writes_profile_template(tmp_path):
+    output = tmp_path / "profile.json"
+
+    result = RUNNER.invoke(
+        cli.app,
+        [
+            "init",
+            "poster",
+            "--job-type",
+            "poster_title_image",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["key"] == "poster"
+    assert payload["job_type"] == "poster_title_image"
+    assert payload["case"] == "job-flow"
 
 
 def test_api_url_rejects_secret_bearing_parts(tmp_path):
@@ -246,7 +446,7 @@ def test_pressure_uses_manifest_context(tmp_path, monkeypatch):
         json.dumps(
             {
                 "run_id": "run-2",
-                "scenario_key": "job-submit",
+                "case_key": "job-submit",
                 "job_type": "job_test_echo",
                 "caller_id": "load-cli",
                 "paths": {"csv_prefix": str(run_dir / "locust")},
@@ -288,4 +488,91 @@ def test_pressure_uses_manifest_context(tmp_path, monkeypatch):
         "job_test_echo",
         "--caller-id",
         "load-cli",
+    ]
+
+def test_report_uses_case_key(tmp_path):
+    output_dir = tmp_path / "load"
+    run_dir = output_dir / "run-3"
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "succeeded",
+                "run_id": "run-3",
+                "case_key": "job-flow",
+                "job_type": "job_test_echo",
+                "caller_id": "load-cli",
+                "paths": {
+                    "manifest": str(run_dir / "manifest.json"),
+                    "csv_prefix": str(run_dir / "locust"),
+                    "html_report": str(run_dir / "report.html"),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = RUNNER.invoke(
+        cli.app,
+        [
+            "report",
+            "--run-id",
+            "run-3",
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "case=job-flow" in result.output
+
+
+def test_drain_uses_manifest_context(tmp_path, monkeypatch):
+    output_dir = tmp_path / "load"
+    run_dir = output_dir / "old-run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "old-run",
+                "case_key": "job-submit",
+                "job_type": "job_test_echo",
+                "caller_id": "load-cli",
+                "paths": {"csv_prefix": str(run_dir / "locust")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_run_jobs_command(args):
+        captured["args"] = args
+        return 0
+
+    monkeypatch.setattr(cli, "_run_jobs_command", fake_run_jobs_command)
+
+    result = RUNNER.invoke(
+        cli.app,
+        [
+            "drain",
+            "--run-id",
+            "old-run",
+            "--output-dir",
+            str(output_dir),
+            "--strict",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["args"] == [
+        "drain",
+        "--since",
+        "30m",
+        "--older-than",
+        "10m",
+        "--job-type",
+        "job_test_echo",
+        "--caller-id",
+        "load-cli",
+        "--strict",
     ]

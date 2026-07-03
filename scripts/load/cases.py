@@ -4,15 +4,15 @@ from dataclasses import dataclass
 from typing import Literal
 
 
-ScenarioKind = Literal["job_submit", "job_query", "job_flow", "api_request"]
+CaseKind = Literal["job_submit", "job_query", "job_flow", "api_request"]
 
 
 @dataclass(frozen=True)
-class LoadScenario:
+class LoadCase:
     key: str
     title: str
     question: str
-    kind: ScenarioKind
+    kind: CaseKind
     target: str
     default_job_type: str | None = None
     default_http_method: str | None = None
@@ -30,8 +30,8 @@ class LoadScenario:
     post_checks: tuple[str, ...] = ()
 
 
-SCENARIOS: dict[str, LoadScenario] = {
-    "job-flow": LoadScenario(
+CASES: dict[str, LoadCase] = {
+    "job-flow": LoadCase(
         key="job-flow",
         title="Job 完整链路压测",
         question="创建 Job 后，worker 能否按预期消费并在轮询窗口内进入终态？",
@@ -44,7 +44,7 @@ SCENARIOS: dict[str, LoadScenario] = {
         default_spawn_rate=1.0,
         post_checks=("drain", "pressure"),
     ),
-    "job-submit": LoadScenario(
+    "job-submit": LoadCase(
         key="job-submit",
         title="Job 接单压测",
         question="POST /jobs 接单、DB 写入和 dispatch publish 是否成为瓶颈？",
@@ -57,7 +57,7 @@ SCENARIOS: dict[str, LoadScenario] = {
         default_spawn_rate=10.0,
         post_checks=("drain", "pressure"),
     ),
-    "job-query": LoadScenario(
+    "job-query": LoadCase(
         key="job-query",
         title="Job 查询压测",
         question="GET /jobs/{job_id} 在轮询压力下的 p95/p99 和错误率如何？",
@@ -70,7 +70,7 @@ SCENARIOS: dict[str, LoadScenario] = {
         default_spawn_rate=10.0,
         post_checks=("pressure",),
     ),
-    "workflow-flow": LoadScenario(
+    "workflow-flow": LoadCase(
         key="workflow-flow",
         title="Workflow Job 完整链路压测",
         question="root orchestration、child fan-out 和 root finalize 是否能闭环？",
@@ -84,7 +84,7 @@ SCENARIOS: dict[str, LoadScenario] = {
         default_flow_timeout_seconds=90.0,
         post_checks=("drain", "pressure"),
     ),
-    "api-health": LoadScenario(
+    "api-health": LoadCase(
         key="api-health",
         title="Health API 压测",
         question="/health 在基础 HTTP 压力下是否稳定？",
@@ -100,15 +100,15 @@ SCENARIOS: dict[str, LoadScenario] = {
 }
 
 
-def get_scenario(key: str) -> LoadScenario:
+def get_case(key: str) -> LoadCase:
     try:
-        return SCENARIOS[key]
+        return CASES[key]
     except KeyError as exc:
-        allowed = ", ".join(sorted(SCENARIOS))
-        raise ValueError(f"unknown load scenario: {key}; expected one of: {allowed}") from exc
+        allowed = ", ".join(sorted(CASES))
+        raise ValueError(f"unknown load case: {key}; expected one of: {allowed}") from exc
 
 
-def scenario_rows() -> list[dict[str, object]]:
+def case_rows() -> list[dict[str, object]]:
     return [
         {
             "key": item.key,
@@ -118,5 +118,5 @@ def scenario_rows() -> list[dict[str, object]]:
             "default_job_type": item.default_job_type or "-",
             "question": item.question,
         }
-        for item in SCENARIOS.values()
+        for item in CASES.values()
     ]

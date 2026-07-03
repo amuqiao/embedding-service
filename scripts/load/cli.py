@@ -11,7 +11,13 @@ from typing import Annotated, Any
 import typer
 
 from scripts.jobs import formatters
-from scripts.load.scenarios import LoadScenario, get_scenario, scenario_rows
+from scripts.load.profiles import (
+    profile_rows,
+    profile_template,
+    resolve_profile,
+    write_profile_template,
+)
+from scripts.load.cases import LoadCase, case_rows, get_case
 from scripts.load.support import (
     LoadError,
     ROOT_DIR,
@@ -29,7 +35,7 @@ from scripts.load.support import (
 
 HELP_EPILOG = """\b
 作用域：
-  项目级压测入口。负责选择场景、生成 Locust 命令、归档结果、输出 manifest，并联动 jobs.sh 做压后诊断。
+  项目级压测入口。负责选择 case、套用 profile、生成 Locust 命令、归档结果、输出 manifest，并联动 jobs.sh 做压后诊断。
   默认面向本地 API；远端 API 必须显式传 --allow-remote-api。
 
 \b
@@ -58,9 +64,11 @@ HELP_EPILOG = """\b
 
 \b
 常用示例：
-  ./scripts/load.sh scenarios
+  ./scripts/load.sh cases
+  ./scripts/load.sh profiles
   ./scripts/load.sh smoke
   ./scripts/load.sh run job-flow --users 4 --spawn-rate 1 --time 60s
+  ./scripts/load.sh run --profile echo
   ./scripts/load.sh run job-submit --users 20 --spawn-rate 10 --time 30s
   ./scripts/load.sh ui job-flow --users 10 --spawn-rate 2 --time 2m
   ./scripts/load.sh pressure --run-id <run_id>
@@ -81,22 +89,26 @@ Exit Codes:
 
 GUIDE_TEXT = """Load 压测心智模型
 
-1. 先选问题，再选场景
+1. 先选问题，再选 case
    - job-submit: API 能不能接住创建请求。
    - job-query: 查询接口能不能承受轮询。
    - job-flow: 创建、执行、查询终态能不能闭环。
    - workflow-flow: root/child/finalize workflow 链路能不能闭环。
    - api-health: 基础 HTTP health 压力。
 
-2. load.sh 负责产生压力和归档结果
+2. 用 profile 描述要压的 Job
+   - 内置 profile: echo / workflow。
+   - 真实业务 Job 用 JSON profile 固定 job_type、job_params 和默认压测参数。
+
+3. load.sh 负责产生压力和归档结果
    每次 run/ui/smoke 都生成 .run/load/<run_id>/manifest.json。
    Locust CSV 前缀固定为 .run/load/<run_id>/locust，HTML 报告固定为 report.html。
 
-3. jobs.sh 负责压后诊断
+4. jobs.sh 负责压后诊断
    ./scripts/load.sh pressure --run-id <run_id>
    ./scripts/load.sh drain --run-id <run_id> --strict
 
-4. 安全边界
+5. 安全边界
    默认只允许本机 API 和 job_test_* demo job_type。
    远端 API 用 --allow-remote-api；真实业务 job_type 用 --allow-real-job。
 """
@@ -111,16 +123,15 @@ SMOKE_HELP_EPILOG = """\b
 RUN_HELP_EPILOG = """\b
 常用示例：
   ./scripts/load.sh run job-flow --users 4 --spawn-rate 1 --time 60s
+  ./scripts/load.sh run --profile echo
   ./scripts/load.sh run job-submit --users 20 --spawn-rate 10 --time 30s
   ./scripts/load.sh run job-query --query-job-ids-file .run/load/query-job-ids.txt --users 100
   ./scripts/load.sh run workflow-flow --workflow-mode group --flow-timeout-seconds 90
 
 \b
 真实业务 Job：
-  ./scripts/load.sh run job-flow \\
-    --job-type your_job_type \\
-    --job-params-json-file .run/load/your-job-params.json \\
-    --allow-real-job
+  ./scripts/load.sh init poster-title-image --job-type poster_title_image
+  ./scripts/load.sh run --profile .run/load/profiles/poster-title-image.json --allow-real-job
 """
 
 UI_HELP_EPILOG = """\b
@@ -199,12 +210,13 @@ def _format_float(value: float) -> str:
 
 def _print_run_payload(payload: dict[str, Any]) -> None:
     formatters.section("Load Run")
-    formatters.event(payload["status"].upper(), "load", f"run_id={payload['run_id']} scenario={payload['scenario_key']}")
+    formatters.event(payload["status"].upper(), "load", f"run_id={payload['run_id']} case={payload['case_key']}")
     formatters.print_table(
         [
             {
                 "api_url": payload["api_url"],
-                "scenario": payload["scenario_key"],
+                "case": payload["case_key"],
+                "profile": (payload.get("profile") or {}).get("key") or "-",
                 "job_type": payload.get("job_type") or "-",
                 "users": payload["users"],
                 "spawn_rate": payload["spawn_rate"],
@@ -213,7 +225,8 @@ def _print_run_payload(payload: dict[str, Any]) -> None:
         ],
         [
             ("api_url", "api_url"),
-            ("scenario", "scenario"),
+            ("case", "case"),
+            ("profile", "profile"),
             ("job_type", "job_type"),
             ("users", "users"),
             ("spawn_rate", "spawn_rate"),
@@ -238,9 +251,10 @@ def _print_run_payload(payload: dict[str, Any]) -> None:
 
 def _job_params_env(
     *,
-    scenario: LoadScenario,
+    case: LoadCase,
     job_type: str | None,
     job_params: dict[str, Any] | None,
+    job_params_source: str,
     echo_sleep_seconds: float,
     echo_repeat: int,
     workflow_mode: str,
@@ -249,7 +263,7 @@ def _job_params_env(
     env: dict[str, str] = {}
     if job_params is not None:
         env["LOAD_INTERNAL_JOB_PARAMS_JSON"] = json.dumps(job_params, ensure_ascii=False)
-        env["LOAD_INTERNAL_JOB_PARAMS_SOURCE"] = "explicit"
+        env["LOAD_INTERNAL_JOB_PARAMS_SOURCE"] = job_params_source
         return env
     if job_type == "job_test_echo":
         env.update(
@@ -269,7 +283,7 @@ def _job_params_env(
             }
         )
         return env
-    if scenario.kind in {"job_submit", "job_flow"}:
+    if case.kind in {"job_submit", "job_flow"}:
         raise LoadError(
             "custom job_type requires --job-params-json or --job-params-json-file",
             exit_code=2,
@@ -280,17 +294,20 @@ def _job_params_env(
 def _next_checks(payload: dict[str, Any]) -> list[str]:
     checks: list[str] = []
     run_id = payload["run_id"]
-    if "drain" in payload["scenario"]["post_checks"]:
-        checks.append(f"./scripts/load.sh drain --run-id {run_id} --strict")
-    if "pressure" in payload["scenario"]["post_checks"]:
-        checks.append(f"./scripts/load.sh pressure --run-id {run_id}")
-    checks.append(f"./scripts/load.sh report --run-id {run_id}")
+    output_dir = str(payload.get("output_dir") or ".run/load")
+    output_arg = "" if output_dir == ".run/load" else f" --output-dir {shlex.quote(output_dir)}"
+    if "drain" in payload["case"]["post_checks"]:
+        checks.append(f"./scripts/load.sh drain --run-id {run_id}{output_arg} --strict")
+    if "pressure" in payload["case"]["post_checks"]:
+        checks.append(f"./scripts/load.sh pressure --run-id {run_id}{output_arg}")
+    checks.append(f"./scripts/load.sh report --run-id {run_id}{output_arg}")
     return checks
 
 
 def _prepare_run(
     *,
-    scenario_key: str,
+    case_key: str | None,
+    profile_ref: str | None,
     api_url: str | None,
     env_file: str | None,
     allow_remote_api: bool,
@@ -319,42 +336,72 @@ def _prepare_run(
     web_host: str,
     web_port: int,
 ) -> tuple[dict[str, Any], list[str], dict[str, str]]:
+    profile = resolve_profile(profile_ref)
+    effective_case = case_key or (profile.case if profile else None)
+    if not effective_case:
+        raise LoadError("case is required unless --profile provides a default case", exit_code=2)
     try:
-        scenario = get_scenario(scenario_key)
+        case = get_case(effective_case)
     except ValueError as exc:
         raise LoadError(str(exc), exit_code=2) from exc
     app_env = load_app_env(env_file)
     base_url = resolve_api_url(api_url, app_env, allow_remote_api=allow_remote_api)
     api_prefix = resolve_api_prefix(app_env)
     auth = resolve_auth(app_env, service_api_key=service_api_key, caller_id=caller_id)
-    selected_job_type = job_type or scenario.default_job_type
-    if scenario.kind in {"job_submit", "job_flow"} and not selected_job_type:
-        raise LoadError(f"scenario {scenario.key} requires --job-type", exit_code=2)
-    if scenario.requires_job_ids and not query_job_ids and not query_job_ids_file:
-        raise LoadError(f"scenario {scenario.key} requires --query-job-ids or --query-job-ids-file", exit_code=2)
+    selected_job_type = job_type or (profile.job_type if profile else None) or case.default_job_type
+    if case.kind in {"job_submit", "job_flow"} and not selected_job_type:
+        raise LoadError(f"case {case.key} requires --job-type or --profile", exit_code=2)
+    if case.requires_job_ids and not query_job_ids and not query_job_ids_file:
+        raise LoadError(f"case {case.key} requires --query-job-ids or --query-job-ids-file", exit_code=2)
     if selected_job_type and not is_demo_job_type(selected_job_type) and not allow_real_job:
         raise LoadError(
             f"job_type={selected_job_type} is not a demo job_type; pass --allow-real-job to confirm",
             exit_code=2,
         )
-    job_params = load_json_object(
+    explicit_job_params = load_json_object(
         raw=job_params_json,
         file_path=job_params_json_file,
         option_name="job params",
     )
+    job_params = explicit_job_params if explicit_job_params is not None else (profile.job_params if profile else None)
+    job_params_source = "explicit" if explicit_job_params is not None else ("profile" if job_params is not None else "-")
 
-    effective_users = users or scenario.default_users
-    effective_spawn_rate = spawn_rate if spawn_rate is not None else scenario.default_spawn_rate
-    effective_time = run_time or scenario.default_time
-    effective_wait_min = wait_min_seconds if wait_min_seconds is not None else scenario.default_wait_min_seconds
-    effective_wait_max = wait_max_seconds if wait_max_seconds is not None else scenario.default_wait_max_seconds
+    effective_users = users or (profile.users if profile else None) or case.default_users
+    effective_spawn_rate = (
+        spawn_rate
+        if spawn_rate is not None
+        else (profile.spawn_rate if profile and profile.spawn_rate is not None else case.default_spawn_rate)
+    )
+    effective_time = run_time or (profile.run_time if profile else None) or case.default_time
+    effective_wait_min = (
+        wait_min_seconds
+        if wait_min_seconds is not None
+        else (profile.wait_min_seconds if profile and profile.wait_min_seconds is not None else case.default_wait_min_seconds)
+    )
+    effective_wait_max = (
+        wait_max_seconds
+        if wait_max_seconds is not None
+        else (profile.wait_max_seconds if profile and profile.wait_max_seconds is not None else case.default_wait_max_seconds)
+    )
     if effective_wait_min > effective_wait_max:
         raise LoadError("--wait-min-seconds must be <= --wait-max-seconds", exit_code=2)
     effective_poll = (
-        poll_interval_seconds if poll_interval_seconds is not None else scenario.default_poll_interval_seconds
+        poll_interval_seconds
+        if poll_interval_seconds is not None
+        else (
+            profile.poll_interval_seconds
+            if profile and profile.poll_interval_seconds is not None
+            else case.default_poll_interval_seconds
+        )
     )
     effective_flow_timeout = (
-        flow_timeout_seconds if flow_timeout_seconds is not None else scenario.default_flow_timeout_seconds
+        flow_timeout_seconds
+        if flow_timeout_seconds is not None
+        else (
+            profile.flow_timeout_seconds
+            if profile and profile.flow_timeout_seconds is not None
+            else case.default_flow_timeout_seconds
+        )
     )
 
     effective_run_id = run_id or utc_now_iso().replace(":", "").replace("+", "Z").replace(".", "-")
@@ -368,8 +415,8 @@ def _prepare_run(
     locust_env.update(
         {
             "LOAD_INTERNAL_ENTRYPOINT": "scripts/load.sh",
-            "LOAD_INTERNAL_SCENARIO_KEY": scenario.key,
-            "LOAD_INTERNAL_SCENARIO_KIND": scenario.kind,
+            "LOAD_INTERNAL_CASE_KEY": case.key,
+            "LOAD_INTERNAL_CASE_KIND": case.kind,
             "LOAD_INTERNAL_API_PREFIX": api_prefix,
             "LOAD_INTERNAL_AUTH_ENABLED": "true" if auth["auth_enabled"] else "false",
             "LOAD_INTERNAL_AUTH_TOKEN": auth["auth_token"],
@@ -379,8 +426,8 @@ def _prepare_run(
             "LOAD_INTERNAL_WAIT_MAX_SECONDS": _format_float(effective_wait_max),
             "LOAD_INTERNAL_POLL_INTERVAL_SECONDS": _format_float(effective_poll),
             "LOAD_INTERNAL_FLOW_TIMEOUT_SECONDS": _format_float(effective_flow_timeout),
-            "LOAD_INTERNAL_HTTP_METHOD": scenario.default_http_method or "GET",
-            "LOAD_INTERNAL_HTTP_PATH": scenario.default_http_path or "",
+            "LOAD_INTERNAL_HTTP_METHOD": case.default_http_method or "GET",
+            "LOAD_INTERNAL_HTTP_PATH": case.default_http_path or "",
         }
     )
     if selected_job_type:
@@ -391,9 +438,10 @@ def _prepare_run(
         locust_env["LOAD_INTERNAL_QUERY_JOB_IDS_FILE"] = query_job_ids_file
     locust_env.update(
         _job_params_env(
-            scenario=scenario,
+            case=case,
             job_type=selected_job_type,
             job_params=job_params,
+            job_params_source=job_params_source,
             echo_sleep_seconds=echo_sleep_seconds,
             echo_repeat=echo_repeat,
             workflow_mode=workflow_mode,
@@ -430,20 +478,22 @@ def _prepare_run(
     payload: dict[str, Any] = {
         "status": "prepared",
         "run_id": effective_run_id,
-        "scenario_key": scenario.key,
-        "scenario": {
-            "key": scenario.key,
-            "kind": scenario.kind,
-            "target": scenario.target,
-            "writes_jobs": scenario.writes_jobs,
-            "requires_job_ids": scenario.requires_job_ids,
-            "billable_risk": scenario.billable_risk or bool(selected_job_type and not is_demo_job_type(selected_job_type)),
-            "post_checks": list(scenario.post_checks),
+        "case_key": case.key,
+        "profile": profile.manifest() if profile else None,
+        "case": {
+            "key": case.key,
+            "kind": case.kind,
+            "target": case.target,
+            "writes_jobs": case.writes_jobs,
+            "requires_job_ids": case.requires_job_ids,
+            "billable_risk": case.billable_risk or bool(selected_job_type and not is_demo_job_type(selected_job_type)),
+            "post_checks": list(case.post_checks),
         },
         "api_url": base_url,
         "api_prefix": api_prefix,
         "env_file": str(resolve_env_file_path(env_file)),
         "allow_remote_api": allow_remote_api,
+        "allow_real_job": allow_real_job,
         "auth_header_enabled": auth["auth_enabled"],
         "caller_header_enabled": auth["caller_header_enabled"],
         "caller_id": auth["caller_id"] if auth["caller_header_enabled"] else "default",
@@ -453,6 +503,7 @@ def _prepare_run(
         "users": effective_users,
         "spawn_rate": effective_spawn_rate,
         "run_time": effective_time,
+        "output_dir": output_dir,
         "wait_min_seconds": effective_wait_min,
         "wait_max_seconds": effective_wait_max,
         "poll_interval_seconds": effective_poll,
@@ -494,7 +545,8 @@ def _execute_run(payload: dict[str, Any], command: list[str], locust_env: dict[s
 
 def _run_command(
     *,
-    scenario_key: str,
+    case_key: str | None,
+    profile_ref: str | None,
     api_url: str | None,
     env_file: str | None,
     allow_remote_api: bool,
@@ -530,7 +582,8 @@ def _run_command(
         raise typer.Exit(2)
     try:
         payload, command, locust_env = _prepare_run(
-            scenario_key=scenario_key,
+            case_key=case_key,
+            profile_ref=profile_ref,
             api_url=api_url,
             env_file=env_file,
             allow_remote_api=allow_remote_api,
@@ -576,15 +629,15 @@ def guide() -> None:
     typer.echo(GUIDE_TEXT)
 
 
-@app.command("scenarios", help="查看已注册压测场景。")
-def scenarios(json_output: Annotated[bool, typer.Option("--json", help="输出 JSON。")] = False) -> None:
-    payload = {"scenarios": scenario_rows()}
+def _print_cases(json_output: bool) -> None:
+    rows = case_rows()
+    payload = {"cases": rows}
     if json_output:
         formatters.print_json(payload)
         return
-    formatters.section("Load Scenarios")
+    formatters.section("Load Cases")
     formatters.print_table(
-        payload["scenarios"],
+        payload["cases"],
         [
             ("key", "key"),
             ("target", "target"),
@@ -596,9 +649,52 @@ def scenarios(json_output: Annotated[bool, typer.Option("--json", help="输出 J
     )
 
 
-@app.command("list", help="scenarios 的别名。")
-def list_scenarios(json_output: Annotated[bool, typer.Option("--json", help="输出 JSON。")] = False) -> None:
-    scenarios(json_output=json_output)
+@app.command("cases", help="查看已注册压测 case。")
+def cases(json_output: Annotated[bool, typer.Option("--json", help="输出 JSON。")] = False) -> None:
+    _print_cases(json_output=json_output)
+
+
+@app.command("list", help="cases 的别名。")
+def list_cases(json_output: Annotated[bool, typer.Option("--json", help="输出 JSON。")] = False) -> None:
+    _print_cases(json_output=json_output)
+
+
+@app.command("profiles", help="查看内置 Job profile。")
+def profiles(json_output: Annotated[bool, typer.Option("--json", help="输出 JSON。")] = False) -> None:
+    payload = {"profiles": profile_rows()}
+    if json_output:
+        formatters.print_json(payload)
+        return
+    formatters.section("Load Profiles")
+    formatters.print_table(
+        payload["profiles"],
+        [
+            ("key", "key"),
+            ("job_type", "job_type"),
+            ("case", "case"),
+            ("title", "title"),
+        ],
+    )
+
+
+@app.command("init", help="生成业务 Job profile 模板。")
+def init_profile(
+    key: Annotated[str, typer.Argument(help="profile key，例如 poster-title-image。")],
+    job_type: Annotated[str, typer.Option("--job-type", help="要压测的 job_type。")],
+    output: Annotated[str | None, typer.Option("--output", "-o", help="输出 JSON 路径。")] = None,
+    force: Annotated[bool, typer.Option("--force", help="覆盖已有文件。")] = False,
+) -> None:
+    path = Path(output).expanduser() if output else ROOT_DIR / ".run/load/profiles" / f"{key}.json"
+    if not path.is_absolute():
+        path = ROOT_DIR / path
+    payload = profile_template(key=key, job_type=job_type)
+    try:
+        write_profile_template(path, payload, force=force)
+    except LoadError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+    formatters.section("Load Profile")
+    formatters.event("OK", "profile", f"path={path}")
 
 
 @app.command("smoke", help="运行小流量 job-flow 冒烟压测。", epilog=SMOKE_HELP_EPILOG)
@@ -617,7 +713,8 @@ def smoke(
     json_output: Annotated[bool, typer.Option("--json", help="输出 JSON；仅支持 --dry-run。")] = False,
 ) -> None:
     _run_command(
-        scenario_key="job-flow",
+        case_key="job-flow",
+        profile_ref=None,
         api_url=api_url,
         env_file=env_file,
         allow_remote_api=allow_remote_api,
@@ -650,9 +747,10 @@ def smoke(
     )
 
 
-@app.command("run", help="运行指定压测场景并生成 CSV/HTML/manifest。", epilog=RUN_HELP_EPILOG)
+@app.command("run", help="运行指定压测 case 并生成 CSV/HTML/manifest。", epilog=RUN_HELP_EPILOG)
 def run(
-    scenario_key: Annotated[str, typer.Argument(help="场景 key，查看 ./scripts/load.sh scenarios。")],
+    case_key: Annotated[str | None, typer.Argument(help="case key，查看 ./scripts/load.sh cases；传 --profile 时可省略。")] = None,
+    profile_ref: Annotated[str | None, typer.Option("--profile", help="内置 profile key 或 JSON profile 文件。")] = None,
     api_url: Annotated[str | None, typer.Option("--api-url", help="API 基础 URL。")] = None,
     env_file: Annotated[str | None, typer.Option("--env-file", help="显式配置文件路径。")] = None,
     allow_remote_api: Annotated[bool, typer.Option("--allow-remote-api", help="允许非本机 API URL。")] = False,
@@ -662,7 +760,7 @@ def run(
     ] = None,
     caller_id: Annotated[str, typer.Option("--caller-id", "--x-ai-service-caller-id", help="Caller ID。")] = "load-cli",
     allow_real_job: Annotated[bool, typer.Option("--allow-real-job", help="允许非 job_test_* job_type。")] = False,
-    job_type: Annotated[str | None, typer.Option("--job-type", help="覆盖场景默认 job_type。")] = None,
+    job_type: Annotated[str | None, typer.Option("--job-type", help="覆盖 case/profile 默认 job_type。")] = None,
     job_params_json: Annotated[
         str | None,
         typer.Option("--job-params-json", help="高风险：自定义 job_params JSON 对象；会出现在 shell history/ps，优先用文件。"),
@@ -690,7 +788,8 @@ def run(
     json_output: Annotated[bool, typer.Option("--json", help="输出 JSON；仅支持 --dry-run。")] = False,
 ) -> None:
     _run_command(
-        scenario_key=scenario_key,
+        case_key=case_key,
+        profile_ref=profile_ref,
         api_url=api_url,
         env_file=env_file,
         allow_remote_api=allow_remote_api,
@@ -723,9 +822,10 @@ def run(
     )
 
 
-@app.command("ui", help="启动 Locust Web UI 并自动开始指定场景。", epilog=UI_HELP_EPILOG)
+@app.command("ui", help="启动 Locust Web UI 并自动开始指定 case。", epilog=UI_HELP_EPILOG)
 def ui(
-    scenario_key: Annotated[str, typer.Argument(help="场景 key，查看 ./scripts/load.sh scenarios。")],
+    case_key: Annotated[str | None, typer.Argument(help="case key，查看 ./scripts/load.sh cases；传 --profile 时可省略。")] = None,
+    profile_ref: Annotated[str | None, typer.Option("--profile", help="内置 profile key 或 JSON profile 文件。")] = None,
     api_url: Annotated[str | None, typer.Option("--api-url", help="API 基础 URL。")] = None,
     env_file: Annotated[str | None, typer.Option("--env-file", help="显式配置文件路径。")] = None,
     allow_remote_api: Annotated[bool, typer.Option("--allow-remote-api", help="允许非本机 API URL。")] = False,
@@ -735,7 +835,7 @@ def ui(
     ] = None,
     caller_id: Annotated[str, typer.Option("--caller-id", "--x-ai-service-caller-id", help="Caller ID。")] = "load-cli",
     allow_real_job: Annotated[bool, typer.Option("--allow-real-job", help="允许非 job_test_* job_type。")] = False,
-    job_type: Annotated[str | None, typer.Option("--job-type", help="覆盖场景默认 job_type。")] = None,
+    job_type: Annotated[str | None, typer.Option("--job-type", help="覆盖 case/profile 默认 job_type。")] = None,
     job_params_json_file: Annotated[str | None, typer.Option("--job-params-json-file", help="自定义 job_params JSON 文件。")] = None,
     query_job_ids: Annotated[
         str | None,
@@ -761,7 +861,8 @@ def ui(
     json_output: Annotated[bool, typer.Option("--json", help="输出 JSON；仅支持 --dry-run。")] = False,
 ) -> None:
     _run_command(
-        scenario_key=scenario_key,
+        case_key=case_key,
+        profile_ref=profile_ref,
         api_url=api_url,
         env_file=env_file,
         allow_remote_api=allow_remote_api,
@@ -818,7 +919,7 @@ def report(
     formatters.event(
         str(manifest.get("status", "-")).upper(),
         "load",
-        f"run_id={manifest.get('run_id')} scenario={manifest.get('scenario_key')}",
+        f"run_id={manifest.get('run_id')} case={manifest.get('case_key')}",
     )
     formatters.print_table(
         [
