@@ -106,7 +106,93 @@ app/ops_dashboard/static/chart_contract.js
 | `recent_jobs` | `client_request_id` | query | `client_request_id` | 按调用方幂等请求定位 root Job |
 | `recent_jobs` | `limit` | query | `limit` | 限制返回行数 |
 | `job_trace` | `job_id` | route | `job_id` | 替换 `/jobs/{job_id}/data` route param |
-| `job_trace` | `limit` | query | `limit` | 限制 timeline 等明细行数 |
+| `job_trace` | `limit` | query | `limit` | 限制 timeline 行数 |
+
+## Tabbed Views
+
+当前 dashboard 是 5 个一级 tab。tab 按“运维问题”划分，不按数据库表或 `jobs.sh` 子命令划分。
+
+```text
+Overview
+  -> 当前健康吗，下一步看哪里
+Recent Jobs
+  -> 最近 root Job 具体是哪几个
+Flow & Capacity
+  -> 系统是在恢复还是恶化，容量和延迟卡在哪
+Failures & Callbacks
+  -> 失败集中在哪，callback 是否完成外部通知
+Job Trace
+  -> 单个 Job 的证据链是什么
+```
+
+| tab / dataSource | 视图模块 | 用途 |
+| --- | --- | --- |
+| `overview` | `overview.status` | 页面状态和生成时间 |
+| `overview` | `overview.current_state` | active、queued、running、succeeded、success_rate、failed、callback_delivered、stuck、callback_due |
+| `overview` | `overview.ingress_trend` | created / terminal / failed 趋势 |
+| `overview` | `overview.latency_p95` | queue / run / lifecycle p95 |
+| `overview` | `overview.health_signals` | health next checks |
+| `overview` | `overview.stuck_samples` | stuck 样本入口 |
+| `recent_jobs` | `recent_jobs.status` | 页面状态和生成时间 |
+| `recent_jobs` | `recent_jobs.summary_cards` | 当前筛选下的 root Job 状态计数 |
+| `recent_jobs` | `recent_jobs.table` | root Job 列表，`job_id` 可进入 Job Trace |
+| `flow_capacity` | `flow_capacity.status` | 页面状态、drain 状态和生成时间 |
+| `flow_capacity` | `flow_capacity.capacity_cards` | global gate、headroom、accepted_rps |
+| `flow_capacity` | `flow_capacity.drain_cards` | current/window drain 状态 |
+| `flow_capacity` | `flow_capacity.ingress_drain` | created / started / terminal / failed 趋势 |
+| `flow_capacity` | `flow_capacity.status_composition` | queued / running / succeeded / failed 构成 |
+| `flow_capacity` | `flow_capacity.latency_p95` | queue / run / lifecycle p95 |
+| `flow_capacity` | `flow_capacity.job_type_hotspots` | job_type 热点和 p95 |
+| `flow_capacity` | `flow_capacity.next_checks` | CLI handoff |
+| `failures_callbacks` | `failures_callbacks.status` | 页面状态和生成时间 |
+| `failures_callbacks` | `failures_callbacks.summary_cards` | failed、callback_due、delivered、dead_letter、stuck |
+| `failures_callbacks` | `failures_callbacks.failure_groups_rank` | failure group 排名 |
+| `failures_callbacks` | `failures_callbacks.failure_groups_table` | failure group 明细 |
+| `failures_callbacks` | `failures_callbacks.failed_samples` | failed family 样本，`job_id` 可进入 Job Trace |
+| `failures_callbacks` | `failures_callbacks.callback_outbox` | callback status summary |
+| `failures_callbacks` | `failures_callbacks.callback_composition` | callback 状态构成 |
+| `failures_callbacks` | `failures_callbacks.callback_samples` | due / leased / dead_letter callback 样本 |
+| `failures_callbacks` | `failures_callbacks.next_checks` | CLI handoff |
+| `job_trace` | `job_trace.status` | 当前 Job 状态和生成时间 |
+| `job_trace` | `job_trace.summary` | root identity、状态、进度、callback、生命周期 |
+| `job_trace` | `job_trace.payload_summary` | payload 结构摘要；不展示 full payload |
+| `job_trace` | `job_trace.attempts` | retry decision 和 attempt 证据 |
+| `job_trace` | `job_trace.ai_calls` | AI call ledger 证据 |
+| `job_trace` | `job_trace.children` | workflow children / family 视角 |
+| `job_trace` | `job_trace.timeline` | 状态变迁 timeline，payload 只做 summary |
+| `job_trace` | `job_trace.callbacks` | 单 Job callback delivery 证据 |
+
+新增视图先按问题归属放入现有 tab。归属不清时，先判断它回答的是“健康、最近任务、吞吐容量、失败回调、单 Job 追踪”中的哪一个问题，而不是先判断它来自哪个 `jobs.sh` 子命令。
+
+## Overview Contract
+
+`overview` 是默认入口，用于快速判断当前是否健康，并把使用者导向下一个 tab 或 CLI。
+
+| payload path | 统计口径 | 说明 |
+| --- | --- | --- |
+| `summary.jobs` | root scope + `created_at` window | total、queued、running、succeeded、failed、terminal、success_rate、active_jobs |
+| `summary.callbacks` | root scope + `created_at` window | pending、leased、delivering、delivered、failed、dead_letter、due |
+| `capacity.current` | `global_gate` | 当前全局 active 占用，不按窗口裁剪 |
+| `ingress` | root event-time buckets | created / started / terminal / failed 事件趋势 |
+| `latency` | root scope + `created_at` window | queue / run / lifecycle p95 |
+| `stuck` | family scope stuck report | `total/sample/truncated`；样本用于进入 Job Trace |
+| `health` | `summary`、`callbacks`、`stuck` 派生 | `critical/warning/ok` 和 next checks |
+
+Overview 不承载长任务表。需要查具体 Job 时进入 `Recent Jobs`、`Failures & Callbacks` 或 `Job Trace`。
+
+## Recent Jobs Contract
+
+`recent_jobs` 是 public root Job 选择器，用于按状态和 `client_request_id` 找到具体 Job。
+
+| payload path | 统计口径 | 说明 |
+| --- | --- | --- |
+| `controls.status` | page-local query | `all/queued/running/succeeded/failed` |
+| `controls.client_request_id` | page-local query | 精确定位调用方幂等请求 |
+| `controls.limit` | page-local query | 1 到 100 |
+| `summary` | root scope + `created_at` window + page controls | 当前筛选下 total、queued、running、succeeded、failed、terminal |
+| `jobs` | root scope rows | root Job 行，包含 callback/attempt/dispatch 简要状态和 `duration_or_age_seconds` |
+
+Recent Jobs 固定为 root 视角，不提供 `scope` 控件。child / family 证据从 `Job Trace`、`Failures & Callbacks` 或 `./scripts/jobs.sh list --scope family` 进入。
 
 ## Flow And Capacity Contract
 
@@ -141,6 +227,21 @@ app/ops_dashboard/static/chart_contract.js
 | `stuck` | family scope stuck report | 只作为坏消息辅助信号；stuck 主路径仍在 Overview / Flow & Capacity |
 
 `health.status` 的规则是：存在 callback dead_letter 为 `critical`；否则存在 callback due 或 failed records 为 `warning`；否则为 `ok`。`health.next_checks` 会按当前过滤条件生成 `./scripts/jobs.sh failures`、`./scripts/jobs.sh callbacks-summary` 和 `list --status failed --scope family` handoff。
+
+## Job Trace Contract
+
+`job_trace` 是单 Job 证据链页面。它不按时间窗口筛选，只由 route control `job_id` 和 query control `limit` 决定。
+
+| payload path | 统计口径 | 说明 |
+| --- | --- | --- |
+| `job` | 单条 `job_aggregates` | identity、root/child、进度、callback_status、payload summaries、error summary |
+| `attempts` | `job_execution_attempts` by job | attempt 状态、retry decision、failure phase |
+| `ai_calls` | AI call ledger by job | provider/model/operation/status/cost 证据 |
+| `workflow_children` | children by root | workflow child Job 列表 |
+| `timeline` | status event timeline | 状态变迁和 payload summary |
+| `callbacks` | callback outbox by job | 单 Job callback delivery 证据 |
+
+`payload --full` 不进 dashboard。页面只展示结构摘要；需要完整 payload 时使用 CLI。
 
 ## Renderer Contract
 

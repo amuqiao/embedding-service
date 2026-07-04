@@ -31,7 +31,7 @@
 | [`api/poster-title-image-delivery-api.md`](api/poster-title-image-delivery-api.md) | AI 标题图生成对接的当前交付接口合同、任务创建、查询、费用和 Callback 说明 |
 | [`api/poster-title-image-api.md`](api/poster-title-image-api.md) | CPP 美术任务接入 AI 标题图生成的 vNext 目标接口草案，不覆盖当前实现合同 |
 | [`plans/hardening.md`](plans/hardening.md) | 不阻塞主干开发的运维硬化 backlog |
-| [`plans/ops-dashboard-mvp-navigation.md`](plans/ops-dashboard-mvp-navigation.md) | 待确认的 `ops_dashboard` 稳定阶段、MVP 排障闭环、tab 视图归属规则和未来优化路线图 |
+| [`plans/ops-dashboard-post-mvp.md`](plans/ops-dashboard-post-mvp.md) | `ops_dashboard` MVP 后的表格可用性、长窗口分析、Job Trace 可视化、环境诊断和安全边界后续优化计划 |
 | [`plans/job-kernel-reliability-review.md`](plans/job-kernel-reliability-review.md) | Job 机制生产可靠性、一致性、安全性和测试覆盖审查结论 |
 | [`plans/ai-capability-enhancement.md`](plans/ai-capability-enhancement.md) | 多模态 provider、正式业务 `job_type`、node/child attribution 和业务 e2e 后续计划 |
 | [`plans/ai-capability-cost-boundary-design.md`](plans/ai-capability-cost-boundary-design.md) | `job_cost_summary`、node/child cost attribution、多模态成本路径和持久化 usage 扩展后续计划 |
