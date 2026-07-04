@@ -256,6 +256,8 @@ GET  /api/v1/ai-jobs/jobs/{job_id}
 | `example-workflow-starmap` | `example_workflow` | `workflow-flow` |
 | `example-workflow-chunks` | `example_workflow` | `workflow-flow` |
 
+内置 profile 都带有默认 `job_params`，例如 `example-workflow-chain` 会固定 `example_workflow.mode=chain`。dry-run manifest 只记录 `job_params_present`、case、profile、job_type、风险确认和输出路径，不打印原始 `job_params`，避免把真实业务输入写进压测摘要。命令行显式传入的示例参数会覆盖 profile 默认值，例如 `--workflow-sleep-seconds` 可以覆盖内置 workflow profile 的 sleep 时长。
+
 生成业务 Job profile 模板：
 
 ```bash
@@ -443,6 +445,8 @@ JOB flow terminal latency
 | `--query-job-ids-file` | 无 | `job-query` case 用 Job ID 文件 |
 | `--query-job-ids` | 无 | 逗号分隔 UUID job_id；大量输入优先使用 `--query-job-ids-file` |
 | `--caller-id` | `load-cli` | `X-AI-Service-Caller-ID` |
+
+使用内置 profile 时，`--workflow-mode` 通常由 profile key 决定；直接运行 case 或需要临时覆盖时再显式传 `--workflow-mode`。同理，`--echo-sleep-seconds`、`--echo-repeat` 和 `--workflow-sleep-seconds` 是示例 job 的调参入口，不是业务 job 的通用合同。
 
 Workflow root / child 链路压测示例：
 

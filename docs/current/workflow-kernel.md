@@ -41,6 +41,22 @@ a -> b -> c
 | chunks/map | `root + children chunk.0...chunk.N` | 大批量分块处理 |
 | partial/fail-fast | 子任务失败策略 | 容错批处理和严格批处理 |
 
+## 示例 Workflow Mode
+
+`example_workflow` 是 `visibility="demo"` 的模板示例 root。它的 mode catalog 由 `app.jobs.types.example_catalog.all_example_workflow_mode_specs()` 提供，测试和 smoke 从该 catalog 读取，不再手写第二份 mode 表。
+
+| mode | primitive | 节点形态 |
+|---|---|---|
+| `single` | `task` | 一个 `example_sleep` child；`single` 只是示例别名，不是 kernel primitive |
+| `chain` | `chain` | 多个 `example_sleep` child 串行依赖 |
+| `group` | `group` | 多个 `example_sleep` child 并行执行 |
+| `chord` | `chord` | 多个 `example_sleep` header 完成后运行一个 `example_sleep` body |
+| `map` | `map` | 把 items 展开成多个 `example_sleep` child |
+| `starmap` | `starmap` | 把二维 items 解包成多个 `example_pair` child |
+| `chunks` | `chunks` | 把 items 按 `chunk_size` 分块成多个 `example_collect` child |
+
+这些 mode 用来展示和压测 root/child 编排结构；正式业务 workflow 应定义自己的 root `job_type`、child executors、workflow definition 和结果 schema。
+
 ## Runtime Path
 
 ```text

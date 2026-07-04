@@ -11,7 +11,7 @@
 
 ## Remaining Gaps
 
-- 正式业务 `job_type` 尚未接入；当前内置 `job_test_*` 和 `job_real_llm_*` 只作为模板验证和示例。
+- 正式业务 `job_type` 尚未接入；当前内置 `example_*` 和 `job_real_llm_*` 只作为模板验证、压测目标或真实 LLM 链路样例。
 - 真实模型业务 e2e 需要等正式业务 schema、prompt、model、pricing 和对象存储产物确定后补齐。
 - node / child 级 cost attribution、running result snapshot、child node 查询、取消语义和运维 UI 都不是模板阶段前置项。
 - 生产部署、K8s、云平台 Secrets、CI/CD 发布流水线不属于本仓库当前边界。

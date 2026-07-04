@@ -43,7 +43,23 @@
 
 workflow child node 应引用 `role="leaf"` 或 `role="root_or_leaf"` 的 executor。`visibility="internal"` 或内部 child Job 的创建由服务内部 workflow orchestrator 完成，不经过外部 `POST /jobs` 提交准入；Job 实例是否为 child 由 `root_job_id` 和 `workflow_node_key` 共同表达：public root 的两者都为空，workflow child 的两者都非空。
 
-当前开发者示例是 `example_workflow`，标记为 `visibility="demo"`、`role="root"`。它覆盖 `single`、`chain`、`group`、`chord`、`map`、`starmap` 和 `chunks`，可作为本地理解 root/child 模式和压测 workflow 链路的参考，但不是正式业务 API 合同。
+当前开发者示例是 `example_workflow`，标记为 `visibility="demo"`、`role="root"`。它可作为本地理解 root/child 模式和压测 workflow 链路的参考；当前示例 mode catalog 见 [`../current/workflow-kernel.md`](../current/workflow-kernel.md)，但它不是正式业务 API 合同。
+
+业务 workflow 对接的是 `job_type` / workflow primitive / profile 合同，不是继承 `example_*`。正式业务可以复用 `task`、`chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 的编译语义，但必须定义自己的 root params、public result、internal child schema、错误 reason 和业务 e2e。
+
+## 新增压测 Profile
+
+`scripts/load.sh` 的 `case` 表达压测链路，`profile` 表达压测对象和默认参数。新增业务 `job_type` 后，优先新增 JSON profile，而不是修改 `scripts/load/locustfile.py`。
+
+最小步骤：
+
+1. 使用 `./scripts/load.sh init <profile-key> --job-type <job_type>` 生成 `.run/load/profiles/<profile-key>.json`。
+2. 在 JSON profile 顶层填写 `case`、`job_type` 和 `job_params`；把 `users`、`spawn_rate`、`time`、`poll_interval_seconds` 和 `flow_timeout_seconds` 等压测默认值放入 `defaults` 对象。
+3. 运行时使用 `./scripts/load.sh run --profile <profile-file> --allow-real-job`；非 `example_*` 类型必须显式确认。
+4. 使用 `./scripts/load.sh run --profile <profile-file> --dry-run --allow-real-job` 检查 manifest，再进入真实压测。
+5. 长期保留的业务 profile 应补充 profile 解析或 dry-run manifest 测试，证明不需要改 Locust runner。
+
+profile manifest 是压测合同的机器可读投影。它应能说明 case、profile、`job_type`、是否存在 `job_params`、是否需要真实业务确认和输出目录；manifest 不应打印完整业务 payload。`example_*` profile 是模板默认低成本目标；真实业务 profile 只复用同一 runner 和 manifest 合同。
 
 ## 新增 HTTP 接口
 
