@@ -44,8 +44,9 @@ Layout
 
 - 默认关闭，由 `OPS_DASHBOARD_ENABLED` 控制。
 - 路由固定在 `/internal/jobs-dashboard`，不进入 OpenAPI。
-- 后端提供 data source config、overview、failures、job trace、health。
+- 后端提供 data source config、overview、recent_jobs、flow_capacity、failures_callbacks、job trace、health。
 - 前端负责 renderer contract、widget registry、layout registry、ECharts 渲染和 HTML 渲染。
+- `recent_jobs` 和 `flow_capacity` 当前已进入导航/data source/page-local controls 合同，但业务读模型仍返回 planned payload；真实 Recent Jobs 和 Flow & Capacity 视图属于后续阶段。
 - `/internal/jobs-dashboard/examples` 是独立静态 renderer 示例页，只使用 generic fixtures，不请求 Job 读模型，也不作为业务 mock 数据源。
 - dashboard 不支持业务 mock 数据开关；旧的 `OPS_DASHBOARD_MOCK_DATA_ENABLED` 已废弃，出现在 env 文件或进程环境中都会触发配置加载失败。
 - dashboard 不直接读取 Redis broker、Pod runtime、完整 payload 或对象存储内容；这些仍由 `scripts/jobs.sh broker/runtime/payload --full` 等命令承担。
@@ -64,6 +65,7 @@ GET /internal/jobs-dashboard/config
 
 app/ops_dashboard/static/dashboard.js
   DATA_SOURCE_REGISTRY
+  PAGE_CONTROL_REGISTRY
   WIDGET_REGISTRY
   LAYOUT_REGISTRY
   WIDGET_DATA_ADAPTERS
@@ -77,6 +79,7 @@ app/ops_dashboard/static/chart_contract.js
 | 层 | 文件 | 拥有内容 | 不应包含 |
 | --- | --- | --- | --- |
 | Backend Data Source | `app/ops_dashboard/registry.py` / `router.py` | `key`、`title`、`route`、`refresh_seconds`、read model route | ECharts 类型、DOM 位置、页面布局 |
+| Page-local Control | `app/ops_dashboard/registry.py` / `dashboard.js` | `key`、`type`、`binding`、`param`、默认值、选项、目标 data source | 业务 SQL、renderer 实现、跨页面全局过滤语义 |
 | Widget | `app/ops_dashboard/static/dashboard.js` | `rendererType`、`dataSource`、`dataPath` / `adapter`、字段映射、运维问题 | DOM `target`、页面区域、panel 顺序 |
 | Layout | `app/ops_dashboard/static/dashboard.js` | 页面 title、dataSource、groups、placements、panel chrome、host class、target | 数据查询逻辑、renderer 实现、业务 SQL |
 | Renderer | `app/ops_dashboard/static/chart_contract.js` | 通用渲染器、fallback、HTML escape、ECharts 生命周期 | Job 业务字段、section 路由、页面导航 |
@@ -88,10 +91,22 @@ app/ops_dashboard/static/chart_contract.js
 | key | route | refresh | 当前用途 |
 | --- | --- | --- | --- |
 | `overview` | `/internal/jobs-dashboard/sections/overview/data` | 15s | 总览健康、容量、趋势、延迟、stuck 样本 |
-| `failures` | `/internal/jobs-dashboard/sections/failures/data` | 30s | 失败聚合、失败样本、callback outbox |
+| `recent_jobs` | `/internal/jobs-dashboard/sections/recent_jobs/data` | 15s | Phase 1 planned payload；page-local `status/client_request_id/limit` 控件合同 |
+| `flow_capacity` | `/internal/jobs-dashboard/sections/flow_capacity/data` | 30s | Phase 2 planned payload |
+| `failures_callbacks` | `/internal/jobs-dashboard/sections/failures_callbacks/data` | 30s | 失败聚合、失败样本、callback outbox |
 | `job_trace` | `/internal/jobs-dashboard/jobs/{job_id}/data` | 0 | 单 Job 证据链追踪 |
 
 `sections` 目前与 `data_sources` 保持同一份配置输出；前端使用它生成导航和 data source route。
+
+当前 page-local controls：
+
+| dataSource | control | binding | param | 用途 |
+| --- | --- | --- | --- | --- |
+| `recent_jobs` | `status` | query | `status` | 页内状态筛选，允许 `all/queued/running/succeeded/failed` |
+| `recent_jobs` | `client_request_id` | query | `client_request_id` | 按调用方幂等请求定位 root Job |
+| `recent_jobs` | `limit` | query | `limit` | 限制返回行数 |
+| `job_trace` | `job_id` | route | `job_id` | 替换 `/jobs/{job_id}/data` route param |
+| `job_trace` | `limit` | query | `limit` | 限制 timeline 等明细行数 |
 
 ## Renderer Contract
 
@@ -187,8 +202,9 @@ GET /internal/jobs-dashboard
 section 数据流：
 
 ```text
-loadSection("overview" | "failures")
+loadSection("overview" | "recent_jobs" | "flow_capacity" | "failures_callbacks")
   -> resolve route from data source config
+  -> merge global filters and page-local query controls
   -> GET section data
   -> renderWidgetLayout(layout, widgets, payload, adapters)
   -> rendererType dispatch
@@ -199,6 +215,7 @@ loadSection("overview" | "failures")
 
 ```text
 loadJobTrace(job_id)
+  -> set page-local route control job_id
   -> GET /internal/jobs-dashboard/jobs/{job_id}/data
   -> render job_trace layout
   -> summary/json/table widgets share the same renderer pipeline
@@ -260,6 +277,16 @@ GET /internal/jobs-dashboard/examples
 
 不要为了一个 widget 拆一个 HTTP endpoint；当前默认粒度是 section/data source 级 route。
 
+### 新增 page-local control
+
+页面级控件用于只属于某个 data source 的查询参数，例如 `recent_jobs.status` 或 `job_trace.job_id`：
+
+1. 在 `DASHBOARD_DATA_SOURCES` 对应项声明 control schema。
+2. 在前端 `PAGE_CONTROL_REGISTRY` 增加同名 control。
+3. 明确 `binding` 是 `route` 还是 `query`。
+4. 在 route 中做参数校验。
+5. 更新 config 和静态 registry 测试。
+
 ## Verification
 
 - 静态注册合同测试：`tests/test_ops_dashboard.py::test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contract`
@@ -275,6 +302,7 @@ widget rendererType exists
 widget dataSource exists
 layout dataSource matches placed widgets
 widget adapter exists
+page-local controls declare route/query binding
 examples cover public renderer types
 examples never fetch live data
 ```

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import mimetypes
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -19,6 +20,8 @@ from app.ops_dashboard import read_model
 from app.ops_dashboard.config import get_dashboard_config
 from app.ops_dashboard.registry import data_source_config, section_config
 from app.ops_dashboard.schemas import DashboardFilters, VALID_BUCKETS, VALID_WINDOWS
+
+VALID_RECENT_JOB_STATUSES = {"all", "queued", "running", "succeeded", "failed"}
 
 router = APIRouter(tags=["ops-dashboard"], include_in_schema=False)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -41,7 +44,6 @@ def _filters(
     bucket: str = Query(default="1m"),
     caller_id: str | None = Query(default=None),
     job_type: str | None = Query(default=None),
-    limit: int = Query(default=20, ge=1, le=100),
 ) -> DashboardFilters:
     if window not in VALID_WINDOWS:
         raise HTTPException(status_code=400, detail=f"window must be one of: {', '.join(VALID_WINDOWS)}")
@@ -50,7 +52,29 @@ def _filters(
     config = get_dashboard_config()
     if VALID_WINDOWS[window] > config.max_window_seconds:
         raise HTTPException(status_code=400, detail="window exceeds OPS_DASHBOARD_MAX_WINDOW_SECONDS")
-    return DashboardFilters(window=window, bucket=bucket, caller_id=caller_id, job_type=job_type, limit=limit)
+    return DashboardFilters(window=window, bucket=bucket, caller_id=caller_id, job_type=job_type)
+
+
+def _planned_section_payload(
+    *,
+    section: str,
+    title: str,
+    filters: DashboardFilters,
+    next_checks: list[str],
+    controls: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "generated_at": datetime.now(UTC),
+        "section": section,
+        "title": title,
+        "filters": filters.__dict__,
+        "controls": controls or {},
+        "health": {
+            "status": "neutral",
+            "reasons": ["planned"],
+            "next_checks": next_checks,
+        },
+    }
 
 
 async def _with_timeout(coro):
@@ -122,8 +146,53 @@ async def overview_section(
     return jsonable_encoder(payload)
 
 
-@router.get("/internal/jobs-dashboard/sections/failures/data")
-async def failures_section(
+@router.get("/internal/jobs-dashboard/sections/recent_jobs/data")
+async def recent_jobs_section(
+    _: OpsAccess,
+    filters: DashboardFilters = Depends(_filters),
+    status: str = Query(default="all"),
+    client_request_id: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    if status not in VALID_RECENT_JOB_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status must be one of: {', '.join(sorted(VALID_RECENT_JOB_STATUSES))}",
+        )
+    return jsonable_encoder(
+        _planned_section_payload(
+            section="recent_jobs",
+            title="最近任务",
+            filters=filters,
+            controls={"status": status, "client_request_id": client_request_id, "limit": limit},
+            next_checks=[
+                "Phase 1 will connect public root Job rows.",
+                "./scripts/jobs.sh list --status succeeded,failed --json",
+            ],
+        )
+    )
+
+
+@router.get("/internal/jobs-dashboard/sections/flow_capacity/data")
+async def flow_capacity_section(
+    _: OpsAccess,
+    filters: DashboardFilters = Depends(_filters),
+):
+    return jsonable_encoder(
+        _planned_section_payload(
+            section="flow_capacity",
+            title="吞吐与容量",
+            filters=filters,
+            next_checks=[
+                "Phase 2 will connect ingress, drain, gate/headroom and latency signals.",
+                "./scripts/jobs.sh dashboard --since 1h",
+            ],
+        )
+    )
+
+
+@router.get("/internal/jobs-dashboard/sections/failures_callbacks/data")
+async def failures_callbacks_section(
     _: OpsAccess,
     db: AsyncSession = Depends(get_dashboard_db),
     filters: DashboardFilters = Depends(_filters),

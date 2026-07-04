@@ -84,7 +84,7 @@ def _base_params(filters: DashboardFilters) -> dict[str, Any]:
         "job_type": filters.job_type,
         "caller_id": filters.caller_id,
         "since_at": _now() - filters.window_delta,
-        "limit": filters.limit,
+        "limit": filters.sample_limit,
     }
 
 

@@ -95,32 +95,75 @@ def test_ops_dashboard_page_and_config_routes_work_without_auth(monkeypatch):
     assert config_json["route_base"] == "/internal/jobs-dashboard"
     assert "mock_data_enabled" not in config_json
     assert "data_source" not in config_json
-    assert config_json["data_sources"] == [
+    data_sources = {source["key"]: source for source in config_json["data_sources"]}
+    assert list(data_sources) == ["overview", "recent_jobs", "flow_capacity", "failures_callbacks", "job_trace"]
+    assert data_sources["overview"]["route"] == "/internal/jobs-dashboard/sections/overview/data"
+    assert data_sources["recent_jobs"]["route"] == "/internal/jobs-dashboard/sections/recent_jobs/data"
+    assert data_sources["flow_capacity"]["route"] == "/internal/jobs-dashboard/sections/flow_capacity/data"
+    assert data_sources["failures_callbacks"]["route"] == "/internal/jobs-dashboard/sections/failures_callbacks/data"
+    assert data_sources["job_trace"]["route"] == "/internal/jobs-dashboard/jobs/{job_id}/data"
+    assert data_sources["recent_jobs"]["controls"] == [
         {
-            "key": "overview",
-            "title": "总览",
-            "route": "/internal/jobs-dashboard/sections/overview/data",
-            "refresh_seconds": 15,
-            "default_enabled": True,
+            "key": "status",
+            "type": "select",
+            "binding": "query",
+            "param": "status",
+            "label": "status",
+            "default": "all",
+            "options": ["all", "queued", "running", "succeeded", "failed"],
+            "min": None,
+            "max": None,
         },
         {
-            "key": "failures",
-            "title": "失败",
-            "route": "/internal/jobs-dashboard/sections/failures/data",
-            "refresh_seconds": 30,
-            "default_enabled": True,
+            "key": "client_request_id",
+            "type": "text",
+            "binding": "query",
+            "param": "client_request_id",
+            "label": "client_request_id",
+            "default": None,
+            "options": [],
+            "min": None,
+            "max": None,
         },
         {
-            "key": "job_trace",
-            "title": "Job 追踪",
-            "route": "/internal/jobs-dashboard/jobs/{job_id}/data",
-            "refresh_seconds": 0,
-            "default_enabled": True,
+            "key": "limit",
+            "type": "number",
+            "binding": "query",
+            "param": "limit",
+            "label": "limit",
+            "default": 20,
+            "options": [],
+            "min": 1,
+            "max": 100,
+        },
+    ]
+    assert data_sources["job_trace"]["controls"] == [
+        {
+            "key": "job_id",
+            "type": "text",
+            "binding": "route",
+            "param": "job_id",
+            "label": "job_id",
+            "default": None,
+            "options": [],
+            "min": None,
+            "max": None,
+        },
+        {
+            "key": "limit",
+            "type": "number",
+            "binding": "query",
+            "param": "limit",
+            "label": "limit",
+            "default": 100,
+            "options": [],
+            "min": 1,
+            "max": 200,
         },
     ]
     assert config_json["data_sources"] == config_json["sections"]
     for source in config_json["data_sources"]:
-        assert set(source) == {"key", "title", "route", "refresh_seconds", "default_enabled"}
+        assert set(source) == {"key", "title", "route", "refresh_seconds", "default_enabled", "controls"}
 
 
 def test_ops_dashboard_routes_are_hidden_from_openapi_and_get_only(monkeypatch):
@@ -160,6 +203,7 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     assert "const RENDERERS = Object.freeze" in contract
     assert "function renderWidgetLayout" in contract
     assert "const DATA_SOURCE_REGISTRY = Object.freeze" in script
+    assert "const PAGE_CONTROL_REGISTRY = Object.freeze" in script
     assert "const WIDGET_REGISTRY = Object.freeze" in script
     assert "const LAYOUT_REGISTRY = Object.freeze" in script
     assert "const WIDGET_DATA_ADAPTERS = Object.freeze" in script
@@ -187,6 +231,9 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     type_matches = re.findall(r'^\s{4}(?:"([^"]+)"|([a-z_]+)):', type_body.group("body"), re.M)
     assert {quoted or bare for quoted, bare in type_matches} == renderer_types
 
+    control_source = script[
+        script.index("const PAGE_CONTROL_REGISTRY = Object.freeze") : script.index("const WIDGET_REGISTRY = Object.freeze")
+    ]
     widget_source = script[script.index("const WIDGET_REGISTRY = Object.freeze") : script.index("const LAYOUT_REGISTRY = Object.freeze")]
     layout_source = script[script.index("const LAYOUT_REGISTRY = Object.freeze") : script.index("const WIDGET_DATA_ADAPTERS = Object.freeze")]
     data_source_source = script[
@@ -198,12 +245,37 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     assert {"echarts.line", "echarts.horizontal_bar", "html.table", "status_line"} <= widget_renderer_types
 
     data_source_keys = set(re.findall(r"^\s{4}([a-z_]+):", data_source_source, re.M))
-    assert data_source_keys == {"overview", "failures", "job_trace"}
+    assert data_source_keys == {"overview", "recent_jobs", "flow_capacity", "failures_callbacks", "job_trace"}
     assert 'route: `${BASE}/sections/overview/data`' in data_source_source
-    assert 'route: `${BASE}/sections/failures/data`' in data_source_source
+    assert 'route: `${BASE}/sections/recent_jobs/data`' in data_source_source
+    assert 'route: `${BASE}/sections/flow_capacity/data`' in data_source_source
+    assert 'route: `${BASE}/sections/failures_callbacks/data`' in data_source_source
     assert 'route: `${BASE}/jobs/{job_id}/data`' in data_source_source
+    assert "usesJobId" not in data_source_source
+    assert "job_search" not in script
     widget_data_sources = set(re.findall(r'dataSource:\s*"([^"]+)"', widget_source))
     assert widget_data_sources <= data_source_keys
+    assert "recent_jobs:" in control_source
+    assert "job_trace:" in control_source
+    assert 'binding: "route"' in control_source
+    assert 'binding: "query"' in control_source
+    for snippet in [
+        'key: "status"',
+        'type: "select"',
+        'default: "all"',
+        'options: ["all", "queued", "running", "succeeded", "failed"]',
+        'key: "client_request_id"',
+        'key: "limit"',
+        "default: 20",
+        "max: 100",
+        'key: "job_id"',
+        "default: 100",
+        "max: 200",
+    ]:
+        assert snippet in control_source
+    assert "PAGE_CONTROL_REGISTRY[section]" in script
+    assert "route.replace(`{${control.param}}`" in script
+    assert "configured?.refresh_seconds ?? state.config?.refresh_seconds ?? 15" in script
 
     widget_keys = set(re.findall(r'^\s{4}"([^"]+)":\s*\{', widget_source, re.M))
     layout_widget_id_list = re.findall(r'widgetId:\s*"([^"]+)"', layout_source)
@@ -223,7 +295,11 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
         assert field in script
 
     for target in re.findall(r'target:\s*"([^"]+)"', layout_source):
-        assert f'id="{target}"' in page or f'id="{target}"' in script
+        assert (
+            f'id="{target}"' in page
+            or f'id="{target}"' in script
+            or 'id="${escapeHtml(layout.target)}"' in script
+        )
 
     adapter_body = re.search(r"const WIDGET_DATA_ADAPTERS = Object\.freeze\(\{(?P<body>.*?)\n  \}\);", script, re.S)
     assert adapter_body is not None
@@ -297,6 +373,7 @@ def test_ops_dashboard_overview_route_returns_read_model_payload(monkeypatch):
 
     async def fake_overview_data(_db, filters, *, max_active_jobs):
         assert filters.window == "1h"
+        assert filters.sample_limit == 20
         assert max_active_jobs == 1000
         return {
             "generated_at": datetime(2026, 7, 3, tzinfo=UTC),
@@ -311,7 +388,7 @@ def test_ops_dashboard_overview_route_returns_read_model_payload(monkeypatch):
     application.include_router(ops_router.router)
 
     with TestClient(application) as client:
-        response = client.get("/internal/jobs-dashboard/sections/overview/data?window=1h&bucket=1m")
+        response = client.get("/internal/jobs-dashboard/sections/overview/data?window=1h&bucket=1m&limit=7")
 
     assert response.status_code == 200
     assert response.json()["health"]["status"] == "ok"
@@ -385,7 +462,69 @@ def test_ops_dashboard_job_trace_route_returns_read_model_payload(monkeypatch):
     assert response.json()["job"]["status"] == "succeeded"
 
 
-def test_ops_dashboard_failures_route_returns_read_model_payload(monkeypatch):
+def test_ops_dashboard_recent_jobs_route_returns_planned_payload(monkeypatch):
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    application = FastAPI()
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get(
+            "/internal/jobs-dashboard/sections/recent_jobs/data"
+            "?window=1h&bucket=1m&status=failed&client_request_id=req-1&limit=7"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["section"] == "recent_jobs"
+    assert payload["health"]["reasons"] == ["planned"]
+    assert payload["controls"] == {"status": "failed", "client_request_id": "req-1", "limit": 7}
+
+
+def test_ops_dashboard_recent_jobs_rejects_invalid_status(monkeypatch):
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    application = FastAPI()
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get("/internal/jobs-dashboard/sections/recent_jobs/data?status=stuck")
+
+    assert response.status_code == 400
+    assert "status must be one of" in response.json()["detail"]
+
+
+def test_ops_dashboard_flow_capacity_route_returns_planned_payload(monkeypatch):
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    application = FastAPI()
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get("/internal/jobs-dashboard/sections/flow_capacity/data?window=1h&bucket=1m")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["section"] == "flow_capacity"
+    assert payload["health"]["reasons"] == ["planned"]
+
+
+def test_ops_dashboard_failures_callbacks_route_returns_read_model_payload(monkeypatch):
     from app.ops_dashboard import config as ops_config
     from app.ops_dashboard import read_model
     from app.ops_dashboard import router as ops_router
@@ -399,6 +538,7 @@ def test_ops_dashboard_failures_route_returns_read_model_payload(monkeypatch):
 
     async def fake_failures_data(_db, filters):
         assert filters.window == "1h"
+        assert filters.sample_limit == 20
         return {
             "generated_at": datetime(2026, 7, 3, tzinfo=UTC),
             "failure_groups": [{"error_code": "LIVE_ONLY", "count": 1}],
@@ -414,7 +554,9 @@ def test_ops_dashboard_failures_route_returns_read_model_payload(monkeypatch):
     application.include_router(ops_router.router)
 
     with TestClient(application) as client:
-        response = client.get("/internal/jobs-dashboard/sections/failures/data?window=1h&bucket=1m")
+        response = client.get(
+            "/internal/jobs-dashboard/sections/failures_callbacks/data?window=1h&bucket=1m&limit=7"
+        )
 
     assert response.status_code == 200
     assert response.json()["failure_groups"][0]["error_code"] == "LIVE_ONLY"

@@ -4,7 +4,7 @@
     section: "overview",
     config: null,
     refreshTimer: null,
-    currentJobId: null,
+    pageControls: {},
   };
 
   const Renderers = window.OpsDashboardRenderers;
@@ -24,16 +24,75 @@
       route: `${BASE}/sections/overview/data`,
       usesFilters: true,
     },
-    failures: {
-      sectionKey: "failures",
-      route: `${BASE}/sections/failures/data`,
+    recent_jobs: {
+      sectionKey: "recent_jobs",
+      route: `${BASE}/sections/recent_jobs/data`,
+      usesFilters: true,
+    },
+    flow_capacity: {
+      sectionKey: "flow_capacity",
+      route: `${BASE}/sections/flow_capacity/data`,
+      usesFilters: true,
+    },
+    failures_callbacks: {
+      sectionKey: "failures_callbacks",
+      route: `${BASE}/sections/failures_callbacks/data`,
       usesFilters: true,
     },
     job_trace: {
       sectionKey: "job_trace",
       route: `${BASE}/jobs/{job_id}/data`,
-      usesJobId: true,
     },
+  });
+
+  const PAGE_CONTROL_REGISTRY = Object.freeze({
+    recent_jobs: [
+      {
+        key: "status",
+        type: "select",
+        binding: "query",
+        param: "status",
+        label: "status",
+        default: "all",
+        options: ["all", "queued", "running", "succeeded", "failed"],
+      },
+      {
+        key: "client_request_id",
+        type: "text",
+        binding: "query",
+        param: "client_request_id",
+        label: "client_request_id",
+      },
+      {
+        key: "limit",
+        type: "number",
+        binding: "query",
+        param: "limit",
+        label: "limit",
+        default: 20,
+        min: 1,
+        max: 100,
+      },
+    ],
+    job_trace: [
+      {
+        key: "job_id",
+        type: "text",
+        binding: "route",
+        param: "job_id",
+        label: "job_id",
+      },
+      {
+        key: "limit",
+        type: "number",
+        binding: "query",
+        param: "limit",
+        label: "limit",
+        default: 100,
+        min: 1,
+        max: 200,
+      },
+    ],
   });
 
   const WIDGET_REGISTRY = Object.freeze({
@@ -120,19 +179,51 @@
         { key: "since_at", label: "since_at", value: (row) => formatDate(row.since_at) },
       ],
     },
-    "failures.status": {
+    "recent_jobs.status": {
       rendererType: "status_line",
-      dataSource: "failures",
+      dataSource: "recent_jobs",
       items: [
-        { label: "section", badgeDefault: "ok", badgePath: "health.status", value: "failures" },
+        { label: "section", badgeDefault: "neutral", badgePath: "health.status", value: "recent_jobs" },
         { label: "generated_at", valuePath: "generated_at", format: "date" },
       ],
     },
-    "failures.failure_groups_rank": {
+    "recent_jobs.next_checks": {
+      title: "Recent Jobs",
+      question: "Phase 1 data source",
+      rendererType: "html.signal_list",
+      dataSource: "recent_jobs",
+      dataPath: "health.next_checks",
+      emptyText: "Recent Jobs data source planned",
+    },
+    "flow_capacity.status": {
+      rendererType: "status_line",
+      dataSource: "flow_capacity",
+      items: [
+        { label: "section", badgeDefault: "neutral", badgePath: "health.status", value: "flow_capacity" },
+        { label: "generated_at", valuePath: "generated_at", format: "date" },
+      ],
+    },
+    "flow_capacity.next_checks": {
+      title: "Flow & Capacity",
+      question: "Phase 2 data source",
+      rendererType: "html.signal_list",
+      dataSource: "flow_capacity",
+      dataPath: "health.next_checks",
+      emptyText: "Flow & Capacity data source planned",
+    },
+    "failures_callbacks.status": {
+      rendererType: "status_line",
+      dataSource: "failures_callbacks",
+      items: [
+        { label: "section", badgeDefault: "ok", badgePath: "health.status", value: "failures_callbacks" },
+        { label: "generated_at", valuePath: "generated_at", format: "date" },
+      ],
+    },
+    "failures_callbacks.failure_groups_rank": {
       title: "Failure Groups",
       question: "按 error_code 聚合",
       rendererType: "echarts.horizontal_bar",
-      dataSource: "failures",
+      dataSource: "failures_callbacks",
       dataPath: "failure_groups",
       labelField: "error_code",
       valueField: "count",
@@ -140,11 +231,11 @@
       color: "#c9342f",
       left: 130,
     },
-    "failures.failure_groups_table": {
+    "failures_callbacks.failure_groups_table": {
       title: "Failure Groups Table",
       question: "failure group details",
       rendererType: "html.table",
-      dataSource: "failures",
+      dataSource: "failures_callbacks",
       dataPath: "failure_groups",
       emptyText: "当前窗口没有 failure groups",
       columns: [
@@ -156,11 +247,11 @@
         { key: "newest_updated_at", label: "newest", value: (row) => formatDate(row.newest_updated_at) },
       ],
     },
-    "failures.failed_samples": {
+    "failures_callbacks.failed_samples": {
       title: "Failed Samples",
       question: "点击 job_id 查看追踪",
       rendererType: "html.table",
-      dataSource: "failures",
+      dataSource: "failures_callbacks",
       dataPath: "failed_samples",
       emptyText: "当前窗口没有 failed Job",
       columns: [
@@ -171,11 +262,11 @@
         { key: "updated_at", label: "updated", value: (row) => formatDate(row.updated_at) },
       ],
     },
-    "failures.callback_outbox": {
+    "failures_callbacks.callback_outbox": {
       title: "Callbacks",
       question: "outbox 状态",
       rendererType: "html.table",
-      dataSource: "failures",
+      dataSource: "failures_callbacks",
       dataPath: "callbacks",
       emptyText: "当前窗口没有 callback outbox",
       columns: [
@@ -337,34 +428,54 @@
         { widgetId: "overview.stuck_samples", group: "main", hostClass: "table-wrap" },
       ],
     },
-    failures: {
-      title: "失败",
-      dataSource: "failures",
+    recent_jobs: {
+      title: "最近任务",
+      dataSource: "recent_jobs",
+      target: "recent-jobs-widgets",
+      emptyText: "Recent Jobs data source is planned for Phase 1.",
+      groups: [{ key: "main", className: "panel-grid" }],
+      placements: [
+        { widgetId: "recent_jobs.status", target: "status-line" },
+        { widgetId: "recent_jobs.next_checks", group: "main", hostClass: "signal-list" },
+      ],
+    },
+    flow_capacity: {
+      title: "吞吐与容量",
+      dataSource: "flow_capacity",
       target: "view-root",
       groups: [{ key: "main", className: "panel-grid" }],
       placements: [
-        { widgetId: "failures.status", target: "status-line" },
+        { widgetId: "flow_capacity.status", target: "status-line" },
+        { widgetId: "flow_capacity.next_checks", group: "main", hostClass: "signal-list" },
+      ],
+    },
+    failures_callbacks: {
+      title: "失败与回调",
+      dataSource: "failures_callbacks",
+      target: "view-root",
+      groups: [{ key: "main", className: "panel-grid" }],
+      placements: [
+        { widgetId: "failures_callbacks.status", target: "status-line" },
         {
-          widgetId: "failures.failure_groups_rank",
+          widgetId: "failures_callbacks.failure_groups_rank",
           group: "main",
           panelClass: "panel panel-wide",
           hostClass: "chart chart-compact",
         },
         {
-          widgetId: "failures.failure_groups_table",
+          widgetId: "failures_callbacks.failure_groups_table",
           group: "main",
           panelClass: "panel panel-wide",
           hostClass: "table-wrap",
         },
-        { widgetId: "failures.failed_samples", group: "main", hostClass: "table-wrap" },
-        { widgetId: "failures.callback_outbox", group: "main", hostClass: "table-wrap" },
+        { widgetId: "failures_callbacks.failed_samples", group: "main", hostClass: "table-wrap" },
+        { widgetId: "failures_callbacks.callback_outbox", group: "main", hostClass: "table-wrap" },
       ],
     },
     job_trace: {
       title: "Job 追踪",
       dataSource: "job_trace",
       target: "job-trace-widgets",
-      control: "job_search",
       emptyText: "输入 job_id 后加载 Job 追踪。",
       groups: [
         { key: "summary", className: "trace-summary" },
@@ -398,14 +509,14 @@
     return document.querySelector(selector);
   }
 
-  function filterQuery() {
+  function filterParams() {
     const form = new FormData($("#filters"));
     const params = new URLSearchParams();
     for (const [key, value] of form.entries()) {
       const normalized = String(value).trim();
       if (normalized) params.set(key, normalized);
     }
-    return params.toString();
+    return params;
   }
 
   async function fetchJson(path) {
@@ -422,16 +533,56 @@
     return configured.find((source) => source.key === key);
   }
 
+  function pageControls(section) {
+    return PAGE_CONTROL_REGISTRY[section] || [];
+  }
+
+  function initializePageControls() {
+    for (const [section, controls] of Object.entries(PAGE_CONTROL_REGISTRY)) {
+      state.pageControls[section] ||= {};
+      for (const control of controls) {
+        if (control.default !== undefined && state.pageControls[section][control.key] === undefined) {
+          state.pageControls[section][control.key] = control.default;
+        }
+      }
+    }
+  }
+
+  function controlValue(section, control, params) {
+    if (params && control.key in params) return params[control.key];
+    if (control.key === "job_id" && params?.jobId) return params.jobId;
+    const saved = state.pageControls[section]?.[control.key];
+    if (saved !== undefined) return saved;
+    return control.default;
+  }
+
+  function routeControlsReady(section, params) {
+    return pageControls(section)
+      .filter((control) => control.binding === "route")
+      .every((control) => {
+        const value = controlValue(section, control, params);
+        return value !== undefined && value !== null && String(value).trim() !== "";
+      });
+  }
+
   function dataSourceUrl(key, params) {
     const source = DATA_SOURCE_REGISTRY[key];
     if (!source) throw new Error(`Unknown dataSource: ${key}`);
     const configured = configuredDataSource(source.sectionKey);
     let route = configured?.route || source.route;
-    if (source.usesJobId) {
-      if (!params?.jobId) throw new Error("job_id is required");
-      route = route.replace("{job_id}", encodeURIComponent(params.jobId));
+    const queryParams = source.usesFilters ? filterParams() : new URLSearchParams();
+    for (const control of pageControls(key)) {
+      const value = controlValue(key, control, params);
+      const normalized = value === undefined || value === null ? "" : String(value).trim();
+      if (control.binding === "route") {
+        if (!normalized) throw new Error(`${control.param} is required`);
+        route = route.replace(`{${control.param}}`, encodeURIComponent(normalized));
+      } else if (control.binding === "query" && normalized) {
+        queryParams.set(control.param, normalized);
+      }
     }
-    const query = source.usesFilters ? filterQuery() : "";
+    if (route.includes("{")) throw new Error(`Unbound route param in dataSource: ${key}`);
+    const query = queryParams.toString();
     return query ? `${route}?${query}` : route;
   }
 
@@ -468,30 +619,67 @@
     $("#section-title").textContent = LAYOUT_REGISTRY[section]?.title || section;
   }
 
-  function renderJobSearchShell(context) {
-    $("#view-root").innerHTML = `
-      <form id="job-search" class="job-search">
+  function renderControlInput(section, control, context) {
+    const value = controlValue(section, control, context);
+    if (control.type === "select") {
+      const options = (control.options || [])
+        .map((option) => `
+          <option value="${escapeHtml(option)}" ${String(value) === String(option) ? "selected" : ""}>${escapeHtml(option)}</option>
+        `)
+        .join("");
+      return `
         <label>
-          job_id
-          <input name="job_id" autocomplete="off" placeholder="UUID" value="${escapeHtml(context?.jobId || "")}" />
+          ${escapeHtml(control.label)}
+          <select name="${escapeHtml(control.key)}">${options}</select>
         </label>
-        <button class="primary-button" type="submit">查询 Job</button>
-      </form>
-      <div id="job-trace-widgets" class="trace-content empty-state">${escapeHtml(context?.message || LAYOUT_REGISTRY.job_trace.emptyText)}</div>
+      `;
+    }
+    const attrs = [
+      `name="${escapeHtml(control.key)}"`,
+      `type="${control.type === "number" ? "number" : "text"}"`,
+      `value="${escapeHtml(value ?? "")}"`,
+      control.min !== undefined ? `min="${escapeHtml(control.min)}"` : "",
+      control.max !== undefined ? `max="${escapeHtml(control.max)}"` : "",
+      control.type === "text" ? "autocomplete=\"off\"" : "",
+    ].filter(Boolean).join(" ");
+    return `
+      <label>
+        ${escapeHtml(control.label)}
+        <input ${attrs} />
+      </label>
     `;
-    bindJobSearch();
+  }
+
+  function renderPageControls(section, context) {
+    const controls = pageControls(section);
+    if (controls.length === 0) return "";
+    return `
+      <form id="page-controls" class="job-search">
+        ${controls.map((control) => renderControlInput(section, control, context)).join("")}
+        <button class="primary-button" type="submit">查询</button>
+      </form>
+    `;
+  }
+
+  function renderControlledShell(section, layout, context) {
+    const message = context?.message || layout.emptyText || "";
+    $("#view-root").innerHTML = `
+      ${renderPageControls(section, context)}
+      <div id="${escapeHtml(layout.target)}" class="trace-content empty-state">${escapeHtml(message)}</div>
+    `;
+    bindPageControls(section);
   }
 
   function renderPage(section, payload, context) {
     const layout = LAYOUT_REGISTRY[section];
     assertLayoutDataSources(section, layout);
     setActiveSection(section);
-    if (layout.control === "job_search") {
-      renderJobSearchShell(context);
+    if (pageControls(section).length > 0) {
+      renderControlledShell(section, layout, context);
       if (!payload) return;
     }
     renderWidgetLayout(layout, WIDGET_REGISTRY, payload, WIDGET_DATA_ADAPTERS);
-    if (layout.control === "job_search") bindJobSearch();
+    if (pageControls(section).length > 0) bindPageControls(section);
   }
 
   function assertLayoutDataSources(section, layout) {
@@ -513,6 +701,10 @@
   async function loadSection(section) {
     clearRefresh();
     try {
+      if (!routeControlsReady(section)) {
+        renderPage(section, null);
+        return;
+      }
       const payload = await fetchJson(dataSourceUrl(section));
       renderPage(section, payload);
       scheduleRefresh(section);
@@ -523,12 +715,9 @@
 
   async function loadJobTrace(jobId) {
     if (!jobId) return;
-    state.currentJobId = jobId;
-    clearRefresh();
-    setActiveSection("job_trace");
-    renderPage("job_trace", null, { jobId, message: `正在加载 ${jobId}...` });
-    const payload = await fetchJson(dataSourceUrl("job_trace", { jobId }));
-    renderPage("job_trace", payload, { jobId });
+    state.pageControls.job_trace ||= {};
+    state.pageControls.job_trace.job_id = jobId;
+    await loadSection("job_trace");
   }
 
   function showJobTraceError(error) {
@@ -540,16 +729,21 @@
     setError(error.message || String(error));
   }
 
-  function bindJobSearch() {
-    const form = $("#job-search");
+  function bindPageControls(section) {
+    const form = $("#page-controls");
     if (!form) return;
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const jobId = new FormData(event.currentTarget).get("job_id")?.toString().trim();
-      if (!jobId) return;
-      window.location.hash = `job=${encodeURIComponent(jobId)}`;
+      const values = {};
+      for (const [key, value] of new FormData(event.currentTarget).entries()) {
+        values[key] = String(value).trim();
+      }
+      state.pageControls[section] = { ...(state.pageControls[section] || {}), ...values };
+      if (section === "job_trace" && values.job_id) {
+        window.location.hash = `job=${encodeURIComponent(values.job_id)}`;
+      }
       try {
-        await loadJobTrace(jobId);
+        await loadSection(section);
       } catch (error) {
         showJobTraceError(error);
       }
@@ -561,7 +755,11 @@
     clearRefresh();
     if (section === "job_trace") {
       $("#status-line").innerHTML = "";
-      renderPage("job_trace", null, { jobId: state.currentJobId });
+      if (routeControlsReady("job_trace")) {
+        loadSection("job_trace");
+        return;
+      }
+      renderPage("job_trace", null);
       return;
     }
     loadSection(section);
@@ -569,7 +767,7 @@
 
   function scheduleRefresh(section) {
     const configured = configuredDataSource(section);
-    const seconds = configured?.refresh_seconds || state.config?.refresh_seconds || 15;
+    const seconds = configured?.refresh_seconds ?? state.config?.refresh_seconds ?? 15;
     if (!seconds) return;
     state.refreshTimer = window.setTimeout(() => loadSection(section), Math.max(seconds, 5) * 1000);
   }
@@ -582,6 +780,7 @@
   async function init() {
     try {
       state.config = await fetchJson(`${BASE}/config`);
+      initializePageControls();
     } catch (error) {
       setError(error.message || String(error));
     }

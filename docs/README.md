@@ -16,10 +16,10 @@
 | [`current/template-readiness.md`](current/template-readiness.md) | 当前仓库作为 AI Job 微服务模板复制给新业务前的就绪边界、必改项和最小验收 |
 | [`current/template-project-config.md`](current/template-project-config.md) | 复制模板成为真实业务项目时，项目身份、数据库名、compose 命名空间和对象存储命名空间的替换清单 |
 | [`current/script-entrypoint-contract.md`](current/script-entrypoint-contract.md) | 当前脚本入口 `-h`、子命令 help、输出、副作用、示例和验证的 envelope 合同 |
-| [`current/ops-dashboard.md`](current/ops-dashboard.md) | 当前只读 `ops_dashboard` 路由、前端 Chart Contract、Panel Registry 和 Job 运维展示边界 |
+| [`current/ops-dashboard.md`](current/ops-dashboard.md) | 当前只读 `ops_dashboard` 路由、data source / widget / layout / renderer 注册层和 Job 运维展示边界 |
 | [`current/job-load-testing.md`](current/job-load-testing.md) | Job 发布、查询和完整异步流程的压测入口、执行计划、指标和评估方法 |
 | [`runbooks/compose-full-dev-operations.md`](runbooks/compose-full-dev-operations.md) | 开发环境使用 `compose-full` 启动服务后，查看状态、容器内排障脚本和日志的操作手册 |
-| [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` overview、root/family scope、Job/workflow 查询和常见排障顺序 |
+| [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` overview、root/family scope、Job/workflow 查询和常见排障顺序的辅助说明；命令真源以 `scripts/jobs.sh` 和 `scripts/jobs/cli.py` 为准 |
 | [`runbooks/标题生成链路.md`](runbooks/标题生成链路.md) | `poster_title_image` 从接单、style probe、生图、OSS 写入、join 到结果快照的链路定位和排障顺序 |
 | [`runbooks/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/MAX_ACTIVE_JOBS%20估算与生产调优.md) | `MAX_ACTIVE_JOBS` 估算、K8s 生产调优顺序和 PostgreSQL/Redis 瓶颈判断 |
 | [`runbooks/lifespan.md`](runbooks/lifespan.md) | API、worker、recovery 生命周期与运行期资源放置边界 |
@@ -31,7 +31,7 @@
 | [`api/poster-title-image-delivery-api.md`](api/poster-title-image-delivery-api.md) | AI 标题图生成对接的当前交付接口合同、任务创建、查询、费用和 Callback 说明 |
 | [`api/poster-title-image-api.md`](api/poster-title-image-api.md) | CPP 美术任务接入 AI 标题图生成的 vNext 目标接口草案，不覆盖当前实现合同 |
 | [`plans/hardening.md`](plans/hardening.md) | 不阻塞主干开发的运维硬化 backlog |
-| [`plans/ops-dashboard-design.md`](plans/ops-dashboard-design.md) | 待确认的只读 `ops_dashboard` 可视化排障模块、页面分区、route 和 `jobs.sh` 映射设计 |
+| [`plans/ops-dashboard-mvp-navigation.md`](plans/ops-dashboard-mvp-navigation.md) | 待确认的 `ops_dashboard` 稳定阶段、MVP 排障闭环、tab 视图归属规则和未来优化路线图 |
 | [`plans/job-kernel-reliability-review.md`](plans/job-kernel-reliability-review.md) | Job 机制生产可靠性、一致性、安全性和测试覆盖审查结论 |
 | [`plans/ai-capability-enhancement.md`](plans/ai-capability-enhancement.md) | 多模态 provider、正式业务 `job_type`、node/child attribution 和业务 e2e 后续计划 |
 | [`plans/ai-capability-cost-boundary-design.md`](plans/ai-capability-cost-boundary-design.md) | `job_cost_summary`、node/child cost attribution、多模态成本路径和持久化 usage 扩展后续计划 |
@@ -42,7 +42,7 @@
 
 - `docs/current/` 只写当前代码已经落地的事实。
 - `docs/api/` 只写外部调用方和业务扩展方需要遵守的合同。
-- `docs/plans/` 只写未来计划、待办和目标方向，不覆盖当前事实。
+- `docs/plans/` 只写未来计划、待办和目标方向；可保留简短 current baseline 作为上下文，但当前事实真源仍在 `docs/current/`。
 - `docs/runbooks/` 只写可重复执行的排障手册，不重复维护代码事实或 API 合同。
 - `docs/archived/` 只保存历史设计和旧计划，归档文档不能作为当前事实源。
 

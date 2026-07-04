@@ -22,7 +22,7 @@ class DashboardFilters:
     bucket: str = "1m"
     caller_id: str | None = None
     job_type: str | None = None
-    limit: int = 20
+    sample_limit: int = 20
 
     @property
     def window_delta(self) -> timedelta:
