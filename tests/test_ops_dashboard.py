@@ -294,6 +294,20 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     assert 'dataPath: "job_type_hotspots"' in widget_source
     assert 'valuePath: "drain.status"' in widget_source
     assert 'valuePath: "drain.stuck.total"' in widget_source
+    for widget_id in [
+        '"failures_callbacks.summary_cards"',
+        '"failures_callbacks.failure_groups_rank"',
+        '"failures_callbacks.failure_groups_table"',
+        '"failures_callbacks.failed_samples"',
+        '"failures_callbacks.callback_outbox"',
+        '"failures_callbacks.callback_composition"',
+        '"failures_callbacks.callback_samples"',
+        '"failures_callbacks.next_checks"',
+    ]:
+        assert widget_id in widget_source
+    assert 'adapter: "callback_composition_rows"' in widget_source
+    assert 'dataPath: "callback_samples"' in widget_source
+    assert 'valuePath: "callback_summary.due"' in widget_source
 
     widget_keys = set(re.findall(r'^\s{4}"([^"]+)":\s*\{', widget_source, re.M))
     layout_widget_id_list = re.findall(r'widgetId:\s*"([^"]+)"', layout_source)
@@ -682,10 +696,14 @@ def test_ops_dashboard_failures_callbacks_route_returns_read_model_payload(monke
         assert filters.sample_limit == 20
         return {
             "generated_at": datetime(2026, 7, 3, tzinfo=UTC),
+            "health": {"status": "warning", "reasons": ["failed_jobs"], "next_checks": []},
+            "failure_summary": {"failed_records": 1, "failed_roots": 1},
             "failure_groups": [{"error_code": "LIVE_ONLY", "count": 1}],
             "failed_samples": [],
+            "callback_summary": {"due": 0, "delivered": 0, "dead_letter": 0},
             "callbacks": [],
-            "stuck": {"count": 0, "sample": []},
+            "callback_samples": [],
+            "stuck": {"total": 0, "count": 0, "sample": []},
         }
 
     monkeypatch.setattr(read_model, "failures_data", fake_failures_data)
@@ -701,6 +719,45 @@ def test_ops_dashboard_failures_callbacks_route_returns_read_model_payload(monke
 
     assert response.status_code == 200
     assert response.json()["failure_groups"][0]["error_code"] == "LIVE_ONLY"
+    assert response.json()["health"]["status"] == "warning"
+
+
+def test_ops_dashboard_failures_callbacks_route_returns_504_on_timeout(monkeypatch):
+    import asyncio
+
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False, timeout=0.001)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    async def fake_db():
+        yield object()
+
+    async def slow_failures_data(_db, _filters):
+        await asyncio.sleep(0.01)
+        return {
+            "generated_at": datetime(2026, 7, 3, tzinfo=UTC),
+            "health": {"status": "ok", "reasons": [], "next_checks": []},
+            "failure_groups": [],
+            "failed_samples": [],
+            "callbacks": [],
+            "callback_samples": [],
+        }
+
+    monkeypatch.setattr(read_model, "failures_data", slow_failures_data)
+
+    application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get("/internal/jobs-dashboard/sections/failures_callbacks/data")
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "ops dashboard query timed out"
 
 
 def test_ops_dashboard_health_route_returns_read_model_payload(monkeypatch):
@@ -1102,6 +1159,110 @@ async def test_ops_dashboard_failure_groups_sql_uses_summarized_error_fields():
     assert "detail_message" not in sql
     assert "COALESCE(j.error->>'code'" in sql
     assert "GROUP BY 1, 2, 3, 4" in sql
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_failed_samples_sql_uses_family_scope_and_trace_fields():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB()
+
+    await read_model.failed_samples(db, DashboardFilters())
+
+    sql = db.statements[0]
+    assert "FROM job_aggregates root" in sql
+    assert "(j.id = root.id OR j.root_job_id = root.id)" in sql
+    assert "CASE WHEN j.root_job_id IS NULL THEN 'root' ELSE 'child' END AS record_scope" in sql
+    assert "j.root_job_id::text AS root_job_id" in sql
+    assert "j.workflow_node_key" in sql
+    assert "AS callback_status" in sql
+    assert "a.status AS attempt_status" in sql
+    assert "d.status AS dispatch_status" in sql
+    assert "duration_seconds" in sql
+    assert "LEFT JOIN job_aggregates root_job" not in sql
+    assert "WHERE c.job_id = j.id" in sql
+    assert "j.error->>'message'" not in sql
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_failed_samples_preserves_zero_duration_seconds():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB(rows_by_call=[[{"duration_seconds": 0, "age_seconds": 12}]])
+
+    rows = await read_model.failed_samples(db, DashboardFilters())
+
+    assert rows[0]["duration_or_age_seconds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_callbacks_summary_sql_uses_cli_order_and_sanitized_error_code():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB()
+
+    await read_model.callbacks_summary(db, DashboardFilters())
+
+    sql = db.statements[0]
+    assert "max(c.last_error->>'code')" in sql
+    assert "AS sample_last_error_code" in sql
+    assert "AS oldest_age_seconds" in sql
+    assert "WHEN 'pending' THEN 1" in sql
+    assert "WHEN 'dead_letter' THEN 6" in sql
+    assert "last_error::text" not in sql
+    assert "last_error AS" not in sql
+    assert "c.last_response" not in sql
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_callback_samples_sql_returns_due_and_dead_letter_without_raw_payload():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB()
+
+    await read_model.callback_samples(db, DashboardFilters())
+
+    sql = db.statements[0]
+    assert "c.status IN ('leased', 'dead_letter')" in sql
+    assert "c.status IN ('pending', 'failed', 'retrying')" in sql
+    assert "c.next_attempt_at <= now()" in sql
+    assert "COALESCE(c.last_error->>'code', '-') AS last_error_code" in sql
+    assert "c.last_response" not in sql
+    assert "c.last_error AS" not in sql
+    assert "c.payload" not in sql
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_failures_data_exposes_health_next_checks_and_query_scopes():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB(
+        rows_by_call=[
+            [{"status": "dead_letter", "count": 2, "due": 0}],
+            [{"failed_records": 3, "failed_roots": 2}],
+        ]
+    )
+
+    payload = await read_model.failures_data(
+        db,
+        DashboardFilters(window="24h", caller_id="caller-a", job_type="job_echo"),
+    )
+
+    assert payload["health"]["status"] == "critical"
+    assert payload["health"]["reasons"] == ["callback_dead_letter", "failed_jobs"]
+    assert payload["health"]["next_checks"] == [
+        "./scripts/jobs.sh failures --since 24h --job-type job_echo --caller-id caller-a",
+        "./scripts/jobs.sh callbacks-summary --since 24h --job-type job_echo --caller-id caller-a",
+        "./scripts/jobs.sh list --status failed --scope family --since 24h --job-type job_echo --caller-id caller-a --limit 20",
+    ]
+    assert payload["callback_summary"]["dead_letter"] == 2
+    assert payload["callback_samples"] == []
+    assert payload["query_scopes"]["callbacks"] == "root scope callback_outbox grouped by status"
 
 
 @pytest.mark.asyncio

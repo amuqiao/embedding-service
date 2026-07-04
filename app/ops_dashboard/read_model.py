@@ -121,6 +121,15 @@ def _flow_capacity_next_checks(filters: DashboardFilters) -> list[str]:
     ]
 
 
+def _failures_callbacks_next_checks(filters: DashboardFilters) -> list[str]:
+    filter_args = _jobs_cli_filter_args(filters)
+    return [
+        f"./scripts/jobs.sh failures --since {filters.window}{filter_args}",
+        f"./scripts/jobs.sh callbacks-summary --since {filters.window}{filter_args}",
+        f"./scripts/jobs.sh list --status failed --scope family --since {filters.window}{filter_args} --limit 20",
+    ]
+
+
 def _typed_text(sql: str):
     statement = text(sql)
     existing_params = statement.compile().params
@@ -711,13 +720,45 @@ async def callbacks_summary(db: AsyncSession, filters: DashboardFilters) -> list
             WHERE c.status IN ('pending', 'failed', 'retrying')
           ) AS next_attempt_at,
           max(c.delivery_attempts) AS max_delivery_attempts_seen,
-          max(c.last_http_status) FILTER (WHERE c.last_http_status IS NOT NULL) AS last_http_status_seen
+          max(c.last_http_status) FILTER (WHERE c.last_http_status IS NOT NULL) AS last_http_status_seen,
+          max(c.last_error->>'code') FILTER (WHERE c.last_error IS NOT NULL) AS sample_last_error_code,
+          EXTRACT(EPOCH FROM (now() - min(c.created_at))) AS oldest_age_seconds
         FROM callback_outbox c
         JOIN job_aggregates j ON j.id = c.job_id
         WHERE j.deleted_at IS NULL
         {clause}
         GROUP BY c.status
-        ORDER BY c.status ASC
+        ORDER BY
+          CASE c.status
+            WHEN 'pending' THEN 1
+            WHEN 'leased' THEN 2
+            WHEN 'delivering' THEN 3
+            WHEN 'failed' THEN 4
+            WHEN 'retrying' THEN 5
+            WHEN 'dead_letter' THEN 6
+            WHEN 'delivered' THEN 7
+            WHEN 'skipped' THEN 8
+            ELSE 9
+          END,
+          c.status ASC
+        """,
+        _base_params(filters),
+    )
+
+
+async def failure_summary(db: AsyncSession, filters: DashboardFilters) -> dict[str, Any]:
+    clause = _scope_clause("j", "family")
+    return await _one(
+        db,
+        f"""
+        SELECT
+          count(*) FILTER (WHERE j.status = 'failed') AS failed_records,
+          count(DISTINCT COALESCE(j.root_job_id, j.id)) FILTER (WHERE j.status = 'failed') AS failed_roots,
+          min(j.updated_at) FILTER (WHERE j.status = 'failed') AS oldest_failed_updated_at,
+          max(j.updated_at) FILTER (WHERE j.status = 'failed') AS newest_failed_updated_at
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NULL
+          {clause}
         """,
         _base_params(filters),
     )
@@ -749,27 +790,120 @@ async def failure_groups(db: AsyncSession, filters: DashboardFilters) -> list[di
 
 
 async def failed_samples(db: AsyncSession, filters: DashboardFilters) -> list[dict[str, Any]]:
-    clause = _scope_clause("j", "root")
-    return await _all(
+    clause = _scope_clause("j", "family")
+    rows = await _all(
         db,
         f"""
         SELECT
           j.id::text AS job_id,
+          CASE WHEN j.root_job_id IS NULL THEN 'root' ELSE 'child' END AS record_scope,
+          j.root_job_id::text AS root_job_id,
+          j.workflow_node_key,
           j.status,
           j.job_type,
           j.caller_id,
           j.client_request_id,
           j.progress_percent,
           j.progress_stage,
+          COALESCE(j.error->>'code', '-') AS error_code,
+          CASE
+            WHEN j.callback_url IS NULL THEN 'not_configured'
+            WHEN cb.status IS NULL THEN 'pending'
+            WHEN cb.status = 'leased' THEN 'delivering'
+            WHEN cb.status = 'dead_letter' THEN 'failed'
+            WHEN cb.status = 'skipped' AND cb.last_error IS NOT NULL THEN 'failed'
+            WHEN cb.status = 'skipped' THEN 'not_configured'
+            ELSE cb.status
+          END AS callback_status,
+          a.status AS attempt_status,
+          a.purpose_attempt_no AS attempt_no,
+          d.status AS dispatch_status,
+          d.publish_attempts,
+          a.lease_expires_at,
           j.created_at,
           j.started_at,
           j.finished_at,
-          j.updated_at
+          j.updated_at,
+          EXTRACT(EPOCH FROM (now() - j.created_at)) AS age_seconds,
+          CASE
+            WHEN j.started_at IS NULL THEN NULL
+            WHEN j.finished_at IS NULL THEN EXTRACT(EPOCH FROM (now() - j.started_at))
+            ELSE EXTRACT(EPOCH FROM (j.finished_at - j.started_at))
+          END AS duration_seconds
         FROM job_aggregates j
+        LEFT JOIN job_execution_attempts a ON a.id = j.active_attempt_id
+        LEFT JOIN dispatch_outbox d ON d.attempt_id = a.id AND d.task_name = 'jobs.run_attempt'
+        LEFT JOIN LATERAL (
+          SELECT c.status, c.last_error
+          FROM callback_outbox c
+          WHERE c.job_id = j.id
+          ORDER BY c.created_at DESC
+          LIMIT 1
+        ) cb ON TRUE
         WHERE j.deleted_at IS NULL
           AND j.status = 'failed'
           {clause}
         ORDER BY j.updated_at DESC
+        LIMIT :limit
+        """,
+        _base_params(filters),
+    )
+    return [
+        row
+        | {
+            "duration_or_age_seconds": (
+                row.get("duration_seconds")
+                if row.get("duration_seconds") is not None
+                else row.get("age_seconds")
+            ),
+        }
+        for row in rows
+    ]
+
+
+async def callback_samples(db: AsyncSession, filters: DashboardFilters) -> list[dict[str, Any]]:
+    clause = _scope_clause("j", "root")
+    return await _all(
+        db,
+        f"""
+        SELECT
+          c.id::text AS callback_id,
+          c.job_id::text AS job_id,
+          c.event_type,
+          c.status,
+          j.job_type,
+          j.caller_id,
+          j.client_request_id,
+          c.delivery_attempts,
+          c.max_delivery_attempts,
+          c.next_attempt_at,
+          c.lease_expires_at,
+          c.last_http_status,
+          COALESCE(c.last_error->>'code', '-') AS last_error_code,
+          c.created_at,
+          c.updated_at,
+          c.delivered_at,
+          c.dead_lettered_at
+        FROM callback_outbox c
+        JOIN job_aggregates j ON j.id = c.job_id
+        WHERE j.deleted_at IS NULL
+          AND (
+            c.status IN ('leased', 'dead_letter')
+            OR (
+              c.status IN ('pending', 'failed', 'retrying')
+              AND (c.next_attempt_at IS NULL OR c.next_attempt_at <= now())
+            )
+          )
+          {clause}
+        ORDER BY
+          CASE
+            WHEN c.status = 'dead_letter' THEN 1
+            WHEN c.status = 'leased' THEN 2
+            WHEN c.status IN ('pending', 'failed', 'retrying') THEN 3
+            ELSE 5
+          END,
+          c.next_attempt_at ASC NULLS FIRST,
+          c.updated_at DESC
         LIMIT :limit
         """,
         _base_params(filters),
@@ -978,15 +1112,68 @@ async def overview_data(db: AsyncSession, filters: DashboardFilters, *, max_acti
     }
 
 
+def _callbacks_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {
+        "total": 0,
+        "due": 0,
+        "delivered": 0,
+        "dead_letter": 0,
+        "pending": 0,
+        "leased": 0,
+        "retrying": 0,
+        "skipped": 0,
+        "failed": 0,
+    }
+    for row in rows:
+        status = str(row.get("status") or "")
+        count = int(row.get("count") or 0)
+        counts["total"] += count
+        counts["due"] += int(row.get("due") or 0)
+        if status in counts:
+            counts[status] += count
+    return counts
+
+
+def _failures_health(*, failure: dict[str, Any], callbacks: dict[str, int]) -> dict[str, Any]:
+    reasons: list[str] = []
+    severity = "ok"
+    if int(callbacks.get("dead_letter") or 0):
+        severity = "critical"
+        reasons.append("callback_dead_letter")
+    if int(callbacks.get("due") or 0):
+        if severity != "critical":
+            severity = "warning"
+        reasons.append("callback_due")
+    if int(failure.get("failed_records") or 0):
+        if severity != "critical":
+            severity = "warning"
+        reasons.append("failed_jobs")
+    return {"status": severity, "reasons": reasons}
+
+
 async def failures_data(db: AsyncSession, filters: DashboardFilters) -> dict[str, Any]:
     callback_rows = await callbacks_summary(db, filters)
+    callback_counts = _callbacks_counts(callback_rows)
+    failure_payload = await failure_summary(db, filters)
+    health = _failures_health(failure=failure_payload, callbacks=callback_counts)
     return {
         "generated_at": _now(),
         "filters": filters.__dict__,
+        "health": health | {"next_checks": _failures_callbacks_next_checks(filters)},
+        "failure_summary": failure_payload,
         "failure_groups": await failure_groups(db, filters),
         "failed_samples": await failed_samples(db, filters),
+        "callback_summary": callback_counts,
         "callbacks": callback_rows,
+        "callback_samples": await callback_samples(db, filters),
         "stuck": await stuck_report(db, filters),
+        "query_scopes": {
+            "failure_summary": "family scope created_at window; applies root job_type/caller_id",
+            "failure_groups": "family scope failed records grouped by summarized error fields",
+            "failed_samples": "family scope failed samples; raw error message is not returned",
+            "callbacks": "root scope callback_outbox grouped by status",
+            "callback_samples": "root scope due/leased/dead_letter callback rows; raw last_error/last_response are not returned",
+        },
     }
 
 

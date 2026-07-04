@@ -46,7 +46,7 @@ Layout
 - 路由固定在 `/internal/jobs-dashboard`，不进入 OpenAPI。
 - 后端提供 data source config、overview、recent_jobs、flow_capacity、failures_callbacks、job trace、health。
 - 前端负责 renderer contract、widget registry、layout registry、ECharts 渲染和 HTML 渲染。
-- `recent_jobs` 已接入 public root Job 读模型，支持页内 `status/client_request_id/limit` 控件；`flow_capacity` 已接入 DB read model，用于吞吐、drain、容量、延迟和 job_type 热点方向判断。
+- `recent_jobs` 已接入 public root Job 读模型，支持页内 `status/client_request_id/limit` 控件；`flow_capacity` 已接入 DB read model，用于吞吐、drain、容量、延迟和 job_type 热点方向判断；`failures_callbacks` 已接入失败聚合、失败样本、callback summary 和 callback 样本。
 - `/internal/jobs-dashboard/examples` 是独立静态 renderer 示例页，只使用 generic fixtures，不请求 Job 读模型，也不作为业务 mock 数据源。
 - dashboard 不支持业务 mock 数据开关；旧的 `OPS_DASHBOARD_MOCK_DATA_ENABLED` 已废弃，出现在 env 文件或进程环境中都会触发配置加载失败。
 - dashboard 不直接读取 Redis broker、Pod runtime、完整 payload 或对象存储内容；这些仍由 `scripts/jobs.sh broker/runtime/payload --full` 等命令承担。
@@ -93,7 +93,7 @@ app/ops_dashboard/static/chart_contract.js
 | `overview` | `/internal/jobs-dashboard/sections/overview/data` | 15s | 总览健康、容量、趋势、延迟、成功率、stuck 样本 |
 | `recent_jobs` | `/internal/jobs-dashboard/sections/recent_jobs/data` | 15s | public root Job 选择器；page-local `status/client_request_id/limit` 控件合同 |
 | `flow_capacity` | `/internal/jobs-dashboard/sections/flow_capacity/data` | 30s | 吞吐/排空趋势、drain、gate/headroom、状态构成、latency p95、job_type 热点、CLI handoff |
-| `failures_callbacks` | `/internal/jobs-dashboard/sections/failures_callbacks/data` | 30s | 失败聚合、失败样本、callback outbox |
+| `failures_callbacks` | `/internal/jobs-dashboard/sections/failures_callbacks/data` | 30s | 失败聚合、失败样本、callback summary、callback composition、callback 样本、CLI handoff |
 | `job_trace` | `/internal/jobs-dashboard/jobs/{job_id}/data` | 0 | 单 Job 证据链追踪 |
 
 `sections` 目前与 `data_sources` 保持同一份配置输出；前端使用它生成导航和 data source route。
@@ -125,6 +125,22 @@ app/ops_dashboard/static/chart_contract.js
 | `job_type_hotspots` | root scope + `created_at` window + `job_type` group | 按 job_type 展示 active、failed 和 p95 热点 |
 
 `health.next_checks` 会按当前页面筛选条件生成 CLI handoff，例如保留 `--since`、`--bucket`、`--job-type` 和 `--caller-id`。`flow_capacity` payload 不包含 `broker`、`runtime` 或 `db_connection_budget`；这些仍由 `./scripts/jobs.sh broker`、`./scripts/jobs.sh runtime` 和相关显式命令承担。
+
+## Failures And Callbacks Contract
+
+`failures_callbacks` 是 Phase 3 已落地的只读 data source，用于回答“失败集中在哪、callback 是否完成外部通知、哪些样本要进入 Job Trace”。它复用 dashboard 通用 `window/caller_id/job_type` 过滤，不提供写操作、callback replay 或 dispatch replay。
+
+| payload path | 统计口径 | 说明 |
+| --- | --- | --- |
+| `failure_summary` | family scope + root `created_at` window | 统计 failed records 和 failed root families |
+| `failure_groups` | family scope failed records | 按 `error_code/error_kind/failure_phase/detail_type` 聚合；不返回 raw `detail_message` |
+| `failed_samples` | family scope failed rows | 返回 root/child、workflow node、callback/attempt/dispatch 状态和 age/duration；`job_id` 可进入 Job Trace |
+| `callbacks` | root scope callback_outbox grouped by status | 对齐 `callbacks-summary` 的 status/count/due/age/http 摘要；只返回 `sample_last_error_code` |
+| `callback_summary` | `callbacks` 派生 | 为 metric cards 和 callback composition 提供 due/delivered/dead_letter 等计数 |
+| `callback_samples` | root scope due/leased/dead_letter callback rows | 返回 callback 处理样本；不返回 raw `last_error`、`last_response`、payload 或 lease token |
+| `stuck` | family scope stuck report | 只作为坏消息辅助信号；stuck 主路径仍在 Overview / Flow & Capacity |
+
+`health.status` 的规则是：存在 callback dead_letter 为 `critical`；否则存在 callback due 或 failed records 为 `warning`；否则为 `ok`。`health.next_checks` 会按当前过滤条件生成 `./scripts/jobs.sh failures`、`./scripts/jobs.sh callbacks-summary` 和 `list --status failed --scope family` handoff。
 
 ## Renderer Contract
 

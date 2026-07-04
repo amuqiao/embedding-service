@@ -51,7 +51,7 @@ Dashboard 的边界：
 - 当前 renderer 已覆盖 MVP 所需基础表达：`status_line`、`metric_cards`、`echarts.line`、`echarts.stacked_bar`、`echarts.horizontal_bar`、`html.table`、`html.signal_list`、`html.summary_table`、`html.json_block`。
 - 后端当前 data source 已进入目标 key：`overview`、`recent_jobs`、`flow_capacity`、`failures_callbacks`、`job_trace`。
 - `recent_jobs` 和 `flow_capacity` 已接入 DB read model。
-- 当前页面已经能展示总览成功闭环、最近任务、吞吐容量方向、失败聚合和单 Job 追踪；但还没有完整覆盖 callback 闭环增强。
+- 当前页面已经能展示总览成功闭环、最近任务、吞吐容量方向、失败与 callback 闭环、单 Job 追踪。
 
 ## Roadmap Summary
 
@@ -384,22 +384,9 @@ MVP 使用 page-level data source，不为每个 widget 单独拆 endpoint。
 
 已完成。当前事实以 [`../current/ops-dashboard.md`](../current/ops-dashboard.md) 的 Flow And Capacity Contract、widgets 和 CLI handoff 说明为准。
 
-### Phase 3: MVP Failures & Callbacks
+### Phase 3: MVP Failures & Callbacks（已落地）
 
-目标：
-
-- 把失败聚合和 callback 闭环放到同一个 tab，形成“失败原因 + 外部通知”闭环。
-
-交付：
-
-```text
-failures_callbacks data source
-failure cards
-failure groups rank/table
-failed samples
-callback composition
-callback samples
-```
+已完成。当前事实以 [`../current/ops-dashboard.md`](../current/ops-dashboard.md) 的 Failures And Callbacks Contract、widgets 和 CLI handoff 说明为准。
 
 ### Post-MVP: Table Usability / 表格可用性
 
