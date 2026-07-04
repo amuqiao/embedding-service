@@ -1634,6 +1634,29 @@ def test_jobs_types_json_is_machine_readable_without_app_log_noise():
     assert "job_real_llm_echo" in job_types
     assert "job_real_llm_double_echo" in job_types
     specs = {item["job_type"]: item for item in payload["job_types"]}
+    required_keys = {
+        "job_type",
+        "visibility",
+        "role",
+        "execution_mode",
+        "retry_policy",
+        "side_effect_policy",
+        "params_schema",
+        "runtime_fields_schema",
+        "canonical_result_schema",
+        "public_result_schema",
+        "callback_envelope_schema",
+        "allow_callback",
+        "result_snapshot_statuses",
+        "large_artifact_keys",
+        "error_codes",
+        "log_events",
+        "timeout_seconds",
+        "prompt_specs",
+        "prompt_template_required_blocks",
+    }
+    for spec in payload["job_types"]:
+        assert required_keys <= set(spec)
     assert specs["poster_title_image"]["visibility"] == "public"
     assert specs["poster_title_image"]["role"] == "root"
     assert specs["job_test_collect"]["visibility"] == "demo"

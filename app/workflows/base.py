@@ -174,3 +174,78 @@ def chunks(
         required=required,
         weight=weight,
     )
+
+
+@dataclass(frozen=True)
+class WorkflowPrimitiveSpec:
+    primitive: str
+    expr_type: str
+    builder: str
+    semantic_key: str
+    semantics: str
+
+    def snapshot(self) -> dict[str, str]:
+        return {
+            "primitive": self.primitive,
+            "expr_type": self.expr_type,
+            "builder": self.builder,
+            "semantic_key": self.semantic_key,
+            "semantics": self.semantics,
+        }
+
+
+_WORKFLOW_PRIMITIVE_SPECS: tuple[WorkflowPrimitiveSpec, ...] = (
+    WorkflowPrimitiveSpec(
+        primitive="task",
+        expr_type="Task",
+        builder="task",
+        semantic_key="single_node",
+        semantics="single child node",
+    ),
+    WorkflowPrimitiveSpec(
+        primitive="chain",
+        expr_type="Chain",
+        builder="chain",
+        semantic_key="linear_dependency",
+        semantics="next roots depend on previous leaves",
+    ),
+    WorkflowPrimitiveSpec(
+        primitive="group",
+        expr_type="Group",
+        builder="group",
+        semantic_key="parallel_fanout",
+        semantics="members become parallel ready nodes",
+    ),
+    WorkflowPrimitiveSpec(
+        primitive="chord",
+        expr_type="Chord",
+        builder="chord",
+        semantic_key="fanout_join",
+        semantics="body roots depend on header leaves",
+    ),
+    WorkflowPrimitiveSpec(
+        primitive="map",
+        expr_type="Map",
+        builder="map_items",
+        semantic_key="map_expand",
+        semantics="items expand into one-param child nodes",
+    ),
+    WorkflowPrimitiveSpec(
+        primitive="starmap",
+        expr_type="StarMap",
+        builder="starmap_items",
+        semantic_key="starmap_expand",
+        semantics="items expand into unpacked multi-param child nodes",
+    ),
+    WorkflowPrimitiveSpec(
+        primitive="chunks",
+        expr_type="Chunks",
+        builder="chunks",
+        semantic_key="chunk_expand",
+        semantics="items split by chunk_size into child nodes",
+    ),
+)
+
+
+def all_workflow_primitive_specs() -> tuple[dict[str, str], ...]:
+    return tuple(spec.snapshot() for spec in _WORKFLOW_PRIMITIVE_SPECS)

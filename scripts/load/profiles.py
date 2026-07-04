@@ -67,15 +67,7 @@ BUILTIN_PROFILES: dict[str, LoadProfile] = {
 
 
 def profile_rows() -> list[dict[str, object]]:
-    return [
-        {
-            "key": profile.key,
-            "job_type": profile.job_type,
-            "case": profile.case,
-            "title": profile.title,
-        }
-        for profile in BUILTIN_PROFILES.values()
-    ]
+    return [profile.manifest() for profile in BUILTIN_PROFILES.values()]
 
 
 def resolve_profile(ref: str | None) -> LoadProfile | None:

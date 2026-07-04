@@ -7,6 +7,7 @@ from app.jobs import registry as job_registry
 from app.workflows import (
     WorkflowDefinition,
     WorkflowSpec,
+    all_workflow_primitive_specs,
     chain,
     chord,
     chunks,
@@ -25,6 +26,29 @@ from app.jobs.types.poster_title_image.executor import _item_node_key
 
 def _nodes_by_key(plan):
     return {node["key"]: node for node in plan["nodes"]}
+
+
+def test_workflow_primitive_catalog_is_machine_readable_contract():
+    specs = all_workflow_primitive_specs()
+    by_name = {item["primitive"]: item for item in specs}
+
+    assert tuple(by_name) == ("task", "chain", "group", "chord", "map", "starmap", "chunks")
+    assert "single" not in by_name
+    assert by_name["task"] == {
+        "primitive": "task",
+        "expr_type": "Task",
+        "builder": "task",
+        "semantic_key": "single_node",
+        "semantics": "single child node",
+    }
+    assert by_name["chain"]["semantic_key"] == "linear_dependency"
+    assert by_name["group"]["semantic_key"] == "parallel_fanout"
+    assert by_name["chord"]["semantic_key"] == "fanout_join"
+    assert by_name["map"]["semantic_key"] == "map_expand"
+    assert by_name["starmap"]["builder"] == "starmap_items"
+    assert by_name["starmap"]["semantic_key"] == "starmap_expand"
+    assert by_name["chunks"]["semantic_key"] == "chunk_expand"
+    json.dumps(specs, ensure_ascii=False, sort_keys=True)
 
 
 def test_chain_compiles_to_linear_dependencies():

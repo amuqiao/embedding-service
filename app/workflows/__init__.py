@@ -3,6 +3,7 @@
 from app.workflows.base import (
     FAILURE_POLICIES,
     WorkflowSpec,
+    all_workflow_primitive_specs,
     chain,
     chord,
     chunks,
@@ -27,6 +28,7 @@ __all__ = [
     "FAILURE_POLICIES",
     "WorkflowDefinition",
     "WorkflowSpec",
+    "all_workflow_primitive_specs",
     "all_workflow_types",
     "chain",
     "chord",

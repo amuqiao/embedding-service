@@ -29,6 +29,31 @@ class LoadCase:
     default_wait_max_seconds: float = 1.0
     post_checks: tuple[str, ...] = ()
 
+    def manifest(self) -> dict[str, object]:
+        return {
+            "key": self.key,
+            "title": self.title,
+            "question": self.question,
+            "kind": self.kind,
+            "target": self.target,
+            "default_job_type": self.default_job_type,
+            "default_http_method": self.default_http_method,
+            "default_http_path": self.default_http_path,
+            "writes_jobs": self.writes_jobs,
+            "requires_job_ids": self.requires_job_ids,
+            "billable_risk": self.billable_risk,
+            "defaults": {
+                "time": self.default_time,
+                "users": self.default_users,
+                "spawn_rate": self.default_spawn_rate,
+                "flow_timeout_seconds": self.default_flow_timeout_seconds,
+                "poll_interval_seconds": self.default_poll_interval_seconds,
+                "wait_min_seconds": self.default_wait_min_seconds,
+                "wait_max_seconds": self.default_wait_max_seconds,
+            },
+            "post_checks": list(self.post_checks),
+        }
+
 
 CASES: dict[str, LoadCase] = {
     "job-flow": LoadCase(
@@ -109,14 +134,4 @@ def get_case(key: str) -> LoadCase:
 
 
 def case_rows() -> list[dict[str, object]]:
-    return [
-        {
-            "key": item.key,
-            "target": item.target,
-            "writes_jobs": item.writes_jobs,
-            "requires_job_ids": item.requires_job_ids,
-            "default_job_type": item.default_job_type or "-",
-            "question": item.question,
-        }
-        for item in CASES.values()
-    ]
+    return [item.manifest() for item in CASES.values()]

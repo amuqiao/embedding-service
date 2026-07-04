@@ -290,6 +290,31 @@ def test_job_type_registry_exposes_required_metadata():
     )
 
 
+def test_registered_job_type_names_are_layered_contract():
+    register_all_job_types()
+    specs = job_registry.all_job_type_specs()
+
+    assert {
+        "arithmetic",
+        "job_real_llm_double_echo",
+        "job_real_llm_echo",
+        "job_test_add",
+        "job_test_collect",
+        "job_test_echo",
+        "job_test_workflow",
+        "poster_title_image",
+        "poster_title_image_generate_item",
+        "poster_title_image_join",
+        "poster_title_image_style_probe",
+    } <= set(specs)
+    assert {name for name, spec in specs.items() if spec.visibility == "public"} >= {"poster_title_image"}
+    assert {name for name, spec in specs.items() if spec.visibility == "internal"} >= {
+        "poster_title_image_generate_item",
+        "poster_title_image_join",
+        "poster_title_image_style_probe",
+    }
+
+
 def test_poster_title_image_retry_policy_is_scoped_to_transient_leaf_execution():
     register_all_job_types()
     specs = job_registry.all_job_type_specs()

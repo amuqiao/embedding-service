@@ -33,8 +33,42 @@ def test_cases_lists_registered_contract():
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    keys = {item["key"] for item in payload["cases"]}
+    cases = {item["key"]: item for item in payload["cases"]}
+    keys = set(cases)
     assert {"job-flow", "job-submit", "job-query", "workflow-flow", "api-health"} <= keys
+    required_keys = {
+        "key",
+        "title",
+        "question",
+        "kind",
+        "target",
+        "default_job_type",
+        "default_http_method",
+        "default_http_path",
+        "writes_jobs",
+        "requires_job_ids",
+        "billable_risk",
+        "defaults",
+        "post_checks",
+    }
+    for case in payload["cases"]:
+        assert required_keys <= set(case)
+        assert {
+            "time",
+            "users",
+            "spawn_rate",
+            "flow_timeout_seconds",
+            "poll_interval_seconds",
+            "wait_min_seconds",
+            "wait_max_seconds",
+        } <= set(case["defaults"])
+    assert cases["job-flow"]["kind"] == "job_flow"
+    assert cases["job-flow"]["default_job_type"] == "job_test_echo"
+    assert cases["job-flow"]["defaults"]["time"] == "60s"
+    assert cases["job-flow"]["defaults"]["users"] == 4
+    assert cases["job-flow"]["post_checks"] == ["drain", "pressure"]
+    assert cases["job-query"]["requires_job_ids"] is True
+    assert cases["api-health"]["default_http_path"] == "/health"
 
 
 def test_list_alias_lists_cases():
@@ -50,8 +84,27 @@ def test_profiles_lists_builtin_profiles():
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    keys = {item["key"] for item in payload["profiles"]}
+    profiles = {item["key"]: item for item in payload["profiles"]}
+    keys = set(profiles)
     assert {"echo", "workflow"} <= keys
+    required_keys = {"key", "title", "job_type", "case", "job_params_present", "defaults"}
+    for profile in payload["profiles"]:
+        assert required_keys <= set(profile)
+        assert {
+            "users",
+            "spawn_rate",
+            "time",
+            "poll_interval_seconds",
+            "flow_timeout_seconds",
+            "wait_min_seconds",
+            "wait_max_seconds",
+        } <= set(profile["defaults"])
+        assert "job_params" not in profile
+    assert profiles["echo"]["job_type"] == "job_test_echo"
+    assert profiles["echo"]["case"] == "job-flow"
+    assert profiles["echo"]["defaults"]["time"] == "60s"
+    assert profiles["echo"]["defaults"]["flow_timeout_seconds"] == 45.0
+    assert profiles["workflow"]["case"] == "workflow-flow"
 
 
 def test_run_rejects_non_demo_job_without_confirmation(tmp_path):
@@ -100,10 +153,26 @@ def test_run_dry_run_writes_manifest_without_token(tmp_path):
     payload = json.loads(result.output)
     manifest = json.loads((output_dir / "run-1" / "manifest.json").read_text(encoding="utf-8"))
     assert payload["status"] == "dry_run"
+    assert payload["run_id"] == "run-1"
+    assert payload == manifest
+    assert manifest["status"] == "dry_run"
     assert manifest["case_key"] == "job-flow"
+    assert manifest["case"]["kind"] == "job_flow"
+    assert manifest["case"]["target"] == "job"
+    assert manifest["case"]["writes_jobs"] is True
+    assert manifest["case"]["requires_job_ids"] is False
+    assert manifest["case"]["billable_risk"] is False
+    assert manifest["profile"] is None
     assert manifest["job_type"] == "job_test_echo"
+    assert manifest["job_params_source"] == "job_test_echo_defaults"
+    assert manifest["allow_real_job"] is False
+    assert manifest["users"] == 4
+    assert manifest["spawn_rate"] == 1.0
+    assert manifest["run_time"] == "60s"
     assert "LOAD_INTERNAL_AUTH_TOKEN" not in json.dumps(manifest)
+    assert manifest["paths"]["manifest"].endswith("/run-1/manifest.json")
     assert manifest["paths"]["csv_prefix"].endswith("/run-1/locust")
+    assert manifest["paths"]["html_report"].endswith("/run-1/report.html")
     assert f"--output-dir {output_dir}" in manifest["next_checks"][0]
 
 
@@ -241,6 +310,12 @@ def test_run_file_profile_supplies_real_job_params(tmp_path):
     assert payload["allow_real_job"] is True
     assert payload["job_type"] == "poster_title_image"
     assert payload["job_params_source"] == "profile"
+    assert payload["case"]["billable_risk"] is True
+    assert payload["profile"]["key"] == "poster"
+    assert payload["profile"]["job_type"] == "poster_title_image"
+    assert payload["profile"]["job_params_present"] is True
+    assert payload["profile"]["defaults"]["time"] == "30s"
+    assert "job_params" not in payload["profile"]
     assert payload["users"] == 2
     assert payload["flow_timeout_seconds"] == 120.0
 
