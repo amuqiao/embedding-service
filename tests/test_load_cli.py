@@ -28,6 +28,43 @@ def _env_file(tmp_path: Path) -> Path:
     return path
 
 
+def _prepared_locust_env(tmp_path: Path, *, profile: str, **overrides):
+    env_file = _env_file(tmp_path)
+    values = {
+        "case_key": None,
+        "profile_ref": profile,
+        "api_url": None,
+        "env_file": str(env_file),
+        "allow_remote_api": False,
+        "service_api_key": None,
+        "caller_id": "load-cli",
+        "allow_real_job": False,
+        "job_type": None,
+        "job_params_json": None,
+        "job_params_json_file": None,
+        "query_job_ids": None,
+        "query_job_ids_file": None,
+        "users": None,
+        "spawn_rate": None,
+        "run_time": None,
+        "run_id": "profile-env",
+        "output_dir": str(tmp_path / "load"),
+        "echo_sleep_seconds": None,
+        "echo_repeat": None,
+        "workflow_mode": None,
+        "workflow_sleep_seconds": None,
+        "wait_min_seconds": None,
+        "wait_max_seconds": None,
+        "poll_interval_seconds": None,
+        "flow_timeout_seconds": None,
+        "web": False,
+        "web_host": "127.0.0.1",
+        "web_port": 8089,
+    }
+    values.update(overrides)
+    return cli._prepare_run(**values)
+
+
 def test_cases_lists_registered_contract():
     result = RUNNER.invoke(cli.app, ["cases", "--json"])
 
@@ -86,7 +123,16 @@ def test_profiles_lists_builtin_profiles():
     payload = json.loads(result.output)
     profiles = {item["key"]: item for item in payload["profiles"]}
     keys = set(profiles)
-    assert {"echo", "workflow"} <= keys
+    assert keys == {
+        "example-sleep",
+        "example-workflow-single",
+        "example-workflow-chain",
+        "example-workflow-group",
+        "example-workflow-chord",
+        "example-workflow-map",
+        "example-workflow-starmap",
+        "example-workflow-chunks",
+    }
     required_keys = {"key", "title", "job_type", "case", "job_params_present", "defaults"}
     for profile in payload["profiles"]:
         assert required_keys <= set(profile)
@@ -100,11 +146,14 @@ def test_profiles_lists_builtin_profiles():
             "wait_max_seconds",
         } <= set(profile["defaults"])
         assert "job_params" not in profile
-    assert profiles["echo"]["job_type"] == "example_sleep"
-    assert profiles["echo"]["case"] == "job-flow"
-    assert profiles["echo"]["defaults"]["time"] == "60s"
-    assert profiles["echo"]["defaults"]["flow_timeout_seconds"] == 45.0
-    assert profiles["workflow"]["case"] == "workflow-flow"
+    assert profiles["example-sleep"]["job_type"] == "example_sleep"
+    assert profiles["example-sleep"]["case"] == "job-flow"
+    assert profiles["example-sleep"]["job_params_present"] is True
+    assert profiles["example-sleep"]["defaults"]["time"] == "60s"
+    assert profiles["example-sleep"]["defaults"]["flow_timeout_seconds"] == 45.0
+    assert profiles["example-workflow-group"]["job_type"] == "example_workflow"
+    assert profiles["example-workflow-group"]["case"] == "workflow-flow"
+    assert profiles["example-workflow-group"]["job_params_present"] is True
 
 
 def test_run_rejects_non_demo_job_without_confirmation(tmp_path):
@@ -272,7 +321,7 @@ def test_run_builtin_profile_uses_profile_defaults(tmp_path):
         [
             "run",
             "--profile",
-            "workflow",
+            "example-workflow-group",
             "--env-file",
             str(env_file),
             "--run-id",
@@ -288,8 +337,34 @@ def test_run_builtin_profile_uses_profile_defaults(tmp_path):
     payload = json.loads(result.output)
     assert payload["case_key"] == "workflow-flow"
     assert payload["job_type"] == "example_workflow"
-    assert payload["profile"]["key"] == "workflow"
+    assert payload["profile"]["key"] == "example-workflow-group"
+    assert payload["job_params_source"] == "profile"
+    assert payload["profile"]["job_params_present"] is True
+    assert "job_params" not in payload["profile"]
     assert payload["flow_timeout_seconds"] == 90.0
+
+
+def test_builtin_workflow_profile_supplies_effective_locust_job_params(tmp_path):
+    _payload, _command, locust_env = _prepared_locust_env(tmp_path, profile="example-workflow-group")
+
+    job_params = json.loads(locust_env["LOAD_INTERNAL_JOB_PARAMS_JSON"])
+    assert job_params == {"mode": "group", "label": "load-group", "sleep_seconds": 15.0}
+    assert locust_env["LOAD_INTERNAL_JOB_PARAMS_SOURCE"] == "profile"
+
+
+def test_builtin_workflow_profile_allows_explicit_example_overrides(tmp_path):
+    _payload, _command, locust_env = _prepared_locust_env(
+        tmp_path,
+        profile="example-workflow-group",
+        workflow_mode="chain",
+        workflow_sleep_seconds=3.0,
+    )
+
+    assert json.loads(locust_env["LOAD_INTERNAL_JOB_PARAMS_JSON"]) == {
+        "mode": "chain",
+        "label": "load-group",
+        "sleep_seconds": 3.0,
+    }
 
 
 def test_run_file_profile_supplies_real_job_params(tmp_path):

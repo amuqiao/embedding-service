@@ -243,6 +243,19 @@ GET  /api/v1/ai-jobs/jobs/{job_id}
 ./scripts/load.sh profiles
 ```
 
+当前内置 profile：
+
+| profile | job_type | case |
+|---|---|---|
+| `example-sleep` | `example_sleep` | `job-flow` |
+| `example-workflow-single` | `example_workflow` | `workflow-flow` |
+| `example-workflow-chain` | `example_workflow` | `workflow-flow` |
+| `example-workflow-group` | `example_workflow` | `workflow-flow` |
+| `example-workflow-chord` | `example_workflow` | `workflow-flow` |
+| `example-workflow-map` | `example_workflow` | `workflow-flow` |
+| `example-workflow-starmap` | `example_workflow` | `workflow-flow` |
+| `example-workflow-chunks` | `example_workflow` | `workflow-flow` |
+
 生成业务 Job profile 模板：
 
 ```bash
@@ -434,10 +447,8 @@ JOB flow terminal latency
 Workflow root / child 链路压测示例：
 
 ```bash
-./scripts/load.sh run workflow-flow \
+./scripts/load.sh run --profile example-workflow-group \
   --api-url http://127.0.0.1:8100 \
-  --workflow-mode group \
-  --workflow-sleep-seconds 15 \
   --flow-timeout-seconds 90 \
   --users 10 \
   --spawn-rate 2 \

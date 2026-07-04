@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.jobs.types.example_catalog import all_example_workflow_mode_specs
 from scripts.load.support import LoadError, ROOT_DIR, ensure_parent
 
 
@@ -42,27 +43,36 @@ class LoadProfile:
         }
 
 
+def _workflow_profile(mode: str) -> LoadProfile:
+    return LoadProfile(
+        key=f"example-workflow-{mode}",
+        title=f"示例 Workflow {mode}",
+        job_type="example_workflow",
+        case="workflow-flow",
+        job_params={"mode": mode, "label": f"load-{mode}", "sleep_seconds": 15.0},
+        users=4,
+        spawn_rate=1.0,
+        run_time="60s",
+        flow_timeout_seconds=90.0,
+    )
+
+
 BUILTIN_PROFILES: dict[str, LoadProfile] = {
-    "echo": LoadProfile(
-        key="echo",
-        title="内置 echo Job",
+    "example-sleep": LoadProfile(
+        key="example-sleep",
+        title="示例 Sleep Job",
         job_type="example_sleep",
         case="job-flow",
+        job_params={"message": "load", "repeat": 1, "sleep_seconds": 15.0},
         users=4,
         spawn_rate=1.0,
         run_time="60s",
         flow_timeout_seconds=45.0,
     ),
-    "workflow": LoadProfile(
-        key="workflow",
-        title="内置 workflow Job",
-        job_type="example_workflow",
-        case="workflow-flow",
-        users=4,
-        spawn_rate=1.0,
-        run_time="60s",
-        flow_timeout_seconds=90.0,
-    ),
+    **{
+        f"example-workflow-{spec['mode']}": _workflow_profile(str(spec["mode"]))
+        for spec in all_example_workflow_mode_specs()
+    },
 }
 
 

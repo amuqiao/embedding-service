@@ -68,7 +68,7 @@ HELP_EPILOG = """\b
   ./scripts/load.sh profiles
   ./scripts/load.sh smoke
   ./scripts/load.sh run job-flow --users 4 --spawn-rate 1 --time 60s
-  ./scripts/load.sh run --profile echo
+  ./scripts/load.sh run --profile example-sleep
   ./scripts/load.sh run job-submit --users 20 --spawn-rate 10 --time 30s
   ./scripts/load.sh ui job-flow --users 10 --spawn-rate 2 --time 2m
   ./scripts/load.sh pressure --run-id <run_id>
@@ -97,7 +97,7 @@ GUIDE_TEXT = """Load 压测心智模型
    - api-health: 基础 HTTP health 压力。
 
 2. 用 profile 描述要压的 Job
-   - 内置 profile: echo / workflow。
+   - 内置 profile: example-sleep / example-workflow-<mode>。
    - 真实业务 Job 用 JSON profile 固定 job_type、job_params 和默认压测参数。
 
 3. load.sh 负责产生压力和归档结果
@@ -123,10 +123,10 @@ SMOKE_HELP_EPILOG = """\b
 RUN_HELP_EPILOG = """\b
 常用示例：
   ./scripts/load.sh run job-flow --users 4 --spawn-rate 1 --time 60s
-  ./scripts/load.sh run --profile echo
+  ./scripts/load.sh run --profile example-sleep
   ./scripts/load.sh run job-submit --users 20 --spawn-rate 10 --time 30s
   ./scripts/load.sh run job-query --query-job-ids-file .run/load/query-job-ids.txt --users 100
-  ./scripts/load.sh run workflow-flow --workflow-mode group --flow-timeout-seconds 90
+  ./scripts/load.sh run --profile example-workflow-group
 
 \b
 真实业务 Job：
@@ -255,21 +255,32 @@ def _job_params_env(
     job_type: str | None,
     job_params: dict[str, Any] | None,
     job_params_source: str,
-    echo_sleep_seconds: float,
-    echo_repeat: int,
-    workflow_mode: str,
-    workflow_sleep_seconds: float,
+    echo_sleep_seconds: float | None,
+    echo_repeat: int | None,
+    workflow_mode: str | None,
+    workflow_sleep_seconds: float | None,
 ) -> dict[str, str]:
     env: dict[str, str] = {}
     if job_params is not None:
-        env["LOAD_INTERNAL_JOB_PARAMS_JSON"] = json.dumps(job_params, ensure_ascii=False)
+        effective_params = dict(job_params)
+        if job_type == "example_sleep":
+            if echo_sleep_seconds is not None:
+                effective_params["sleep_seconds"] = echo_sleep_seconds
+            if echo_repeat is not None:
+                effective_params["repeat"] = echo_repeat
+        if job_type == "example_workflow":
+            if workflow_mode is not None:
+                effective_params["mode"] = workflow_mode
+            if workflow_sleep_seconds is not None:
+                effective_params["sleep_seconds"] = workflow_sleep_seconds
+        env["LOAD_INTERNAL_JOB_PARAMS_JSON"] = json.dumps(effective_params, ensure_ascii=False)
         env["LOAD_INTERNAL_JOB_PARAMS_SOURCE"] = job_params_source
         return env
     if job_type == "example_sleep":
         env.update(
             {
-                "LOAD_INTERNAL_ECHO_SLEEP_SECONDS": _format_float(echo_sleep_seconds),
-                "LOAD_INTERNAL_ECHO_REPEAT": str(echo_repeat),
+                "LOAD_INTERNAL_ECHO_SLEEP_SECONDS": _format_float(15.0 if echo_sleep_seconds is None else echo_sleep_seconds),
+                "LOAD_INTERNAL_ECHO_REPEAT": str(1 if echo_repeat is None else echo_repeat),
                 "LOAD_INTERNAL_JOB_PARAMS_SOURCE": "example_sleep_defaults",
             }
         )
@@ -277,8 +288,10 @@ def _job_params_env(
     if job_type == "example_workflow":
         env.update(
             {
-                "LOAD_INTERNAL_WORKFLOW_MODE": workflow_mode,
-                "LOAD_INTERNAL_WORKFLOW_SLEEP_SECONDS": _format_float(workflow_sleep_seconds),
+                "LOAD_INTERNAL_WORKFLOW_MODE": workflow_mode or "group",
+                "LOAD_INTERNAL_WORKFLOW_SLEEP_SECONDS": _format_float(
+                    15.0 if workflow_sleep_seconds is None else workflow_sleep_seconds
+                ),
                 "LOAD_INTERNAL_JOB_PARAMS_SOURCE": "example_workflow_defaults",
             }
         )
@@ -324,10 +337,10 @@ def _prepare_run(
     run_time: str | None,
     run_id: str | None,
     output_dir: str,
-    echo_sleep_seconds: float,
-    echo_repeat: int,
-    workflow_mode: str,
-    workflow_sleep_seconds: float,
+    echo_sleep_seconds: float | None,
+    echo_repeat: int | None,
+    workflow_mode: str | None,
+    workflow_sleep_seconds: float | None,
     wait_min_seconds: float | None,
     wait_max_seconds: float | None,
     poll_interval_seconds: float | None,
@@ -563,10 +576,10 @@ def _run_command(
     run_time: str | None,
     run_id: str | None,
     output_dir: str,
-    echo_sleep_seconds: float,
-    echo_repeat: int,
-    workflow_mode: str,
-    workflow_sleep_seconds: float,
+    echo_sleep_seconds: float | None,
+    echo_repeat: int | None,
+    workflow_mode: str | None,
+    workflow_sleep_seconds: float | None,
     wait_min_seconds: float | None,
     wait_max_seconds: float | None,
     poll_interval_seconds: float | None,
@@ -776,10 +789,10 @@ def run(
     run_time: Annotated[str | None, typer.Option("--time", "-t", help="持续时间，例如 60s、2m。")] = None,
     run_id: Annotated[str | None, typer.Option("--run-id", help="显式 run_id。")] = None,
     output_dir: Annotated[str, typer.Option("--output-dir", help="结果目录根路径。")] = ".run/load",
-    echo_sleep_seconds: Annotated[float, typer.Option("--echo-sleep-seconds", min=0, help="example_sleep sleep 秒数。")] = 15.0,
-    echo_repeat: Annotated[int, typer.Option("--echo-repeat", min=1, help="example_sleep repeat。")] = 1,
-    workflow_mode: Annotated[str, typer.Option("--workflow-mode", help="example_workflow mode。")] = "group",
-    workflow_sleep_seconds: Annotated[float, typer.Option("--workflow-sleep-seconds", min=0, help="workflow sleep 秒数。")] = 15.0,
+    echo_sleep_seconds: Annotated[float | None, typer.Option("--echo-sleep-seconds", min=0, help="example_sleep sleep 秒数。")] = None,
+    echo_repeat: Annotated[int | None, typer.Option("--echo-repeat", min=1, help="example_sleep repeat。")] = None,
+    workflow_mode: Annotated[str | None, typer.Option("--workflow-mode", help="example_workflow mode。")] = None,
+    workflow_sleep_seconds: Annotated[float | None, typer.Option("--workflow-sleep-seconds", min=0, help="workflow sleep 秒数。")] = None,
     wait_min_seconds: Annotated[float | None, typer.Option("--wait-min-seconds", min=0, help="Locust 用户最小等待。")] = None,
     wait_max_seconds: Annotated[float | None, typer.Option("--wait-max-seconds", min=0, help="Locust 用户最大等待。")] = None,
     poll_interval_seconds: Annotated[float | None, typer.Option("--poll-interval-seconds", min=0.1, help="flow 轮询间隔。")] = None,
@@ -847,10 +860,10 @@ def ui(
     run_time: Annotated[str | None, typer.Option("--time", "-t", help="持续时间，例如 60s、2m。")] = None,
     run_id: Annotated[str | None, typer.Option("--run-id", help="显式 run_id。")] = None,
     output_dir: Annotated[str, typer.Option("--output-dir", help="结果目录根路径。")] = ".run/load",
-    echo_sleep_seconds: Annotated[float, typer.Option("--echo-sleep-seconds", min=0, help="example_sleep sleep 秒数。")] = 15.0,
-    echo_repeat: Annotated[int, typer.Option("--echo-repeat", min=1, help="example_sleep repeat。")] = 1,
-    workflow_mode: Annotated[str, typer.Option("--workflow-mode", help="example_workflow mode。")] = "group",
-    workflow_sleep_seconds: Annotated[float, typer.Option("--workflow-sleep-seconds", min=0, help="workflow sleep 秒数。")] = 15.0,
+    echo_sleep_seconds: Annotated[float | None, typer.Option("--echo-sleep-seconds", min=0, help="example_sleep sleep 秒数。")] = None,
+    echo_repeat: Annotated[int | None, typer.Option("--echo-repeat", min=1, help="example_sleep repeat。")] = None,
+    workflow_mode: Annotated[str | None, typer.Option("--workflow-mode", help="example_workflow mode。")] = None,
+    workflow_sleep_seconds: Annotated[float | None, typer.Option("--workflow-sleep-seconds", min=0, help="workflow sleep 秒数。")] = None,
     wait_min_seconds: Annotated[float | None, typer.Option("--wait-min-seconds", min=0, help="Locust 用户最小等待。")] = None,
     wait_max_seconds: Annotated[float | None, typer.Option("--wait-max-seconds", min=0, help="Locust 用户最大等待。")] = None,
     poll_interval_seconds: Annotated[float | None, typer.Option("--poll-interval-seconds", min=0.1, help="flow 轮询间隔。")] = None,
