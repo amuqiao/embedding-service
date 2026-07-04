@@ -4,6 +4,8 @@
 
 本文不是生产部署规范，也不替代压测报告。本文负责把单 API、单 worker 的压测方法扩展成生产调优判断框架。
 
+如果目标是执行压测、选择内置 `example-*` profile、模拟 `poster_title_image` 编排结构或压后观察 dashboard，先看 [`job-load-testing-runbook.md`](job-load-testing-runbook.md)。本文只负责容量阈值和生产调优判断。
+
 ## 核心模型
 
 `MAX_ACTIVE_JOBS` 是接单保护阈值，不是吞吐配置。它限制的是系统里同时处于 active 状态的 Job 数量。

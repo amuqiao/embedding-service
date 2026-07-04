@@ -17,11 +17,12 @@
 | [`current/template-project-config.md`](current/template-project-config.md) | 复制模板成为真实业务项目时，项目身份、数据库名、compose 命名空间和对象存储命名空间的替换清单 |
 | [`current/script-entrypoint-contract.md`](current/script-entrypoint-contract.md) | 当前脚本入口 `-h`、子命令 help、输出、副作用、示例和验证的 envelope 合同 |
 | [`current/ops-dashboard.md`](current/ops-dashboard.md) | 当前只读 `ops_dashboard` 路由、data source / widget / layout / renderer 注册层和 Job 运维展示边界 |
-| [`current/job-load-testing.md`](current/job-load-testing.md) | Job 发布、查询和完整异步流程的压测入口、执行计划、指标和评估方法 |
+| [`current/job-load-testing.md`](current/job-load-testing.md) | 当前 Job 压测入口、case/profile、manifest、产物、安全确认和指标语义事实 |
+| [`runbooks/job-load-testing-runbook.md`](runbooks/job-load-testing-runbook.md) | 执行一次 Job 压测、选择示例 profile、模拟 `poster_title_image` 结构、观察 dashboard 和压后诊断的唯一操作手册 |
 | [`runbooks/compose-full-dev-operations.md`](runbooks/compose-full-dev-operations.md) | 开发环境使用 `compose-full` 启动服务后，查看状态、容器内排障脚本和日志的操作手册 |
-| [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` overview、root/family scope、Job/workflow 查询和常见排障顺序的辅助说明；命令真源以 `scripts/jobs.sh` 和 `scripts/jobs/cli.py` 为准 |
+| [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` overview、root/family scope、Job/workflow 查询和常见排障顺序的辅助说明；压测主流程以 `job-load-testing-runbook.md` 为准，命令真源以 `scripts/jobs.sh` 和 `scripts/jobs/cli.py` 为准 |
 | [`runbooks/标题生成链路.md`](runbooks/标题生成链路.md) | `poster_title_image` 从接单、style probe、生图、OSS 写入、join 到结果快照的链路定位和排障顺序 |
-| [`runbooks/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/MAX_ACTIVE_JOBS%20估算与生产调优.md) | `MAX_ACTIVE_JOBS` 估算、K8s 生产调优顺序和 PostgreSQL/Redis 瓶颈判断 |
+| [`runbooks/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/MAX_ACTIVE_JOBS%20估算与生产调优.md) | `MAX_ACTIVE_JOBS` 估算、K8s 生产调优顺序和 PostgreSQL/Redis 瓶颈判断；不是压测执行手册 |
 | [`runbooks/lifespan.md`](runbooks/lifespan.md) | API、worker、recovery 生命周期与运行期资源放置边界 |
 | [`runbooks/local-postgres-database-name.md`](runbooks/local-postgres-database-name.md) | 本地项目数据库名变更后，PostgreSQL volume 旧库与 `.env` 新库不一致的排障和修复 |
 | [`runbooks/remote-test-env-fastapi-redis-taskiq.md`](runbooks/remote-test-env-fastapi-redis-taskiq.md) | 远端测试环境 FastAPI 依赖漂移、Redis 5 和 Taskiq broker 排障记录 |

@@ -4,6 +4,8 @@
 
 `jobs.sh` 是只读查询和排障入口。它不创建 Job，不取消 Job，不重试 Job，不重放 callback，也不修改数据库。
 
+如果目标是执行一次压测、选择 `example-*` profile、模拟 `poster_title_image` 编排结构或观察 dashboard，先看 [`job-load-testing-runbook.md`](job-load-testing-runbook.md)。本文只负责 `jobs.sh` 的只读诊断命令和证据解释。
+
 ## 先建立心智模型
 
 异步 Job 的排障不是从命令名开始，而是从“现在要回答什么问题、证据在哪一层”开始。
@@ -203,7 +205,7 @@ capacity 看当前占用 + 最近窗口的容量估算。
 ./scripts/jobs.sh gate
 ./scripts/jobs.sh gate --max-active-jobs 1000
 ./scripts/jobs.sh capacity --since 1h --max-active-jobs 1000
-./scripts/jobs.sh capacity --since 20m --caller-id default --max-active-jobs 1000
+./scripts/jobs.sh capacity --since 20m --caller-id load-cli --max-active-jobs 1000
 ./scripts/jobs.sh capacity --worker-pods 4 --worker-concurrency 30 --api-pods 2 --db-max-connections 100
 ./scripts/jobs.sh ingress --since 30m --bucket 1m
 ```
@@ -352,22 +354,7 @@ failed    finished_at 落入时间桶且 status=failed
 
 ### 4. 压测后判断能不能进入下一档
 
-先看瓶颈方向：
-
-```bash
-./scripts/jobs.sh pressure \
-  --since 20m \
-  --caller-id default \
-  --max-active-jobs 1000 \
-  --locust-prefix .run/load/<run-prefix> \
-  --api-log logs/api.log
-```
-
-再确认排空：
-
-```bash
-./scripts/jobs.sh drain --since 30m --caller-id default --strict
-```
+压测主流程以 [`job-load-testing-runbook.md`](job-load-testing-runbook.md) 为准。这里仅保留 `jobs.sh pressure` / `drain` 的诊断含义；通过 `load.sh` 运行的压测默认 caller 是 `load-cli`。
 
 判断规则：
 
@@ -391,7 +378,7 @@ drain not_drained
 压测刚结束想快速看本轮残留：
 
 ```bash
-./scripts/jobs.sh stuck --since 20m --older-than 1m --caller-id default --limit 20
+./scripts/jobs.sh stuck --since 20m --older-than 1m --caller-id load-cli --limit 20
 ```
 
 常见 issue：
@@ -575,30 +562,11 @@ degrading
 
 ### 压测出现 HTTP 500
 
-```bash
-./scripts/jobs.sh pressure \
-  --since 10m \
-  --caller-id default \
-  --max-active-jobs <当前值> \
-  --locust-prefix .run/load/<run-prefix> \
-  --api-log logs/api.log \
-  --api-log-tail 2000
-
-./scripts/jobs.sh list --caller-id default --status failed --since 10m --limit 20
-./scripts/jobs.sh inspect <job_id>
-```
-
-如果看到 DB 连接相关信号，先治理连接池、PostgreSQL 连接上限、API/worker 并发，不要继续升压。
+压测 HTTP 500 的完整处置路径见 [`job-load-testing-runbook.md`](job-load-testing-runbook.md)。本文只补充 `jobs.sh` 侧含义：先用 `pressure` 判断 HTTP、capacity、latency、failed、stuck 和 API log 方向，再用 `list` / `inspect` 定位失败样本。如果看到 DB 连接相关信号，先治理连接池、PostgreSQL 连接上限、API/worker 并发，不要继续升压。
 
 ### POST /jobs 返回 503
 
-```bash
-./scripts/jobs.sh gate --max-active-jobs <当前值>
-./scripts/jobs.sh pressure --since 10m --caller-id default --max-active-jobs <当前值> --locust-prefix .run/load/<run-prefix>
-./scripts/jobs.sh drain --since 30m --caller-id default --strict
-```
-
-如果主要是 `http_503_gate_hit`，且后台能排空、健康检查正常，说明 `MAX_ACTIVE_JOBS` 上限保护生效。是否调大这个上限，要结合 `capacity`、`latency`、失败率和环境资源判断。
+压测 503 的完整处置路径见 [`job-load-testing-runbook.md`](job-load-testing-runbook.md)。本文只补充 `jobs.sh` 侧含义：`gate` 看当前全局 active 水位，`pressure` 判断是否主要命中 active gate，`drain` 判断后台是否可排空。如果主要是 `http_503_gate_hit`，且后台能排空、健康检查正常，说明 `MAX_ACTIVE_JOBS` 上限保护生效。是否调大这个上限，要结合 `capacity`、`latency`、失败率和环境资源判断。
 
 ## JSON 使用边界
 
