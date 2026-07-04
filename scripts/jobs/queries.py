@@ -53,6 +53,7 @@ def _family_scope_clause(
     job_type: str | None,
     caller_id: str | None,
     client_request_id: str | None,
+    run_id: str | None,
     since: datetime | None,
 ) -> tuple[str, dict[str, Any]]:
     clauses = [
@@ -72,6 +73,9 @@ def _family_scope_clause(
     if client_request_id is not None:
         clauses.append("root.client_request_id = %(client_request_id)s")
         params["client_request_id"] = client_request_id
+    if run_id is not None:
+        clauses.append("root.metadata->>'run_id' = %(run_id)s")
+        params["run_id"] = run_id
     if since is not None:
         clauses.append("root.created_at >= %(since)s")
         params["since"] = since
@@ -86,6 +90,7 @@ def _common_filters(
     caller_id: str | None,
     client_request_id: str | None,
     since: datetime | None,
+    run_id: str | None = None,
     record_scope: str = "all",
 ) -> tuple[str, dict[str, Any]]:
     clauses: list[str] = []
@@ -100,6 +105,7 @@ def _common_filters(
             job_type=job_type,
             caller_id=caller_id,
             client_request_id=client_request_id,
+            run_id=run_id,
             since=since,
         )
         clauses.append(family_sql)
@@ -118,6 +124,9 @@ def _common_filters(
     if client_request_id is not None:
         clauses.append(f"AND {table_alias}.client_request_id = %(client_request_id)s")
         params["client_request_id"] = client_request_id
+    if run_id is not None:
+        clauses.append(f"AND {table_alias}.metadata->>'run_id' = %(run_id)s")
+        params["run_id"] = run_id
     if since is not None:
         clauses.append(f"AND {table_alias}.created_at >= %(since)s")
         params["since"] = since
@@ -129,6 +138,7 @@ def _scope_filters(
     table_alias: str,
     job_type: str | None,
     caller_id: str | None,
+    run_id: str | None = None,
     since: datetime | None = None,
     record_scope: str = "all",
 ) -> tuple[str, dict[str, Any]]:
@@ -138,6 +148,7 @@ def _scope_filters(
         job_type=job_type,
         caller_id=caller_id,
         client_request_id=None,
+        run_id=run_id,
         since=since,
         record_scope=record_scope,
     )
@@ -152,6 +163,7 @@ def list_jobs(
     client_request_id: str | None,
     since: datetime | None,
     limit: int,
+    run_id: str | None = None,
     record_scope: str = "root",
 ) -> list[dict]:
     filters, params = _common_filters(
@@ -160,6 +172,7 @@ def list_jobs(
         job_type=job_type,
         caller_id=caller_id,
         client_request_id=client_request_id,
+        run_id=run_id,
         since=since,
         record_scope=record_scope,
     )
@@ -598,6 +611,7 @@ def summary(
     job_type: str | None,
     caller_id: str | None,
     since: datetime | None,
+    run_id: str | None = None,
     record_scope: str = "root",
     execution_scope: str = "family",
 ) -> dict[str, Any]:
@@ -605,6 +619,7 @@ def summary(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         since=since,
         record_scope=record_scope,
     )
@@ -612,6 +627,7 @@ def summary(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         since=since,
         record_scope=execution_scope,
     )
@@ -619,6 +635,7 @@ def summary(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         since=since,
         record_scope="root",
     )
@@ -751,12 +768,14 @@ def latency(
     caller_id: str | None,
     since: datetime | None,
     group_by: str,
+    run_id: str | None = None,
     record_scope: str = "root",
 ) -> list[dict]:
     filters, params = _scope_filters(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         since=since,
         record_scope=record_scope,
     )
@@ -814,12 +833,14 @@ def ingress(
     caller_id: str | None,
     since: datetime,
     bucket_seconds: int,
+    run_id: str | None = None,
     record_scope: str = "root",
 ) -> list[dict]:
     filters, params = _scope_filters(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         since=None,
         record_scope=record_scope,
     )
@@ -880,12 +901,14 @@ def failure_groups(
     caller_id: str | None,
     since: datetime | None,
     limit: int,
+    run_id: str | None = None,
     record_scope: str = "family",
 ) -> list[dict]:
     filters, params = _scope_filters(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         since=since,
         record_scope=record_scope,
     )
@@ -920,12 +943,14 @@ def callbacks_summary(
     job_type: str | None,
     caller_id: str | None,
     since: datetime | None,
+    run_id: str | None = None,
     record_scope: str = "root",
 ) -> list[dict]:
     filters, params = _scope_filters(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         since=since,
         record_scope=record_scope,
     )
@@ -996,12 +1021,14 @@ def capacity(
     caller_id: str | None,
     since: datetime,
     window_seconds: float,
+    run_id: str | None = None,
     window_scope: str = "root",
 ) -> dict[str, Any]:
     window_filters, window_params = _scope_filters(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         since=since,
         record_scope=window_scope,
     )
@@ -1176,6 +1203,7 @@ def stuck(
     limit: int,
     job_type: str | None = None,
     caller_id: str | None = None,
+    run_id: str | None = None,
     since: datetime | None = None,
     record_scope: str = "family",
 ) -> list[dict]:
@@ -1184,6 +1212,7 @@ def stuck(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         since=since,
         record_scope=record_scope,
     )
@@ -1277,18 +1306,21 @@ def drain_status(
     caller_id: str | None,
     since: datetime,
     older_than: timedelta,
+    run_id: str | None = None,
     record_scope: str = "family",
 ) -> dict[str, Any]:
     current_filters, current_params = _scope_filters(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         record_scope=record_scope,
     )
     window_filters, window_params = _scope_filters(
         table_alias="j",
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         since=since,
         record_scope=record_scope,
     )
@@ -1339,6 +1371,7 @@ def drain_status(
         limit=1000,
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         since=since,
         record_scope=record_scope,
     )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -162,6 +163,8 @@ DRAIN_HELP_EPILOG = """\b
   ./scripts/load.sh drain --run-id <run_id> --strict
 """
 
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
 
 app = typer.Typer(
     name="load.sh",
@@ -174,6 +177,15 @@ app = typer.Typer(
 )
 
 
+def _validate_run_id(run_id: str) -> str:
+    if not RUN_ID_RE.fullmatch(run_id):
+        raise LoadError(
+            "run_id must match [A-Za-z0-9][A-Za-z0-9_-]{0,127}",
+            exit_code=2,
+        )
+    return run_id
+
+
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is None:
@@ -182,6 +194,7 @@ def main(ctx: typer.Context) -> None:
 
 
 def _run_dir(run_id: str, output_dir: str) -> Path:
+    _validate_run_id(run_id)
     base = Path(output_dir).expanduser()
     if not base.is_absolute():
         base = ROOT_DIR / base
@@ -428,6 +441,8 @@ def _prepare_run(
     locust_env.update(
         {
             "LOAD_INTERNAL_ENTRYPOINT": "scripts/load.sh",
+            "LOAD_INTERNAL_RUN_ID": effective_run_id,
+            "LOAD_INTERNAL_PROFILE_KEY": profile.key if profile else "",
             "LOAD_INTERNAL_CASE_KEY": case.key,
             "LOAD_INTERNAL_CASE_KIND": case.kind,
             "LOAD_INTERNAL_API_PREFIX": api_prefix,
@@ -1003,6 +1018,8 @@ def pressure(
         args.extend(["--job-type", manifest["job_type"]])
     if manifest.get("caller_id") and manifest.get("caller_id") != "-":
         args.extend(["--caller-id", manifest["caller_id"]])
+    if manifest.get("run_id"):
+        args.extend(["--run-id", manifest["run_id"]])
     if max_active_jobs is not None:
         args.extend(["--max-active-jobs", str(max_active_jobs)])
     if api_log is not None:
@@ -1028,6 +1045,8 @@ def drain(
         args.extend(["--job-type", manifest["job_type"]])
     if manifest.get("caller_id") and manifest.get("caller_id") != "-":
         args.extend(["--caller-id", manifest["caller_id"]])
+    if manifest.get("run_id"):
+        args.extend(["--run-id", manifest["run_id"]])
     if strict:
         args.append("--strict")
     raise typer.Exit(_run_jobs_command(args))

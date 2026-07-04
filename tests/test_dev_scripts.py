@@ -3868,13 +3868,35 @@ def test_jobs_pressure_json_uses_aggregated_queries(monkeypatch):
 
     monkeypatch.setattr("scripts.jobs.cli._with_connection", fake_with_connection)
 
-    result = RUNNER.invoke(jobs_cli_app, ["pressure", "--since", "20m", "--caller-id", "default", "--max-active-jobs", "1000", "--json"])
+    result = RUNNER.invoke(
+        jobs_cli_app,
+        [
+            "pressure",
+            "--since",
+            "20m",
+            "--caller-id",
+            "default",
+            "--run-id",
+            "run-1",
+            "--max-active-jobs",
+            "1000",
+            "--json",
+        ],
+    )
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["scope"]["since"] == "20m"
     assert payload["scope"]["caller_id"] == "default"
+    assert payload["scope"]["run_id"] == "run-1"
     assert set(payload) >= {"status", "bottlenecks", "summary", "capacity", "latency", "stuck", "failure_groups", "samples"}
+
+
+def test_jobs_pressure_rejects_unsafe_run_id():
+    result = RUNNER.invoke(jobs_cli_app, ["pressure", "--run-id", "../escape", "--json"])
+
+    assert result.exit_code == 2
+    assert "must match [A-Za-z0-9][A-Za-z0-9_-]{0,127}" in result.output
 
 
 def test_jobs_pressure_uses_root_aggregates_and_family_risk_queries(monkeypatch):
@@ -3899,15 +3921,38 @@ def test_jobs_pressure_uses_root_aggregates_and_family_risk_queries(monkeypatch)
     monkeypatch.setattr(queries, "failure_groups", lambda conn, **kwargs: captured["failure_groups"].append(kwargs) or [])
     monkeypatch.setattr(queries, "list_jobs", lambda conn, **kwargs: captured["list_jobs"].append(kwargs) or [])
 
-    result = RUNNER.invoke(jobs_cli_app, ["pressure", "--since", "20m", "--caller-id", "default", "--max-active-jobs", "1000", "--json"])
+    result = RUNNER.invoke(
+        jobs_cli_app,
+        [
+            "pressure",
+            "--since",
+            "20m",
+            "--caller-id",
+            "default",
+            "--run-id",
+            "run-1",
+            "--max-active-jobs",
+            "1000",
+            "--json",
+        ],
+    )
 
     assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["summary"]["scope"]["run_id"] == "run-1"
+    assert payload["capacity"]["scope"]["window"]["run_id"] == "run-1"
     assert captured["summary"][0].get("record_scope", "root") == "root"
+    assert captured["summary"][0]["run_id"] == "run-1"
     assert captured["capacity"][0].get("window_scope", "root") == "root"
+    assert captured["capacity"][0]["run_id"] == "run-1"
     assert captured["latency"][0]["record_scope"] == "root"
+    assert captured["latency"][0]["run_id"] == "run-1"
     assert captured["stuck"][0]["record_scope"] == "family"
+    assert captured["stuck"][0]["run_id"] == "run-1"
     assert captured["failure_groups"][0]["record_scope"] == "family"
+    assert captured["failure_groups"][0]["run_id"] == "run-1"
     assert {item["record_scope"] for item in captured["list_jobs"]} == {"family"}
+    assert {item["run_id"] for item in captured["list_jobs"]} == {"run-1"}
 
 
 def test_jobs_pressure_reads_locust_csv_prefix(tmp_path):

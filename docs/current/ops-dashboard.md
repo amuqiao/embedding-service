@@ -46,6 +46,7 @@ Layout
 - 路由固定在 `/internal/jobs-dashboard`，不进入 OpenAPI。
 - 后端提供 data source config、overview、recent_jobs、flow_capacity、failures_callbacks、job trace、health。
 - 前端负责 renderer contract、widget registry、layout registry、ECharts 渲染和 HTML 渲染。
+- dashboard 顶部全局过滤支持 `window/bucket/caller_id/job_type/run_id`；`run_id` 对齐 `load.sh` 写入 Job metadata 的压测身份。
 - `recent_jobs` 已接入 public root Job 读模型，支持页内 `status/client_request_id/limit` 控件；`flow_capacity` 已接入 DB read model，用于吞吐、drain、容量、延迟和 job_type 热点方向判断；`failures_callbacks` 已接入失败聚合、失败样本、callback summary 和 callback 样本。
 - `/internal/jobs-dashboard/examples` 是独立静态 renderer 示例页，只使用 generic fixtures，不请求 Job 读模型，也不作为业务 mock 数据源。
 - dashboard 不支持业务 mock 数据开关；旧的 `OPS_DASHBOARD_MOCK_DATA_ENABLED` 已废弃，出现在 env 文件或进程环境中都会触发配置加载失败。
@@ -155,7 +156,11 @@ Job Trace
 | `failures_callbacks` | `failures_callbacks.next_checks` | CLI handoff |
 | `job_trace` | `job_trace.status` | 当前 Job 状态和生成时间 |
 | `job_trace` | `job_trace.summary` | root identity、状态、进度、callback、生命周期 |
+| `job_trace` | `job_trace.load_summary` | 来自 Job metadata 的压测 run_id/profile/case/sequence 摘要 |
 | `job_trace` | `job_trace.payload_summary` | payload 结构摘要；不展示 full payload |
+| `job_trace` | `job_trace.workflow_summary` | workflow root/children/finalize 摘要 |
+| `job_trace` | `job_trace.result_summary` | result / canonical_result 结构摘要 |
+| `job_trace` | `job_trace.callback_summary` | 单 Job callback 状态摘要 |
 | `job_trace` | `job_trace.attempts` | retry decision 和 attempt 证据 |
 | `job_trace` | `job_trace.ai_calls` | AI call ledger 证据 |
 | `job_trace` | `job_trace.children` | workflow children / family 视角 |
@@ -196,7 +201,7 @@ Recent Jobs 固定为 root 视角，不提供 `scope` 控件。child / family �
 
 ## Flow And Capacity Contract
 
-`flow_capacity` 是 Phase 2 已落地的只读 data source，用于回答“系统是否在恢复、吞吐是否下降、容量是否不足、慢在哪个阶段”。它复用 dashboard 通用 `window/bucket/caller_id/job_type` 过滤，但不同子块有不同统计口径：
+`flow_capacity` 是 Phase 2 已落地的只读 data source，用于回答“系统是否在恢复、吞吐是否下降、容量是否不足、慢在哪个阶段”。它复用 dashboard 通用 `window/bucket/caller_id/job_type/run_id` 过滤，但不同子块有不同统计口径：
 
 | payload path | 统计口径 | 说明 |
 | --- | --- | --- |
@@ -210,11 +215,11 @@ Recent Jobs 固定为 root 视角，不提供 `scope` 控件。child / family �
 | `latency` | root scope + `created_at` window | `queue_wait_p95_seconds/run_p95_seconds/lifecycle_p95_seconds` |
 | `job_type_hotspots` | root scope + `created_at` window + `job_type` group | 按 job_type 展示 active、failed 和 p95 热点 |
 
-`health.next_checks` 会按当前页面筛选条件生成 CLI handoff，例如保留 `--since`、`--bucket`、`--job-type` 和 `--caller-id`。`flow_capacity` payload 不包含 `broker`、`runtime` 或 `db_connection_budget`；这些仍由 `./scripts/jobs.sh broker`、`./scripts/jobs.sh runtime` 和相关显式命令承担。
+`health.next_checks` 会按当前页面筛选条件生成 CLI handoff，例如保留 `--since`、`--bucket`、`--job-type`、`--caller-id` 和 `--run-id`。`flow_capacity` payload 不包含 `broker`、`runtime` 或 `db_connection_budget`；这些仍由 `./scripts/jobs.sh broker`、`./scripts/jobs.sh runtime` 和相关显式命令承担。
 
 ## Failures And Callbacks Contract
 
-`failures_callbacks` 是 Phase 3 已落地的只读 data source，用于回答“失败集中在哪、callback 是否完成外部通知、哪些样本要进入 Job Trace”。它复用 dashboard 通用 `window/caller_id/job_type` 过滤，不提供写操作、callback replay 或 dispatch replay。
+`failures_callbacks` 是 Phase 3 已落地的只读 data source，用于回答“失败集中在哪、callback 是否完成外部通知、哪些样本要进入 Job Trace”。它复用 dashboard 通用 `window/caller_id/job_type/run_id` 过滤，不提供写操作、callback replay 或 dispatch replay。
 
 | payload path | 统计口径 | 说明 |
 | --- | --- | --- |
@@ -235,6 +240,10 @@ Recent Jobs 固定为 root 视角，不提供 `scope` 控件。child / family �
 | payload path | 统计口径 | 说明 |
 | --- | --- | --- |
 | `job` | 单条 `job_aggregates` | identity、root/child、进度、callback_status、payload summaries、error summary |
+| `load_summary` | `job.metadata` | `scripts/load.sh` 写入的 `source/run_id/profile/case_key/sequence` |
+| `workflow_summary` | `job.result` / workflow fields | root/child/finalize 结构摘要 |
+| `result_summary` | `job.result` / `canonical_result` | 只返回结构摘要，不返回完整结果 payload |
+| `callback_summary` | callback fields | 单 Job callback 状态、attempt 和错误码摘要 |
 | `attempts` | `job_execution_attempts` by job | attempt 状态、retry decision、failure phase |
 | `ai_calls` | AI call ledger by job | provider/model/operation/status/cost 证据 |
 | `workflow_children` | children by root | workflow child Job 列表 |

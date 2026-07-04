@@ -19,7 +19,7 @@ from app.core.security import bearer_scheme, require_service_auth
 from app.ops_dashboard import read_model
 from app.ops_dashboard.config import get_dashboard_config
 from app.ops_dashboard.registry import data_source_config, section_config
-from app.ops_dashboard.schemas import DashboardFilters, VALID_BUCKETS, VALID_WINDOWS
+from app.ops_dashboard.schemas import DashboardFilters, VALID_BUCKETS, VALID_WINDOWS, is_valid_run_id
 
 VALID_RECENT_JOB_STATUSES = {"all", "queued", "running", "succeeded", "failed"}
 
@@ -44,15 +44,18 @@ def _filters(
     bucket: str = Query(default="1m"),
     caller_id: str | None = Query(default=None),
     job_type: str | None = Query(default=None),
+    run_id: str | None = Query(default=None),
 ) -> DashboardFilters:
     if window not in VALID_WINDOWS:
         raise HTTPException(status_code=400, detail=f"window must be one of: {', '.join(VALID_WINDOWS)}")
     if bucket not in VALID_BUCKETS:
         raise HTTPException(status_code=400, detail=f"bucket must be one of: {', '.join(VALID_BUCKETS)}")
+    if run_id is not None and not is_valid_run_id(run_id):
+        raise HTTPException(status_code=400, detail="run_id must match [A-Za-z0-9][A-Za-z0-9_-]{0,127}")
     config = get_dashboard_config()
     if VALID_WINDOWS[window] > config.max_window_seconds:
         raise HTTPException(status_code=400, detail="window exceeds OPS_DASHBOARD_MAX_WINDOW_SECONDS")
-    return DashboardFilters(window=window, bucket=bucket, caller_id=caller_id, job_type=job_type)
+    return DashboardFilters(window=window, bucket=bucket, caller_id=caller_id, job_type=job_type, run_id=run_id)
 
 
 def _planned_section_payload(
@@ -140,8 +143,8 @@ async def dashboard_config(_: OpsAccess):
 @router.get("/internal/jobs-dashboard/sections/overview/data")
 async def overview_section(
     _: OpsAccess,
-    db: AsyncSession = Depends(get_dashboard_db),
     filters: DashboardFilters = Depends(_filters),
+    db: AsyncSession = Depends(get_dashboard_db),
 ):
     payload = await _with_timeout(
         read_model.overview_data(db, filters, max_active_jobs=settings.job.max_active_jobs)
@@ -152,8 +155,8 @@ async def overview_section(
 @router.get("/internal/jobs-dashboard/sections/recent_jobs/data")
 async def recent_jobs_section(
     _: OpsAccess,
-    db: AsyncSession = Depends(get_dashboard_db),
     filters: DashboardFilters = Depends(_filters),
+    db: AsyncSession = Depends(get_dashboard_db),
     status: str = Query(default="all"),
     client_request_id: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
@@ -178,8 +181,8 @@ async def recent_jobs_section(
 @router.get("/internal/jobs-dashboard/sections/flow_capacity/data")
 async def flow_capacity_section(
     _: OpsAccess,
-    db: AsyncSession = Depends(get_dashboard_db),
     filters: DashboardFilters = Depends(_filters),
+    db: AsyncSession = Depends(get_dashboard_db),
 ):
     payload = await _with_timeout(
         read_model.flow_capacity_data(
@@ -194,8 +197,8 @@ async def flow_capacity_section(
 @router.get("/internal/jobs-dashboard/sections/failures_callbacks/data")
 async def failures_callbacks_section(
     _: OpsAccess,
-    db: AsyncSession = Depends(get_dashboard_db),
     filters: DashboardFilters = Depends(_filters),
+    db: AsyncSession = Depends(get_dashboard_db),
 ):
     payload = await _with_timeout(read_model.failures_data(db, filters))
     return jsonable_encoder(payload)
@@ -217,8 +220,8 @@ async def job_trace_data(
 @router.get("/internal/jobs-dashboard/health")
 async def job_health(
     _: OpsAccess,
-    db: AsyncSession = Depends(get_dashboard_db),
     filters: DashboardFilters = Depends(_filters),
+    db: AsyncSession = Depends(get_dashboard_db),
 ):
     payload = await _with_timeout(
         read_model.overview_data(db, filters, max_active_jobs=settings.job.max_active_jobs)

@@ -129,6 +129,10 @@ def test_profiles_lists_builtin_profiles():
         "example-workflow-chain",
         "example-workflow-group",
         "example-workflow-chord",
+        "example-workflow-chord-slow",
+        "example-workflow-chord-child-fail",
+        "example-workflow-chord-join-fail",
+        "example-workflow-chord-timeout",
         "example-workflow-map",
         "example-workflow-starmap",
         "example-workflow-chunks",
@@ -247,6 +251,30 @@ def test_run_dry_run_writes_manifest_without_token(tmp_path):
     assert f"--output-dir {output_dir}" in manifest["next_checks"][0]
 
 
+def test_run_rejects_unsafe_run_id_before_writing_manifest(tmp_path):
+    env_file = _env_file(tmp_path)
+    output_dir = tmp_path / "load"
+
+    result = RUNNER.invoke(
+        cli.app,
+        [
+            "run",
+            "job-flow",
+            "--env-file",
+            str(env_file),
+            "--run-id",
+            "../escape",
+            "--output-dir",
+            str(output_dir),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "run_id must match" in result.stderr
+    assert not (tmp_path / "escape").exists()
+
+
 def test_query_case_requires_job_ids(tmp_path):
     env_file = _env_file(tmp_path)
 
@@ -345,11 +373,13 @@ def test_run_builtin_profile_uses_profile_defaults(tmp_path):
 
 
 def test_builtin_workflow_profile_supplies_effective_locust_job_params(tmp_path):
-    _payload, _command, locust_env = _prepared_locust_env(tmp_path, profile="example-workflow-group")
+    payload, _command, locust_env = _prepared_locust_env(tmp_path, profile="example-workflow-group")
 
     job_params = json.loads(locust_env["LOAD_INTERNAL_JOB_PARAMS_JSON"])
     assert job_params == {"mode": "group", "label": "load-group", "sleep_seconds": 15.0}
     assert locust_env["LOAD_INTERNAL_JOB_PARAMS_SOURCE"] == "profile"
+    assert locust_env["LOAD_INTERNAL_RUN_ID"] == payload["run_id"]
+    assert locust_env["LOAD_INTERNAL_PROFILE_KEY"] == "example-workflow-group"
 
 
 def test_builtin_workflow_profile_allows_explicit_example_overrides(tmp_path):
@@ -610,6 +640,40 @@ def test_locust_failure_message_does_not_include_body():
     assert "secret-body" not in result.stderr
 
 
+def test_locust_job_metadata_includes_run_context():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "\n".join(
+                [
+                    "import json",
+                    "from scripts.load import locustfile",
+                    "print(json.dumps(locustfile.build_job_metadata(",
+                    "    case_key='workflow-flow',",
+                    "    run_id='run-1',",
+                    "    profile_key='example-workflow-chord',",
+                    "    sequence=3,",
+                    "), sort_keys=True))",
+                ]
+            ),
+        ],
+        check=False,
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "source": "scripts/load.sh",
+        "run_id": "run-1",
+        "case_key": "workflow-flow",
+        "sequence": 3,
+        "profile": "example-workflow-chord",
+    }
+
+
 def test_pressure_uses_manifest_context(tmp_path, monkeypatch):
     output_dir = tmp_path / "load"
     run_dir = output_dir / "run-2"
@@ -660,6 +724,8 @@ def test_pressure_uses_manifest_context(tmp_path, monkeypatch):
         "example_sleep",
         "--caller-id",
         "load-cli",
+        "--run-id",
+        "run-2",
     ]
 
 def test_report_uses_case_key(tmp_path):
@@ -746,5 +812,7 @@ def test_drain_uses_manifest_context(tmp_path, monkeypatch):
         "example_sleep",
         "--caller-id",
         "load-cli",
+        "--run-id",
+        "old-run",
         "--strict",
     ]

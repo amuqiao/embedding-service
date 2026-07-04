@@ -19,6 +19,7 @@ from scripts.jobs import db, formatters, queries
 VALID_JOB_STATUSES = {"queued", "running", "succeeded", "failed"}
 VALID_LATENCY_GROUP_BY = {"all", "job_type", "caller_id", "status"}
 DURATION_RE = re.compile(r"^(?P<value>[1-9][0-9]*)(?P<unit>s|m|h|d)$")
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 HTTP_STATUS_RE = re.compile(r"HTTP (?P<status>[0-9]{3})")
 LOG_TIMESTAMP_RE = re.compile(r"^(?P<timestamp>[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}),")
 
@@ -407,6 +408,24 @@ JsonOption = Annotated[
     ),
 ]
 JobIdArgument = Annotated[str, typer.Argument(help="Job ID。")]
+
+
+def _validate_run_id_option(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not RUN_ID_RE.fullmatch(value):
+        raise typer.BadParameter("must match [A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+    return value
+
+
+RunIdOption = Annotated[
+    str | None,
+    typer.Option(
+        "--run-id",
+        help="按 metadata.run_id 过滤压测运行。",
+        callback=_validate_run_id_option,
+    ),
+]
 LimitOption = Annotated[
     int,
     typer.Option(
@@ -1339,11 +1358,12 @@ def _render_capacity_human(payload: dict[str, Any], *, title: str = "Job Capacit
     formatters.event(
         "OK",
         "capacity",
-        "since=%s job_type=%s caller_id=%s"
+        "since=%s job_type=%s caller_id=%s run_id=%s"
         % (
             window_scope.get("since") or "-",
             window_scope.get("job_type") or "-",
             window_scope.get("caller_id") or "-",
+            window_scope.get("run_id") or "-",
         ),
     )
     _render_gate_human(
@@ -1354,12 +1374,13 @@ def _render_capacity_human(payload: dict[str, Any], *, title: str = "Job Capacit
     formatters.event(
         "OK",
         "window",
-        "since=%s record_scope=%s job_type=%s caller_id=%s"
+        "since=%s record_scope=%s job_type=%s caller_id=%s run_id=%s"
         % (
             window_scope.get("since") or "-",
             window_scope.get("record_scope") or "-",
             window_scope.get("job_type") or "-",
             window_scope.get("caller_id") or "-",
+            window_scope.get("run_id") or "-",
         ),
     )
     formatters.print_table([payload.get("window") or {}], _capacity_window_columns())
@@ -2519,6 +2540,7 @@ def _summary_payload(
     job_type: str | None,
     caller_id: str | None,
     record_scope: str,
+    run_id: str | None = None,
     summary_payload: dict[str, Any],
 ) -> dict[str, Any]:
     return {
@@ -2527,6 +2549,7 @@ def _summary_payload(
             "seconds": window.total_seconds(),
             "job_type": job_type,
             "caller_id": caller_id,
+            "run_id": run_id,
             "record_scope": record_scope,
             "query_scopes": summary_payload.get("query_scopes") or {},
         },
@@ -2540,6 +2563,8 @@ def _summary_next_checks(scope: dict[str, Any], *, no_jobs_found: bool) -> list[
         filters.append(f"--job-type {scope['job_type']}")
     if scope.get("caller_id"):
         filters.append(f"--caller-id {scope['caller_id']}")
+    if scope.get("run_id"):
+        filters.append(f"--run-id {scope['run_id']}")
     filter_text = (" " + " ".join(filters)) if filters else ""
     checks = [
         f"./scripts/jobs.sh list --since {scope['since']}{filter_text} --limit 20",
@@ -2635,6 +2660,7 @@ def _fetch_summary_payload(
     since: str,
     job_type: str | None,
     caller_id: str | None,
+    run_id: str | None = None,
     record_scope: str = "root",
 ) -> dict[str, Any]:
     window, since_at = _since_window(since)
@@ -2644,6 +2670,7 @@ def _fetch_summary_payload(
             conn,
             job_type=job_type,
             caller_id=caller_id,
+            run_id=run_id,
             since=since_at,
             record_scope=record_scope,
             execution_scope=execution_scope,
@@ -2654,6 +2681,7 @@ def _fetch_summary_payload(
         window=window,
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         record_scope=record_scope,
         summary_payload=raw_payload,
     )
@@ -2669,7 +2697,7 @@ def _render_summary(payload: dict[str, Any]) -> None:
     formatters.event(
         "OK",
         "summary",
-        f"since={scope['since']} record_scope={scope.get('record_scope') or '-'} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'}",
+        f"since={scope['since']} record_scope={scope.get('record_scope') or '-'} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'} run_id={scope.get('run_id') or '-'}",
     )
     if no_jobs_found:
         print("no jobs found in the selected window.")
@@ -2729,6 +2757,7 @@ def _drain_payload(
     older_than: str,
     job_type: str | None,
     caller_id: str | None,
+    run_id: str | None,
     raw_payload: dict[str, Any],
 ) -> dict[str, Any]:
     current_active = _count((raw_payload.get("current") or {}).get("active_jobs"))
@@ -2758,6 +2787,7 @@ def _drain_payload(
     filters = (
         (f" --job-type {job_type}" if job_type else "")
         + (f" --caller-id {caller_id}" if caller_id else "")
+        + (f" --run-id {run_id}" if run_id else "")
     )
     active_list_command = (
         f"./scripts/jobs.sh list --status queued,running --scope family{filters} --limit 20"
@@ -2770,6 +2800,7 @@ def _drain_payload(
             "older_than": older_than,
             "job_type": job_type,
             "caller_id": caller_id,
+            "run_id": run_id,
             "query_scopes": raw_payload.get("query_scopes") or {},
         },
         **raw_payload,
@@ -2794,6 +2825,7 @@ def _render_drain(payload: dict[str, Any]) -> None:
         (
             f"since={scope['since']} older_than={scope['older_than']} "
             f"job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'}"
+            f" run_id={scope.get('run_id') or '-'}"
         ),
     )
     print(payload["message"])
@@ -2991,9 +3023,10 @@ def _pressure_payload(
     max_active_jobs: int | None,
     queue_wait_warning_seconds: float,
     run_warning_seconds: float,
+    payload: dict[str, Any],
+    run_id: str | None = None,
     locust: dict[str, Any] | None = None,
     api_log: dict[str, Any] | None = None,
-    payload: dict[str, Any],
 ) -> dict[str, Any]:
     summary = payload["summary"]
     capacity_payload = payload["capacity"]
@@ -3242,6 +3275,7 @@ def _pressure_payload(
     filters = (
         (f" --job-type {job_type}" if job_type else "")
         + (f" --caller-id {caller_id}" if caller_id else "")
+        + (f" --run-id {run_id}" if run_id else "")
     )
     return {
         "scope": {
@@ -3249,6 +3283,7 @@ def _pressure_payload(
             "older_than": older_than,
             "job_type": job_type,
             "caller_id": caller_id,
+            "run_id": run_id,
             "queue_wait_warning_seconds": queue_wait_warning_seconds,
             "run_warning_seconds": run_warning_seconds,
         },
@@ -3285,7 +3320,7 @@ def _render_pressure(payload: dict[str, Any]) -> None:
     formatters.event(
         payload["status"].upper(),
         "pressure",
-        f"system_state={payload.get('system_state') or '-'} since={scope['since']} older_than={scope['older_than']} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'}",
+        f"system_state={payload.get('system_state') or '-'} since={scope['since']} older_than={scope['older_than']} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'} run_id={scope.get('run_id') or '-'}",
     )
     formatters.section("Bottlenecks")
     rows = [
@@ -3371,6 +3406,7 @@ def _overview_raw_payload(
             window=window,
             job_type=job_type,
             caller_id=caller_id,
+            run_id=run_id,
             record_scope="root",
             summary_payload=summary_payload,
         ),
@@ -3456,6 +3492,7 @@ def _overview_payload(
         older_than=older_than,
         job_type=job_type,
         caller_id=caller_id,
+        run_id=None,
         max_active_jobs=max_active_jobs,
         queue_wait_warning_seconds=30.0,
         run_warning_seconds=60.0,
@@ -3849,6 +3886,7 @@ def _capacity_payload_from_result(
     job_type: str | None,
     caller_id: str | None,
     record_scope: str,
+    run_id: str | None = None,
     max_active_jobs: int | None,
 ) -> dict[str, Any]:
     current = dict(raw_payload.get("current") or {})
@@ -3869,6 +3907,7 @@ def _capacity_payload_from_result(
                 "seconds": window.total_seconds(),
                 "job_type": job_type,
                 "caller_id": caller_id,
+                "run_id": run_id,
             },
         },
         "max_active_jobs": max_active_jobs,
@@ -3893,6 +3932,7 @@ def _capacity_payload(
     job_type: str | None,
     caller_id: str | None,
     record_scope: str,
+    run_id: str | None = None,
     max_active_jobs: int | None,
     worker_pods: int | None,
     worker_concurrency: int | None,
@@ -3908,6 +3948,7 @@ def _capacity_payload(
             conn,
             job_type=job_type,
             caller_id=caller_id,
+            run_id=run_id,
             since=since_at,
             window_seconds=window.total_seconds(),
             window_scope=record_scope,
@@ -3919,6 +3960,7 @@ def _capacity_payload(
         window=window,
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         record_scope=record_scope,
         max_active_jobs=max_active_jobs,
     )
@@ -3946,6 +3988,7 @@ def _ingress_payload_from_rows(
     job_type: str | None,
     caller_id: str | None,
     record_scope: str,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     return {
         "scope": {
@@ -3955,6 +3998,7 @@ def _ingress_payload_from_rows(
             "bucket_seconds": bucket_seconds,
             "job_type": job_type,
             "caller_id": caller_id,
+            "run_id": run_id,
             "record_scope": record_scope,
         },
         "ingress": rows,
@@ -3967,7 +4011,15 @@ def _ingress_payload_from_rows(
     }
 
 
-def _ingress_payload(*, since: str, bucket: str, job_type: str | None, caller_id: str | None, record_scope: str) -> dict[str, Any]:
+def _ingress_payload(
+    *,
+    since: str,
+    bucket: str,
+    job_type: str | None,
+    caller_id: str | None,
+    record_scope: str,
+    run_id: str | None = None,
+) -> dict[str, Any]:
     window, since_at = _since_window(since)
     try:
         bucket_delta = parse_duration(bucket)
@@ -3983,6 +4035,7 @@ def _ingress_payload(*, since: str, bucket: str, job_type: str | None, caller_id
             conn,
             job_type=job_type,
             caller_id=caller_id,
+            run_id=run_id,
             since=since_at,
             bucket_seconds=bucket_seconds,
             record_scope=record_scope,
@@ -3996,6 +4049,7 @@ def _ingress_payload(*, since: str, bucket: str, job_type: str | None, caller_id
         bucket_seconds=bucket_seconds,
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         record_scope=record_scope,
     )
 
@@ -4009,6 +4063,7 @@ def _latency_payload_from_rows(
     caller_id: str | None,
     record_scope: str,
     group_by: str,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     return {
         "scope": {
@@ -4016,6 +4071,7 @@ def _latency_payload_from_rows(
             "seconds": window.total_seconds(),
             "job_type": job_type,
             "caller_id": caller_id,
+            "run_id": run_id,
             "record_scope": record_scope,
         },
         "group_by": group_by,
@@ -4023,13 +4079,22 @@ def _latency_payload_from_rows(
     }
 
 
-def _latency_payload(*, since: str, job_type: str | None, caller_id: str | None, record_scope: str, group_by: str) -> dict[str, Any]:
+def _latency_payload(
+    *,
+    since: str,
+    job_type: str | None,
+    caller_id: str | None,
+    record_scope: str,
+    group_by: str,
+    run_id: str | None = None,
+) -> dict[str, Any]:
     window, since_at = _since_window(since)
     rows = _with_connection(
         lambda conn: queries.latency(
             conn,
             job_type=job_type,
             caller_id=caller_id,
+            run_id=run_id,
             since=since_at,
             group_by=group_by,
             record_scope=record_scope,
@@ -4041,6 +4106,7 @@ def _latency_payload(*, since: str, job_type: str | None, caller_id: str | None,
         window=window,
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         record_scope=record_scope,
         group_by=group_by,
     )
@@ -4073,6 +4139,7 @@ def _stuck_payload(
     since: str | None,
     job_type: str | None,
     caller_id: str | None,
+    run_id: str | None,
     record_scope: str,
     limit: int,
 ) -> dict[str, Any]:
@@ -4090,6 +4157,7 @@ def _stuck_payload(
             limit=limit,
             job_type=job_type,
             caller_id=caller_id,
+            run_id=run_id,
             since=since_at,
             record_scope=record_scope,
         )
@@ -4244,13 +4312,21 @@ def _dashboard_payload(
     }
 
 
-def _callbacks_summary_payload(*, since: str, job_type: str | None, caller_id: str | None, record_scope: str) -> dict[str, Any]:
+def _callbacks_summary_payload(
+    *,
+    since: str,
+    job_type: str | None,
+    caller_id: str | None,
+    record_scope: str,
+    run_id: str | None = None,
+) -> dict[str, Any]:
     window, since_at = _since_window(since)
     rows = _with_connection(
         lambda conn: queries.callbacks_summary(
             conn,
             job_type=job_type,
             caller_id=caller_id,
+            run_id=run_id,
             since=since_at,
             record_scope=record_scope,
         )
@@ -4259,7 +4335,14 @@ def _callbacks_summary_payload(*, since: str, job_type: str | None, caller_id: s
     dead = sum(_count(row.get("count")) for row in rows if row.get("status") == "dead_letter")
     status = "critical" if dead else "warning" if due else "ok"
     return {
-        "scope": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id, "record_scope": record_scope},
+        "scope": {
+            "since": since,
+            "seconds": window.total_seconds(),
+            "job_type": job_type,
+            "caller_id": caller_id,
+            "run_id": run_id,
+            "record_scope": record_scope,
+        },
         "status": status,
         "callbacks": rows,
     }
@@ -4268,7 +4351,11 @@ def _callbacks_summary_payload(*, since: str, job_type: str | None, caller_id: s
 def _render_callbacks_summary_human(payload: dict[str, Any]) -> None:
     scope = payload["scope"]
     formatters.section("Callback Summary")
-    formatters.event(payload["status"].upper(), "callbacks", f"since={scope['since']} record_scope={scope['record_scope']} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'}")
+    formatters.event(
+        payload["status"].upper(),
+        "callbacks",
+        f"since={scope['since']} record_scope={scope['record_scope']} job_type={scope.get('job_type') or '-'} caller_id={scope.get('caller_id') or '-'} run_id={scope.get('run_id') or '-'}",
+    )
     formatters.print_table(payload["callbacks"], _callbacks_summary_columns(), empty_message="no callbacks")
 
 
@@ -4340,6 +4427,7 @@ def list_jobs(
     ] = None,
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    run_id: RunIdOption = None,
     client_request_id: Annotated[
         str | None,
         typer.Option("--client-request-id", help="按 client_request_id 过滤。"),
@@ -4368,6 +4456,7 @@ def list_jobs(
             job_type=job_type,
             caller_id=caller_id,
             client_request_id=client_request_id,
+            run_id=run_id,
             since=since_at,
             limit=limit,
             record_scope=parsed_scope,
@@ -4379,6 +4468,7 @@ def list_jobs(
         "statuses": statuses,
         "job_type": job_type,
         "caller_id": caller_id,
+        "run_id": run_id,
         "client_request_id": client_request_id,
     }
     if json_output:
@@ -4847,6 +4937,7 @@ def stuck(
     ] = "10m",
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    run_id: RunIdOption = None,
     since: Annotated[
         str | None,
         typer.Option("--since", help="只扫描指定时间窗口内创建的 Job，例如 30m。"),
@@ -4866,6 +4957,7 @@ def stuck(
         since=since,
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         record_scope=parsed_scope,
         limit=limit,
     )
@@ -4879,6 +4971,7 @@ def stuck(
 def drain(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    run_id: RunIdOption = None,
     since: Annotated[
         str,
         typer.Option("--since", help="只检查指定时间窗口内创建的 Job，例如 30m。"),
@@ -4906,6 +4999,7 @@ def drain(
             conn,
             job_type=job_type,
             caller_id=caller_id,
+            run_id=run_id,
             since=since_at,
             older_than=older_than_delta,
             record_scope=parsed_scope,
@@ -4916,6 +5010,7 @@ def drain(
         older_than=older_than,
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         raw_payload=raw_payload | {"scope_window_seconds": window.total_seconds()},
     )
     if json_output:
@@ -4930,6 +5025,7 @@ def drain(
 def pressure(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤窗口证据。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤窗口证据。")] = None,
+    run_id: RunIdOption = None,
     since: Annotated[
         str,
         typer.Option("--since", help="诊断窗口，例如 20m。"),
@@ -4977,11 +5073,12 @@ def pressure(
     limit = max_active_jobs if max_active_jobs is not None else _env_max_active_jobs()
 
     def action(conn):
-        summary_payload = queries.summary(conn, job_type=job_type, caller_id=caller_id, since=since_at)
+        summary_payload = queries.summary(conn, job_type=job_type, caller_id=caller_id, since=since_at, run_id=run_id)
         capacity_payload = queries.capacity(
             conn,
             job_type=job_type,
             caller_id=caller_id,
+            run_id=run_id,
             since=since_at,
             window_seconds=window.total_seconds(),
         )
@@ -4989,18 +5086,20 @@ def pressure(
             "stuck_limit": sample_limit,
             "summary": _summary_payload(
                 since=since,
-            window=window,
-            job_type=job_type,
-            caller_id=caller_id,
-            record_scope="root",
-            summary_payload=summary_payload,
-        ),
+                window=window,
+                job_type=job_type,
+                caller_id=caller_id,
+                run_id=run_id,
+                record_scope="root",
+                summary_payload=summary_payload,
+            ),
             "capacity": _capacity_payload_from_result(
                 capacity_payload,
                 since=since,
                 window=window,
                 job_type=job_type,
                 caller_id=caller_id,
+                run_id=run_id,
                 record_scope="root",
                 max_active_jobs=limit,
             ),
@@ -5008,6 +5107,7 @@ def pressure(
                 conn,
                 job_type=job_type,
                 caller_id=caller_id,
+                run_id=run_id,
                 since=since_at,
                 group_by="all",
                 record_scope="root",
@@ -5018,6 +5118,7 @@ def pressure(
                 limit=sample_limit,
                 job_type=job_type,
                 caller_id=caller_id,
+                run_id=run_id,
                 since=since_at,
                 record_scope="family",
             ),
@@ -5025,6 +5126,7 @@ def pressure(
                 conn,
                 job_type=job_type,
                 caller_id=caller_id,
+                run_id=run_id,
                 since=since_at,
                 limit=sample_limit,
                 record_scope="family",
@@ -5035,6 +5137,7 @@ def pressure(
                 job_type=job_type,
                 caller_id=caller_id,
                 client_request_id=None,
+                run_id=run_id,
                 since=since_at,
                 limit=sample_limit,
                 record_scope="family",
@@ -5045,6 +5148,7 @@ def pressure(
                 job_type=job_type,
                 caller_id=caller_id,
                 client_request_id=None,
+                run_id=run_id,
                 since=since_at,
                 limit=sample_limit,
                 record_scope="family",
@@ -5057,6 +5161,7 @@ def pressure(
         older_than=older_than,
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         max_active_jobs=limit,
         queue_wait_warning_seconds=queue_wait_warning_seconds,
         run_warning_seconds=run_warning_seconds,
@@ -5074,6 +5179,7 @@ def pressure(
 def summary(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    run_id: RunIdOption = None,
     since: Annotated[
         str,
         typer.Option("--since", help="只统计指定时间窗口内创建的 Job，例如 10m。"),
@@ -5086,7 +5192,13 @@ def summary(
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
-    payload = _fetch_summary_payload(since=since, job_type=job_type, caller_id=caller_id, record_scope=parsed_scope)
+    payload = _fetch_summary_payload(
+        since=since,
+        job_type=job_type,
+        caller_id=caller_id,
+        run_id=run_id,
+        record_scope=parsed_scope,
+    )
     if json_output:
         formatters.print_json(payload)
         return
@@ -5097,13 +5209,20 @@ def summary(
 def doctor(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    run_id: RunIdOption = None,
     since: Annotated[
         str,
         typer.Option("--since", help="只诊断指定时间窗口内创建的 Job，例如 10m。"),
     ] = "10m",
     json_output: JsonOption = False,
 ) -> None:
-    summary_payload = _fetch_summary_payload(since=since, job_type=job_type, caller_id=caller_id, record_scope="root")
+    summary_payload = _fetch_summary_payload(
+        since=since,
+        job_type=job_type,
+        caller_id=caller_id,
+        run_id=run_id,
+        record_scope="root",
+    )
     payload = _diagnose_summary(summary_payload)
     if json_output:
         formatters.print_json(payload)
@@ -5250,6 +5369,7 @@ def runtime(json_output: JsonOption = False) -> None:
 def failures(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    run_id: RunIdOption = None,
     since: Annotated[str, typer.Option("--since", help="只统计指定窗口内创建的 Job，例如 1h。")] = "1h",
     record_scope: ScopeOption = "family",
     limit: LimitOption = 20,
@@ -5266,20 +5386,32 @@ def failures(
             conn,
             job_type=job_type,
             caller_id=caller_id,
+            run_id=run_id,
             since=since_at,
             limit=limit,
             record_scope=parsed_scope,
         )
     )
     payload = {
-        "scope": {"since": since, "seconds": window.total_seconds(), "job_type": job_type, "caller_id": caller_id, "record_scope": parsed_scope},
+        "scope": {
+            "since": since,
+            "seconds": window.total_seconds(),
+            "job_type": job_type,
+            "caller_id": caller_id,
+            "run_id": run_id,
+            "record_scope": parsed_scope,
+        },
         "failure_groups": rows,
     }
     if json_output:
         formatters.print_json(payload)
         return
     formatters.section("Failure Groups")
-    formatters.event("OK", "failures", f"since={since} record_scope={parsed_scope} job_type={job_type or '-'} caller_id={caller_id or '-'}")
+    formatters.event(
+        "OK",
+        "failures",
+        f"since={since} record_scope={parsed_scope} job_type={job_type or '-'} caller_id={caller_id or '-'} run_id={run_id or '-'}",
+    )
     formatters.print_table(rows, _failure_group_columns(), empty_message="no failed jobs")
 
 
@@ -5287,6 +5419,7 @@ def failures(
 def callbacks_summary(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    run_id: RunIdOption = None,
     since: Annotated[str, typer.Option("--since", help="只统计指定窗口内创建的 root Job，例如 1h。")] = "1h",
     record_scope: ScopeOption = "root",
     json_output: JsonOption = False,
@@ -5296,7 +5429,13 @@ def callbacks_summary(
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
-    payload = _callbacks_summary_payload(since=since, job_type=job_type, caller_id=caller_id, record_scope=parsed_scope)
+    payload = _callbacks_summary_payload(
+        since=since,
+        job_type=job_type,
+        caller_id=caller_id,
+        run_id=run_id,
+        record_scope=parsed_scope,
+    )
     if json_output:
         formatters.print_json(payload)
         return
@@ -5307,6 +5446,7 @@ def callbacks_summary(
 def ingress(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    run_id: RunIdOption = None,
     since: Annotated[str, typer.Option("--since", help="统计窗口，例如 30m。")] = "30m",
     bucket: Annotated[str, typer.Option("--bucket", help="时间桶大小，例如 1m、5m、1h。")] = "1m",
     record_scope: ScopeOption = "root",
@@ -5317,12 +5457,23 @@ def ingress(
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
-    payload = _ingress_payload(since=since, bucket=bucket, job_type=job_type, caller_id=caller_id, record_scope=parsed_scope)
+    payload = _ingress_payload(
+        since=since,
+        bucket=bucket,
+        job_type=job_type,
+        caller_id=caller_id,
+        run_id=run_id,
+        record_scope=parsed_scope,
+    )
     if json_output:
         formatters.print_json(payload)
         return
     formatters.section("Job Ingress")
-    formatters.event("OK", "ingress", f"since={since} bucket={bucket} record_scope={parsed_scope} job_type={job_type or '-'} caller_id={caller_id or '-'}")
+    formatters.event(
+        "OK",
+        "ingress",
+        f"since={since} bucket={bucket} record_scope={parsed_scope} job_type={job_type or '-'} caller_id={caller_id or '-'} run_id={run_id or '-'}",
+    )
     formatters.print_table(payload["ingress"], _ingress_columns(), empty_message="no job events")
 
 
@@ -5330,6 +5481,7 @@ def ingress(
 def latency(
     job_type: Annotated[str | None, typer.Option("--job-type", help="按 job_type 过滤。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="按 caller_id 过滤。")] = None,
+    run_id: RunIdOption = None,
     since: Annotated[
         str,
         typer.Option("--since", help="只统计指定时间窗口内创建的 Job，例如 30m。"),
@@ -5347,7 +5499,14 @@ def latency(
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise typer.Exit(2) from exc
-    payload = _latency_payload(since=since, job_type=job_type, caller_id=caller_id, record_scope=parsed_scope, group_by=group)
+    payload = _latency_payload(
+        since=since,
+        job_type=job_type,
+        caller_id=caller_id,
+        run_id=run_id,
+        record_scope=parsed_scope,
+        group_by=group,
+    )
     if json_output:
         formatters.print_json(payload)
         return
@@ -5358,6 +5517,7 @@ def latency(
 def capacity(
     job_type: Annotated[str | None, typer.Option("--job-type", help="窗口估算按 job_type 过滤；current 仍是全局 active 占用口径。")] = None,
     caller_id: Annotated[str | None, typer.Option("--caller-id", help="窗口估算按 caller_id 过滤；current 仍是全局 active 占用口径。")] = None,
+    run_id: RunIdOption = None,
     since: Annotated[
         str,
         typer.Option("--since", help="估算窗口，例如 10m。"),
@@ -5389,6 +5549,7 @@ def capacity(
         since=since,
         job_type=job_type,
         caller_id=caller_id,
+        run_id=run_id,
         record_scope=parsed_scope,
         max_active_jobs=limit,
         worker_pods=worker_pods,

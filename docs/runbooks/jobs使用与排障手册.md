@@ -92,7 +92,7 @@ Redis/Taskiq 和 worker 是否真的在消费？
 
 `broker` 和 `runtime` 的作用域是当前执行环境。它们适合在 Pod 内运行，用于确认当前 Pod 看到的 Redis/Taskiq、进程、环境变量和 cgroup 资源；它们不会修改 Redis、DB 或 Job 状态。
 
-## 三个最容易混淆的概念
+## 四个最容易混淆的概念
 
 ### 时间窗口
 
@@ -136,6 +136,31 @@ family
 all
   不加 lineage 条件。
   只用于明确的底层排查。
+```
+
+### Run ID
+
+`--run-id` 是 `load.sh` 压测写入 Job metadata 的本轮压测标识。通过 `load.sh` 创建的 Job 会带有：
+
+```text
+metadata.source = scripts/load.sh
+metadata.run_id = <run_id>
+metadata.profile = <profile>
+metadata.case_key = <case>
+```
+
+压测排障时优先用 `--run-id <run_id>`，它比 `--caller-id load-cli` 更精确。`caller_id` 只能说明来源是压测脚本，`run_id` 才能区分是哪一轮压测。
+
+`run_id` 只能使用字母、数字、下划线和中横线，例如 `poster-title-image-shape-baseline-1`。不要使用空格、斜杠、点号或 shell 特殊字符。
+
+常用命令：
+
+```bash
+./scripts/jobs.sh list --run-id <run_id> --since 30m
+./scripts/jobs.sh failures --run-id <run_id> --since 30m
+./scripts/jobs.sh stuck --run-id <run_id> --since 30m --older-than 1m
+./scripts/jobs.sh drain --run-id <run_id> --since 30m --strict
+./scripts/jobs.sh pressure --run-id <run_id> --since 30m
 ```
 
 ### 当前全局 active 占用
@@ -195,7 +220,8 @@ capacity 看当前占用 + 最近窗口的容量估算。
 | 为什么 overview 说窗口为空但 active_jobs=1？ | `gate` | 这个 Job 可能创建于窗口外，但现在仍未结束 |
 | 当前是否接近 `MAX_ACTIVE_JOBS` 上限？ | `gate --max-active-jobs <n>` | 直接看 active_ratio 和 headroom，含义见上面的字段说明 |
 | 最近 1 小时的吞吐和生命周期是否支撑当前上限？ | `capacity --since 1h` | 需要窗口 accepted_jobs、lifecycle p95 和估算需求 |
-| 按某个 caller/job_type 估算本轮压测容量？ | `capacity --since 20m --caller-id <id>` | 过滤只作用于窗口估算，不作用于当前全局占用 |
+| 按某轮压测估算容量？ | `capacity --since 20m --run-id <run_id>` | 过滤只作用于窗口估算，不作用于当前全局占用 |
+| 按某个 caller/job_type 估算容量？ | `capacity --since 20m --caller-id <id>` | `caller_id` 是粗过滤；压测优先用 `run_id` |
 | 入口提交速率是否突然变大？ | `ingress --since 30m --bucket 1m` | 看 created、started、terminal、failed 是否同向变化 |
 | 是否可以加 worker 并发或 pod？ | `capacity --worker-pods <n> --worker-concurrency <n> --api-pods <n> --db-max-connections <n>` | 同时看处理槽位和 DB 连接预算 |
 
@@ -205,6 +231,7 @@ capacity 看当前占用 + 最近窗口的容量估算。
 ./scripts/jobs.sh gate
 ./scripts/jobs.sh gate --max-active-jobs 1000
 ./scripts/jobs.sh capacity --since 1h --max-active-jobs 1000
+./scripts/jobs.sh capacity --since 20m --run-id <run_id> --max-active-jobs 1000
 ./scripts/jobs.sh capacity --since 20m --caller-id load-cli --max-active-jobs 1000
 ./scripts/jobs.sh capacity --worker-pods 4 --worker-concurrency 30 --api-pods 2 --db-max-connections 100
 ./scripts/jobs.sh ingress --since 30m --bucket 1m
@@ -378,7 +405,7 @@ drain not_drained
 压测刚结束想快速看本轮残留：
 
 ```bash
-./scripts/jobs.sh stuck --since 20m --older-than 1m --caller-id load-cli --limit 20
+./scripts/jobs.sh stuck --since 20m --older-than 1m --run-id <run_id> --limit 20
 ```
 
 常见 issue：

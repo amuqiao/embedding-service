@@ -24,6 +24,7 @@ OPTIONAL_FILTER_BIND_TYPES = {
     "job_type": String(),
     "caller_id": String(),
     "client_request_id": String(),
+    "run_id": String(),
     "status": String(),
     "since_at": DateTime(timezone=True),
 }
@@ -55,6 +56,7 @@ AND EXISTS (
     AND ({alias}.id = root.id OR {alias}.root_job_id = root.id)
     AND (:job_type IS NULL OR root.job_type = :job_type)
     AND (:caller_id IS NULL OR root.caller_id = :caller_id)
+    AND (:run_id IS NULL OR root.metadata->>'run_id' = :run_id)
     AND (:since_at IS NULL OR root.created_at >= :since_at)
 )
 """
@@ -67,6 +69,7 @@ def _scope_clause(alias: str, record_scope: str) -> str:
 {_lineage_scope_clause(alias, record_scope)}
 AND (:job_type IS NULL OR {alias}.job_type = :job_type)
 AND (:caller_id IS NULL OR {alias}.caller_id = :caller_id)
+AND (:run_id IS NULL OR {alias}.metadata->>'run_id' = :run_id)
 AND (:since_at IS NULL OR {alias}.created_at >= :since_at)
 """
 
@@ -78,6 +81,7 @@ def _scope_clause_without_since(alias: str, record_scope: str) -> str:
 {_lineage_scope_clause(alias, record_scope)}
 AND (:job_type IS NULL OR {alias}.job_type = :job_type)
 AND (:caller_id IS NULL OR {alias}.caller_id = :caller_id)
+AND (:run_id IS NULL OR {alias}.metadata->>'run_id' = :run_id)
 """
 
 
@@ -87,6 +91,7 @@ def _root_job_filter_clause(alias: str) -> str:
 AND (:job_type IS NULL OR {alias}.job_type = :job_type)
 AND (:caller_id IS NULL OR {alias}.caller_id = :caller_id)
 AND (:client_request_id IS NULL OR {alias}.client_request_id = :client_request_id)
+AND (:run_id IS NULL OR {alias}.metadata->>'run_id' = :run_id)
 AND (:since_at IS NULL OR {alias}.created_at >= :since_at)
 """
 
@@ -95,6 +100,7 @@ def _base_params(filters: DashboardFilters) -> dict[str, Any]:
     return {
         "job_type": filters.job_type,
         "caller_id": filters.caller_id,
+        "run_id": filters.run_id,
         "since_at": _now() - filters.window_delta,
         "limit": filters.sample_limit,
     }
@@ -106,6 +112,8 @@ def _jobs_cli_filter_args(filters: DashboardFilters) -> str:
         args += f" --job-type {filters.job_type}"
     if filters.caller_id:
         args += f" --caller-id {filters.caller_id}"
+    if filters.run_id:
+        args += f" --run-id {filters.run_id}"
     return args
 
 
@@ -440,6 +448,7 @@ async def drain_status(
     current_params = {
         "job_type": filters.job_type,
         "caller_id": filters.caller_id,
+        "run_id": filters.run_id,
         "since_at": None,
     }
     window_params = _base_params(filters)
@@ -1192,6 +1201,17 @@ def _summary_of(value: Any) -> dict[str, Any]:
     return {"present": True, "type": type(value).__name__}
 
 
+def _load_summary_of(metadata: Any) -> dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return {"present": False}
+    summary = {
+        key: metadata.get(key)
+        for key in ("source", "run_id", "profile", "case_key", "sequence")
+        if metadata.get(key) is not None
+    }
+    return {"present": bool(summary), **summary}
+
+
 async def get_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any] | None:
     row = (
         await db.execute(
@@ -1249,8 +1269,10 @@ async def get_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any] | None:
         return None
     data = dict(row)
     error = data.pop("error", None)
+    metadata = data.pop("metadata", None)
     return data | {
-        "metadata_summary": _summary_of(data.pop("metadata", None)),
+        "load_summary": _load_summary_of(metadata),
+        "metadata_summary": _summary_of(metadata),
         "job_params_summary": _summary_of(data.pop("job_params_ref", None)),
         "runtime_summary": _summary_of(data.pop("runtime_ref", None)),
         "result_summary": _summary_of(data.pop("result", None)),

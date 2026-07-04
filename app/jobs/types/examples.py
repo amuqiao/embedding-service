@@ -37,6 +37,26 @@ from app.workflows import (
 _WORKFLOW_DEFINITION: WorkflowDefinition | None = None
 
 
+async def _simulate_example_behavior(
+    *,
+    sleep_seconds: float,
+    fail: bool,
+    fail_after_seconds: float,
+    job_id: object,
+    job_type: str,
+) -> None:
+    if sleep_seconds:
+        await asyncio.sleep(sleep_seconds)
+    if fail_after_seconds:
+        await asyncio.sleep(fail_after_seconds)
+    if fail:
+        raise AppError(
+            "JOB_EXECUTION_FAILED",
+            f"{job_type} forced failure",
+            details={"job_id": str(job_id), "job_type": job_type, "fault": "forced_failure"},
+        )
+
+
 @register_job_type
 class ExampleSleepJob(JobExecutor):
     name = "example_sleep"
@@ -63,13 +83,20 @@ class ExampleSleepJob(JobExecutor):
 
     async def _execute(self, job, db) -> dict[str, Any] | None:
         params = ExampleSleepParams.model_validate(job_params_from_job(job))
-        if params.sleep_seconds:
-            await asyncio.sleep(params.sleep_seconds)
-        return ExampleSleepResult(
+        await _simulate_example_behavior(
+            sleep_seconds=params.sleep_seconds,
+            fail=params.fail,
+            fail_after_seconds=params.fail_after_seconds,
+            job_id=job.id,
+            job_type=self.name,
+        )
+        result = ExampleSleepResult(
             message=params.message,
             repeated=[params.message for _ in range(params.repeat)],
             count=params.repeat,
-        ).model_dump()
+            payload="x" * params.result_size_bytes,
+        )
+        return result.model_dump(exclude={"payload"} if params.result_size_bytes == 0 else None)
 
 
 @register_job_type
@@ -95,8 +122,9 @@ class ExamplePairJob(JobExecutor):
     def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = ExamplePairParams.model_validate(job_params)
         normalized = {"a": params.a, "b": params.b}
-        if "sleep_seconds" in params.model_fields_set:
-            normalized["sleep_seconds"] = params.sleep_seconds
+        for key in ("sleep_seconds", "fail", "fail_after_seconds"):
+            if key in params.model_fields_set:
+                normalized[key] = getattr(params, key)
         return normalized
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
@@ -104,8 +132,13 @@ class ExamplePairJob(JobExecutor):
 
     async def _execute(self, job, db) -> dict[str, Any] | None:
         params = ExamplePairParams.model_validate(job_params_from_job(job))
-        if params.sleep_seconds:
-            await asyncio.sleep(params.sleep_seconds)
+        await _simulate_example_behavior(
+            sleep_seconds=params.sleep_seconds,
+            fail=params.fail,
+            fail_after_seconds=params.fail_after_seconds,
+            job_id=job.id,
+            job_type=self.name,
+        )
         return ExamplePairResult(a=params.a, b=params.b, result=params.a + params.b).model_dump()
 
 
@@ -134,8 +167,9 @@ class ExampleWorkflowJob(JobExecutor):
     def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = ExampleWorkflowParams.model_validate(job_params)
         normalized = {"mode": params.mode, "label": params.label}
-        if "sleep_seconds" in params.model_fields_set:
-            normalized["sleep_seconds"] = params.sleep_seconds
+        for key in ("sleep_seconds", "fail_node_key", "fail_after_seconds", "result_size_bytes"):
+            if key in params.model_fields_set:
+                normalized[key] = getattr(params, key)
         return normalized
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
@@ -173,8 +207,9 @@ class ExampleCollectJob(JobExecutor):
     def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = ExampleCollectParams.model_validate(job_params)
         normalized = {"items": params.items}
-        if "sleep_seconds" in params.model_fields_set:
-            normalized["sleep_seconds"] = params.sleep_seconds
+        for key in ("sleep_seconds", "fail", "fail_after_seconds"):
+            if key in params.model_fields_set:
+                normalized[key] = getattr(params, key)
         return normalized
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
@@ -182,8 +217,13 @@ class ExampleCollectJob(JobExecutor):
 
     async def _execute(self, job, db) -> dict[str, Any] | None:
         params = ExampleCollectParams.model_validate(job_params_from_job(job))
-        if params.sleep_seconds:
-            await asyncio.sleep(params.sleep_seconds)
+        await _simulate_example_behavior(
+            sleep_seconds=params.sleep_seconds,
+            fail=params.fail,
+            fail_after_seconds=params.fail_after_seconds,
+            job_id=job.id,
+            job_type=self.name,
+        )
         return ExampleCollectResult(items=params.items, count=len(params.items)).model_dump()
 
 
@@ -202,90 +242,110 @@ def _workflow_definition() -> WorkflowDefinition:
     return _WORKFLOW_DEFINITION
 
 
-def _sleep_node(key: str, label: str, sleep_seconds: float) -> Any:
+def _node_fault_params(key: str, params: dict[str, Any]) -> dict[str, Any]:
+    if params.get("fail_node_key") != key:
+        return {}
+    return {
+        "fail": True,
+        "fail_after_seconds": params.get("fail_after_seconds", 0),
+    }
+
+
+def _sleep_node(key: str, label: str, params: dict[str, Any]) -> Any:
+    job_params = {
+        "message": f"{label}:{key}",
+        "repeat": 1,
+        "sleep_seconds": params.get("sleep_seconds", 0),
+        "result_size_bytes": params.get("result_size_bytes", 0),
+    } | _node_fault_params(key, params)
     return task(
         key,
         "example_sleep",
-        {"message": f"{label}:{key}", "repeat": 1, "sleep_seconds": sleep_seconds},
+        job_params,
     )
 
 
 def _workflow_expr(params: dict[str, Any]) -> Any:
     mode = params["mode"]
-    label = params["label"]
-    sleep_seconds = params.get("sleep_seconds", 0)
     if mode == "single":
-        return _single_expr(label, sleep_seconds)
+        return _single_expr(params)
     if mode == "chain":
-        return _chain_expr(label, sleep_seconds)
+        return _chain_expr(params)
     if mode == "group":
-        return _group_expr(label, sleep_seconds)
+        return _group_expr(params)
     if mode == "chord":
-        return _chord_expr(label, sleep_seconds)
+        return _chord_expr(params)
     if mode == "map":
-        return _map_expr(label, sleep_seconds)
+        return _map_expr(params)
     if mode == "starmap":
-        return _starmap_expr(sleep_seconds)
+        return _starmap_expr(params)
     if mode == "chunks":
-        return _chunks_expr(label, sleep_seconds)
+        return _chunks_expr(params)
     raise ValueError(f"unsupported example workflow mode: {mode}")
 
 
-def _single_expr(label: str, sleep_seconds: float) -> Any:
-    return _sleep_node("only", label, sleep_seconds)
+def _single_expr(params: dict[str, Any]) -> Any:
+    return _sleep_node("only", params["label"], params)
 
 
-def _chain_expr(label: str, sleep_seconds: float) -> Any:
+def _chain_expr(params: dict[str, Any]) -> Any:
+    label = params["label"]
     return chain(
-        _sleep_node("a", label, sleep_seconds),
-        _sleep_node("b", label, sleep_seconds),
-        _sleep_node("c", label, sleep_seconds),
+        _sleep_node("a", label, params),
+        _sleep_node("b", label, params),
+        _sleep_node("c", label, params),
     )
 
 
-def _group_expr(label: str, sleep_seconds: float) -> Any:
+def _group_expr(params: dict[str, Any]) -> Any:
+    label = params["label"]
     return group(
-        _sleep_node("a", label, sleep_seconds),
-        _sleep_node("b", label, sleep_seconds),
-        _sleep_node("c", label, sleep_seconds),
+        _sleep_node("a", label, params),
+        _sleep_node("b", label, params),
+        _sleep_node("c", label, params),
     )
 
 
-def _chord_expr(label: str, sleep_seconds: float) -> Any:
+def _chord_expr(params: dict[str, Any]) -> Any:
+    label = params["label"]
     return chord(
         group(
-            _sleep_node("a", label, sleep_seconds),
-            _sleep_node("b", label, sleep_seconds),
+            _sleep_node("a", label, params),
+            _sleep_node("b", label, params),
         ),
-        _sleep_node("join", label, sleep_seconds),
+        _sleep_node("join", label, params),
     )
 
 
-def _map_expr(label: str, sleep_seconds: float) -> Any:
+def _map_expr(params: dict[str, Any]) -> Any:
     return map_items(
         "item",
         "example_sleep",
-        [f"{label}:one", f"{label}:two"],
+        [f"{params['label']}:one", f"{params['label']}:two"],
         param_name="message",
-        static_job_params={"repeat": 1, "sleep_seconds": sleep_seconds},
+        static_job_params={
+            "repeat": 1,
+            "sleep_seconds": params.get("sleep_seconds", 0),
+            "result_size_bytes": params.get("result_size_bytes", 0),
+        } | _node_fault_params("item", params),
     )
 
 
-def _starmap_expr(sleep_seconds: float) -> Any:
+def _starmap_expr(params: dict[str, Any]) -> Any:
     return starmap_items(
         "pair",
         "example_pair",
         [(1, 2), {"a": 3, "b": 4}],
         arg_names=("a", "b"),
-        static_job_params={"sleep_seconds": sleep_seconds},
+        static_job_params={"sleep_seconds": params.get("sleep_seconds", 0)} | _node_fault_params("pair", params),
     )
 
 
-def _chunks_expr(label: str, sleep_seconds: float) -> Any:
+def _chunks_expr(params: dict[str, Any]) -> Any:
     return chunks(
         "chunk",
         "example_collect",
-        [f"{label}:1", f"{label}:2", f"{label}:3", f"{label}:4", f"{label}:5"],
+        [f"{params['label']}:1", f"{params['label']}:2", f"{params['label']}:3", f"{params['label']}:4", f"{params['label']}:5"],
         chunk_size=2,
-        static_job_params={"sleep_seconds": sleep_seconds},
+        static_job_params={"sleep_seconds": params.get("sleep_seconds", 0)} | _node_fault_params("chunk", params),
     )

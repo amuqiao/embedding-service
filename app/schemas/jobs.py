@@ -245,7 +245,9 @@ class RuntimeFieldsBase(StrictBaseModel):
 class ExamplePairParams(StrictBaseModel):
     a: NumberValue
     b: NumberValue
-    sleep_seconds: float = Field(default=0, ge=0, le=55)
+    sleep_seconds: float = Field(default=0, ge=0, le=600)
+    fail: bool = False
+    fail_after_seconds: float = Field(default=0, ge=0, le=600)
 
     @field_validator("a", "b")
     @classmethod
@@ -279,7 +281,10 @@ class ExamplePairResult(StrictBaseModel):
 class ExampleSleepParams(StrictBaseModel):
     message: str = Field(min_length=1, max_length=512)
     repeat: int = Field(default=1, ge=1, le=5)
-    sleep_seconds: float = Field(default=0, ge=0, le=55)
+    sleep_seconds: float = Field(default=0, ge=0, le=600)
+    fail: bool = False
+    fail_after_seconds: float = Field(default=0, ge=0, le=600)
+    result_size_bytes: int = Field(default=0, ge=0, le=65_536)
 
 
 class ExampleSleepRuntimeFields(StrictBaseModel):
@@ -290,11 +295,14 @@ class ExampleSleepResult(StrictBaseModel):
     message: str
     repeated: list[str]
     count: int = Field(ge=1, le=5)
+    payload: str = Field(default="", max_length=65_536)
 
 
 class ExampleCollectParams(StrictBaseModel):
     items: list[str] = Field(min_length=1, max_length=10)
-    sleep_seconds: float = Field(default=0, ge=0, le=55)
+    sleep_seconds: float = Field(default=0, ge=0, le=600)
+    fail: bool = False
+    fail_after_seconds: float = Field(default=0, ge=0, le=600)
 
 
 class ExampleCollectRuntimeFields(StrictBaseModel):
@@ -309,7 +317,10 @@ class ExampleCollectResult(StrictBaseModel):
 class ExampleWorkflowParams(StrictBaseModel):
     mode: Literal["single", "chain", "group", "chord", "map", "starmap", "chunks"]
     label: str = Field(default="workflow-smoke", min_length=1, max_length=64)
-    sleep_seconds: float = Field(default=0, ge=0, le=55)
+    sleep_seconds: float = Field(default=0, ge=0, le=600)
+    fail_node_key: str | None = Field(default=None, min_length=1, max_length=64)
+    fail_after_seconds: float = Field(default=0, ge=0, le=600)
+    result_size_bytes: int = Field(default=0, ge=0, le=65_536)
 
 
 class ExampleWorkflowRuntimeFields(StrictBaseModel):

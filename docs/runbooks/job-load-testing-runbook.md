@@ -40,6 +40,10 @@
 | 批量 item 展开 | `example-workflow-map` |
 | 多参数展开 | `example-workflow-starmap` |
 | 分块处理 | `example-workflow-chunks` |
+| child 慢执行 | `example-workflow-chord-slow` |
+| child 人为失败 | `example-workflow-chord-child-fail` |
+| join 人为失败 | `example-workflow-chord-join-fail` |
+| 终态等待超时压力 | `example-workflow-chord-timeout` |
 
 `poster_title_image` 的当前编排形状接近：
 
@@ -61,6 +65,20 @@ root job
 ```
 
 这只模拟 root/child/fan-out/join/body/root finalize 结构，不模拟 LLM、生图、OSS、真实 payload、图片数量、结果大小、真实汇总结果或模型供应商延迟，也不模拟 `poster_title_image` 里去重后的 `probe.*`、多个 `item.*` 以及 `join` 同时依赖 probe 和 item 的完整图结构。
+
+如果目标是先确认失败和排障链路是否闭环，可以用示例故障 profile：
+
+```bash
+./scripts/load.sh run --profile example-workflow-chord-child-fail \
+  --users 1 \
+  --spawn-rate 1 \
+  --time 20s \
+  --run-id poster-title-image-shape-child-fail
+
+./scripts/load.sh pressure --run-id poster-title-image-shape-child-fail
+```
+
+这类 profile 预期会让 Job 失败，作用是验证 failures、Job Trace、dashboard 和 `jobs.sh` handoff 是否能定位到失败节点，不表示服务压测失败。
 
 真实压 `poster_title_image` 时，应使用业务 profile，并显式确认真实业务风险：
 
@@ -147,6 +165,19 @@ dashboard 主要看：
 | Failures & Callbacks | 失败聚合、失败样本、callback 是否异常 |
 | Job Trace | 单个异常 Job 的 root/child/attempt/timeline 证据 |
 
+如果本轮压测传了 `--run-id`，dashboard 顶部 `run_id` 也填同一个值。这样 Overview、Recent Jobs、Flow & Capacity、Failures & Callbacks 会只看本轮压测相关 Job，避免被历史数据干扰。
+
+进入 Job Trace 后，优先看：
+
+| 视图 | 看什么 |
+|---|---|
+| Load Summary | 这个 Job 是否来自目标 `run_id/profile/case` |
+| Summary | root/child、状态、生命周期和错误摘要 |
+| Workflow Summary | root/children/finalize 的编排结构是否符合预期 |
+| Result Summary | 结果结构大小和关键字段是否符合预期 |
+| Callback Summary | callback 是否 due、delivered、failed 或 dead_letter |
+| Attempts / Timeline | worker 执行尝试和状态流转证据 |
+
 本地压测还要看：
 
 ```bash
@@ -197,9 +228,9 @@ tail -n 200 logs/worker.log
 
 ```bash
 ./scripts/jobs.sh gate
-./scripts/jobs.sh capacity --since 20m --caller-id load-cli
-./scripts/jobs.sh stuck --since 20m --older-than 1m --caller-id load-cli --limit 20
-./scripts/jobs.sh failures --since 20m --caller-id load-cli
+./scripts/jobs.sh capacity --since 20m --run-id <run_id>
+./scripts/jobs.sh stuck --since 20m --older-than 1m --run-id <run_id> --limit 20
+./scripts/jobs.sh failures --since 20m --run-id <run_id>
 ```
 
 单个 Job 样本：
@@ -237,6 +268,10 @@ drain / pressure 结论
 dashboard 异常样本
 ```
 
+`run_id` 是本轮压测的主关联键。用 `load.sh pressure/drain/report --run-id <run_id>` 优先于手写 `jobs.sh` 参数；需要手工展开时，再把 `--run-id <run_id>` 带到 `jobs.sh list/failures/stuck/capacity/latency/ingress/callbacks-summary`。
+
+`run_id` 只能使用字母、数字、下划线和中横线，例如 `poster-title-image-shape-baseline-1`。不要使用空格、斜杠、点号或 shell 特殊字符。
+
 容量调优和 `MAX_ACTIVE_JOBS`、`WORKER_CONCURRENCY`、API/worker Pod、PostgreSQL/Redis 的关系，不在本文重复展开；进入生产容量判断时看 [`MAX_ACTIVE_JOBS 估算与生产调优.md`](MAX_ACTIVE_JOBS%20估算与生产调优.md)。
 
 ## 查询接口压测
@@ -246,7 +281,7 @@ dashboard 异常样本
 先准备 Job ID 文件，例如从本轮 load 产生的 Job 里取样：
 
 ```bash
-./scripts/jobs.sh list --caller-id load-cli --since 10m --limit 20 --json
+./scripts/jobs.sh list --run-id <run_id> --since 10m --limit 20 --json
 ```
 
 把要查询的 ID 写入：
@@ -327,7 +362,7 @@ dashboard 异常样本
 
 ```bash
 ./scripts/load.sh pressure --run-id <run_id>
-./scripts/jobs.sh list --caller-id load-cli --status failed --since 10m --limit 20
+./scripts/jobs.sh list --run-id <run_id> --status failed --scope family --since 10m --limit 20
 ./scripts/jobs.sh inspect <job_id>
 ```
 
@@ -347,7 +382,7 @@ dashboard 异常样本
 
 ```bash
 ./scripts/jobs.sh workflow <job_id>
-./scripts/jobs.sh list --scope family --status queued,running --limit 20
+./scripts/jobs.sh list --scope family --status queued,running --run-id <run_id> --limit 20
 ./scripts/jobs.sh diagnose <job_id> --include-children
 ```
 

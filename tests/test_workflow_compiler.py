@@ -590,6 +590,23 @@ def test_example_workflow_sleep_normalization_preserves_payload_shape():
         "label": "x",
         "sleep_seconds": 0,
     }
+    assert workflow.normalize_job_params(
+        {
+            "mode": "chord",
+            "label": "x",
+            "sleep_seconds": 1,
+            "fail_node_key": "b",
+            "fail_after_seconds": 2,
+            "result_size_bytes": 16,
+        }
+    ) == {
+        "mode": "chord",
+        "label": "x",
+        "sleep_seconds": 1,
+        "fail_node_key": "b",
+        "fail_after_seconds": 2,
+        "result_size_bytes": 16,
+    }
     assert collect.normalize_job_params({"items": ["a", "b"]}) == {"items": ["a", "b"]}
     assert collect.normalize_job_params({"items": ["a", "b"], "sleep_seconds": 0}) == {
         "items": ["a", "b"],

@@ -534,6 +534,81 @@
         };
       },
     },
+    "job_trace.load_summary": {
+      title: "Load Summary",
+      question: "run context",
+      rendererType: "html.summary_table",
+      dataSource: "job_trace",
+      rows: [
+        { label: "source", value: (payload) => getPath(payload, "job.load_summary.source") || "-" },
+        { label: "run_id", value: (payload) => getPath(payload, "job.load_summary.run_id") || "-" },
+        { label: "profile", value: (payload) => getPath(payload, "job.load_summary.profile") || "-" },
+        { label: "case_key", value: (payload) => getPath(payload, "job.load_summary.case_key") || "-" },
+        { label: "sequence", value: (payload) => getPath(payload, "job.load_summary.sequence") ?? "-" },
+      ],
+    },
+    "job_trace.workflow_summary": {
+      title: "Workflow Summary",
+      question: "children status",
+      rendererType: "metric_cards",
+      dataSource: "job_trace",
+      cards: [
+        { label: "children", value: (payload) => (payload.workflow_children || []).length, sub: "nodes" },
+        {
+          label: "succeeded",
+          value: (payload) => (payload.workflow_children || []).filter((row) => row.status === "succeeded").length,
+          sub: "children",
+        },
+        {
+          label: "failed",
+          value: (payload) => (payload.workflow_children || []).filter((row) => row.status === "failed").length,
+          sub: "children",
+        },
+        {
+          label: "active",
+          value: (payload) => (payload.workflow_children || []).filter((row) => ["queued", "running"].includes(row.status)).length,
+          sub: "children",
+        },
+      ],
+    },
+    "job_trace.result_summary": {
+      title: "Result Summary",
+      question: "terminal payload shape",
+      rendererType: "html.summary_table",
+      dataSource: "job_trace",
+      rows: [
+        { label: "result_present", value: (payload) => getPath(payload, "job.result_summary.present") },
+        { label: "result_type", value: (payload) => getPath(payload, "job.result_summary.type") || "-" },
+        { label: "result_keys", value: (payload) => (getPath(payload, "job.result_summary.keys") || []).join(", ") || "-" },
+        { label: "canonical_present", value: (payload) => getPath(payload, "job.canonical_result_summary.present") },
+        { label: "error_code", value: (payload) => getPath(payload, "job.error_code") || "-" },
+        { label: "error_message", value: (payload) => getPath(payload, "job.error_message") || "-" },
+      ],
+    },
+    "job_trace.callback_summary": {
+      title: "Callback Summary",
+      question: "delivery status",
+      rendererType: "metric_cards",
+      dataSource: "job_trace",
+      cards: [
+        { label: "callbacks", value: (payload) => (payload.callbacks || []).length, sub: "rows" },
+        {
+          label: "delivered",
+          value: (payload) => (payload.callbacks || []).filter((row) => row.status === "delivered").length,
+          sub: "callbacks",
+        },
+        {
+          label: "dead_letter",
+          value: (payload) => (payload.callbacks || []).filter((row) => row.status === "dead_letter").length,
+          sub: "callbacks",
+        },
+        {
+          label: "attempts",
+          value: (payload) => Math.max(0, ...(payload.callbacks || []).map((row) => Number(row.delivery_attempts || 0))),
+          sub: "max",
+        },
+      ],
+    },
     "job_trace.attempts": {
       title: "Attempts",
       question: "retry decision",
@@ -721,6 +796,10 @@
       placements: [
         { widgetId: "job_trace.status", target: "status-line" },
         { widgetId: "job_trace.summary", group: "summary", hostClass: "table-wrap" },
+        { widgetId: "job_trace.load_summary", group: "summary", hostClass: "table-wrap" },
+        { widgetId: "job_trace.workflow_summary", group: "summary", chrome: "bare", hostClass: "stat-grid" },
+        { widgetId: "job_trace.result_summary", group: "summary", hostClass: "table-wrap" },
+        { widgetId: "job_trace.callback_summary", group: "summary", chrome: "bare", hostClass: "stat-grid" },
         { widgetId: "job_trace.payload_summary", group: "summary" },
         { widgetId: "job_trace.attempts", group: "details", hostClass: "table-wrap" },
         { widgetId: "job_trace.ai_calls", group: "details", hostClass: "table-wrap" },

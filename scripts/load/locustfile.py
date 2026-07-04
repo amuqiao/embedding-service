@@ -116,6 +116,18 @@ def build_job_params(job_type: str, sequence: int) -> dict[str, Any]:
     raise LoadConfigError("custom job_type requires LOAD_INTERNAL_JOB_PARAMS_JSON")
 
 
+def build_job_metadata(*, case_key: str, run_id: str, profile_key: str | None, sequence: int) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "source": "scripts/load.sh",
+        "run_id": run_id,
+        "case_key": case_key,
+        "sequence": sequence,
+    }
+    if profile_key:
+        metadata["profile"] = profile_key
+    return metadata
+
+
 class ProjectLoadUser(HttpUser):
     wait_time = between(
         env_float("LOAD_INTERNAL_WAIT_MIN_SECONDS", 0.1),
@@ -123,6 +135,8 @@ class ProjectLoadUser(HttpUser):
     )
 
     def on_start(self) -> None:
+        self.run_id = env_required("LOAD_INTERNAL_RUN_ID")
+        self.profile_key = env_optional("LOAD_INTERNAL_PROFILE_KEY")
         self.case_key = env_required("LOAD_INTERNAL_CASE_KEY")
         self.case_kind = env_required("LOAD_INTERNAL_CASE_KIND")
         self.api_prefix = env_required("LOAD_INTERNAL_API_PREFIX").rstrip("/")
@@ -161,10 +175,12 @@ class ProjectLoadUser(HttpUser):
             "client_request_id": f"load-{self.case_key}-{uuid.uuid4()}-{sequence}",
             "job_type": self.job_type,
             "job_params": build_job_params(str(self.job_type), sequence),
-            "metadata": {
-                "source": "scripts/load.sh",
-                "case_key": self.case_key,
-            },
+            "metadata": build_job_metadata(
+                case_key=self.case_key,
+                run_id=self.run_id,
+                profile_key=self.profile_key,
+                sequence=sequence,
+            ),
             "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
         }
         with self.client.post(

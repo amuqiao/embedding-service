@@ -57,6 +57,21 @@ def _workflow_profile(mode: str) -> LoadProfile:
     )
 
 
+def _workflow_chord_profile(key: str, title: str, job_params: dict[str, Any], *, run_time: str, flow_timeout: float) -> LoadProfile:
+    return LoadProfile(
+        key=key,
+        title=title,
+        job_type="example_workflow",
+        case="workflow-flow",
+        job_params=job_params,
+        users=4,
+        spawn_rate=1.0,
+        run_time=run_time,
+        poll_interval_seconds=2.0,
+        flow_timeout_seconds=flow_timeout,
+    )
+
+
 BUILTIN_PROFILES: dict[str, LoadProfile] = {
     "example-sleep": LoadProfile(
         key="example-sleep",
@@ -73,6 +88,46 @@ BUILTIN_PROFILES: dict[str, LoadProfile] = {
         f"example-workflow-{spec['mode']}": _workflow_profile(str(spec["mode"]))
         for spec in all_example_workflow_mode_specs()
     },
+    "example-workflow-chord-slow": _workflow_chord_profile(
+        "example-workflow-chord-slow",
+        "示例 Workflow chord 慢执行",
+        {"mode": "chord", "label": "load-chord-slow", "sleep_seconds": 45.0},
+        run_time="5m",
+        flow_timeout=240.0,
+    ),
+    "example-workflow-chord-child-fail": _workflow_chord_profile(
+        "example-workflow-chord-child-fail",
+        "示例 Workflow chord 子节点失败",
+        {
+            "mode": "chord",
+            "label": "load-chord-child-fail",
+            "sleep_seconds": 1.0,
+            "fail_node_key": "b",
+            "fail_after_seconds": 1.0,
+        },
+        run_time="2m",
+        flow_timeout=90.0,
+    ),
+    "example-workflow-chord-join-fail": _workflow_chord_profile(
+        "example-workflow-chord-join-fail",
+        "示例 Workflow chord 汇总节点失败",
+        {
+            "mode": "chord",
+            "label": "load-chord-join-fail",
+            "sleep_seconds": 1.0,
+            "fail_node_key": "join",
+            "fail_after_seconds": 1.0,
+        },
+        run_time="2m",
+        flow_timeout=90.0,
+    ),
+    "example-workflow-chord-timeout": _workflow_chord_profile(
+        "example-workflow-chord-timeout",
+        "示例 Workflow chord 子节点超时",
+        {"mode": "chord", "label": "load-chord-timeout", "sleep_seconds": 180.0},
+        run_time="5m",
+        flow_timeout=300.0,
+    ),
 }
 
 

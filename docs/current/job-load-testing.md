@@ -45,8 +45,24 @@ GET  /api/v1/ai-jobs/jobs/{job_id}
 | `example-workflow-map` | `example_workflow` | `workflow-flow` | item 列表展开 |
 | `example-workflow-starmap` | `example_workflow` | `workflow-flow` | 多参数 item 解包展开 |
 | `example-workflow-chunks` | `example_workflow` | `workflow-flow` | 长列表分块 |
+| `example-workflow-chord-slow` | `example_workflow` | `workflow-flow` | 并行 child + join，child 人为变慢 |
+| `example-workflow-chord-child-fail` | `example_workflow` | `workflow-flow` | 并行 child + join，child 人为失败 |
+| `example-workflow-chord-join-fail` | `example_workflow` | `workflow-flow` | 并行 child + join，join 节点人为失败 |
+| `example-workflow-chord-timeout` | `example_workflow` | `workflow-flow` | 并行 child + join，整体终态等待超时压力 |
 
 `example_*` 都是 `visibility="demo"` 的低成本示例类型，不调用真实模型、不访问对象存储、不发起外部 HTTP。正式业务 `job_type` 需要通过业务 profile 接入同一 runner，并显式传 `--allow-real-job`。
+
+内置示例 `job_type` 支持用于压测的低成本模拟参数：
+
+| 参数 | 适用范围 | 含义 |
+|---|---|---|
+| `sleep_seconds` | `example_sleep`、`example_pair`、`example_collect`、`example_workflow` | 模拟执行耗时，当前上限 600 秒 |
+| `fail` | `example_sleep`、`example_pair`、`example_collect` | 人为让该节点失败 |
+| `fail_after_seconds` | `example_sleep`、`example_pair`、`example_collect`、`example_workflow` | 失败前先等待一段时间 |
+| `result_size_bytes` | `example_sleep`、`example_workflow` | 让 `example_sleep` 结果携带指定大小的字符串 payload |
+| `fail_node_key` | `example_workflow` | 指定 workflow 中哪个 node 人为失败 |
+
+这些参数只用于示例 Job 的形状、耗时、结果大小和失败注入，不模拟 LLM、对象存储、外部 HTTP 或真实业务副作用。
 
 ## Profile 合同
 
@@ -91,6 +107,30 @@ profile 只保存压测对象和默认参数，不保存真实业务执行确认
 manifest 是压测合同的机器可读投影，包含 case、profile、`job_type`、风险确认、caller、API URL、Locust 命令、输出路径和执行状态。manifest 只记录 `job_params_source` 和 profile 的 `job_params_present`，不打印完整业务 payload。
 
 `SERVICE_API_KEY` 只通过环境传给 Locust，不写入 manifest。不建议使用 `--service-api-key` 传密钥，因为它会出现在 shell history、`ps` 或 CI 命令日志中。
+
+## Run ID Traceability
+
+`load.sh run` 会把本轮压测身份写入每个创建出来的 Job metadata：
+
+| metadata 字段 | 含义 |
+|---|---|
+| `source` | 固定为 `scripts/load.sh` |
+| `run_id` | 本轮压测 ID，对应 `.run/load/<run_id>/` |
+| `profile` | profile key |
+| `case_key` | case key |
+| `sequence` | Locust user 内提交序号 |
+
+`run_id` 是压测、dashboard 和 `jobs.sh` 之间的稳定关联键。`load.sh pressure --run-id <run_id>` 和 `load.sh drain --run-id <run_id>` 会读取 manifest，并把同一个 `run_id` 透传给 `jobs.sh`，确保压后诊断只看本轮压测 Job family。
+
+`jobs.sh` 的 `list/drain/pressure/stuck/failures/summary/doctor/callbacks-summary/ingress/latency/capacity` 支持 `--run-id` 过滤。dashboard 的全局过滤也支持 `run_id`，用于把 Overview、Recent Jobs、Flow & Capacity、Failures & Callbacks 收敛到某轮压测。
+
+`run_id` 必须匹配：
+
+```text
+[A-Za-z0-9][A-Za-z0-9_-]{0,127}
+```
+
+也就是只能使用字母、数字、下划线和中横线，且不能以分隔符开头。这个约束让 `run_id` 可以同时安全用作产物目录名、Job metadata 关联键和 CLI handoff 参数。
 
 ## 安全确认
 

@@ -185,6 +185,24 @@ def test_ops_dashboard_routes_are_hidden_from_openapi_and_get_only(monkeypatch):
     assert post_response.status_code == 405
 
 
+def test_ops_dashboard_rejects_unsafe_run_id_filter(monkeypatch):
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    application = FastAPI()
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get("/internal/jobs-dashboard/sections/overview/data?run_id=../escape")
+
+    assert response.status_code == 400
+    assert "run_id must match" in response.json()["detail"]
+
+
 def test_ops_dashboard_static_file_rejects_traversal():
     from app.ops_dashboard import router as ops_router
 
@@ -274,6 +292,7 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
         "max: 200",
     ]:
         assert snippet in control_source
+    assert 'name="run_id"' in page
     assert "PAGE_CONTROL_REGISTRY[section]" in script
     assert "route.replace(`{${control.param}}`" in script
     assert "configured?.refresh_seconds ?? state.config?.refresh_seconds ?? 15" in script
@@ -308,6 +327,13 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     assert 'adapter: "callback_composition_rows"' in widget_source
     assert 'dataPath: "callback_samples"' in widget_source
     assert 'valuePath: "callback_summary.due"' in widget_source
+    for widget_id in [
+        '"job_trace.load_summary"',
+        '"job_trace.workflow_summary"',
+        '"job_trace.result_summary"',
+        '"job_trace.callback_summary"',
+    ]:
+        assert widget_id in widget_source
 
     widget_keys = set(re.findall(r'^\s{4}"([^"]+)":\s*\{', widget_source, re.M))
     layout_widget_id_list = re.findall(r'widgetId:\s*"([^"]+)"', layout_source)
@@ -509,6 +535,7 @@ def test_ops_dashboard_recent_jobs_route_returns_read_model_payload(monkeypatch)
     async def fake_recent_jobs_data(_db, filters, *, status, client_request_id, limit):
         assert filters.window == "1h"
         assert filters.bucket == "1m"
+        assert filters.run_id == "run-1"
         assert status == "failed"
         assert client_request_id == "req-1"
         assert limit == 7
@@ -530,7 +557,7 @@ def test_ops_dashboard_recent_jobs_route_returns_read_model_payload(monkeypatch)
     with TestClient(application) as client:
         response = client.get(
             "/internal/jobs-dashboard/sections/recent_jobs/data"
-            "?window=1h&bucket=1m&status=failed&client_request_id=req-1&limit=7"
+            "?window=1h&bucket=1m&run_id=run-1&status=failed&client_request_id=req-1&limit=7"
         )
 
     assert response.status_code == 200
@@ -883,11 +910,13 @@ async def test_ops_dashboard_read_model_binds_optional_filter_types_for_asyncpg(
     for statement in db.statement_objects:
         assert _bind_type_name(statement, "job_type") == "String"
         assert _bind_type_name(statement, "caller_id") == "String"
+        assert _bind_type_name(statement, "run_id") == "String"
         assert _bind_type_name(statement, "since_at") == "DateTime"
 
     combined_sql = "\n".join(db.statements)
     assert ":job_type IS NULL" in combined_sql
     assert ":caller_id IS NULL" in combined_sql
+    assert ":run_id IS NULL" in combined_sql
     assert ":since_at IS NULL" in combined_sql
 
 
@@ -900,7 +929,7 @@ async def test_ops_dashboard_recent_jobs_sql_matches_public_root_list_scope():
 
     await read_model.recent_jobs(
         db,
-        DashboardFilters(caller_id="caller", job_type="job_type"),
+        DashboardFilters(caller_id="caller", job_type="job_type", run_id="run-1"),
         status="failed",
         client_request_id="req-1",
         limit=7,
@@ -914,9 +943,11 @@ async def test_ops_dashboard_recent_jobs_sql_matches_public_root_list_scope():
     assert "j.deleted_at IS NULL" in sql
     assert "(:status IS NULL OR j.status = :status)" in sql
     assert "(:client_request_id IS NULL OR j.client_request_id = :client_request_id)" in sql
+    assert "(:run_id IS NULL OR j.metadata->>'run_id' = :run_id)" in sql
     assert "LIMIT :limit" in sql
     assert params["status"] == "failed"
     assert params["client_request_id"] == "req-1"
+    assert params["run_id"] == "run-1"
     assert params["limit"] == 7
     assert _bind_type_name(db.statement_objects[0], "status") == "String"
     assert _bind_type_name(db.statement_objects[0], "client_request_id") == "String"
@@ -995,7 +1026,7 @@ async def test_ops_dashboard_flow_capacity_data_runs_expected_read_model_queries
 
     payload = await read_model.flow_capacity_data(
         db,
-        DashboardFilters(window="24h", bucket="5m", caller_id="caller-a", job_type="job_echo"),
+        DashboardFilters(window="24h", bucket="5m", caller_id="caller-a", job_type="job_echo", run_id="run-1"),
         max_active_jobs=1000,
     )
 
@@ -1010,10 +1041,10 @@ async def test_ops_dashboard_flow_capacity_data_runs_expected_read_model_queries
     assert "runtime" not in payload
     assert "db_connection_budget" not in payload
     assert payload["health"]["next_checks"] == [
-        "./scripts/jobs.sh capacity --since 24h --job-type job_echo --caller-id caller-a",
-        "./scripts/jobs.sh ingress --since 24h --bucket 5m --job-type job_echo --caller-id caller-a",
-        "./scripts/jobs.sh drain --since 24h --older-than 10m --job-type job_echo --caller-id caller-a",
-        "./scripts/jobs.sh latency --since 24h --group-by job_type --job-type job_echo --caller-id caller-a",
+        "./scripts/jobs.sh capacity --since 24h --job-type job_echo --caller-id caller-a --run-id run-1",
+        "./scripts/jobs.sh ingress --since 24h --bucket 5m --job-type job_echo --caller-id caller-a --run-id run-1",
+        "./scripts/jobs.sh drain --since 24h --older-than 10m --job-type job_echo --caller-id caller-a --run-id run-1",
+        "./scripts/jobs.sh latency --since 24h --group-by job_type --job-type job_echo --caller-id caller-a --run-id run-1",
         "./scripts/jobs.sh broker",
         "./scripts/jobs.sh runtime",
     ]
@@ -1042,12 +1073,14 @@ async def test_ops_dashboard_drain_status_sql_uses_family_scope_and_drained_verd
 
     db = _RecordingDB()
 
-    payload = await read_model.drain_status(db, DashboardFilters())
+    payload = await read_model.drain_status(db, DashboardFilters(run_id="run-1"))
 
     assert payload["status"] == "drained"
     combined_sql = "\n".join(db.statements)
+    assert db.params[0]["run_id"] == "run-1"
     assert "FROM job_aggregates root" in combined_sql
     assert "(j.id = root.id OR j.root_job_id = root.id)" in combined_sql
+    assert "root.metadata->>'run_id' = :run_id" in combined_sql
     assert "AS running_inactive" in combined_sql
     assert "AS active_jobs" in combined_sql
     assert "count(*) FILTER (WHERE j.status = 'failed') AS failed" in combined_sql
