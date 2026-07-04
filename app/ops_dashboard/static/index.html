@@ -18,7 +18,7 @@
           <p>FastAPI + Taskiq</p>
         </div>
       </div>
-      <nav id="section-nav" class="nav" aria-label="Dashboard sections"></nav>
+      <nav id="section-nav" class="nav" aria-label="面板分区"></nav>
       <div class="side-note">
         只读 internal dashboard。深度排障继续使用 <code>scripts/jobs.sh</code>。
       </div>
@@ -27,37 +27,25 @@
     <main class="main">
       <header class="toolbar">
         <div>
-          <div class="eyebrow">internal route</div>
+          <div class="eyebrow">内部路由 internal route</div>
           <h2 id="section-title">总览</h2>
         </div>
         <form id="filters" class="filters">
           <label>
             时间窗口
-            <select name="window">
-              <option value="10m">10m</option>
-              <option value="1h" selected>1h</option>
-              <option value="24h">24h</option>
-            </select>
+            <select name="window"></select>
           </label>
           <label>
-            bucket
-            <select name="bucket">
-              <option value="1m" selected>1m</option>
-              <option value="5m">5m</option>
-              <option value="15m">15m</option>
-            </select>
+            调用方 caller_id
+            <input name="caller_id" autocomplete="off" placeholder="全部 all" />
           </label>
           <label>
-            caller_id
-            <input name="caller_id" autocomplete="off" placeholder="all" />
+            Job 类型 job_type
+            <input name="job_type" autocomplete="off" placeholder="全部 all" />
           </label>
           <label>
-            job_type
-            <input name="job_type" autocomplete="off" placeholder="all" />
-          </label>
-          <label>
-            run_id
-            <input name="run_id" autocomplete="off" placeholder="all" />
+            压测轮次 run_id
+            <input name="run_id" autocomplete="off" placeholder="全部 all" />
           </label>
           <button id="refresh" class="icon-button" type="submit" title="刷新" aria-label="刷新">↻</button>
         </form>

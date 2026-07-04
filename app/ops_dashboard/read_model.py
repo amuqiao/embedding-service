@@ -27,6 +27,7 @@ OPTIONAL_FILTER_BIND_TYPES = {
     "run_id": String(),
     "status": String(),
     "since_at": DateTime(timezone=True),
+    "until_at": DateTime(timezone=True),
 }
 
 
@@ -58,6 +59,7 @@ AND EXISTS (
     AND (:caller_id IS NULL OR root.caller_id = :caller_id)
     AND (:run_id IS NULL OR root.metadata->>'run_id' = :run_id)
     AND (:since_at IS NULL OR root.created_at >= :since_at)
+    AND (:until_at IS NULL OR root.created_at < :until_at)
 )
 """
 
@@ -71,6 +73,7 @@ AND (:job_type IS NULL OR {alias}.job_type = :job_type)
 AND (:caller_id IS NULL OR {alias}.caller_id = :caller_id)
 AND (:run_id IS NULL OR {alias}.metadata->>'run_id' = :run_id)
 AND (:since_at IS NULL OR {alias}.created_at >= :since_at)
+AND (:until_at IS NULL OR {alias}.created_at < :until_at)
 """
 
 
@@ -93,6 +96,7 @@ AND (:caller_id IS NULL OR {alias}.caller_id = :caller_id)
 AND (:client_request_id IS NULL OR {alias}.client_request_id = :client_request_id)
 AND (:run_id IS NULL OR {alias}.metadata->>'run_id' = :run_id)
 AND (:since_at IS NULL OR {alias}.created_at >= :since_at)
+AND (:until_at IS NULL OR {alias}.created_at < :until_at)
 """
 
 
@@ -101,7 +105,8 @@ def _base_params(filters: DashboardFilters) -> dict[str, Any]:
         "job_type": filters.job_type,
         "caller_id": filters.caller_id,
         "run_id": filters.run_id,
-        "since_at": _now() - filters.window_delta,
+        "since_at": filters.range_start_at,
+        "until_at": filters.range_end_at,
         "limit": filters.sample_limit,
     }
 
@@ -121,7 +126,7 @@ def _flow_capacity_next_checks(filters: DashboardFilters) -> list[str]:
     filter_args = _jobs_cli_filter_args(filters)
     return [
         f"./scripts/jobs.sh capacity --since {filters.window}{filter_args}",
-        f"./scripts/jobs.sh ingress --since {filters.window} --bucket {filters.bucket}{filter_args}",
+        f"./scripts/jobs.sh ingress --since {filters.window} --bucket {filters.resolved_bucket}{filter_args}",
         f"./scripts/jobs.sh drain --since {filters.window} --older-than 10m{filter_args}",
         f"./scripts/jobs.sh latency --since {filters.window} --group-by job_type{filter_args}",
         "./scripts/jobs.sh broker",
@@ -372,6 +377,7 @@ async def ingress(db: AsyncSession, filters: DashboardFilters) -> list[dict[str,
           FROM job_aggregates j
           WHERE j.deleted_at IS NULL
             AND j.created_at >= :since_at
+            AND j.created_at < :until_at
             {clause}
           UNION ALL
           SELECT j.started_at AS event_at, 'started' AS metric
@@ -379,6 +385,7 @@ async def ingress(db: AsyncSession, filters: DashboardFilters) -> list[dict[str,
           WHERE j.deleted_at IS NULL
             AND j.started_at IS NOT NULL
             AND j.started_at >= :since_at
+            AND j.started_at < :until_at
             {clause}
           UNION ALL
           SELECT j.finished_at AS event_at, 'terminal' AS metric
@@ -386,6 +393,7 @@ async def ingress(db: AsyncSession, filters: DashboardFilters) -> list[dict[str,
           WHERE j.deleted_at IS NULL
             AND j.finished_at IS NOT NULL
             AND j.finished_at >= :since_at
+            AND j.finished_at < :until_at
             {clause}
           UNION ALL
           SELECT j.finished_at AS event_at, 'failed' AS metric
@@ -394,6 +402,7 @@ async def ingress(db: AsyncSession, filters: DashboardFilters) -> list[dict[str,
             AND j.status = 'failed'
             AND j.finished_at IS NOT NULL
             AND j.finished_at >= :since_at
+            AND j.finished_at < :until_at
             {clause}
         )
         SELECT
@@ -429,6 +438,7 @@ async def status_composition(db: AsyncSession, filters: DashboardFilters) -> lis
         FROM job_aggregates j
         WHERE j.deleted_at IS NULL
           AND j.created_at >= :since_at
+          AND j.created_at < :until_at
           {clause}
         GROUP BY bucket_at
         ORDER BY bucket_at ASC
@@ -450,6 +460,7 @@ async def drain_status(
         "caller_id": filters.caller_id,
         "run_id": filters.run_id,
         "since_at": None,
+        "until_at": None,
     }
     window_params = _base_params(filters)
     current = await _one(
@@ -1056,7 +1067,7 @@ async def recent_jobs_data(
     )
     return {
         "generated_at": _now(),
-        "filters": filters.__dict__,
+        "filters": filters.as_payload(),
         "controls": {"status": status, "client_request_id": client_request_id, "limit": limit},
         "status_options": ["all", "queued", "running", "succeeded", "failed"],
         "summary": summary_payload,
@@ -1075,7 +1086,7 @@ async def flow_capacity_data(db: AsyncSession, filters: DashboardFilters, *, max
     capacity_window_payload = await capacity_window(db, filters)
     return {
         "generated_at": _now(),
-        "filters": filters.__dict__,
+        "filters": filters.as_payload(),
         "health": {
             "status": "ok",
             "reasons": [],
@@ -1093,14 +1104,14 @@ async def flow_capacity_data(db: AsyncSession, filters: DashboardFilters, *, max
         "job_type_hotspots": await job_type_hotspots(db, filters),
         "query_scopes": {
             "capacity.current": "global_gate current active; ignores window/job_type/caller_id",
-            "capacity.window": "root scope created_at window; applies job_type/caller_id",
+            "capacity.window": "root scope created_at time range; applies job_type/caller_id",
             "drain.current": "family scope current active; applies root job_type/caller_id, ignores window",
-            "drain.window": "family scope created_at window; applies root job_type/caller_id",
-            "drain.stuck": "family scope stuck total/sample/truncated; applies root created_at window and root job_type/caller_id",
+            "drain.window": "family scope created_at time range; applies root job_type/caller_id",
+            "drain.stuck": "family scope stuck total/sample/truncated; applies root created_at time range and root job_type/caller_id",
             "ingress": "root event-time buckets for created/started/finished events; applies job_type/caller_id",
             "status_composition": "dashboard root created_at buckets; applies job_type/caller_id",
-            "latency": "root scope created_at window; applies job_type/caller_id",
-            "job_type_hotspots": "root scope created_at window; applies job_type/caller_id; grouped by job_type",
+            "latency": "root scope created_at time range; applies job_type/caller_id",
+            "job_type_hotspots": "root scope created_at time range; applies job_type/caller_id; grouped by job_type",
         },
     }
 
@@ -1111,8 +1122,13 @@ async def overview_data(db: AsyncSession, filters: DashboardFilters, *, max_acti
     callback_rows = await callbacks_summary(db, filters)
     return {
         "generated_at": _now(),
-        "filters": filters.__dict__,
-        "health": health_verdict(summary=summary_payload, stuck=stuck_payload["sample"], callbacks=callback_rows),
+        "filters": filters.as_payload(),
+        "health": health_verdict(
+            summary=summary_payload,
+            stuck=stuck_payload["sample"],
+            callbacks=callback_rows,
+            filters=filters,
+        ),
         "summary": summary_payload,
         "capacity": {"current": await global_gate(db, max_active_jobs=max_active_jobs)},
         "ingress": await ingress(db, filters),
@@ -1167,7 +1183,7 @@ async def failures_data(db: AsyncSession, filters: DashboardFilters) -> dict[str
     health = _failures_health(failure=failure_payload, callbacks=callback_counts)
     return {
         "generated_at": _now(),
-        "filters": filters.__dict__,
+        "filters": filters.as_payload(),
         "health": health | {"next_checks": _failures_callbacks_next_checks(filters)},
         "failure_summary": failure_payload,
         "failure_groups": await failure_groups(db, filters),
@@ -1177,7 +1193,7 @@ async def failures_data(db: AsyncSession, filters: DashboardFilters) -> dict[str
         "callback_samples": await callback_samples(db, filters),
         "stuck": await stuck_report(db, filters),
         "query_scopes": {
-            "failure_summary": "family scope created_at window; applies root job_type/caller_id",
+            "failure_summary": "family scope created_at time range; applies root job_type/caller_id",
             "failure_groups": "family scope failed records grouped by summarized error fields",
             "failed_samples": "family scope failed samples; raw error message is not returned",
             "callbacks": "root scope callback_outbox grouped by status",

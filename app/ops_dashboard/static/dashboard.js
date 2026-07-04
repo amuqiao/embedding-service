@@ -52,7 +52,7 @@
         type: "select",
         binding: "query",
         param: "status",
-        label: "status",
+        label: "状态",
         default: "all",
         options: ["all", "queued", "running", "succeeded", "failed"],
       },
@@ -68,7 +68,7 @@
         type: "number",
         binding: "query",
         param: "limit",
-        label: "limit",
+        label: "数量",
         default: 20,
         min: 1,
         max: 100,
@@ -87,7 +87,7 @@
         type: "number",
         binding: "query",
         param: "limit",
-        label: "limit",
+        label: "数量",
         default: 100,
         min: 1,
         max: 200,
@@ -101,47 +101,47 @@
       dataSource: "overview",
       items: [
         {
-          label: "reasons",
+          label: "原因",
           badgePath: "health.status",
           badgeDefault: "ok",
           valuePath: "health.reasons",
           format: "join",
-          empty: "no active warning",
+          empty: "无活跃告警",
         },
-        { label: "generated_at", valuePath: "generated_at", format: "date" },
+        { label: "生成时间", valuePath: "generated_at", format: "date" },
       ],
     },
     "overview.current_state": {
-      title: "Current State",
+      title: "当前状态",
       question: "现在怎么样",
       rendererType: "metric_cards",
       dataSource: "overview",
       cards: [
         {
-          label: "active_jobs",
+          label: "活跃 Job",
           valuePath: "capacity.current.active_jobs",
-          subPrefix: "headroom",
+          subPrefix: "剩余额度",
           subPath: "capacity.current.headroom",
         },
-        { label: "queued", valuePath: "summary.jobs.queued", sub: "root window" },
-        { label: "running_active", valuePath: "summary.jobs.running_active", sub: "active attempts" },
-        { label: "succeeded", valuePath: "summary.jobs.succeeded", sub: "window" },
+        { label: "排队", valuePath: "summary.jobs.queued", sub: "root 时间窗口" },
+        { label: "运行中", valuePath: "summary.jobs.running_active", sub: "活跃执行" },
+        { label: "成功", valuePath: "summary.jobs.succeeded", sub: "时间窗口" },
         {
-          label: "success_rate %",
+          label: "成功率 %",
           value: (payload) => {
             const rate = getPath(payload, "summary.jobs.success_rate");
             return rate === null || rate === undefined ? null : Math.round(Number(rate) * 1000) / 10;
           },
-          sub: "terminal window",
+          sub: "终态窗口",
         },
-        { label: "failed", valuePath: "summary.jobs.failed", sub: "window" },
-        { label: "callback_delivered", valuePath: "summary.callbacks.delivered", sub: "window" },
-        { label: "stuck", valuePath: "stuck.total", sub: "older than 10m" },
-        { label: "callback_due", valuePath: "summary.callbacks.due", sub: "due now" },
+        { label: "失败", valuePath: "summary.jobs.failed", sub: "时间窗口" },
+        { label: "Callback 已送达", valuePath: "summary.callbacks.delivered", sub: "时间窗口" },
+        { label: "卡住", valuePath: "stuck.total", sub: "超过 10m" },
+        { label: "Callback 到期", valuePath: "summary.callbacks.due", sub: "当前到期" },
       ],
     },
     "overview.ingress_trend": {
-      title: "Ingress",
+      title: "入口趋势",
       question: "created / terminal / failed",
       rendererType: "echarts.line",
       dataSource: "overview",
@@ -155,8 +155,8 @@
       colors: ["#1769aa", "#12805c", "#c9342f"],
     },
     "overview.latency_p95": {
-      title: "Latency p95",
-      question: "queue / run / lifecycle",
+      title: "延迟 p95",
+      question: "排队 / 执行 / 生命周期",
       rendererType: "echarts.horizontal_bar",
       dataSource: "overview",
       adapter: "latency_p95_rows",
@@ -167,8 +167,8 @@
       left: 84,
     },
     "overview.health_signals": {
-      title: "Health Signals",
-      question: "next checks",
+      title: "健康信号",
+      question: "下一步检查",
       rendererType: "html.signal_list",
       dataSource: "overview",
       dataPath: "health.next_checks",
@@ -176,43 +176,43 @@
     },
     "overview.stuck_samples": {
       title: "Stuck 样本",
-      question: "older than 10m",
+      question: "超过 10m",
       rendererType: "html.table",
       dataSource: "overview",
       dataPath: "stuck.sample",
       emptyText: "未发现 stuck 样本",
       columns: [
-        { key: "issue", label: "issue" },
+        { key: "issue", label: "问题" },
         { key: "job_id", label: "job_id", render: jobLink },
-        { key: "job_status", label: "status", render: statusBadge },
+        { key: "job_status", label: "状态", render: statusBadge },
         { key: "job_type", label: "job_type" },
-        { key: "since_at", label: "since_at", value: (row) => formatDate(row.since_at) },
+        { key: "since_at", label: "开始时间", value: (row) => formatDate(row.since_at) },
       ],
     },
     "recent_jobs.status": {
       rendererType: "status_line",
       dataSource: "recent_jobs",
       items: [
-        { label: "section", badgeDefault: "neutral", badgePath: "health.status", value: "recent_jobs" },
-        { label: "generated_at", valuePath: "generated_at", format: "date" },
+        { label: "分区", badgeDefault: "neutral", badgePath: "health.status", value: "recent_jobs" },
+        { label: "生成时间", valuePath: "generated_at", format: "date" },
       ],
     },
     "recent_jobs.summary_cards": {
-      title: "Result Cards",
-      question: "current filter",
+      title: "结果概览",
+      question: "当前筛选",
       rendererType: "metric_cards",
       dataSource: "recent_jobs",
       cards: [
-        { label: "total", valuePath: "summary.total", sub: "filtered root jobs" },
-        { label: "queued", valuePath: "summary.queued", sub: "window" },
-        { label: "running", valuePath: "summary.running", sub: "window" },
-        { label: "succeeded", valuePath: "summary.succeeded", sub: "window" },
-        { label: "failed", valuePath: "summary.failed", sub: "window" },
-        { label: "terminal", valuePath: "summary.terminal", sub: "finished" },
+        { label: "总数", valuePath: "summary.total", sub: "筛选后 root Job" },
+        { label: "排队", valuePath: "summary.queued", sub: "时间窗口" },
+        { label: "运行中", valuePath: "summary.running", sub: "时间窗口" },
+        { label: "成功", valuePath: "summary.succeeded", sub: "时间窗口" },
+        { label: "失败", valuePath: "summary.failed", sub: "时间窗口" },
+        { label: "终态", valuePath: "summary.terminal", sub: "已结束" },
       ],
     },
     "recent_jobs.table": {
-      title: "Recent Jobs",
+      title: "最近任务",
       question: "点击 job_id 查看追踪",
       rendererType: "html.table",
       dataSource: "recent_jobs",
@@ -220,17 +220,17 @@
       emptyText: "当前筛选没有 root Job",
       columns: [
         { key: "job_id", label: "job_id", render: jobLink },
-        { key: "status", label: "status", render: statusBadge },
+        { key: "status", label: "状态", render: statusBadge },
         { key: "job_type", label: "job_type" },
-        { key: "caller_id", label: "caller" },
+        { key: "caller_id", label: "caller_id" },
         { key: "client_request_id", label: "client_request_id", wrap: true },
         { key: "progress_percent", label: "%" },
-        { key: "progress_stage", label: "stage" },
-        { key: "callback_status", label: "callback", render: statusBadge },
-        { key: "updated_at", label: "updated", value: (row) => formatDate(row.updated_at) },
+        { key: "progress_stage", label: "阶段" },
+        { key: "callback_status", label: "Callback 状态", render: statusBadge },
+        { key: "updated_at", label: "更新时间", value: (row) => formatDate(row.updated_at) },
         {
           key: "duration_or_age_seconds",
-          label: "age/duration s",
+          label: "年龄/耗时秒",
           value: (row) => Math.round(Number(row.duration_or_age_seconds || 0)),
         },
       ],
@@ -239,42 +239,42 @@
       rendererType: "status_line",
       dataSource: "flow_capacity",
       items: [
-        { label: "section", badgeDefault: "neutral", badgePath: "health.status", value: "flow_capacity" },
+        { label: "分区", badgeDefault: "neutral", badgePath: "health.status", value: "flow_capacity" },
         { label: "drain", badgeDefault: "neutral", badgePath: "drain.status", valuePath: "drain.status" },
-        { label: "generated_at", valuePath: "generated_at", format: "date" },
+        { label: "生成时间", valuePath: "generated_at", format: "date" },
       ],
     },
     "flow_capacity.next_checks": {
-      title: "Flow & Capacity",
-      question: "CLI handoff",
+      title: "吞吐与容量",
+      question: "CLI 排障入口",
       rendererType: "html.signal_list",
       dataSource: "flow_capacity",
       dataPath: "health.next_checks",
       emptyText: "没有后续检查",
     },
     "flow_capacity.capacity_cards": {
-      title: "Capacity Cards",
-      question: "gate / headroom",
+      title: "容量概览",
+      question: "容量闸门与 headroom",
       rendererType: "metric_cards",
       dataSource: "flow_capacity",
       cards: [
-        { label: "max_active_jobs", valuePath: "capacity.current.max_active_jobs", sub: "configured" },
-        { label: "active_jobs", valuePath: "capacity.current.active_jobs", sub: "global gate" },
-        { label: "headroom", valuePath: "capacity.current.headroom", sub: "remaining" },
-        { label: "queued", valuePath: "capacity.current.queued", sub: "global" },
-        { label: "running_active", valuePath: "capacity.current.running_active", sub: "global" },
+        { label: "最大活跃 Job", valuePath: "capacity.current.max_active_jobs", sub: "配置值" },
+        { label: "活跃 Job", valuePath: "capacity.current.active_jobs", sub: "全局闸门" },
+        { label: "剩余额度", valuePath: "capacity.current.headroom", sub: "headroom" },
+        { label: "排队", valuePath: "capacity.current.queued", sub: "全局" },
+        { label: "运行中", valuePath: "capacity.current.running_active", sub: "全局" },
         {
-          label: "accepted_rps",
+          label: "接单 RPS",
           value: (payload) => {
             const value = getPath(payload, "capacity.window.accepted_submit_rps");
             return value === null || value === undefined ? null : Math.round(Number(value) * 1000) / 1000;
           },
-          sub: "window",
+          sub: "时间窗口",
         },
       ],
     },
     "flow_capacity.ingress_drain": {
-      title: "Ingress / Drain",
+      title: "入口与排空",
       question: "created / started / terminal / failed",
       rendererType: "echarts.line",
       dataSource: "flow_capacity",
@@ -289,20 +289,20 @@
       colors: ["#1769aa", "#5f6b7a", "#12805c", "#c9342f"],
     },
     "flow_capacity.drain_cards": {
-      title: "Drain",
-      question: "current / window",
+      title: "排空状态",
+      question: "当前与时间窗口",
       rendererType: "metric_cards",
       dataSource: "flow_capacity",
       cards: [
-        { label: "current_active", valuePath: "drain.current.active_jobs", sub: "family current" },
-        { label: "running_inactive", valuePath: "drain.current.running_inactive", sub: "family current" },
-        { label: "window_active", valuePath: "drain.window.active_jobs", sub: "family window" },
-        { label: "window_failed", valuePath: "drain.window.failed", sub: "family window" },
-        { label: "stuck", valuePath: "drain.stuck.total", sub: "older than 10m" },
+        { label: "当前活跃", valuePath: "drain.current.active_jobs", sub: "当前 family" },
+        { label: "非活跃运行", valuePath: "drain.current.running_inactive", sub: "当前 family" },
+        { label: "窗口活跃", valuePath: "drain.window.active_jobs", sub: "窗口 family" },
+        { label: "窗口失败", valuePath: "drain.window.failed", sub: "窗口 family" },
+        { label: "卡住", valuePath: "drain.stuck.total", sub: "超过 10m" },
       ],
     },
     "flow_capacity.status_composition": {
-      title: "Status Composition",
+      title: "状态构成",
       question: "queued / running / terminal",
       rendererType: "echarts.stacked_bar",
       dataSource: "flow_capacity",
@@ -317,8 +317,8 @@
       colors: ["#d68c1f", "#1769aa", "#12805c", "#c9342f"],
     },
     "flow_capacity.latency_p95": {
-      title: "Latency p95",
-      question: "queue / run / lifecycle",
+      title: "延迟 p95",
+      question: "排队 / 执行 / 生命周期",
       rendererType: "echarts.horizontal_bar",
       dataSource: "flow_capacity",
       adapter: "latency_p95_rows",
@@ -329,56 +329,56 @@
       left: 84,
     },
     "flow_capacity.job_type_hotspots": {
-      title: "Job Type Hotspots",
-      question: "active / failed / p95",
+      title: "job_type 热点",
+      question: "活跃 / 失败 / p95",
       rendererType: "html.table",
       dataSource: "flow_capacity",
       dataPath: "job_type_hotspots",
       emptyText: "当前窗口没有 Job 类型热点",
       columns: [
         { key: "job_type", label: "job_type" },
-        { key: "total", label: "total" },
-        { key: "active_jobs", label: "active" },
-        { key: "queued", label: "queued" },
-        { key: "running", label: "running" },
-        { key: "failed", label: "failed" },
-        { key: "queue_wait_p95_seconds", label: "queue_p95_s", value: (row) => secondsCell(row.queue_wait_p95_seconds) },
-        { key: "run_p95_seconds", label: "run_p95_s", value: (row) => secondsCell(row.run_p95_seconds) },
-        { key: "lifecycle_p95_seconds", label: "lifecycle_p95_s", value: (row) => secondsCell(row.lifecycle_p95_seconds) },
+        { key: "total", label: "总数" },
+        { key: "active_jobs", label: "活跃" },
+        { key: "queued", label: "排队" },
+        { key: "running", label: "运行中" },
+        { key: "failed", label: "失败" },
+        { key: "queue_wait_p95_seconds", label: "排队 p95", value: (row) => secondsCell(row.queue_wait_p95_seconds) },
+        { key: "run_p95_seconds", label: "执行 p95", value: (row) => secondsCell(row.run_p95_seconds) },
+        { key: "lifecycle_p95_seconds", label: "生命周期 p95", value: (row) => secondsCell(row.lifecycle_p95_seconds) },
       ],
     },
     "failures_callbacks.status": {
       rendererType: "status_line",
       dataSource: "failures_callbacks",
       items: [
-        { label: "section", badgeDefault: "ok", badgePath: "health.status", value: "failures_callbacks" },
-        { label: "generated_at", valuePath: "generated_at", format: "date" },
+        { label: "分区", badgeDefault: "ok", badgePath: "health.status", value: "failures_callbacks" },
+        { label: "生成时间", valuePath: "generated_at", format: "date" },
       ],
     },
     "failures_callbacks.summary_cards": {
-      title: "Failure / Callback Cards",
-      question: "failed / callback closure",
+      title: "失败与 Callback 概览",
+      question: "失败与 Callback 闭环",
       rendererType: "metric_cards",
       dataSource: "failures_callbacks",
       cards: [
-        { label: "failed_records", valuePath: "failure_summary.failed_records", sub: "family window" },
-        { label: "failed_roots", valuePath: "failure_summary.failed_roots", sub: "root families" },
-        { label: "callback_due", valuePath: "callback_summary.due", sub: "due now" },
-        { label: "delivered", valuePath: "callback_summary.delivered", sub: "callback" },
-        { label: "dead_letter", valuePath: "callback_summary.dead_letter", sub: "callback" },
-        { label: "stuck", valuePath: "stuck.total", sub: "older than 10m" },
+        { label: "失败记录", valuePath: "failure_summary.failed_records", sub: "family 窗口" },
+        { label: "失败 root", valuePath: "failure_summary.failed_roots", sub: "root family" },
+        { label: "Callback 到期", valuePath: "callback_summary.due", sub: "当前到期" },
+        { label: "已送达", valuePath: "callback_summary.delivered", sub: "Callback" },
+        { label: "死信", valuePath: "callback_summary.dead_letter", sub: "Callback" },
+        { label: "卡住", valuePath: "stuck.total", sub: "超过 10m" },
       ],
     },
     "failures_callbacks.next_checks": {
-      title: "Failures & Callbacks",
-      question: "CLI handoff",
+      title: "失败与 Callback",
+      question: "CLI 排障入口",
       rendererType: "html.signal_list",
       dataSource: "failures_callbacks",
       dataPath: "health.next_checks",
       emptyText: "没有后续检查",
     },
     "failures_callbacks.failure_groups_rank": {
-      title: "Failure Groups",
+      title: "失败分组",
       question: "按 error_code 聚合",
       rendererType: "echarts.horizontal_bar",
       dataSource: "failures_callbacks",
@@ -390,8 +390,8 @@
       left: 130,
     },
     "failures_callbacks.failure_groups_table": {
-      title: "Failure Groups Table",
-      question: "failure group details",
+      title: "失败分组明细",
+      question: "失败分组明细",
       rendererType: "html.table",
       dataSource: "failures_callbacks",
       dataPath: "failure_groups",
@@ -399,14 +399,14 @@
       columns: [
         { key: "error_code", label: "error_code" },
         { key: "error_kind", label: "error_kind" },
-        { key: "failure_phase", label: "phase" },
-        { key: "count", label: "count" },
+        { key: "failure_phase", label: "阶段" },
+        { key: "count", label: "数量" },
         { key: "detail_type", label: "detail_type" },
-        { key: "newest_updated_at", label: "newest", value: (row) => formatDate(row.newest_updated_at) },
+        { key: "newest_updated_at", label: "最新时间", value: (row) => formatDate(row.newest_updated_at) },
       ],
     },
     "failures_callbacks.failed_samples": {
-      title: "Failed Samples",
+      title: "失败样本",
       question: "点击 job_id 查看追踪",
       rendererType: "html.table",
       dataSource: "failures_callbacks",
@@ -414,43 +414,43 @@
       emptyText: "当前窗口没有 failed Job",
       columns: [
         { key: "job_id", label: "job_id", render: jobLink },
-        { key: "record_scope", label: "scope" },
-        { key: "workflow_node_key", label: "node" },
+        { key: "record_scope", label: "范围" },
+        { key: "workflow_node_key", label: "节点" },
         { key: "job_type", label: "job_type" },
         { key: "error_code", label: "error_code" },
         { key: "progress_percent", label: "%" },
-        { key: "progress_stage", label: "stage" },
-        { key: "callback_status", label: "callback", render: statusBadge },
-        { key: "attempt_status", label: "attempt", render: statusBadge },
-        { key: "dispatch_status", label: "dispatch", render: statusBadge },
+        { key: "progress_stage", label: "阶段" },
+        { key: "callback_status", label: "Callback 状态", render: statusBadge },
+        { key: "attempt_status", label: "尝试状态", render: statusBadge },
+        { key: "dispatch_status", label: "分发状态", render: statusBadge },
         {
           key: "duration_or_age_seconds",
-          label: "age/duration s",
+          label: "年龄/耗时秒",
           value: (row) => Math.round(Number(row.duration_or_age_seconds || 0)),
         },
-        { key: "updated_at", label: "updated", value: (row) => formatDate(row.updated_at) },
+        { key: "updated_at", label: "更新时间", value: (row) => formatDate(row.updated_at) },
       ],
     },
     "failures_callbacks.callback_outbox": {
-      title: "Callbacks",
+      title: "Callback outbox",
       question: "outbox 状态",
       rendererType: "html.table",
       dataSource: "failures_callbacks",
       dataPath: "callbacks",
       emptyText: "当前窗口没有 callback outbox",
       columns: [
-        { key: "status", label: "status", render: statusBadge },
-        { key: "count", label: "count" },
+        { key: "status", label: "状态", render: statusBadge },
+        { key: "count", label: "数量" },
         { key: "due", label: "due" },
-        { key: "oldest_age_seconds", label: "oldest_s", value: (row) => secondsCell(row.oldest_age_seconds) },
+        { key: "oldest_age_seconds", label: "最旧秒", value: (row) => secondsCell(row.oldest_age_seconds) },
         { key: "last_http_status_seen", label: "http_seen" },
         { key: "sample_last_error_code", label: "error_code" },
-        { key: "next_attempt_at", label: "next", value: (row) => formatDate(row.next_attempt_at) },
+        { key: "next_attempt_at", label: "下次尝试", value: (row) => formatDate(row.next_attempt_at) },
       ],
     },
     "failures_callbacks.callback_composition": {
-      title: "Callback Composition",
-      question: "callback status by window",
+      title: "Callback 状态构成",
+      question: "窗口内 Callback 状态",
       rendererType: "echarts.stacked_bar",
       dataSource: "failures_callbacks",
       adapter: "callback_composition_rows",
@@ -467,7 +467,7 @@
       colors: ["#d68c1f", "#1769aa", "#7f4fb3", "#12805c", "#5f6b7a", "#b95000", "#c9342f"],
     },
     "failures_callbacks.callback_samples": {
-      title: "Callback Samples",
+      title: "Callback 样本",
       question: "due / leased / dead_letter",
       rendererType: "html.table",
       dataSource: "failures_callbacks",
@@ -475,13 +475,13 @@
       emptyText: "当前窗口没有需要处理的 callback 样本",
       columns: [
         { key: "job_id", label: "job_id", render: jobLink },
-        { key: "status", label: "status", render: statusBadge },
-        { key: "event_type", label: "event" },
-        { key: "delivery_attempts", label: "attempts" },
+        { key: "status", label: "状态", render: statusBadge },
+        { key: "event_type", label: "事件" },
+        { key: "delivery_attempts", label: "尝试次数" },
         { key: "last_http_status", label: "http" },
         { key: "last_error_code", label: "error_code" },
-        { key: "next_attempt_at", label: "next", value: (row) => formatDate(row.next_attempt_at) },
-        { key: "updated_at", label: "updated", value: (row) => formatDate(row.updated_at) },
+        { key: "next_attempt_at", label: "下次尝试", value: (row) => formatDate(row.next_attempt_at) },
+        { key: "updated_at", label: "更新时间", value: (row) => formatDate(row.updated_at) },
       ],
     },
     "job_trace.status": {
@@ -489,12 +489,12 @@
       dataSource: "job_trace",
       items: [
         { label: "job_id", badgePath: "job.status", valuePath: "job.job_id" },
-        { label: "generated_at", valuePath: "generated_at", format: "date" },
+        { label: "生成时间", valuePath: "generated_at", format: "date" },
       ],
     },
     "job_trace.summary": {
-      title: "Job Summary",
-      question: "root identity and lifecycle",
+      title: "Job 摘要",
+      question: "root 身份与生命周期",
       rendererType: "html.summary_table",
       dataSource: "job_trace",
       rows: [
@@ -505,17 +505,17 @@
         { label: "caller_id", valuePath: "job.caller_id" },
         { label: "client_request_id", value: (payload) => getPath(payload, "job.client_request_id") || "-" },
         {
-          label: "progress",
+          label: "进度",
           value: (payload) => `${getPath(payload, "job.progress_percent") ?? 0}% / ${getPath(payload, "job.progress_stage") || "-"}`,
         },
-        { label: "callback", value: (payload) => getPath(payload, "job.callback_status") || "-" },
-        { label: "created_at", valuePath: "job.created_at", format: "date" },
-        { label: "finished_at", valuePath: "job.finished_at", format: "date" },
+        { label: "Callback 状态", value: (payload) => getPath(payload, "job.callback_status") || "-" },
+        { label: "创建时间", valuePath: "job.created_at", format: "date" },
+        { label: "完成时间", valuePath: "job.finished_at", format: "date" },
       ],
     },
     "job_trace.payload": {
-      title: "Payload",
-      question: "input and runtime shape",
+      title: "Payload 明细",
+      question: "输入与运行时结构",
       rendererType: "html.json_block",
       dataSource: "job_trace",
       value: (payload) => {
@@ -528,12 +528,12 @@
       },
     },
     "job_trace.load_summary": {
-      title: "Load Summary",
-      question: "run context",
+      title: "压测摘要",
+      question: "压测上下文",
       rendererType: "html.summary_table",
       dataSource: "job_trace",
       rows: [
-        { label: "source", value: (payload) => getPath(payload, "job.load_summary.source") || "-" },
+        { label: "来源", value: (payload) => getPath(payload, "job.load_summary.source") || "-" },
         { label: "run_id", value: (payload) => getPath(payload, "job.load_summary.run_id") || "-" },
         { label: "profile", value: (payload) => getPath(payload, "job.load_summary.profile") || "-" },
         { label: "case_key", value: (payload) => getPath(payload, "job.load_summary.case_key") || "-" },
@@ -541,32 +541,32 @@
       ],
     },
     "job_trace.workflow_summary": {
-      title: "Workflow Summary",
-      question: "children status",
+      title: "Workflow 摘要",
+      question: "子任务状态",
       rendererType: "metric_cards",
       dataSource: "job_trace",
       cards: [
-        { label: "children", value: (payload) => (payload.workflow_children || []).length, sub: "nodes" },
+        { label: "子任务", value: (payload) => (payload.workflow_children || []).length, sub: "节点" },
         {
-          label: "succeeded",
+          label: "成功",
           value: (payload) => (payload.workflow_children || []).filter((row) => row.status === "succeeded").length,
-          sub: "children",
+          sub: "子任务",
         },
         {
-          label: "failed",
+          label: "失败",
           value: (payload) => (payload.workflow_children || []).filter((row) => row.status === "failed").length,
-          sub: "children",
+          sub: "子任务",
         },
         {
-          label: "active",
+          label: "活跃",
           value: (payload) => (payload.workflow_children || []).filter((row) => ["queued", "running"].includes(row.status)).length,
-          sub: "children",
+          sub: "子任务",
         },
       ],
     },
     "job_trace.result": {
-      title: "Result",
-      question: "result and error shape",
+      title: "Result 明细",
+      question: "Result 与 error 结构",
       rendererType: "html.json_block",
       dataSource: "job_trace",
       value: (payload) => {
@@ -583,107 +583,107 @@
       },
     },
     "job_trace.callback_summary": {
-      title: "Callback Summary",
-      question: "delivery status",
+      title: "Callback 摘要",
+      question: "投递状态",
       rendererType: "metric_cards",
       dataSource: "job_trace",
       cards: [
-        { label: "callbacks", value: (payload) => (payload.callbacks || []).length, sub: "rows" },
+        { label: "Callback 数量", value: (payload) => (payload.callbacks || []).length, sub: "记录" },
         {
-          label: "delivered",
+          label: "已送达",
           value: (payload) => (payload.callbacks || []).filter((row) => row.status === "delivered").length,
-          sub: "callbacks",
+          sub: "Callback",
         },
         {
-          label: "dead_letter",
+          label: "死信",
           value: (payload) => (payload.callbacks || []).filter((row) => row.status === "dead_letter").length,
-          sub: "callbacks",
+          sub: "Callback",
         },
         {
-          label: "attempts",
+          label: "尝试次数",
           value: (payload) => Math.max(0, ...(payload.callbacks || []).map((row) => Number(row.delivery_attempts || 0))),
-          sub: "max",
+          sub: "最大值",
         },
       ],
     },
     "job_trace.attempts": {
-      title: "Attempts",
-      question: "retry decision",
+      title: "重试尝试",
+      question: "重试决策",
       rendererType: "html.table",
       dataSource: "job_trace",
       dataPath: "attempts",
       emptyText: "没有 attempts",
       columns: [
         { key: "purpose_attempt_no", label: "no" },
-        { key: "purpose", label: "purpose" },
-        { key: "status", label: "status", render: statusBadge },
-        { key: "failure_phase", label: "phase" },
-        { key: "retry_eligible", label: "eligible" },
-        { key: "retry_decision", label: "decision" },
-        { key: "retry_decision_reason", label: "reason", wrap: true },
-        { key: "policy_max_attempts", label: "max" },
+        { key: "purpose", label: "用途" },
+        { key: "status", label: "状态", render: statusBadge },
+        { key: "failure_phase", label: "阶段" },
+        { key: "retry_eligible", label: "可重试" },
+        { key: "retry_decision", label: "决策" },
+        { key: "retry_decision_reason", label: "原因", wrap: true },
+        { key: "policy_max_attempts", label: "最大次数" },
       ],
     },
     "job_trace.ai_calls": {
-      title: "AI Calls",
-      question: "provider evidence",
+      title: "AI 调用",
+      question: "provider 证据",
       rendererType: "html.table",
       dataSource: "job_trace",
       dataPath: "ai_calls",
       emptyText: "没有 AI call ledger",
       columns: [
-        { key: "status", label: "status", render: statusBadge },
-        { key: "operation", label: "operation" },
-        { key: "model_id", label: "model" },
+        { key: "status", label: "状态", render: statusBadge },
+        { key: "operation", label: "操作" },
+        { key: "model_id", label: "模型" },
         { key: "error_code", label: "error_code" },
         { key: "duration_ms", label: "ms" },
         { key: "billable_status", label: "billable" },
-        { key: "error_message", label: "message", wrap: true },
+        { key: "error_message", label: "错误消息", wrap: true },
       ],
     },
     "job_trace.children": {
-      title: "Workflow Children",
-      question: "family view",
+      title: "Workflow 子任务",
+      question: "family 视图",
       rendererType: "html.table",
       dataSource: "job_trace",
       dataPath: "workflow_children",
       emptyText: "没有 workflow children",
       columns: [
-        { key: "workflow_node_key", label: "node", wrap: true },
+        { key: "workflow_node_key", label: "节点" },
         { key: "job_id", label: "job_id", render: jobLink },
-        { key: "status", label: "status", render: statusBadge },
+        { key: "status", label: "状态", render: statusBadge },
         { key: "job_type", label: "job_type" },
         { key: "progress_percent", label: "%" },
-        { key: "updated_at", label: "updated", value: (row) => formatDate(row.updated_at) },
+        { key: "updated_at", label: "更新时间", value: (row) => formatDate(row.updated_at) },
       ],
     },
     "job_trace.timeline": {
-      title: "Timeline",
-      question: "payload summary only",
+      title: "时间线",
+      question: "仅展示 payload 摘要",
       rendererType: "html.table",
       dataSource: "job_trace",
       dataPath: "timeline",
       emptyText: "没有 timeline events",
       columns: [
-        { key: "created_at", label: "created_at", value: (row) => formatDate(row.created_at) },
-        { key: "event_type", label: "event" },
-        { key: "from_status", label: "from" },
-        { key: "to_status", label: "to" },
-        { key: "reason", label: "reason" },
-        { key: "payload_summary", label: "payload", value: (row) => JSON.stringify(row.payload_summary), wrap: true },
+        { key: "created_at", label: "创建时间", value: (row) => formatDate(row.created_at) },
+        { key: "event_type", label: "事件" },
+        { key: "from_status", label: "来源状态" },
+        { key: "to_status", label: "目标状态" },
+        { key: "reason", label: "原因" },
+        { key: "payload_summary", label: "payload 摘要", value: (row) => JSON.stringify(row.payload_summary), wrap: true },
       ],
     },
     "job_trace.callbacks": {
-      title: "Callbacks",
-      question: "terminal delivery",
+      title: "Callback 记录",
+      question: "终态投递",
       rendererType: "html.table",
       dataSource: "job_trace",
       dataPath: "callbacks",
       emptyText: "没有 callbacks",
       columns: [
-        { key: "event_type", label: "event" },
-        { key: "status", label: "status", render: statusBadge },
-        { key: "delivery_attempts", label: "attempts" },
+        { key: "event_type", label: "事件" },
+        { key: "status", label: "状态", render: statusBadge },
+        { key: "delivery_attempts", label: "尝试次数" },
         { key: "last_http_status", label: "http" },
         { key: "last_error_message", label: "last_error", wrap: true },
       ],
@@ -753,7 +753,7 @@
       ],
     },
     failures_callbacks: {
-      title: "失败与回调",
+      title: "失败与 Callback",
       dataSource: "failures_callbacks",
       target: "view-root",
       groups: [
@@ -787,9 +787,9 @@
       target: "job-trace-widgets",
       emptyText: "输入 job_id 后加载 Job 追踪。",
       groups: [
-        { key: "summary", title: "Summary", className: "trace-summary" },
-        { key: "details", title: "Details", className: "trace-content" },
-        { key: "evidence", title: "Evidence", className: "trace-content" },
+        { key: "summary", title: "摘要", className: "trace-summary" },
+        { key: "details", title: "明细", className: "trace-content" },
+        { key: "evidence", title: "证据", className: "trace-content" },
       ],
       placements: [
         { widgetId: "job_trace.status", target: "status-line" },
@@ -812,16 +812,16 @@
     latency_p95_rows: (payload) => {
       const row = (getPath(payload, "latency") || [])[0] || {};
       return [
-        { label: "queue", value: row.queue_wait_p95_seconds },
-        { label: "run", value: row.run_p95_seconds },
-        { label: "lifecycle", value: row.lifecycle_p95_seconds },
+        { label: "排队", value: row.queue_wait_p95_seconds },
+        { label: "执行", value: row.run_p95_seconds },
+        { label: "生命周期", value: row.lifecycle_p95_seconds },
       ];
     },
     callback_composition_rows: (payload) => {
       const summary = getPath(payload, "callback_summary") || {};
       return [
         {
-          bucket: "window",
+          bucket: "窗口",
           pending: summary.pending,
           leased: summary.leased,
           retrying: summary.retrying,
@@ -838,13 +838,36 @@
     return document.querySelector(selector);
   }
 
+  function filterConfig() {
+    return state.config?.filters || {};
+  }
+
+  function populateSelect(select, options, selected) {
+    if (!select || !Array.isArray(options)) return;
+    select.innerHTML = options
+      .map((option) => `
+        <option value="${escapeHtml(option)}" ${String(option) === String(selected) ? "selected" : ""}>${escapeHtml(option)}</option>
+      `)
+      .join("");
+  }
+
+  function initializeGlobalFilters() {
+    const config = filterConfig();
+    populateSelect(document.querySelector('[name="window"]'), config.windows, config.default_window);
+  }
+
+  function appendIfPresent(params, key, value) {
+    const normalized = value === undefined || value === null ? "" : String(value).trim();
+    if (normalized) params.set(key, normalized);
+  }
+
   function filterParams() {
     const form = new FormData($("#filters"));
     const params = new URLSearchParams();
-    for (const [key, value] of form.entries()) {
-      const normalized = String(value).trim();
-      if (normalized) params.set(key, normalized);
-    }
+    appendIfPresent(params, "window", form.get("window") || filterConfig().default_window);
+    appendIfPresent(params, "caller_id", form.get("caller_id"));
+    appendIfPresent(params, "job_type", form.get("job_type"));
+    appendIfPresent(params, "run_id", form.get("run_id"));
     return params;
   }
 
@@ -1114,6 +1137,7 @@
   async function init() {
     try {
       state.config = await fetchJson(`${BASE}/config`);
+      initializeGlobalFilters();
       initializePageControls();
     } catch (error) {
       setError(error.message || String(error));

@@ -46,7 +46,7 @@ Layout
 - 路由固定在 `/internal/jobs-dashboard`，不进入 OpenAPI。
 - 后端提供 data source config、overview、recent_jobs、flow_capacity、failures_callbacks、job trace、health。
 - 前端负责 renderer contract、widget registry、layout registry、ECharts 渲染和 HTML 渲染。
-- dashboard 顶部全局过滤支持 `window/bucket/caller_id/job_type/run_id`；`run_id` 对齐 `load.sh` 写入 Job metadata 的压测身份。
+- dashboard 顶部全局过滤支持 `window`、`caller_id`、`job_type`、`run_id`；`bucket` 不作为 dashboard 控件或 query 合同暴露，而是由后端按 `window` 自动派生为 `resolved_bucket`，`run_id` 对齐 `load.sh` 写入 Job metadata 的压测身份。
 - `recent_jobs` 已接入 public root Job 读模型，支持页内 `status/client_request_id/limit` 控件；`flow_capacity` 已接入 DB read model，用于吞吐、drain、容量、延迟和 job_type 热点方向判断；`failures_callbacks` 已接入失败聚合、失败样本、callback summary 和 callback 样本。
 - `/internal/jobs-dashboard/examples` 是独立静态 renderer 示例页，只使用 generic fixtures，不请求 Job 读模型，也不作为业务 mock 数据源。
 - dashboard 不支持业务 mock 数据开关；旧的 `OPS_DASHBOARD_MOCK_DATA_ENABLED` 已废弃，出现在 env 文件或进程环境中都会触发配置加载失败。
@@ -108,6 +108,33 @@ app/ops_dashboard/static/chart_contract.js
 | `recent_jobs` | `limit` | query | `limit` | 限制返回行数 |
 | `job_trace` | `job_id` | route | `job_id` | 替换 `/jobs/{job_id}/data` route param |
 | `job_trace` | `limit` | query | `limit` | 限制 timeline 行数 |
+
+## Time Filter Contract
+
+dashboard 的时间筛选是后端 HTTP query 合同，不只是一组前端控件。除 `job_trace` 外，section data source 都复用同一个 `_filters` 入口构造 `DashboardFilters`。`DashboardFilters` 负责归一化相对窗口和派生分桶粒度；`OPS_DASHBOARD_MAX_WINDOW_SECONDS` 上限由 HTTP query 边界校验。当前只支持相对时间窗口：
+
+| `window` | 自动 `resolved_bucket` |
+| --- | --- |
+| `10m` | `1m` |
+| `30m` | `1m` |
+| `1h` | `1m` |
+| `3h` | `5m` |
+| `6h` | `5m` |
+| `12h` | `15m` |
+| `1d` | `30m` |
+| `3d` | `2h` |
+| `7d` | `6h` |
+
+规则：
+
+- 默认 `window=1h`。
+- `bucket` 是服务端派生值，不接受用户 query 参数；传入 `bucket` 会返回 400。
+- 不支持 `from/to` 日期选择；传入 `from` 或 `to` 会返回 400。
+- 时间范围不能超过 `OPS_DASHBOARD_MAX_WINDOW_SECONDS`。
+- `OPS_DASHBOARD_MAX_WINDOW_SECONDS` 默认 `604800`，即 7 天；如果配置调小，超过上限的 `window` 会返回 400。
+- read model 使用半开区间 `[now - window, now)`；`now` 是本次请求创建 `DashboardFilters` 时的服务端时间。payload 里的 `generated_at` 是展示生成时间，不是 query upper bound。
+
+前端时间筛选只显示 `window`；同一工具条还提供 `caller_id/job_type/run_id` 全局过滤。`resolved_bucket` 可以出现在 payload 和 CLI handoff 中，用于解释图表分桶粒度；它不是用户可调的 dashboard 参数，也不通过 `/config` 暴露为前端可选项。
 
 ## Tabbed Views
 
@@ -175,11 +202,11 @@ Job Trace
 
 | payload path | 统计口径 | 说明 |
 | --- | --- | --- |
-| `summary.jobs` | root scope + `created_at` window | total、queued、running、succeeded、failed、terminal、success_rate、active_jobs |
-| `summary.callbacks` | root scope + `created_at` window | pending、leased、delivering、delivered、failed、dead_letter、due |
+| `summary.jobs` | root scope + `created_at` time range | total、queued、running、succeeded、failed、terminal、success_rate、active_jobs |
+| `summary.callbacks` | root scope + `created_at` time range | pending、leased、delivering、delivered、failed、dead_letter、due |
 | `capacity.current` | `global_gate` | 当前全局 active 占用，不按窗口裁剪 |
 | `ingress` | root event-time buckets | created / started / terminal / failed 事件趋势 |
-| `latency` | root scope + `created_at` window | queue / run / lifecycle p95 |
+| `latency` | root scope + `created_at` time range | queue / run / lifecycle p95 |
 | `stuck` | family scope stuck report | `total/sample/truncated`；样本用于进入 Job Trace |
 | `health` | `summary`、`callbacks`、`stuck` 派生 | `critical/warning/ok` 和 next checks |
 
@@ -194,36 +221,36 @@ Overview 不承载长任务表。需要查具体 Job 时进入 `Recent Jobs`、`
 | `controls.status` | page-local query | `all/queued/running/succeeded/failed` |
 | `controls.client_request_id` | page-local query | 精确定位调用方幂等请求 |
 | `controls.limit` | page-local query | 1 到 100 |
-| `summary` | root scope + `created_at` window + page controls | 当前筛选下 total、queued、running、succeeded、failed、terminal |
+| `summary` | root scope + `created_at` time range + page controls | 当前筛选下 total、queued、running、succeeded、failed、terminal |
 | `jobs` | root scope rows | root Job 行，包含 callback/attempt/dispatch 简要状态和 `duration_or_age_seconds` |
 
 Recent Jobs 固定为 root 视角，不提供 `scope` 控件。child / family 证据从 `Job Trace`、`Failures & Callbacks` 或 `./scripts/jobs.sh list --scope family` 进入。
 
 ## Flow And Capacity Contract
 
-`flow_capacity` 是 Phase 2 已落地的只读 data source，用于回答“系统是否在恢复、吞吐是否下降、容量是否不足、慢在哪个阶段”。它复用 dashboard 通用 `window/bucket/caller_id/job_type/run_id` 过滤，但不同子块有不同统计口径：
+`flow_capacity` 是 Phase 2 已落地的只读 data source，用于回答“系统是否在恢复、吞吐是否下降、容量是否不足、慢在哪个阶段”。它复用 dashboard 通用时间筛选、`caller_id/job_type/run_id` 过滤，但不同子块有不同统计口径：
 
 | payload path | 统计口径 | 说明 |
 | --- | --- | --- |
 | `capacity.current` | `global_gate` | 当前全局 active 占用；不受 `window/job_type/caller_id` 过滤；`headroom` 保留负数，用于暴露超额接单 |
-| `capacity.window` | root scope + `created_at` window | 估算窗口内 accepted、terminal、lifecycle p95、accepted_submit_rps 和 active_jobs_needed_upper_bound |
+| `capacity.window` | root scope + `created_at` time range | 估算时间范围内 accepted、terminal、lifecycle p95、accepted_submit_rps 和 active_jobs_needed_upper_bound |
 | `drain.current` | family scope current | 按 root `job_type/caller_id` 过滤当前 family active，不按窗口裁剪 |
-| `drain.window` | family scope + root `created_at` window | 判断窗口内是否还有 active、running_inactive、failed |
+| `drain.window` | family scope + root `created_at` time range | 判断时间范围内是否还有 active、running_inactive、failed |
 | `drain.stuck` | family scope stuck | 返回 `total/sample/truncated`；`total` 是真实 stuck 数，不是样本行数 |
 | `ingress` | root event-time buckets | `created/started/terminal/failed` 分别按各自事件时间分桶 |
 | `status_composition` | root `created_at` buckets | dashboard 自有状态构成视图，用于观察 queued/running/succeeded/failed 构成 |
-| `latency` | root scope + `created_at` window | `queue_wait_p95_seconds/run_p95_seconds/lifecycle_p95_seconds` |
-| `job_type_hotspots` | root scope + `created_at` window + `job_type` group | 按 job_type 展示 active、failed 和 p95 热点 |
+| `latency` | root scope + `created_at` time range | `queue_wait_p95_seconds/run_p95_seconds/lifecycle_p95_seconds` |
+| `job_type_hotspots` | root scope + `created_at` time range + `job_type` group | 按 job_type 展示 active、failed 和 p95 热点 |
 
-`health.next_checks` 会按当前页面筛选条件生成 CLI handoff，例如保留 `--since`、`--bucket`、`--job-type`、`--caller-id` 和 `--run-id`。`flow_capacity` payload 不包含 `broker`、`runtime` 或 `db_connection_budget`；这些仍由 `./scripts/jobs.sh broker`、`./scripts/jobs.sh runtime` 和相关显式命令承担。
+`health.next_checks` 会按当前页面筛选条件生成 CLI handoff，例如保留 `--since`、后端派生后的 `--bucket`、`--job-type`、`--caller-id` 和 `--run-id`。其中 `--bucket` 只用于把 dashboard 分桶粒度传给 `jobs.sh ingress`，不是 dashboard 的用户输入参数。`flow_capacity` payload 不包含 `broker`、`runtime` 或 `db_connection_budget`；这些仍由 `./scripts/jobs.sh broker`、`./scripts/jobs.sh runtime` 和相关显式命令承担。
 
 ## Failures And Callbacks Contract
 
-`failures_callbacks` 是 Phase 3 已落地的只读 data source，用于回答“失败集中在哪、callback 是否完成外部通知、哪些样本要进入 Job Trace”。它复用 dashboard 通用 `window/caller_id/job_type/run_id` 过滤，不提供写操作、callback replay 或 dispatch replay。
+`failures_callbacks` 是 Phase 3 已落地的只读 data source，用于回答“失败集中在哪、callback 是否完成外部通知、哪些样本要进入 Job Trace”。它复用 dashboard 通用时间筛选和 `caller_id/job_type/run_id` 过滤，不提供写操作、callback replay 或 dispatch replay。
 
 | payload path | 统计口径 | 说明 |
 | --- | --- | --- |
-| `failure_summary` | family scope + root `created_at` window | 统计 failed records 和 failed root families |
+| `failure_summary` | family scope + root `created_at` time range | 统计 failed records 和 failed root families |
 | `failure_groups` | family scope failed records | 按 `error_code/error_kind/failure_phase/detail_type` 聚合；不返回 raw `detail_message` |
 | `failed_samples` | family scope failed rows | 返回 root/child、workflow node、callback/attempt/dispatch 状态和 age/duration；`job_id` 可进入 Job Trace |
 | `callbacks` | root scope callback_outbox grouped by status | 对齐 `callbacks-summary` 的 status/count/due/age/http 摘要；只返回 `sample_last_error_code` |

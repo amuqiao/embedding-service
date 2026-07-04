@@ -367,8 +367,8 @@
       target,
       rows,
       [
-        { key: "label", label: "field" },
-        { key: "value", label: "value", wrap: true },
+        { key: "label", label: "字段" },
+        { key: "value", label: "值", wrap: true },
       ],
       widget.emptyText || "没有摘要"
     );

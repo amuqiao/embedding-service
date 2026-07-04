@@ -466,7 +466,7 @@ class OpsDashboardSettings(ConfigSection):
     enabled: bool = False
     require_auth: bool = False
     refresh_seconds: int = 15
-    max_window_seconds: int = 86_400
+    max_window_seconds: int = 604_800
     query_timeout_seconds: int = 2
 
     @field_validator("enabled", "require_auth", mode="before")

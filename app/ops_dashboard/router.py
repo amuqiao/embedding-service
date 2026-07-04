@@ -19,7 +19,11 @@ from app.core.security import bearer_scheme, require_service_auth
 from app.ops_dashboard import read_model
 from app.ops_dashboard.config import get_dashboard_config
 from app.ops_dashboard.registry import data_source_config, section_config
-from app.ops_dashboard.schemas import DashboardFilters, VALID_BUCKETS, VALID_WINDOWS, is_valid_run_id
+from app.ops_dashboard.schemas import (
+    DashboardFilters,
+    VALID_WINDOWS,
+    is_valid_run_id,
+)
 
 VALID_RECENT_JOB_STATUSES = {"all", "queued", "running", "succeeded", "failed"}
 
@@ -40,22 +44,38 @@ OpsAccess = Annotated[str, Depends(require_ops_access)]
 
 
 def _filters(
-    window: str = Query(default="1h"),
-    bucket: str = Query(default="1m"),
+    window: str | None = Query(default=None),
+    bucket: str | None = Query(default=None),
+    from_at: str | None = Query(default=None, alias="from"),
+    to_at: str | None = Query(default=None, alias="to"),
     caller_id: str | None = Query(default=None),
     job_type: str | None = Query(default=None),
     run_id: str | None = Query(default=None),
 ) -> DashboardFilters:
-    if window not in VALID_WINDOWS:
+    if bucket is not None:
+        raise HTTPException(status_code=400, detail="bucket is server-derived; use window only")
+    if from_at is not None or to_at is not None:
+        raise HTTPException(status_code=400, detail="from/to are not supported; use window")
+    effective_window = "1h" if window is None else window
+    if effective_window not in VALID_WINDOWS:
         raise HTTPException(status_code=400, detail=f"window must be one of: {', '.join(VALID_WINDOWS)}")
-    if bucket not in VALID_BUCKETS:
-        raise HTTPException(status_code=400, detail=f"bucket must be one of: {', '.join(VALID_BUCKETS)}")
     if run_id is not None and not is_valid_run_id(run_id):
         raise HTTPException(status_code=400, detail="run_id must match [A-Za-z0-9][A-Za-z0-9_-]{0,127}")
     config = get_dashboard_config()
-    if VALID_WINDOWS[window] > config.max_window_seconds:
+    if VALID_WINDOWS[effective_window] > config.max_window_seconds:
         raise HTTPException(status_code=400, detail="window exceeds OPS_DASHBOARD_MAX_WINDOW_SECONDS")
-    return DashboardFilters(window=window, bucket=bucket, caller_id=caller_id, job_type=job_type, run_id=run_id)
+    try:
+        filters = DashboardFilters(
+            window=effective_window,
+            caller_id=caller_id,
+            job_type=job_type,
+            run_id=run_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if filters.range_seconds > config.max_window_seconds:
+        raise HTTPException(status_code=400, detail="time range exceeds OPS_DASHBOARD_MAX_WINDOW_SECONDS")
+    return filters
 
 
 def _planned_section_payload(
@@ -70,7 +90,7 @@ def _planned_section_payload(
         "generated_at": datetime.now(UTC),
         "section": section,
         "title": title,
-        "filters": filters.__dict__,
+        "filters": filters.as_payload(),
         "controls": controls or {},
         "health": {
             "status": "neutral",
@@ -133,9 +153,7 @@ async def dashboard_config(_: OpsAccess):
         "sections": section_config(),
         "filters": {
             "windows": list(VALID_WINDOWS),
-            "buckets": list(VALID_BUCKETS),
             "default_window": "1h",
-            "default_bucket": "1m",
         },
     }
 
