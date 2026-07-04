@@ -17,7 +17,7 @@ from app.core.database import get_db
 from app.core.security import bearer_scheme, require_service_auth
 from app.ops_dashboard import read_model
 from app.ops_dashboard.config import get_dashboard_config
-from app.ops_dashboard.registry import section_config
+from app.ops_dashboard.registry import data_source_config, section_config
 from app.ops_dashboard.schemas import DashboardFilters, VALID_BUCKETS, VALID_WINDOWS
 
 router = APIRouter(tags=["ops-dashboard"], include_in_schema=False)
@@ -99,6 +99,7 @@ async def dashboard_config(_: OpsAccess):
         "max_window_seconds": config.max_window_seconds,
         "query_timeout_seconds": config.query_timeout_seconds,
         "route_base": config.route_base,
+        "data_sources": data_source_config(),
         "sections": section_config(),
         "filters": {
             "windows": list(VALID_WINDOWS),

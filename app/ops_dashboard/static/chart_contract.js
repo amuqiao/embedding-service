@@ -1,20 +1,28 @@
 (function () {
   const charts = new Map();
 
-  const CHART_TYPES = Object.freeze({
-    stat_card: { answers: "现在怎么样" },
-    line: { answers: "趋势如何" },
-    stacked_bar: { answers: "构成随时间怎么变" },
-    horizontal_bar: { answers: "谁最多或哪段最重" },
-    table: { answers: "具体是哪几个" },
+  const RENDERER_TYPES = Object.freeze({
+    status_line: { role: "page status and context strip" },
+    metric_cards: { role: "point-in-time metrics" },
+    "echarts.line": { role: "time trend" },
+    "echarts.stacked_bar": { role: "composition over buckets" },
+    "echarts.horizontal_bar": { role: "ranked values" },
+    "html.table": { role: "row details" },
+    "html.signal_list": { role: "short operational signals" },
+    "html.summary_table": { role: "key/value summary" },
+    "html.json_block": { role: "structured diagnostic summary" },
   });
 
-  const CHART_RENDERERS = Object.freeze({
-    stat_card: renderStatCards,
-    line: renderLinePanel,
-    stacked_bar: renderStackedBarPanel,
-    horizontal_bar: renderHorizontalBarPanel,
-    table: renderTablePanel,
+  const RENDERERS = Object.freeze({
+    status_line: renderStatusLineWidget,
+    metric_cards: renderMetricCardsWidget,
+    "echarts.line": renderLineWidget,
+    "echarts.stacked_bar": renderStackedBarWidget,
+    "echarts.horizontal_bar": renderHorizontalBarWidget,
+    "html.table": renderTableWidget,
+    "html.signal_list": renderSignalListWidget,
+    "html.summary_table": renderSummaryTableWidget,
+    "html.json_block": renderJsonBlockWidget,
   });
 
   function $(selector) {
@@ -69,35 +77,112 @@
     return String(target).startsWith("#") ? String(target) : `#${target}`;
   }
 
-  function panelRows(panel, payload, adapters) {
-    if (!panel.adapter) {
-      return getPath(payload, panel.dataPath);
+  function targetElement(target) {
+    return typeof target === "string" ? $(targetSelector(target)) : target;
+  }
+
+  function widgetHostId(widgetId) {
+    return `widget-${String(widgetId).replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
+  }
+
+  function resolveValue(spec, payload) {
+    if (!spec) return undefined;
+    let value;
+    if (typeof spec.value === "function") {
+      value = spec.value(payload);
+    } else if ("value" in spec) {
+      value = spec.value;
+    } else {
+      value = getPath(payload, spec.valuePath);
     }
-    const adapter = adapters?.[panel.adapter];
+    if ((value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) && "empty" in spec) {
+      return spec.empty;
+    }
+    if (spec.format === "date") return formatDate(value);
+    if (spec.format === "join") return Array.isArray(value) ? value.join(spec.separator || ", ") : value;
+    if (spec.format === "json") return JSON.stringify(value, null, 2);
+    return value;
+  }
+
+  function widgetRows(widget, payload, adapters) {
+    if (!widget.adapter) {
+      return getPath(payload, widget.dataPath);
+    }
+    const adapter = adapters?.[widget.adapter];
     if (!adapter) {
-      throw new Error(`Unknown panel adapter: ${panel.adapter}`);
+      throw new Error(`Unknown widget adapter: ${widget.adapter}`);
     }
     return adapter(payload);
   }
 
-  function renderPanels(registry, section, payload, adapters) {
-    for (const panel of registry[section] || []) {
-      renderPanel(panel, payload, adapters);
-    }
-  }
-
-  function renderPanel(panel, payload, adapters) {
-    const renderer = CHART_RENDERERS[panel.chartType];
+  function renderWidget(widget, target, payload, adapters) {
+    const renderer = RENDERERS[widget.rendererType];
     if (!renderer) {
-      throw new Error(`Unknown chartType: ${panel.chartType}`);
+      throw new Error(`Unknown rendererType: ${widget.rendererType}`);
     }
-    renderer(panel, payload, adapters);
+    renderer(widget, target, payload, adapters);
   }
 
-  function renderStatCards(panel, payload) {
-    $(targetSelector(panel.target)).innerHTML = panel.cards
+  function renderWidgetLayout(layout, widgetRegistry, payload, adapters) {
+    const root = targetElement(layout.target);
+    if (!root) return;
+    const placements = layout.placements || [];
+    const inlinePlacements = placements.filter((placement) => !placement.target);
+    const groupHtml = (layout.groups || [])
+      .map((group) => {
+        const groupPlacements = inlinePlacements.filter((placement) => placement.group === group.key);
+        if (groupPlacements.length === 0) return "";
+        const body = groupPlacements.map((placement) => renderPlacementShell(placement, widgetRegistry)).join("");
+        if (!group.className) return body;
+        return `<div class="${escapeHtml(group.className)}">${body}</div>`;
+      })
+      .join("");
+    root.innerHTML = groupHtml;
+    for (const placement of placements) {
+      const widget = widgetRegistry[placement.widgetId];
+      if (!widget) {
+        throw new Error(`Unknown widgetId: ${placement.widgetId}`);
+      }
+      renderWidget(widget, placement.target || widgetHostId(placement.widgetId), payload, adapters);
+    }
+  }
+
+  function renderPlacementShell(placement, widgetRegistry) {
+    const widget = widgetRegistry[placement.widgetId];
+    if (!widget) {
+      throw new Error(`Unknown widgetId: ${placement.widgetId}`);
+    }
+    const host = `<div id="${escapeHtml(widgetHostId(placement.widgetId))}" class="${escapeHtml(placement.hostClass || "")}"></div>`;
+    if (placement.chrome === "bare") return host;
+    return `
+      <section class="${escapeHtml(placement.panelClass || "panel")}">
+        <div class="panel-head">
+          <h3>${escapeHtml(placement.title || widget.title || widget.id || placement.widgetId)}</h3>
+          <span>${escapeHtml(placement.subtitle || widget.subtitle || widget.question || "")}</span>
+        </div>
+        ${host}
+      </section>
+    `;
+  }
+
+  function renderStatusLineWidget(widget, target, payload) {
+    const el = targetElement(target);
+    if (!el) return;
+    el.innerHTML = (widget.items || [])
+      .map((item) => {
+        const badge = item.badgePath ? `${statusBadge(getPath(payload, item.badgePath) || item.badgeDefault || "neutral")} ` : "";
+        const value = resolveValue(item, payload);
+        return `<div>${badge}<strong>${escapeHtml(item.label)}:</strong> ${escapeHtml(compact(value))}</div>`;
+      })
+      .join("");
+  }
+
+  function renderMetricCardsWidget(widget, target, payload) {
+    const el = targetElement(target);
+    if (!el) return;
+    el.innerHTML = (widget.cards || [])
       .map((card) => {
-        const value = getPath(payload, card.valuePath);
+        const value = resolveValue(card, payload);
         const sub = card.subPath ? `${card.subPrefix || ""} ${compact(getPath(payload, card.subPath))}`.trim() : card.sub;
         return `
         <article class="stat-card">
@@ -111,7 +196,8 @@
   }
 
   function renderTable(target, rows, columns, emptyText) {
-    const el = typeof target === "string" ? $(target) : target;
+    const el = targetElement(target);
+    if (!el) return;
     if (!rows || rows.length === 0) {
       el.innerHTML = `<div class="empty-state">${escapeHtml(emptyText)}</div>`;
       return;
@@ -163,22 +249,22 @@
     `;
   }
 
-  function renderLinePanel(panel, payload, adapters) {
-    const rows = panelRows(panel, payload, adapters) || [];
+  function renderLineWidget(widget, target, payload, adapters) {
+    const rows = widgetRows(widget, payload, adapters) || [];
     if (!window.echarts) {
-      renderFallbackChart(panel.target, rows, panel.xField, panel.series.map((series) => series.field));
+      renderFallbackChart(target, rows, widget.xField, widget.series.map((series) => series.field));
       return;
     }
-    const chart = ensureChart(panel.target);
-    const labels = rows.map((row) => formatDate(row[panel.xField]));
+    const chart = ensureChart(target);
+    const labels = rows.map((row) => formatDate(row[widget.xField]));
     chart.setOption({
-      color: panel.colors,
+      color: widget.colors,
       tooltip: { trigger: "axis" },
       legend: { top: 0 },
       grid: { left: 36, right: 18, top: 42, bottom: 38 },
       xAxis: { type: "category", data: labels, boundaryGap: false },
       yAxis: { type: "value", minInterval: 1 },
-      series: panel.series.map((series) => ({
+      series: widget.series.map((series) => ({
         name: series.name,
         type: "line",
         smooth: true,
@@ -190,44 +276,44 @@
     });
   }
 
-  function renderStackedBarPanel(panel, payload, adapters) {
-    const rows = panelRows(panel, payload, adapters) || [];
+  function renderStackedBarWidget(widget, target, payload, adapters) {
+    const rows = widgetRows(widget, payload, adapters) || [];
     if (!window.echarts) {
-      renderFallbackChart(panel.target, rows, panel.xField, panel.series.map((series) => series.field));
+      renderFallbackChart(target, rows, widget.xField, widget.series.map((series) => series.field));
       return;
     }
-    const chart = ensureChart(panel.target);
+    const chart = ensureChart(target);
     chart.setOption({
-      color: panel.colors,
+      color: widget.colors,
       tooltip: { trigger: "axis" },
       legend: { top: 0 },
       grid: { left: 42, right: 18, top: 42, bottom: 38 },
-      xAxis: { type: "category", data: rows.map((row) => compact(row[panel.xField])) },
+      xAxis: { type: "category", data: rows.map((row) => compact(row[widget.xField])) },
       yAxis: { type: "value", minInterval: 1 },
-      series: panel.series.map((series) => ({
+      series: widget.series.map((series) => ({
         name: series.name,
         type: "bar",
-        stack: panel.stack || "total",
+        stack: widget.stack || "total",
         data: rows.map((row) => number(row[series.field])),
       })),
     });
   }
 
-  function renderHorizontalBarPanel(panel, payload, adapters) {
-    const rows = (panelRows(panel, payload, adapters) || []).slice(0, panel.maxItems || undefined);
+  function renderHorizontalBarWidget(widget, target, payload, adapters) {
+    const rows = (widgetRows(widget, payload, adapters) || []).slice(0, widget.maxItems || undefined);
     if (!window.echarts) {
-      renderFallbackChart(panel.target, rows, panel.labelField, [panel.valueField]);
+      renderFallbackChart(target, rows, widget.labelField, [widget.valueField]);
       return;
     }
-    const chart = ensureChart(panel.target);
-    const suffix = panel.valueSuffix || "";
+    const chart = ensureChart(target);
+    const suffix = widget.valueSuffix || "";
     chart.setOption({
-      color: [panel.color],
+      color: [widget.color],
       tooltip: {
         trigger: "axis",
         valueFormatter: (value) => `${Number(value || 0).toFixed(suffix ? 2 : 0)}${suffix}`,
       },
-      grid: { left: panel.left || 110, right: 18, top: 18, bottom: 24 },
+      grid: { left: widget.left || 110, right: 18, top: 18, bottom: 24 },
       xAxis: {
         type: "value",
         minInterval: suffix ? undefined : 1,
@@ -236,32 +322,65 @@
       yAxis: {
         type: "category",
         inverse: true,
-        data: rows.map((row) => compact(row[panel.labelField])),
+        data: rows.map((row) => compact(row[widget.labelField])),
       },
-      series: [{ type: "bar", data: rows.map((row) => number(row[panel.valueField])), barWidth: 18 }],
+      series: [{ type: "bar", data: rows.map((row) => number(row[widget.valueField])), barWidth: 18 }],
     });
   }
 
-  function renderTablePanel(panel, payload, adapters) {
-    const rows = panelRows(panel, payload, adapters) || [];
-    renderTable(targetSelector(panel.target), rows, panel.columns, panel.emptyText);
+  function renderTableWidget(widget, target, payload, adapters) {
+    const rows = widgetRows(widget, payload, adapters) || [];
+    renderTable(target, rows, widget.columns, widget.emptyText);
+  }
+
+  function renderSignalListWidget(widget, target, payload, adapters) {
+    const el = targetElement(target);
+    if (!el) return;
+    const rows = widgetRows(widget, payload, adapters) || [];
+    if (rows.length === 0) {
+      el.innerHTML = `<div class="empty-state">${escapeHtml(widget.emptyText || "没有信号")}</div>`;
+      return;
+    }
+    el.innerHTML = rows.map((row) => `<div class="signal-item"><code>${escapeHtml(compact(row))}</code></div>`).join("");
+  }
+
+  function renderSummaryTableWidget(widget, target, payload) {
+    const rows = (widget.rows || []).map((row) => ({ label: row.label, value: resolveValue(row, payload) }));
+    renderTable(
+      target,
+      rows,
+      [
+        { key: "label", label: "field" },
+        { key: "value", label: "value", wrap: true },
+      ],
+      widget.emptyText || "没有摘要"
+    );
+  }
+
+  function renderJsonBlockWidget(widget, target, payload) {
+    const el = targetElement(target);
+    if (!el) return;
+    const value = resolveValue(widget, payload);
+    el.innerHTML = `<pre class="json-block">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
   }
 
   function resizeCharts() {
     for (const chart of charts.values()) chart.resize();
   }
 
-  window.OpsDashboardCharts = Object.freeze({
-    CHART_TYPES,
-    CHART_RENDERERS,
+  window.OpsDashboardRenderers = Object.freeze({
+    RENDERER_TYPES,
+    RENDERERS,
     compact,
     escapeHtml,
     formatDate,
     getPath,
     number,
-    renderPanel,
-    renderPanels,
+    renderTable,
+    renderWidget,
+    renderWidgetLayout,
     resizeCharts,
     statusBadge,
+    widgetHostId,
   });
 })();

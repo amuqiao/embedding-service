@@ -1,82 +1,127 @@
 (function () {
-  const Charts = window.OpsDashboardCharts;
-  const { formatDate, renderPanels, statusBadge } = Charts;
+  const Renderers = window.OpsDashboardRenderers;
+  const { formatDate, renderWidgetLayout, statusBadge } = Renderers;
 
-  const EXAMPLE_PANEL_REGISTRY = Object.freeze({
-    examples: [
-      {
-        key: "sample_stats",
-        question: "现在怎么样",
-        chartType: "stat_card",
-        target: "example-stats",
-        cards: [
-          { label: "current", valuePath: "summary.current", sub: "point-in-time" },
-          { label: "incoming", valuePath: "summary.incoming", sub: "window" },
-          { label: "completed", valuePath: "summary.completed", sub: "window" },
-          { label: "errored", valuePath: "summary.errored", sub: "window" },
-          { label: "waiting", valuePath: "summary.waiting", sub: "queue" },
-          { label: "capacity", valuePath: "summary.capacity", sub: "headroom" },
-        ],
-      },
-      {
-        key: "sample_line",
-        question: "趋势如何",
-        chartType: "line",
-        target: "example-line",
-        dataPath: "trend",
-        xField: "time",
-        series: [
-          { name: "incoming", field: "incoming" },
-          { name: "completed", field: "completed" },
-          { name: "errored", field: "errored" },
-        ],
-        colors: ["#1769aa", "#12805c", "#c9342f"],
-      },
-      {
-        key: "sample_stacked",
-        question: "构成随时间怎么变",
-        chartType: "stacked_bar",
-        target: "example-stacked",
-        dataPath: "composition",
-        xField: "bucket",
-        series: [
-          { name: "alpha", field: "alpha" },
-          { name: "beta", field: "beta" },
-          { name: "gamma", field: "gamma" },
-        ],
-        colors: ["#1769aa", "#087f8c", "#6554c0"],
-      },
-      {
-        key: "sample_rank",
-        question: "谁最多",
-        chartType: "horizontal_bar",
-        target: "example-rank",
-        dataPath: "rank",
-        labelField: "label",
-        valueField: "value",
-        maxItems: 6,
-        color: "#087f8c",
-        left: 96,
-      },
-      {
-        key: "sample_table",
-        question: "具体是哪几个",
-        chartType: "table",
-        target: "example-table",
-        dataPath: "details",
-        emptyText: "没有样例明细",
-        columns: [
-          { key: "label", label: "label" },
-          { key: "status", label: "status", render: statusBadge },
-          { key: "value", label: "value" },
-          { key: "updated_at", label: "updated", value: (row) => formatDate(row.updated_at) },
-          { key: "message", label: "message", wrap: true },
-        ],
-      },
-    ],
+  const EXAMPLE_WIDGET_REGISTRY = Object.freeze({
+    "examples.status": {
+      rendererType: "status_line",
+      items: [
+        { label: "source", badgeDefault: "neutral", badgePath: "status", value: "static renderer fixtures" },
+        { label: "purpose", value: "renderer contract" },
+      ],
+    },
+    "examples.metrics": {
+      rendererType: "metric_cards",
+      title: "Metric Cards",
+      question: "point-in-time sample",
+      cards: [
+        { label: "current", valuePath: "summary.current", sub: "point-in-time" },
+        { label: "incoming", valuePath: "summary.incoming", sub: "window" },
+        { label: "completed", valuePath: "summary.completed", sub: "window" },
+        { label: "errored", valuePath: "summary.errored", sub: "window" },
+        { label: "waiting", valuePath: "summary.waiting", sub: "queue" },
+        { label: "capacity", valuePath: "summary.capacity", sub: "headroom" },
+      ],
+    },
+    "examples.line": {
+      rendererType: "echarts.line",
+      title: "Line",
+      question: "trend sample",
+      dataPath: "trend",
+      xField: "time",
+      series: [
+        { name: "incoming", field: "incoming" },
+        { name: "completed", field: "completed" },
+        { name: "errored", field: "errored" },
+      ],
+      colors: ["#1769aa", "#12805c", "#c9342f"],
+    },
+    "examples.stacked": {
+      rendererType: "echarts.stacked_bar",
+      title: "Stacked Bar",
+      question: "composition sample",
+      dataPath: "composition",
+      xField: "bucket",
+      series: [
+        { name: "alpha", field: "alpha" },
+        { name: "beta", field: "beta" },
+        { name: "gamma", field: "gamma" },
+      ],
+      colors: ["#1769aa", "#087f8c", "#6554c0"],
+    },
+    "examples.rank": {
+      rendererType: "echarts.horizontal_bar",
+      title: "Horizontal Bar",
+      question: "top-n sample",
+      dataPath: "rank",
+      labelField: "label",
+      valueField: "value",
+      maxItems: 6,
+      color: "#087f8c",
+      left: 96,
+    },
+    "examples.table": {
+      rendererType: "html.table",
+      title: "Table",
+      question: "detail sample",
+      dataPath: "details",
+      emptyText: "没有样例明细",
+      columns: [
+        { key: "label", label: "label" },
+        { key: "status", label: "status", render: statusBadge },
+        { key: "value", label: "value" },
+        { key: "updated_at", label: "updated", value: (row) => formatDate(row.updated_at) },
+        { key: "message", label: "message", wrap: true },
+      ],
+    },
+    "examples.signals": {
+      rendererType: "html.signal_list",
+      title: "Signal List",
+      question: "short messages",
+      dataPath: "signals",
+      emptyText: "没有样例信号",
+    },
+    "examples.summary": {
+      rendererType: "html.summary_table",
+      title: "Summary Table",
+      question: "key/value sample",
+      rows: [
+        { label: "sample_id", valuePath: "summary_meta.sample_id" },
+        { label: "mode", valuePath: "summary_meta.mode" },
+        { label: "updated_at", valuePath: "summary_meta.updated_at", format: "date" },
+      ],
+    },
+    "examples.json": {
+      rendererType: "html.json_block",
+      title: "JSON Block",
+      question: "structured summary",
+      valuePath: "diagnostic",
+    },
+  });
+
+  const EXAMPLE_LAYOUT_REGISTRY = Object.freeze({
+    examples: {
+      target: "example-root",
+      groups: [
+        { key: "summary" },
+        { key: "main", className: "panel-grid" },
+      ],
+      placements: [
+        { widgetId: "examples.status", target: "example-status" },
+        { widgetId: "examples.metrics", group: "summary", chrome: "bare", hostClass: "stat-grid" },
+        { widgetId: "examples.line", group: "main", hostClass: "chart" },
+        { widgetId: "examples.stacked", group: "main", hostClass: "chart" },
+        { widgetId: "examples.rank", group: "main", hostClass: "chart chart-compact" },
+        { widgetId: "examples.table", group: "main", hostClass: "table-wrap" },
+        { widgetId: "examples.signals", group: "main", hostClass: "signal-list" },
+        { widgetId: "examples.summary", group: "main", hostClass: "table-wrap" },
+        { widgetId: "examples.json", group: "main" },
+      ],
+    },
   });
 
   const EXAMPLE_PAYLOAD = Object.freeze({
+    status: "neutral",
     summary: {
       current: 18,
       incoming: 124,
@@ -119,7 +164,7 @@
         status: "warning",
         value: 18,
         updated_at: "2026-07-03T09:18:00+08:00",
-        message: "Long text wraps inside table cells without changing the chart contract.",
+        message: "Long text wraps inside table cells without changing the renderer contract.",
       },
       {
         label: "sample-c",
@@ -129,12 +174,23 @@
         message: "Status badges are shared helpers, not business-specific fields.",
       },
     ],
+    signals: ["first static signal", "second static signal", "renderer fixtures remain generic"],
+    summary_meta: {
+      sample_id: "sample-renderer-contract",
+      mode: "static",
+      updated_at: "2026-07-03T09:20:00+08:00",
+    },
+    diagnostic: {
+      present: true,
+      shape: "generic",
+      fields: ["alpha", "beta", "gamma"],
+    },
   });
 
   function init() {
-    renderPanels(EXAMPLE_PANEL_REGISTRY, "examples", EXAMPLE_PAYLOAD);
+    renderWidgetLayout(EXAMPLE_LAYOUT_REGISTRY.examples, EXAMPLE_WIDGET_REGISTRY, EXAMPLE_PAYLOAD);
   }
 
-  window.addEventListener("resize", Charts.resizeCharts);
+  window.addEventListener("resize", Renderers.resizeCharts);
   window.addEventListener("DOMContentLoaded", init);
 })();

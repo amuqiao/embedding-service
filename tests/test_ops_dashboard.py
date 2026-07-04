@@ -91,9 +91,36 @@ def test_ops_dashboard_page_and_config_routes_work_without_auth(monkeypatch):
     assert page.status_code == 200
     assert "Job 观测面板" in page.text
     assert config.status_code == 200
-    assert config.json()["route_base"] == "/internal/jobs-dashboard"
-    assert "mock_data_enabled" not in config.json()
-    assert "data_source" not in config.json()
+    config_json = config.json()
+    assert config_json["route_base"] == "/internal/jobs-dashboard"
+    assert "mock_data_enabled" not in config_json
+    assert "data_source" not in config_json
+    assert config_json["data_sources"] == [
+        {
+            "key": "overview",
+            "title": "总览",
+            "route": "/internal/jobs-dashboard/sections/overview/data",
+            "refresh_seconds": 15,
+            "default_enabled": True,
+        },
+        {
+            "key": "failures",
+            "title": "失败",
+            "route": "/internal/jobs-dashboard/sections/failures/data",
+            "refresh_seconds": 30,
+            "default_enabled": True,
+        },
+        {
+            "key": "job_trace",
+            "title": "Job 追踪",
+            "route": "/internal/jobs-dashboard/jobs/{job_id}/data",
+            "refresh_seconds": 0,
+            "default_enabled": True,
+        },
+    ]
+    assert config_json["data_sources"] == config_json["sections"]
+    for source in config_json["data_sources"]:
+        assert set(source) == {"key", "title", "route", "refresh_seconds", "default_enabled"}
 
 
 def test_ops_dashboard_routes_are_hidden_from_openapi_and_get_only(monkeypatch):
@@ -124,49 +151,88 @@ def test_ops_dashboard_static_file_rejects_traversal():
     assert exc_info.value.status_code == 404
 
 
-def test_ops_dashboard_static_dashboard_js_declares_chart_contract():
+def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contract():
     contract = Path("app/ops_dashboard/static/chart_contract.js").read_text(encoding="utf-8")
     script = Path("app/ops_dashboard/static/dashboard.js").read_text(encoding="utf-8")
     page = Path("app/ops_dashboard/static/index.html").read_text(encoding="utf-8")
 
-    assert "const CHART_TYPES = Object.freeze" in contract
-    assert "const CHART_RENDERERS = Object.freeze" in contract
-    assert "const PANEL_REGISTRY = Object.freeze" in script
-    assert "const PANEL_DATA_ADAPTERS = Object.freeze" in script
-    assert "Unknown chartType" in contract
+    assert "const RENDERER_TYPES = Object.freeze" in contract
+    assert "const RENDERERS = Object.freeze" in contract
+    assert "function renderWidgetLayout" in contract
+    assert "const DATA_SOURCE_REGISTRY = Object.freeze" in script
+    assert "const WIDGET_REGISTRY = Object.freeze" in script
+    assert "const LAYOUT_REGISTRY = Object.freeze" in script
+    assert "const WIDGET_DATA_ADAPTERS = Object.freeze" in script
+    assert "Unknown rendererType" in contract
     assert "/internal/jobs-dashboard/static/chart_contract.js" in page
 
-    expected_chart_types = {"stat_card", "line", "stacked_bar", "horizontal_bar", "table"}
-    renderer_body = re.search(r"const CHART_RENDERERS = Object\.freeze\(\{(?P<body>.*?)\n  \}\);", contract, re.S)
+    expected_renderer_types = {
+        "status_line",
+        "metric_cards",
+        "echarts.line",
+        "echarts.stacked_bar",
+        "echarts.horizontal_bar",
+        "html.table",
+        "html.signal_list",
+        "html.summary_table",
+        "html.json_block",
+    }
+    renderer_body = re.search(r"const RENDERERS = Object\.freeze\(\{(?P<body>.*?)\n  \}\);", contract, re.S)
     assert renderer_body is not None
-    renderer_types = set(re.findall(r"^\s{4}([a-z_]+):", renderer_body.group("body"), re.M))
-    assert renderer_types == expected_chart_types
+    renderer_matches = re.findall(r'^\s{4}(?:"([^"]+)"|([a-z_]+)):', renderer_body.group("body"), re.M)
+    renderer_types = {quoted or bare for quoted, bare in renderer_matches}
+    assert renderer_types == expected_renderer_types
+    type_body = re.search(r"const RENDERER_TYPES = Object\.freeze\(\{(?P<body>.*?)\n  \}\);", contract, re.S)
+    assert type_body is not None
+    type_matches = re.findall(r'^\s{4}(?:"([^"]+)"|([a-z_]+)):', type_body.group("body"), re.M)
+    assert {quoted or bare for quoted, bare in type_matches} == renderer_types
 
-    panel_body = re.search(r"const PANEL_REGISTRY = Object\.freeze\(\{(?P<body>.*?)\n  \}\);", script, re.S)
-    assert panel_body is not None
-    panel_source = panel_body.group("body")
-    panel_chart_types = set(re.findall(r'chartType:\s*"([^"]+)"', panel_source))
-    assert panel_chart_types <= renderer_types
+    widget_source = script[script.index("const WIDGET_REGISTRY = Object.freeze") : script.index("const LAYOUT_REGISTRY = Object.freeze")]
+    layout_source = script[script.index("const LAYOUT_REGISTRY = Object.freeze") : script.index("const WIDGET_DATA_ADAPTERS = Object.freeze")]
+    data_source_source = script[
+        script.index("const DATA_SOURCE_REGISTRY = Object.freeze") : script.index("const WIDGET_REGISTRY = Object.freeze")
+    ]
 
-    assert panel_source.count('chartType: "stat_card"') == panel_source.count("cards:")
-    assert panel_source.count('chartType: "line"') == panel_source.count("series:")
-    assert panel_source.count('chartType: "table"') == panel_source.count("columns:")
-    assert "rows:" not in panel_source
+    widget_renderer_types = set(re.findall(r'rendererType:\s*"([^"]+)"', widget_source))
+    assert widget_renderer_types <= renderer_types
+    assert {"echarts.line", "echarts.horizontal_bar", "html.table", "status_line"} <= widget_renderer_types
 
-    for field in ["key:", "question:", "chartType:", "target:", "dataPath:", "series:", "columns:", "adapter:"]:
+    data_source_keys = set(re.findall(r"^\s{4}([a-z_]+):", data_source_source, re.M))
+    assert data_source_keys == {"overview", "failures", "job_trace"}
+    assert 'route: `${BASE}/sections/overview/data`' in data_source_source
+    assert 'route: `${BASE}/sections/failures/data`' in data_source_source
+    assert 'route: `${BASE}/jobs/{job_id}/data`' in data_source_source
+    widget_data_sources = set(re.findall(r'dataSource:\s*"([^"]+)"', widget_source))
+    assert widget_data_sources <= data_source_keys
+
+    widget_keys = set(re.findall(r'^\s{4}"([^"]+)":\s*\{', widget_source, re.M))
+    layout_widget_id_list = re.findall(r'widgetId:\s*"([^"]+)"', layout_source)
+    layout_widget_ids = set(layout_widget_id_list)
+    assert len(layout_widget_id_list) == len(layout_widget_ids)
+    assert layout_widget_ids == widget_keys
+    assert "target:" not in widget_source
+    layout_data_sources = set(re.findall(r'dataSource:\s*"([^"]+)"', layout_source))
+    assert layout_data_sources == data_source_keys
+    for widget_id in layout_widget_ids:
+        assert widget_id.split(".", 1)[0] in layout_data_sources
+    declared_groups = set(re.findall(r'key:\s*"([^"]+)"', layout_source))
+    placement_groups = set(re.findall(r'group:\s*"([^"]+)"', layout_source))
+    assert placement_groups <= declared_groups
+
+    for field in ["rendererType:", "dataSource:", "dataPath:", "series:", "columns:", "adapter:", "groups:", "placements:"]:
         assert field in script
 
-    for target in re.findall(r'target:\s*"([^"]+)"', panel_source):
+    for target in re.findall(r'target:\s*"([^"]+)"', layout_source):
         assert f'id="{target}"' in page or f'id="{target}"' in script
 
-    adapter_body = re.search(r"const PANEL_DATA_ADAPTERS = Object\.freeze\(\{(?P<body>.*?)\n  \}\);", script, re.S)
+    adapter_body = re.search(r"const WIDGET_DATA_ADAPTERS = Object\.freeze\(\{(?P<body>.*?)\n  \}\);", script, re.S)
     assert adapter_body is not None
     adapters = set(re.findall(r"^\s{4}([a-z0-9_]+):", adapter_body.group("body"), re.M))
-    panel_adapters = set(re.findall(r'adapter:\s*"([^"]+)"', panel_source))
-    assert panel_adapters <= adapters
+    widget_adapters = set(re.findall(r'adapter:\s*"([^"]+)"', widget_source))
+    assert widget_adapters <= adapters
 
 
-def test_ops_dashboard_examples_page_declares_generic_chart_fixtures(monkeypatch):
+def test_ops_dashboard_examples_page_declares_generic_renderer_fixtures(monkeypatch):
     from app.ops_dashboard import config as ops_config
     from app.ops_dashboard import router as ops_router
 
@@ -183,7 +249,7 @@ def test_ops_dashboard_examples_page_declares_generic_chart_fixtures(monkeypatch
         contract = client.get("/internal/jobs-dashboard/static/chart_contract.js")
 
     assert page.status_code == 200
-    assert "Chart Contract Examples" in page.text
+    assert "Renderer Contract Examples" in page.text
     assert script.status_code == 200
     assert contract.status_code == 200
 
@@ -191,9 +257,25 @@ def test_ops_dashboard_examples_page_declares_generic_chart_fixtures(monkeypatch
     assert examples_html.index("chart_contract.js") < examples_html.index("examples.js")
 
     examples_script = Path("app/ops_dashboard/static/examples.js").read_text(encoding="utf-8")
-    expected_chart_types = {"stat_card", "line", "stacked_bar", "horizontal_bar", "table"}
-    example_chart_types = set(re.findall(r'chartType:\s*"([^"]+)"', examples_script))
-    assert example_chart_types == expected_chart_types
+    expected_renderer_types = {
+        "status_line",
+        "metric_cards",
+        "echarts.line",
+        "echarts.stacked_bar",
+        "echarts.horizontal_bar",
+        "html.table",
+        "html.signal_list",
+        "html.summary_table",
+        "html.json_block",
+    }
+    example_renderer_types = set(re.findall(r'rendererType:\s*"([^"]+)"', examples_script))
+    assert example_renderer_types == expected_renderer_types
+    example_widget_keys = set(re.findall(r'^\s{4}"([^"]+)":\s*\{', examples_script, re.M))
+    example_layout_widget_ids = set(re.findall(r'widgetId:\s*"([^"]+)"', examples_script))
+    assert example_layout_widget_ids == example_widget_keys
+    assert "dataSource:" not in examples_script
+    assert "adapter:" not in examples_script
+    assert "renderWidgetLayout(EXAMPLE_LAYOUT_REGISTRY.examples, EXAMPLE_WIDGET_REGISTRY, EXAMPLE_PAYLOAD)" in examples_script
 
     forbidden_business_terms = {"job_id", "attempt_id", "callback", "poster_title_image"}
     assert all(term not in examples_script for term in forbidden_business_terms)
@@ -261,6 +343,46 @@ def test_ops_dashboard_job_trace_returns_404_when_job_missing(monkeypatch):
         response = client.get(f"/internal/jobs-dashboard/jobs/{uuid.uuid4()}/data")
 
     assert response.status_code == 404
+
+
+def test_ops_dashboard_job_trace_route_returns_read_model_payload(monkeypatch):
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+    job_id = uuid.uuid4()
+
+    async def fake_db():
+        yield object()
+
+    async def fake_job_trace_data(_db, requested_job_id, *, limit):
+        assert requested_job_id == job_id
+        assert limit == 7
+        return {
+            "generated_at": datetime(2026, 7, 3, tzinfo=UTC),
+            "job": {"job_id": str(requested_job_id), "status": "succeeded"},
+            "attempts": [],
+            "ai_calls": [],
+            "workflow_children": [],
+            "timeline": [],
+            "callbacks": [],
+        }
+
+    monkeypatch.setattr(read_model, "job_trace_data", fake_job_trace_data)
+
+    application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get(f"/internal/jobs-dashboard/jobs/{job_id}/data?limit=7")
+
+    assert response.status_code == 200
+    assert response.json()["job"]["job_id"] == str(job_id)
+    assert response.json()["job"]["status"] == "succeeded"
 
 
 def test_ops_dashboard_failures_route_returns_read_model_payload(monkeypatch):

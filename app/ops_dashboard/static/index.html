@@ -18,11 +18,7 @@
           <p>FastAPI + Taskiq</p>
         </div>
       </div>
-      <nav class="nav" aria-label="Dashboard sections">
-        <button class="nav-item active" data-section="overview" type="button">总览</button>
-        <button class="nav-item" data-section="failures" type="button">失败</button>
-        <button class="nav-item" data-section="job_trace" type="button">Job 追踪</button>
-      </nav>
+      <nav id="section-nav" class="nav" aria-label="Dashboard sections"></nav>
       <div class="side-note">
         只读 internal dashboard。深度排障继续使用 <code>scripts/jobs.sh</code>。
       </div>
@@ -65,77 +61,7 @@
 
       <section id="status-line" class="status-line" aria-live="polite"></section>
 
-      <section id="overview-section" class="section active">
-        <div id="stat-grid" class="stat-grid"></div>
-        <div class="panel-grid">
-          <section class="panel">
-            <div class="panel-head">
-              <h3>Ingress</h3>
-              <span>created / terminal / failed</span>
-            </div>
-            <div id="ingress-chart" class="chart"></div>
-          </section>
-          <section class="panel">
-            <div class="panel-head">
-              <h3>Latency p95</h3>
-              <span>queue / run / lifecycle</span>
-            </div>
-            <div id="latency-chart" class="chart chart-compact"></div>
-          </section>
-          <section class="panel">
-            <div class="panel-head">
-              <h3>Health Signals</h3>
-              <span>next checks</span>
-            </div>
-            <div id="health-signals" class="signal-list"></div>
-          </section>
-          <section class="panel">
-            <div class="panel-head">
-              <h3>Stuck 样本</h3>
-              <span>older than 10m</span>
-            </div>
-            <div id="stuck-table" class="table-wrap"></div>
-          </section>
-        </div>
-      </section>
-
-      <section id="failures-section" class="section">
-        <div class="panel-grid">
-          <section class="panel panel-wide">
-            <div class="panel-head">
-              <h3>Failure Groups</h3>
-              <span>按 error_code 聚合</span>
-            </div>
-            <div id="failure-chart" class="chart chart-compact"></div>
-            <div id="failure-groups" class="table-wrap"></div>
-          </section>
-          <section class="panel">
-            <div class="panel-head">
-              <h3>Failed Samples</h3>
-              <span>点击 job_id 查看追踪</span>
-            </div>
-            <div id="failed-samples" class="table-wrap"></div>
-          </section>
-          <section class="panel">
-            <div class="panel-head">
-              <h3>Callbacks</h3>
-              <span>outbox 状态</span>
-            </div>
-            <div id="callbacks-table" class="table-wrap"></div>
-          </section>
-        </div>
-      </section>
-
-      <section id="job_trace-section" class="section">
-        <form id="job-search" class="job-search">
-          <label>
-            job_id
-            <input name="job_id" autocomplete="off" placeholder="UUID" />
-          </label>
-          <button class="primary-button" type="submit">查询 Job</button>
-        </form>
-        <div id="job-trace-content" class="trace-content empty-state">输入 job_id 后加载 Job 追踪。</div>
-      </section>
+      <section id="view-root" class="section active"></section>
     </main>
   </body>
 </html>
