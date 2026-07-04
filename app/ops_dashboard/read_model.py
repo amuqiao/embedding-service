@@ -23,6 +23,8 @@ AND {alias}.client_request_id IS NULL
 OPTIONAL_FILTER_BIND_TYPES = {
     "job_type": String(),
     "caller_id": String(),
+    "client_request_id": String(),
+    "status": String(),
     "since_at": DateTime(timezone=True),
 }
 
@@ -79,6 +81,16 @@ AND (:caller_id IS NULL OR {alias}.caller_id = :caller_id)
 """
 
 
+def _root_job_filter_clause(alias: str) -> str:
+    return f"""
+{ROOT_SCOPE_SQL.format(alias=alias)}
+AND (:job_type IS NULL OR {alias}.job_type = :job_type)
+AND (:caller_id IS NULL OR {alias}.caller_id = :caller_id)
+AND (:client_request_id IS NULL OR {alias}.client_request_id = :client_request_id)
+AND (:since_at IS NULL OR {alias}.created_at >= :since_at)
+"""
+
+
 def _base_params(filters: DashboardFilters) -> dict[str, Any]:
     return {
         "job_type": filters.job_type,
@@ -126,6 +138,13 @@ async def summary(db: AsyncSession, filters: DashboardFilters) -> dict[str, Any]
           count(*) FILTER (WHERE j.status = 'running' AND j.active_attempt_id IS NULL) AS running_inactive,
           count(*) FILTER (WHERE j.status = 'succeeded') AS succeeded,
           count(*) FILTER (WHERE j.status = 'failed') AS failed,
+          count(*) FILTER (WHERE j.finished_at IS NOT NULL) AS terminal,
+          CASE
+            WHEN count(*) FILTER (WHERE j.finished_at IS NOT NULL) = 0 THEN NULL
+            ELSE
+              (count(*) FILTER (WHERE j.status = 'succeeded'))::float
+              / (count(*) FILTER (WHERE j.finished_at IS NOT NULL))::float
+          END AS success_rate,
           count(*) FILTER (
             WHERE j.status = 'queued'
                OR (j.status = 'running' AND j.active_attempt_id IS NOT NULL)
@@ -318,6 +337,12 @@ async def latency(db: AsyncSession, filters: DashboardFilters) -> list[dict[str,
           count(*) FILTER (WHERE j.finished_at IS NOT NULL) AS terminal,
           count(*) FILTER (WHERE j.status = 'succeeded') AS succeeded,
           count(*) FILTER (WHERE j.status = 'failed') AS failed,
+          CASE
+            WHEN count(*) FILTER (WHERE j.finished_at IS NOT NULL) = 0 THEN NULL
+            ELSE
+              (count(*) FILTER (WHERE j.status = 'succeeded'))::float
+              / (count(*) FILTER (WHERE j.finished_at IS NOT NULL))::float
+          END AS success_rate,
           percentile_cont(0.95) WITHIN GROUP (
             ORDER BY EXTRACT(EPOCH FROM (j.started_at - COALESCE(j.queued_at, j.created_at)))
           ) FILTER (WHERE j.started_at IS NOT NULL) AS queue_wait_p95_seconds,
@@ -502,6 +527,156 @@ async def failed_samples(db: AsyncSession, filters: DashboardFilters) -> list[di
         """,
         _base_params(filters),
     )
+
+
+async def recent_jobs_summary(
+    db: AsyncSession,
+    filters: DashboardFilters,
+    *,
+    status: str | None,
+    client_request_id: str | None,
+) -> dict[str, Any]:
+    clause = _root_job_filter_clause("j")
+    params = _base_params(filters) | {
+        "status": status,
+        "client_request_id": client_request_id,
+    }
+    return await _one(
+        db,
+        f"""
+        SELECT
+          count(*) AS total,
+          count(*) FILTER (WHERE j.status = 'queued') AS queued,
+          count(*) FILTER (WHERE j.status = 'running') AS running,
+          count(*) FILTER (WHERE j.status = 'succeeded') AS succeeded,
+          count(*) FILTER (WHERE j.status = 'failed') AS failed,
+          count(*) FILTER (WHERE j.finished_at IS NOT NULL) AS terminal,
+          min(j.created_at) AS oldest_created_at,
+          max(j.created_at) AS newest_created_at,
+          max(j.updated_at) AS newest_updated_at
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NULL
+          AND (:status IS NULL OR j.status = :status)
+          {clause}
+        """,
+        params,
+    )
+
+
+async def recent_jobs(
+    db: AsyncSession,
+    filters: DashboardFilters,
+    *,
+    status: str | None,
+    client_request_id: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    clause = _root_job_filter_clause("j")
+    params = _base_params(filters) | {
+        "status": status,
+        "client_request_id": client_request_id,
+        "limit": limit,
+    }
+    rows = await _all(
+        db,
+        f"""
+        SELECT
+          j.id::text AS job_id,
+          'root' AS record_scope,
+          j.root_job_id::text AS root_job_id,
+          j.workflow_node_key,
+          j.status,
+          j.job_type,
+          j.caller_id,
+          j.client_request_id,
+          j.progress_percent,
+          j.progress_stage,
+          CASE
+            WHEN j.callback_url IS NULL THEN 'not_configured'
+            WHEN cb.status IS NULL THEN 'pending'
+            WHEN cb.status = 'leased' THEN 'delivering'
+            WHEN cb.status = 'dead_letter' THEN 'failed'
+            WHEN cb.status = 'skipped' AND cb.last_error IS NOT NULL THEN 'failed'
+            WHEN cb.status = 'skipped' THEN 'not_configured'
+            ELSE cb.status
+          END AS callback_status,
+          a.status AS attempt_status,
+          a.purpose_attempt_no AS attempt_no,
+          d.status AS dispatch_status,
+          d.publish_attempts,
+          a.lease_expires_at,
+          j.created_at,
+          j.started_at,
+          j.finished_at,
+          j.updated_at,
+          EXTRACT(EPOCH FROM (now() - j.created_at)) AS age_seconds,
+          CASE
+            WHEN j.started_at IS NULL THEN NULL
+            WHEN j.finished_at IS NULL THEN EXTRACT(EPOCH FROM (now() - j.started_at))
+            ELSE EXTRACT(EPOCH FROM (j.finished_at - j.started_at))
+          END AS duration_seconds
+        FROM job_aggregates j
+        LEFT JOIN job_execution_attempts a ON a.id = j.active_attempt_id
+        LEFT JOIN dispatch_outbox d ON d.attempt_id = a.id AND d.task_name = 'jobs.run_attempt'
+        LEFT JOIN LATERAL (
+          SELECT c.status, c.last_error
+          FROM callback_outbox c
+          WHERE c.job_id = j.id
+          ORDER BY c.created_at DESC
+          LIMIT 1
+        ) cb ON TRUE
+        WHERE j.deleted_at IS NULL
+          AND (:status IS NULL OR j.status = :status)
+          {clause}
+        ORDER BY j.created_at DESC
+        LIMIT :limit
+        """,
+        params,
+    )
+    return [
+        row
+        | {
+            "duration_or_age_seconds": row.get("duration_seconds") or row.get("age_seconds"),
+        }
+        for row in rows
+    ]
+
+
+async def recent_jobs_data(
+    db: AsyncSession,
+    filters: DashboardFilters,
+    *,
+    status: str,
+    client_request_id: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    normalized_status = None if status == "all" else status
+    summary_payload = await recent_jobs_summary(
+        db,
+        filters,
+        status=normalized_status,
+        client_request_id=client_request_id,
+    )
+    rows = await recent_jobs(
+        db,
+        filters,
+        status=normalized_status,
+        client_request_id=client_request_id,
+        limit=limit,
+    )
+    return {
+        "generated_at": _now(),
+        "filters": filters.__dict__,
+        "controls": {"status": status, "client_request_id": client_request_id, "limit": limit},
+        "status_options": ["all", "queued", "running", "succeeded", "failed"],
+        "summary": summary_payload,
+        "jobs": rows,
+        "health": {
+            "status": "ok",
+            "reasons": [],
+            "next_checks": ["./scripts/jobs.sh list --status succeeded,failed --json"],
+        },
+    }
 
 
 async def overview_data(db: AsyncSession, filters: DashboardFilters, *, max_active_jobs: int) -> dict[str, Any]:

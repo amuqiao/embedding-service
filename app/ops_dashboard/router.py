@@ -78,7 +78,10 @@ def _planned_section_payload(
 
 
 async def _with_timeout(coro):
-    return await asyncio.wait_for(coro, timeout=get_dashboard_config().query_timeout_seconds)
+    try:
+        return await asyncio.wait_for(coro, timeout=get_dashboard_config().query_timeout_seconds)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="ops dashboard query timed out") from exc
 
 
 async def get_dashboard_db():
@@ -149,6 +152,7 @@ async def overview_section(
 @router.get("/internal/jobs-dashboard/sections/recent_jobs/data")
 async def recent_jobs_section(
     _: OpsAccess,
+    db: AsyncSession = Depends(get_dashboard_db),
     filters: DashboardFilters = Depends(_filters),
     status: str = Query(default="all"),
     client_request_id: str | None = Query(default=None),
@@ -159,18 +163,16 @@ async def recent_jobs_section(
             status_code=400,
             detail=f"status must be one of: {', '.join(sorted(VALID_RECENT_JOB_STATUSES))}",
         )
-    return jsonable_encoder(
-        _planned_section_payload(
-            section="recent_jobs",
-            title="最近任务",
-            filters=filters,
-            controls={"status": status, "client_request_id": client_request_id, "limit": limit},
-            next_checks=[
-                "Phase 1 will connect public root Job rows.",
-                "./scripts/jobs.sh list --status succeeded,failed --json",
-            ],
+    payload = await _with_timeout(
+        read_model.recent_jobs_data(
+            db,
+            filters,
+            status=status,
+            client_request_id=client_request_id,
+            limit=limit,
         )
     )
+    return jsonable_encoder(payload)
 
 
 @router.get("/internal/jobs-dashboard/sections/flow_capacity/data")

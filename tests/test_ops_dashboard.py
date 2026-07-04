@@ -202,6 +202,7 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     assert "const RENDERER_TYPES = Object.freeze" in contract
     assert "const RENDERERS = Object.freeze" in contract
     assert "function renderWidgetLayout" in contract
+    assert "function metricValue" in contract
     assert "const DATA_SOURCE_REGISTRY = Object.freeze" in script
     assert "const PAGE_CONTROL_REGISTRY = Object.freeze" in script
     assert "const WIDGET_REGISTRY = Object.freeze" in script
@@ -276,6 +277,9 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     assert "PAGE_CONTROL_REGISTRY[section]" in script
     assert "route.replace(`{${control.param}}`" in script
     assert "configured?.refresh_seconds ?? state.config?.refresh_seconds ?? 15" in script
+    assert '"recent_jobs.table"' in widget_source
+    assert 'dataPath: "jobs"' in widget_source
+    assert 'getPath(payload, "summary.jobs.success_rate")' in widget_source
 
     widget_keys = set(re.findall(r'^\s{4}"([^"]+)":\s*\{', widget_source, re.M))
     layout_widget_id_list = re.findall(r'widgetId:\s*"([^"]+)"', layout_source)
@@ -462,15 +466,37 @@ def test_ops_dashboard_job_trace_route_returns_read_model_payload(monkeypatch):
     assert response.json()["job"]["status"] == "succeeded"
 
 
-def test_ops_dashboard_recent_jobs_route_returns_planned_payload(monkeypatch):
+def test_ops_dashboard_recent_jobs_route_returns_read_model_payload(monkeypatch):
     from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import read_model
     from app.ops_dashboard import router as ops_router
 
     settings = _dashboard_settings(require_auth=False)
     monkeypatch.setattr(ops_router, "settings", settings)
     monkeypatch.setattr(ops_config, "settings", settings)
 
+    async def fake_db():
+        yield object()
+
+    async def fake_recent_jobs_data(_db, filters, *, status, client_request_id, limit):
+        assert filters.window == "1h"
+        assert filters.bucket == "1m"
+        assert status == "failed"
+        assert client_request_id == "req-1"
+        assert limit == 7
+        return {
+            "generated_at": datetime(2026, 7, 3, tzinfo=UTC),
+            "filters": filters.__dict__,
+            "controls": {"status": status, "client_request_id": client_request_id, "limit": limit},
+            "summary": {"total": 1, "failed": 1},
+            "jobs": [{"job_id": "job-1", "status": "failed"}],
+            "health": {"status": "ok", "reasons": [], "next_checks": []},
+        }
+
+    monkeypatch.setattr(read_model, "recent_jobs_data", fake_recent_jobs_data)
+
     application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
     application.include_router(ops_router.router)
 
     with TestClient(application) as client:
@@ -481,8 +507,8 @@ def test_ops_dashboard_recent_jobs_route_returns_planned_payload(monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["section"] == "recent_jobs"
-    assert payload["health"]["reasons"] == ["planned"]
+    assert payload["summary"] == {"total": 1, "failed": 1}
+    assert payload["jobs"] == [{"job_id": "job-1", "status": "failed"}]
     assert payload["controls"] == {"status": "failed", "client_request_id": "req-1", "limit": 7}
 
 
@@ -494,7 +520,11 @@ def test_ops_dashboard_recent_jobs_rejects_invalid_status(monkeypatch):
     monkeypatch.setattr(ops_router, "settings", settings)
     monkeypatch.setattr(ops_config, "settings", settings)
 
+    async def fake_db():
+        yield object()
+
     application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
     application.include_router(ops_router.router)
 
     with TestClient(application) as client:
@@ -502,6 +532,42 @@ def test_ops_dashboard_recent_jobs_rejects_invalid_status(monkeypatch):
 
     assert response.status_code == 400
     assert "status must be one of" in response.json()["detail"]
+
+
+def test_ops_dashboard_recent_jobs_route_returns_504_on_timeout(monkeypatch):
+    import asyncio
+
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False, timeout=0.001)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    async def fake_db():
+        yield object()
+
+    async def slow_recent_jobs_data(_db, _filters, *, status, client_request_id, limit):
+        await asyncio.sleep(0.01)
+        return {
+            "generated_at": datetime(2026, 7, 3, tzinfo=UTC),
+            "controls": {"status": status, "client_request_id": client_request_id, "limit": limit},
+            "summary": {},
+            "jobs": [],
+        }
+
+    monkeypatch.setattr(read_model, "recent_jobs_data", slow_recent_jobs_data)
+
+    application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get("/internal/jobs-dashboard/sections/recent_jobs/data")
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "ops dashboard query timed out"
 
 
 def test_ops_dashboard_flow_capacity_route_returns_planned_payload(monkeypatch):
@@ -689,6 +755,78 @@ async def test_ops_dashboard_read_model_binds_optional_filter_types_for_asyncpg(
     assert ":job_type IS NULL" in combined_sql
     assert ":caller_id IS NULL" in combined_sql
     assert ":since_at IS NULL" in combined_sql
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_recent_jobs_sql_matches_public_root_list_scope():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB()
+
+    await read_model.recent_jobs(
+        db,
+        DashboardFilters(caller_id="caller", job_type="job_type"),
+        status="failed",
+        client_request_id="req-1",
+        limit=7,
+    )
+
+    sql = db.statements[0]
+    params = db.params[0]
+    assert "j.root_job_id IS NULL" in sql
+    assert "j.workflow_node_key IS NULL" in sql
+    assert "j.client_request_id IS NOT NULL" in sql
+    assert "j.deleted_at IS NULL" in sql
+    assert "(:status IS NULL OR j.status = :status)" in sql
+    assert "(:client_request_id IS NULL OR j.client_request_id = :client_request_id)" in sql
+    assert "LIMIT :limit" in sql
+    assert params["status"] == "failed"
+    assert params["client_request_id"] == "req-1"
+    assert params["limit"] == 7
+    assert _bind_type_name(db.statement_objects[0], "status") == "String"
+    assert _bind_type_name(db.statement_objects[0], "client_request_id") == "String"
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_recent_jobs_data_all_status_uses_unfiltered_root_scope():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB()
+
+    payload = await read_model.recent_jobs_data(
+        db,
+        DashboardFilters(),
+        status="all",
+        client_request_id=None,
+        limit=20,
+    )
+
+    assert payload["controls"] == {"status": "all", "client_request_id": None, "limit": 20}
+    assert len(db.statements) == 2
+    for statement, params in zip(db.statements, db.params, strict=True):
+        assert "j.root_job_id IS NULL" in statement
+        assert "j.workflow_node_key IS NULL" in statement
+        assert "j.client_request_id IS NOT NULL" in statement
+        assert "(:status IS NULL OR j.status = :status)" in statement
+        assert params["status"] is None
+        assert params["client_request_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_latency_sql_exposes_success_rate():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB()
+
+    await read_model.latency(db, DashboardFilters())
+
+    sql = db.statements[0]
+    assert "AS success_rate" in sql
+    assert "j.status = 'succeeded'" in sql
+    assert "j.finished_at IS NOT NULL" in sql
 
 
 @pytest.mark.asyncio

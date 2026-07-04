@@ -49,9 +49,9 @@ Dashboard 的边界：
 - `ops_dashboard` 已是可选只读 internal dashboard，路由固定在 `/internal/jobs-dashboard`，不进入 OpenAPI。
 - 前端已有 `data source / widget / layout / renderer` 分层注册骨架。
 - 当前 renderer 已覆盖 MVP 所需基础表达：`status_line`、`metric_cards`、`echarts.line`、`echarts.stacked_bar`、`echarts.horizontal_bar`、`html.table`、`html.signal_list`、`html.summary_table`、`html.json_block`。
-- 后端当前 data source 已进入 Phase 0 目标 key：`overview`、`recent_jobs`、`flow_capacity`、`failures_callbacks`、`job_trace`。
-- `recent_jobs` 和 `flow_capacity` 当前仍是 planned payload；完整业务读模型留给 Phase 1 / Phase 2。
-- 当前页面已经能展示总览、失败聚合和单 Job 追踪；但还没有完整覆盖成功闭环、最近任务真实列表、吞吐容量归因和 callback 闭环。
+- 后端当前 data source 已进入目标 key：`overview`、`recent_jobs`、`flow_capacity`、`failures_callbacks`、`job_trace`。
+- `recent_jobs` 已接入 public root Job 读模型；`flow_capacity` 当前仍是 planned payload，完整业务读模型留给 Phase 2。
+- 当前页面已经能展示总览成功闭环、最近任务、失败聚合和单 Job 追踪；但还没有完整覆盖吞吐容量归因和 callback 闭环增强。
 
 ## Roadmap Summary
 
@@ -374,39 +374,11 @@ MVP 使用 page-level data source，不为每个 widget 单独拆 endpoint。
 
 ### Phase 0: Foundation / 稳定阶段（已落地）
 
-目标：
+已完成。当前事实以 [`../current/ops-dashboard.md`](../current/ops-dashboard.md) 的 registry、data source 和 page-local controls 章节为准。
 
-- 明确 `tab key == layout key == page-level dataSource key == backend section route key`。
-- 将现有 `overview / failures / job_trace` 迁移到目标命名和分区，不要求保留旧页面布局兼容。
-- 确认 `Recent Jobs` 是代表性 Job 选择器，不是分析页。
-- 建立 page-local controls 合同，统一 `status`、`client_request_id`、`limit`、`job_id` 等页面级查询参数的声明和序列化。
+### Phase 1: MVP Core Loop / 成功闭环 + Recent Jobs（已落地）
 
-交付：
-
-```text
-backend data source registry 目标 key
-frontend layout registry 目标 key
-page-local controls registry / schema / query serialization
-tests 固化 key / route / renderer / widget 引用闭环
-```
-
-### Phase 1: MVP Core Loop / 成功闭环 + Recent Jobs
-
-目标：
-
-- Overview 不再只展示坏消息，补齐 `succeeded`、`success_rate`、callback `delivered`。
-- 新增 `Recent Jobs` tab，支持页内 `status` 筛选。
-- Recent Jobs 表格可点击进入 Job Trace。
-
-交付：
-
-```text
-overview payload 增加成功闭环字段
-recent_jobs data source
-page-local status / client_request_id / limit controls
-Recent Jobs layout + widgets
-ops dashboard tests 覆盖 data source / widget / layout 引用
-```
+已完成。当前事实以 [`../current/ops-dashboard.md`](../current/ops-dashboard.md) 的 Overview、Recent Jobs 和验证说明为准。
 
 ### Phase 2: MVP Flow & Capacity
 

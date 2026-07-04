@@ -46,14 +46,14 @@ Layout
 - 路由固定在 `/internal/jobs-dashboard`，不进入 OpenAPI。
 - 后端提供 data source config、overview、recent_jobs、flow_capacity、failures_callbacks、job trace、health。
 - 前端负责 renderer contract、widget registry、layout registry、ECharts 渲染和 HTML 渲染。
-- `recent_jobs` 和 `flow_capacity` 当前已进入导航/data source/page-local controls 合同，但业务读模型仍返回 planned payload；真实 Recent Jobs 和 Flow & Capacity 视图属于后续阶段。
+- `recent_jobs` 已接入 public root Job 读模型，支持页内 `status/client_request_id/limit` 控件；`flow_capacity` 当前仍返回 planned payload，真实读模型属于后续阶段。
 - `/internal/jobs-dashboard/examples` 是独立静态 renderer 示例页，只使用 generic fixtures，不请求 Job 读模型，也不作为业务 mock 数据源。
 - dashboard 不支持业务 mock 数据开关；旧的 `OPS_DASHBOARD_MOCK_DATA_ENABLED` 已废弃，出现在 env 文件或进程环境中都会触发配置加载失败。
 - dashboard 不直接读取 Redis broker、Pod runtime、完整 payload 或对象存储内容；这些仍由 `scripts/jobs.sh broker/runtime/payload --full` 等命令承担。
 
 ## Registry Layers
 
-当前实现有四个稳定注册层。
+当前实现有五个稳定注册层。
 
 ```text
 app/ops_dashboard/registry.py
@@ -90,8 +90,8 @@ app/ops_dashboard/static/chart_contract.js
 
 | key | route | refresh | 当前用途 |
 | --- | --- | --- | --- |
-| `overview` | `/internal/jobs-dashboard/sections/overview/data` | 15s | 总览健康、容量、趋势、延迟、stuck 样本 |
-| `recent_jobs` | `/internal/jobs-dashboard/sections/recent_jobs/data` | 15s | Phase 1 planned payload；page-local `status/client_request_id/limit` 控件合同 |
+| `overview` | `/internal/jobs-dashboard/sections/overview/data` | 15s | 总览健康、容量、趋势、延迟、成功率、stuck 样本 |
+| `recent_jobs` | `/internal/jobs-dashboard/sections/recent_jobs/data` | 15s | public root Job 选择器；page-local `status/client_request_id/limit` 控件合同 |
 | `flow_capacity` | `/internal/jobs-dashboard/sections/flow_capacity/data` | 30s | Phase 2 planned payload |
 | `failures_callbacks` | `/internal/jobs-dashboard/sections/failures_callbacks/data` | 30s | 失败聚合、失败样本、callback outbox |
 | `job_trace` | `/internal/jobs-dashboard/jobs/{job_id}/data` | 0 | 单 Job 证据链追踪 |

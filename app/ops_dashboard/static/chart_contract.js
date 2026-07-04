@@ -51,6 +51,12 @@
     return Number.isFinite(numeric) ? numeric : 0;
   }
 
+  function metricValue(value) {
+    if (value === null || value === undefined || value === "") return "-";
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : compact(value);
+  }
+
   function compact(value) {
     if (value === null || value === undefined || value === "") return "-";
     if (typeof value === "object") return JSON.stringify(value);
@@ -187,7 +193,7 @@
         return `
         <article class="stat-card">
           <div class="label">${escapeHtml(card.label)}</div>
-          <div class="value">${escapeHtml(number(value))}</div>
+          <div class="value">${escapeHtml(metricValue(value))}</div>
           <div class="sub">${escapeHtml(sub)}</div>
         </article>
       `;

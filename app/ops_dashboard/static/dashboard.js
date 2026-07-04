@@ -125,7 +125,17 @@
         },
         { label: "queued", valuePath: "summary.jobs.queued", sub: "root window" },
         { label: "running_active", valuePath: "summary.jobs.running_active", sub: "active attempts" },
+        { label: "succeeded", valuePath: "summary.jobs.succeeded", sub: "window" },
+        {
+          label: "success_rate %",
+          value: (payload) => {
+            const rate = getPath(payload, "summary.jobs.success_rate");
+            return rate === null || rate === undefined ? null : Math.round(Number(rate) * 1000) / 10;
+          },
+          sub: "terminal window",
+        },
         { label: "failed", valuePath: "summary.jobs.failed", sub: "window" },
+        { label: "callback_delivered", valuePath: "summary.callbacks.delivered", sub: "window" },
         { label: "stuck", valuePath: "stuck.count", sub: "older than 10m" },
         { label: "callback_due", valuePath: "summary.callbacks.due", sub: "due now" },
       ],
@@ -187,13 +197,43 @@
         { label: "generated_at", valuePath: "generated_at", format: "date" },
       ],
     },
-    "recent_jobs.next_checks": {
-      title: "Recent Jobs",
-      question: "Phase 1 data source",
-      rendererType: "html.signal_list",
+    "recent_jobs.summary_cards": {
+      title: "Result Cards",
+      question: "current filter",
+      rendererType: "metric_cards",
       dataSource: "recent_jobs",
-      dataPath: "health.next_checks",
-      emptyText: "Recent Jobs data source planned",
+      cards: [
+        { label: "total", valuePath: "summary.total", sub: "filtered root jobs" },
+        { label: "queued", valuePath: "summary.queued", sub: "window" },
+        { label: "running", valuePath: "summary.running", sub: "window" },
+        { label: "succeeded", valuePath: "summary.succeeded", sub: "window" },
+        { label: "failed", valuePath: "summary.failed", sub: "window" },
+        { label: "terminal", valuePath: "summary.terminal", sub: "finished" },
+      ],
+    },
+    "recent_jobs.table": {
+      title: "Recent Jobs",
+      question: "点击 job_id 查看追踪",
+      rendererType: "html.table",
+      dataSource: "recent_jobs",
+      dataPath: "jobs",
+      emptyText: "当前筛选没有 root Job",
+      columns: [
+        { key: "job_id", label: "job_id", render: jobLink },
+        { key: "status", label: "status", render: statusBadge },
+        { key: "job_type", label: "job_type" },
+        { key: "caller_id", label: "caller" },
+        { key: "client_request_id", label: "client_request_id", wrap: true },
+        { key: "progress_percent", label: "%" },
+        { key: "progress_stage", label: "stage" },
+        { key: "callback_status", label: "callback", render: statusBadge },
+        { key: "updated_at", label: "updated", value: (row) => formatDate(row.updated_at) },
+        {
+          key: "duration_or_age_seconds",
+          label: "age/duration s",
+          value: (row) => Math.round(Number(row.duration_or_age_seconds || 0)),
+        },
+      ],
     },
     "flow_capacity.status": {
       rendererType: "status_line",
@@ -432,11 +472,20 @@
       title: "最近任务",
       dataSource: "recent_jobs",
       target: "recent-jobs-widgets",
-      emptyText: "Recent Jobs data source is planned for Phase 1.",
-      groups: [{ key: "main", className: "panel-grid" }],
+      emptyText: "查询最近 root Job。",
+      groups: [
+        { key: "summary" },
+        { key: "main", className: "panel-grid" },
+      ],
       placements: [
         { widgetId: "recent_jobs.status", target: "status-line" },
-        { widgetId: "recent_jobs.next_checks", group: "main", hostClass: "signal-list" },
+        { widgetId: "recent_jobs.summary_cards", group: "summary", chrome: "bare", hostClass: "stat-grid" },
+        {
+          widgetId: "recent_jobs.table",
+          group: "main",
+          panelClass: "panel panel-wide",
+          hostClass: "table-wrap",
+        },
       ],
     },
     flow_capacity: {
