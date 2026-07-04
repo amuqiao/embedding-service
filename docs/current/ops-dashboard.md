@@ -46,7 +46,7 @@ Layout
 - 路由固定在 `/internal/jobs-dashboard`，不进入 OpenAPI。
 - 后端提供 data source config、overview、recent_jobs、flow_capacity、failures_callbacks、job trace、health。
 - 前端负责 renderer contract、widget registry、layout registry、ECharts 渲染和 HTML 渲染。
-- `recent_jobs` 已接入 public root Job 读模型，支持页内 `status/client_request_id/limit` 控件；`flow_capacity` 当前仍返回 planned payload，真实读模型属于后续阶段。
+- `recent_jobs` 已接入 public root Job 读模型，支持页内 `status/client_request_id/limit` 控件；`flow_capacity` 已接入 DB read model，用于吞吐、drain、容量、延迟和 job_type 热点方向判断。
 - `/internal/jobs-dashboard/examples` 是独立静态 renderer 示例页，只使用 generic fixtures，不请求 Job 读模型，也不作为业务 mock 数据源。
 - dashboard 不支持业务 mock 数据开关；旧的 `OPS_DASHBOARD_MOCK_DATA_ENABLED` 已废弃，出现在 env 文件或进程环境中都会触发配置加载失败。
 - dashboard 不直接读取 Redis broker、Pod runtime、完整 payload 或对象存储内容；这些仍由 `scripts/jobs.sh broker/runtime/payload --full` 等命令承担。
@@ -92,7 +92,7 @@ app/ops_dashboard/static/chart_contract.js
 | --- | --- | --- | --- |
 | `overview` | `/internal/jobs-dashboard/sections/overview/data` | 15s | 总览健康、容量、趋势、延迟、成功率、stuck 样本 |
 | `recent_jobs` | `/internal/jobs-dashboard/sections/recent_jobs/data` | 15s | public root Job 选择器；page-local `status/client_request_id/limit` 控件合同 |
-| `flow_capacity` | `/internal/jobs-dashboard/sections/flow_capacity/data` | 30s | Phase 2 planned payload |
+| `flow_capacity` | `/internal/jobs-dashboard/sections/flow_capacity/data` | 30s | 吞吐/排空趋势、drain、gate/headroom、状态构成、latency p95、job_type 热点、CLI handoff |
 | `failures_callbacks` | `/internal/jobs-dashboard/sections/failures_callbacks/data` | 30s | 失败聚合、失败样本、callback outbox |
 | `job_trace` | `/internal/jobs-dashboard/jobs/{job_id}/data` | 0 | 单 Job 证据链追踪 |
 
@@ -107,6 +107,24 @@ app/ops_dashboard/static/chart_contract.js
 | `recent_jobs` | `limit` | query | `limit` | 限制返回行数 |
 | `job_trace` | `job_id` | route | `job_id` | 替换 `/jobs/{job_id}/data` route param |
 | `job_trace` | `limit` | query | `limit` | 限制 timeline 等明细行数 |
+
+## Flow And Capacity Contract
+
+`flow_capacity` 是 Phase 2 已落地的只读 data source，用于回答“系统是否在恢复、吞吐是否下降、容量是否不足、慢在哪个阶段”。它复用 dashboard 通用 `window/bucket/caller_id/job_type` 过滤，但不同子块有不同统计口径：
+
+| payload path | 统计口径 | 说明 |
+| --- | --- | --- |
+| `capacity.current` | `global_gate` | 当前全局 active 占用；不受 `window/job_type/caller_id` 过滤；`headroom` 保留负数，用于暴露超额接单 |
+| `capacity.window` | root scope + `created_at` window | 估算窗口内 accepted、terminal、lifecycle p95、accepted_submit_rps 和 active_jobs_needed_upper_bound |
+| `drain.current` | family scope current | 按 root `job_type/caller_id` 过滤当前 family active，不按窗口裁剪 |
+| `drain.window` | family scope + root `created_at` window | 判断窗口内是否还有 active、running_inactive、failed |
+| `drain.stuck` | family scope stuck | 返回 `total/sample/truncated`；`total` 是真实 stuck 数，不是样本行数 |
+| `ingress` | root event-time buckets | `created/started/terminal/failed` 分别按各自事件时间分桶 |
+| `status_composition` | root `created_at` buckets | dashboard 自有状态构成视图，用于观察 queued/running/succeeded/failed 构成 |
+| `latency` | root scope + `created_at` window | `queue_wait_p95_seconds/run_p95_seconds/lifecycle_p95_seconds` |
+| `job_type_hotspots` | root scope + `created_at` window + `job_type` group | 按 job_type 展示 active、failed 和 p95 热点 |
+
+`health.next_checks` 会按当前页面筛选条件生成 CLI handoff，例如保留 `--since`、`--bucket`、`--job-type` 和 `--caller-id`。`flow_capacity` payload 不包含 `broker`、`runtime` 或 `db_connection_budget`；这些仍由 `./scripts/jobs.sh broker`、`./scripts/jobs.sh runtime` 和相关显式命令承担。
 
 ## Renderer Contract
 

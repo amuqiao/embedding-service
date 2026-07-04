@@ -280,6 +280,20 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     assert '"recent_jobs.table"' in widget_source
     assert 'dataPath: "jobs"' in widget_source
     assert 'getPath(payload, "summary.jobs.success_rate")' in widget_source
+    for widget_id in [
+        '"flow_capacity.capacity_cards"',
+        '"flow_capacity.drain_cards"',
+        '"flow_capacity.ingress_drain"',
+        '"flow_capacity.status_composition"',
+        '"flow_capacity.latency_p95"',
+        '"flow_capacity.job_type_hotspots"',
+        '"flow_capacity.next_checks"',
+    ]:
+        assert widget_id in widget_source
+    assert 'dataPath: "status_composition"' in widget_source
+    assert 'dataPath: "job_type_hotspots"' in widget_source
+    assert 'valuePath: "drain.status"' in widget_source
+    assert 'valuePath: "drain.stuck.total"' in widget_source
 
     widget_keys = set(re.findall(r'^\s{4}"([^"]+)":\s*\{', widget_source, re.M))
     layout_widget_id_list = re.findall(r'widgetId:\s*"([^"]+)"', layout_source)
@@ -570,15 +584,37 @@ def test_ops_dashboard_recent_jobs_route_returns_504_on_timeout(monkeypatch):
     assert response.json()["detail"] == "ops dashboard query timed out"
 
 
-def test_ops_dashboard_flow_capacity_route_returns_planned_payload(monkeypatch):
+def test_ops_dashboard_flow_capacity_route_returns_read_model_payload(monkeypatch):
     from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import read_model
     from app.ops_dashboard import router as ops_router
 
     settings = _dashboard_settings(require_auth=False)
     monkeypatch.setattr(ops_router, "settings", settings)
     monkeypatch.setattr(ops_config, "settings", settings)
 
+    async def fake_db():
+        yield object()
+
+    async def fake_flow_capacity_data(_db, filters, *, max_active_jobs):
+        assert filters.window == "1h"
+        assert filters.bucket == "1m"
+        assert max_active_jobs == 1000
+        return {
+            "generated_at": datetime(2026, 7, 3, tzinfo=UTC),
+            "filters": filters.__dict__,
+            "capacity": {"current": {"active_jobs": 1, "headroom": 999}},
+            "ingress": [{"bucket_at": datetime(2026, 7, 3, tzinfo=UTC), "created": 1}],
+            "status_composition": [],
+            "latency": [],
+            "job_type_hotspots": [],
+            "health": {"status": "ok", "reasons": [], "next_checks": []},
+        }
+
+    monkeypatch.setattr(read_model, "flow_capacity_data", fake_flow_capacity_data)
+
     application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
     application.include_router(ops_router.router)
 
     with TestClient(application) as client:
@@ -586,8 +622,47 @@ def test_ops_dashboard_flow_capacity_route_returns_planned_payload(monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["section"] == "flow_capacity"
-    assert payload["health"]["reasons"] == ["planned"]
+    assert payload["capacity"]["current"]["active_jobs"] == 1
+    assert payload["capacity"]["current"]["headroom"] == 999
+
+
+def test_ops_dashboard_flow_capacity_route_returns_504_on_timeout(monkeypatch):
+    import asyncio
+
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False, timeout=0.001)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    async def fake_db():
+        yield object()
+
+    async def slow_flow_capacity_data(_db, _filters, *, max_active_jobs):
+        await asyncio.sleep(0.01)
+        return {
+            "generated_at": datetime(2026, 7, 3, tzinfo=UTC),
+            "capacity": {"current": {"max_active_jobs": max_active_jobs}},
+            "ingress": [],
+            "status_composition": [],
+            "latency": [],
+            "job_type_hotspots": [],
+            "health": {"status": "ok", "reasons": [], "next_checks": []},
+        }
+
+    monkeypatch.setattr(read_model, "flow_capacity_data", slow_flow_capacity_data)
+
+    application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get("/internal/jobs-dashboard/sections/flow_capacity/data")
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "ops dashboard query timed out"
 
 
 def test_ops_dashboard_failures_callbacks_route_returns_read_model_payload(monkeypatch):
@@ -698,16 +773,18 @@ class _RowsResult:
 
 
 class _RecordingDB:
-    def __init__(self):
+    def __init__(self, rows_by_call=None):
         self.statement_objects = []
         self.statements = []
         self.params = []
+        self.rows_by_call = list(rows_by_call or [])
 
     async def execute(self, statement, params=None):
         self.statement_objects.append(statement)
         self.statements.append(str(statement))
         self.params.append(params or {})
-        return _RowsResult()
+        rows = self.rows_by_call.pop(0) if self.rows_by_call else []
+        return _RowsResult(rows)
 
 
 def _bind_type_name(statement, key):
@@ -827,6 +904,188 @@ async def test_ops_dashboard_latency_sql_exposes_success_rate():
     assert "AS success_rate" in sql
     assert "j.status = 'succeeded'" in sql
     assert "j.finished_at IS NOT NULL" in sql
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_global_gate_preserves_negative_headroom():
+    from app.ops_dashboard import read_model
+
+    db = _RecordingDB(
+        rows_by_call=[
+            [
+                {
+                    "active_jobs": 1005,
+                    "queued": 900,
+                    "running_active": 105,
+                }
+            ]
+        ]
+    )
+
+    payload = await read_model.global_gate(db, max_active_jobs=1000)
+
+    assert payload["active_jobs"] == 1005
+    assert payload["headroom"] == -5
+    assert payload["active_ratio"] == 1.005
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_flow_capacity_data_runs_expected_read_model_queries():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB()
+
+    payload = await read_model.flow_capacity_data(
+        db,
+        DashboardFilters(window="24h", bucket="5m", caller_id="caller-a", job_type="job_echo"),
+        max_active_jobs=1000,
+    )
+
+    assert payload["capacity"]["current"]["max_active_jobs"] == 1000
+    assert "capacity" in payload
+    assert "drain" in payload
+    assert "ingress" in payload
+    assert "status_composition" in payload
+    assert "latency" in payload
+    assert "job_type_hotspots" in payload
+    assert "broker" not in payload
+    assert "runtime" not in payload
+    assert "db_connection_budget" not in payload
+    assert payload["health"]["next_checks"] == [
+        "./scripts/jobs.sh capacity --since 24h --job-type job_echo --caller-id caller-a",
+        "./scripts/jobs.sh ingress --since 24h --bucket 5m --job-type job_echo --caller-id caller-a",
+        "./scripts/jobs.sh drain --since 24h --older-than 10m --job-type job_echo --caller-id caller-a",
+        "./scripts/jobs.sh latency --since 24h --group-by job_type --job-type job_echo --caller-id caller-a",
+        "./scripts/jobs.sh broker",
+        "./scripts/jobs.sh runtime",
+    ]
+    assert payload["query_scopes"] == {
+        "capacity.current": "global_gate current active; ignores window/job_type/caller_id",
+        "capacity.window": "root scope created_at window; applies job_type/caller_id",
+        "drain.current": "family scope current active; applies root job_type/caller_id, ignores window",
+        "drain.window": "family scope created_at window; applies root job_type/caller_id",
+        "drain.stuck": "family scope stuck total/sample/truncated; applies root created_at window and root job_type/caller_id",
+        "ingress": "root event-time buckets for created/started/finished events; applies job_type/caller_id",
+        "status_composition": "dashboard root created_at buckets; applies job_type/caller_id",
+        "latency": "root scope created_at window; applies job_type/caller_id",
+        "job_type_hotspots": "root scope created_at window; applies job_type/caller_id; grouped by job_type",
+    }
+    combined_sql = "\n".join(db.statements)
+    assert "accepted_submit_rps" not in combined_sql
+    assert "GROUP BY bucket_at" in combined_sql
+    assert "GROUP BY j.job_type" in combined_sql
+    assert "lifecycle_p95_seconds" in combined_sql
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_drain_status_sql_uses_family_scope_and_drained_verdict():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB()
+
+    payload = await read_model.drain_status(db, DashboardFilters())
+
+    assert payload["status"] == "drained"
+    combined_sql = "\n".join(db.statements)
+    assert "FROM job_aggregates root" in combined_sql
+    assert "(j.id = root.id OR j.root_job_id = root.id)" in combined_sql
+    assert "AS running_inactive" in combined_sql
+    assert "AS active_jobs" in combined_sql
+    assert "count(*) FILTER (WHERE j.status = 'failed') AS failed" in combined_sql
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_drain_status_uses_stuck_total_not_sample_count():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    stuck_sample = [
+        {
+            "issue": "published_dispatch_not_claimed",
+            "job_id": str(uuid.uuid4()),
+            "job_status": "queued",
+        }
+        for _ in range(20)
+    ]
+    db = _RecordingDB(
+        rows_by_call=[
+            [
+                {
+                    "queued": 0,
+                    "running": 0,
+                    "running_active": 0,
+                    "running_inactive": 0,
+                    "active_jobs": 0,
+                }
+            ],
+            [
+                {
+                    "total": 0,
+                    "queued": 0,
+                    "running": 0,
+                    "running_active": 0,
+                    "running_inactive": 0,
+                    "active_jobs": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                }
+            ],
+            [{"total": 25}],
+            stuck_sample,
+        ]
+    )
+
+    payload = await read_model.drain_status(db, DashboardFilters())
+
+    assert payload["status"] == "not_drained"
+    assert payload["stuck"]["total"] == 25
+    assert payload["stuck"]["count"] == 25
+    assert payload["stuck"]["truncated"] is True
+    assert len(payload["stuck"]["sample"]) == 20
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_status_composition_sql_uses_root_created_buckets():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB()
+
+    await read_model.status_composition(db, DashboardFilters())
+
+    sql = db.statements[0]
+    assert "j.root_job_id IS NULL" in sql
+    assert "j.workflow_node_key IS NULL" in sql
+    assert "j.client_request_id IS NOT NULL" in sql
+    assert "j.created_at >= :since_at" in sql
+    assert "floor(EXTRACT(EPOCH FROM j.created_at) / :bucket_seconds)" in sql
+    assert "count(*) FILTER (WHERE j.status = 'queued') AS queued" in sql
+    assert "count(*) FILTER (WHERE j.status = 'running') AS running" in sql
+    assert "count(*) FILTER (WHERE j.status = 'succeeded') AS succeeded" in sql
+    assert "count(*) FILTER (WHERE j.status = 'failed') AS failed" in sql
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_job_type_hotspots_sql_uses_root_scope_and_lifecycle_p95():
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard.schemas import DashboardFilters
+
+    db = _RecordingDB()
+
+    await read_model.job_type_hotspots(db, DashboardFilters())
+
+    sql = db.statements[0]
+    assert "j.root_job_id IS NULL" in sql
+    assert "j.workflow_node_key IS NULL" in sql
+    assert "j.client_request_id IS NOT NULL" in sql
+    assert "GROUP BY j.job_type" in sql
+    assert "AS active_jobs" in sql
+    assert "AS queue_wait_p95_seconds" in sql
+    assert "AS run_p95_seconds" in sql
+    assert "AS lifecycle_p95_seconds" in sql
+    assert "LIMIT :limit" in sql
 
 
 @pytest.mark.asyncio

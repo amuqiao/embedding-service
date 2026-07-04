@@ -136,7 +136,7 @@
         },
         { label: "failed", valuePath: "summary.jobs.failed", sub: "window" },
         { label: "callback_delivered", valuePath: "summary.callbacks.delivered", sub: "window" },
-        { label: "stuck", valuePath: "stuck.count", sub: "older than 10m" },
+        { label: "stuck", valuePath: "stuck.total", sub: "older than 10m" },
         { label: "callback_due", valuePath: "summary.callbacks.due", sub: "due now" },
       ],
     },
@@ -240,16 +240,112 @@
       dataSource: "flow_capacity",
       items: [
         { label: "section", badgeDefault: "neutral", badgePath: "health.status", value: "flow_capacity" },
+        { label: "drain", badgeDefault: "neutral", badgePath: "drain.status", valuePath: "drain.status" },
         { label: "generated_at", valuePath: "generated_at", format: "date" },
       ],
     },
     "flow_capacity.next_checks": {
       title: "Flow & Capacity",
-      question: "Phase 2 data source",
+      question: "CLI handoff",
       rendererType: "html.signal_list",
       dataSource: "flow_capacity",
       dataPath: "health.next_checks",
-      emptyText: "Flow & Capacity data source planned",
+      emptyText: "没有后续检查",
+    },
+    "flow_capacity.capacity_cards": {
+      title: "Capacity Cards",
+      question: "gate / headroom",
+      rendererType: "metric_cards",
+      dataSource: "flow_capacity",
+      cards: [
+        { label: "max_active_jobs", valuePath: "capacity.current.max_active_jobs", sub: "configured" },
+        { label: "active_jobs", valuePath: "capacity.current.active_jobs", sub: "global gate" },
+        { label: "headroom", valuePath: "capacity.current.headroom", sub: "remaining" },
+        { label: "queued", valuePath: "capacity.current.queued", sub: "global" },
+        { label: "running_active", valuePath: "capacity.current.running_active", sub: "global" },
+        {
+          label: "accepted_rps",
+          value: (payload) => {
+            const value = getPath(payload, "capacity.window.accepted_submit_rps");
+            return value === null || value === undefined ? null : Math.round(Number(value) * 1000) / 1000;
+          },
+          sub: "window",
+        },
+      ],
+    },
+    "flow_capacity.ingress_drain": {
+      title: "Ingress / Drain",
+      question: "created / started / terminal / failed",
+      rendererType: "echarts.line",
+      dataSource: "flow_capacity",
+      dataPath: "ingress",
+      xField: "bucket_at",
+      series: [
+        { name: "created", field: "created" },
+        { name: "started", field: "started" },
+        { name: "terminal", field: "terminal" },
+        { name: "failed", field: "failed" },
+      ],
+      colors: ["#1769aa", "#5f6b7a", "#12805c", "#c9342f"],
+    },
+    "flow_capacity.drain_cards": {
+      title: "Drain",
+      question: "current / window",
+      rendererType: "metric_cards",
+      dataSource: "flow_capacity",
+      cards: [
+        { label: "current_active", valuePath: "drain.current.active_jobs", sub: "family current" },
+        { label: "running_inactive", valuePath: "drain.current.running_inactive", sub: "family current" },
+        { label: "window_active", valuePath: "drain.window.active_jobs", sub: "family window" },
+        { label: "window_failed", valuePath: "drain.window.failed", sub: "family window" },
+        { label: "stuck", valuePath: "drain.stuck.total", sub: "older than 10m" },
+      ],
+    },
+    "flow_capacity.status_composition": {
+      title: "Status Composition",
+      question: "queued / running / terminal",
+      rendererType: "echarts.stacked_bar",
+      dataSource: "flow_capacity",
+      dataPath: "status_composition",
+      xField: "bucket_at",
+      series: [
+        { name: "queued", field: "queued" },
+        { name: "running", field: "running" },
+        { name: "succeeded", field: "succeeded" },
+        { name: "failed", field: "failed" },
+      ],
+      colors: ["#d68c1f", "#1769aa", "#12805c", "#c9342f"],
+    },
+    "flow_capacity.latency_p95": {
+      title: "Latency p95",
+      question: "queue / run / lifecycle",
+      rendererType: "echarts.horizontal_bar",
+      dataSource: "flow_capacity",
+      adapter: "latency_p95_rows",
+      labelField: "label",
+      valueField: "value",
+      valueSuffix: "s",
+      color: "#087f8c",
+      left: 84,
+    },
+    "flow_capacity.job_type_hotspots": {
+      title: "Job Type Hotspots",
+      question: "active / failed / p95",
+      rendererType: "html.table",
+      dataSource: "flow_capacity",
+      dataPath: "job_type_hotspots",
+      emptyText: "当前窗口没有 Job 类型热点",
+      columns: [
+        { key: "job_type", label: "job_type" },
+        { key: "total", label: "total" },
+        { key: "active_jobs", label: "active" },
+        { key: "queued", label: "queued" },
+        { key: "running", label: "running" },
+        { key: "failed", label: "failed" },
+        { key: "queue_wait_p95_seconds", label: "queue_p95_s", value: (row) => secondsCell(row.queue_wait_p95_seconds) },
+        { key: "run_p95_seconds", label: "run_p95_s", value: (row) => secondsCell(row.run_p95_seconds) },
+        { key: "lifecycle_p95_seconds", label: "lifecycle_p95_s", value: (row) => secondsCell(row.lifecycle_p95_seconds) },
+      ],
     },
     "failures_callbacks.status": {
       rendererType: "status_line",
@@ -492,9 +588,23 @@
       title: "吞吐与容量",
       dataSource: "flow_capacity",
       target: "view-root",
-      groups: [{ key: "main", className: "panel-grid" }],
+      groups: [
+        { key: "summary" },
+        { key: "main", className: "panel-grid" },
+      ],
       placements: [
         { widgetId: "flow_capacity.status", target: "status-line" },
+        { widgetId: "flow_capacity.capacity_cards", group: "summary", chrome: "bare", hostClass: "stat-grid" },
+        { widgetId: "flow_capacity.drain_cards", group: "summary", chrome: "bare", hostClass: "stat-grid" },
+        { widgetId: "flow_capacity.ingress_drain", group: "main", hostClass: "chart" },
+        { widgetId: "flow_capacity.status_composition", group: "main", hostClass: "chart" },
+        { widgetId: "flow_capacity.latency_p95", group: "main", hostClass: "chart chart-compact" },
+        {
+          widgetId: "flow_capacity.job_type_hotspots",
+          group: "main",
+          panelClass: "panel panel-wide",
+          hostClass: "table-wrap",
+        },
         { widgetId: "flow_capacity.next_checks", group: "main", hostClass: "signal-list" },
       ],
     },
@@ -643,6 +753,11 @@
     const id = compact(value);
     if (id === "-") return "-";
     return `<button class="link-button" data-job-id="${escapeHtml(id)}" type="button">${escapeHtml(id)}</button>`;
+  }
+
+  function secondsCell(value) {
+    if (value === null || value === undefined) return "-";
+    return Math.round(Number(value) * 100) / 100;
   }
 
   function renderNavigation() {

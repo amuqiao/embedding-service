@@ -100,6 +100,27 @@ def _base_params(filters: DashboardFilters) -> dict[str, Any]:
     }
 
 
+def _jobs_cli_filter_args(filters: DashboardFilters) -> str:
+    args = ""
+    if filters.job_type:
+        args += f" --job-type {filters.job_type}"
+    if filters.caller_id:
+        args += f" --caller-id {filters.caller_id}"
+    return args
+
+
+def _flow_capacity_next_checks(filters: DashboardFilters) -> list[str]:
+    filter_args = _jobs_cli_filter_args(filters)
+    return [
+        f"./scripts/jobs.sh capacity --since {filters.window}{filter_args}",
+        f"./scripts/jobs.sh ingress --since {filters.window} --bucket {filters.bucket}{filter_args}",
+        f"./scripts/jobs.sh drain --since {filters.window} --older-than 10m{filter_args}",
+        f"./scripts/jobs.sh latency --since {filters.window} --group-by job_type{filter_args}",
+        "./scripts/jobs.sh broker",
+        "./scripts/jobs.sh runtime",
+    ]
+
+
 def _typed_text(sql: str):
     statement = text(sql)
     existing_params = statement.compile().params
@@ -270,7 +291,56 @@ async def global_gate(db: AsyncSession, max_active_jobs: int) -> dict[str, Any]:
     return current | {
         "max_active_jobs": max_active_jobs,
         "active_ratio": (active / max_active_jobs) if max_active_jobs > 0 else None,
-        "headroom": max(max_active_jobs - active, 0) if max_active_jobs > 0 else None,
+        "headroom": (max_active_jobs - active) if max_active_jobs > 0 else None,
+    }
+
+
+async def capacity_window(db: AsyncSession, filters: DashboardFilters) -> dict[str, Any]:
+    clause = _scope_clause("j", "root")
+    params = _base_params(filters) | {"window_seconds": filters.window_delta.total_seconds()}
+    window = await _one(
+        db,
+        f"""
+        SELECT
+          count(*) AS accepted_jobs,
+          count(*) FILTER (WHERE j.finished_at IS NOT NULL) AS terminal_jobs,
+          min(j.created_at) AS first_created_at,
+          max(j.created_at) AS newest_created_at,
+          percentile_cont(0.95) WITHIN GROUP (
+            ORDER BY EXTRACT(EPOCH FROM (j.finished_at - j.created_at))
+          ) FILTER (WHERE j.finished_at IS NOT NULL) AS lifecycle_p95_seconds,
+          CASE
+            WHEN min(j.created_at) IS NOT NULL
+             AND max(j.created_at) IS NOT NULL
+             AND max(j.created_at) > min(j.created_at)
+            THEN EXTRACT(EPOCH FROM (max(j.created_at) - min(j.created_at)))
+            ELSE NULL
+          END AS observed_span_seconds
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NULL
+        {clause}
+        """,
+        params,
+    )
+    accepted_jobs = int(window.get("accepted_jobs") or 0)
+    observed_span_seconds = window.get("observed_span_seconds")
+    effective_window_seconds = (
+        float(observed_span_seconds)
+        if observed_span_seconds is not None and float(observed_span_seconds) > 0
+        else float(params["window_seconds"])
+    )
+    lifecycle_p95_seconds = window.get("lifecycle_p95_seconds")
+    accepted_submit_rps = accepted_jobs / effective_window_seconds if effective_window_seconds > 0 else None
+    active_jobs_needed_upper_bound = (
+        accepted_submit_rps * float(lifecycle_p95_seconds)
+        if accepted_submit_rps is not None and lifecycle_p95_seconds is not None
+        else None
+    )
+    return window | {
+        "window_seconds": params["window_seconds"],
+        "effective_window_seconds": effective_window_seconds,
+        "accepted_submit_rps": accepted_submit_rps,
+        "active_jobs_needed_upper_bound": active_jobs_needed_upper_bound,
     }
 
 
@@ -325,6 +395,104 @@ async def ingress(db: AsyncSession, filters: DashboardFilters) -> list[dict[str,
     )
 
 
+async def status_composition(db: AsyncSession, filters: DashboardFilters) -> list[dict[str, Any]]:
+    clause = _scope_clause_without_since("j", "root")
+    params = _base_params(filters) | {"bucket_seconds": filters.bucket_seconds}
+    return await _all(
+        db,
+        f"""
+        SELECT
+          to_timestamp(
+            floor(EXTRACT(EPOCH FROM j.created_at) / :bucket_seconds) * :bucket_seconds
+          ) AS bucket_at,
+          count(*) FILTER (WHERE j.status = 'queued') AS queued,
+          count(*) FILTER (WHERE j.status = 'running') AS running,
+          count(*) FILTER (WHERE j.status = 'succeeded') AS succeeded,
+          count(*) FILTER (WHERE j.status = 'failed') AS failed
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NULL
+          AND j.created_at >= :since_at
+          {clause}
+        GROUP BY bucket_at
+        ORDER BY bucket_at ASC
+        """,
+        params,
+    )
+
+
+async def drain_status(
+    db: AsyncSession,
+    filters: DashboardFilters,
+    *,
+    older_than: timedelta = timedelta(minutes=10),
+) -> dict[str, Any]:
+    current_clause = _scope_clause("j", "family")
+    window_clause = _scope_clause("j", "family")
+    current_params = {
+        "job_type": filters.job_type,
+        "caller_id": filters.caller_id,
+        "since_at": None,
+    }
+    window_params = _base_params(filters)
+    current = await _one(
+        db,
+        f"""
+        SELECT
+          count(*) FILTER (WHERE j.status = 'queued') AS queued,
+          count(*) FILTER (WHERE j.status = 'running') AS running,
+          count(*) FILTER (WHERE j.status = 'running' AND j.active_attempt_id IS NOT NULL) AS running_active,
+          count(*) FILTER (WHERE j.status = 'running' AND j.active_attempt_id IS NULL) AS running_inactive,
+          count(*) FILTER (
+            WHERE j.status = 'queued'
+               OR (j.status = 'running' AND j.active_attempt_id IS NOT NULL)
+          ) AS active_jobs
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NULL
+        {current_clause}
+        """,
+        current_params,
+    )
+    window = await _one(
+        db,
+        f"""
+        SELECT
+          count(*) AS total,
+          count(*) FILTER (WHERE j.status = 'queued') AS queued,
+          count(*) FILTER (WHERE j.status = 'running') AS running,
+          count(*) FILTER (WHERE j.status = 'running' AND j.active_attempt_id IS NOT NULL) AS running_active,
+          count(*) FILTER (WHERE j.status = 'running' AND j.active_attempt_id IS NULL) AS running_inactive,
+          count(*) FILTER (
+            WHERE j.status = 'queued'
+               OR (j.status = 'running' AND j.active_attempt_id IS NOT NULL)
+          ) AS active_jobs,
+          count(*) FILTER (WHERE j.status = 'succeeded') AS succeeded,
+          count(*) FILTER (WHERE j.status = 'failed') AS failed,
+          min(j.created_at) AS oldest_created_at,
+          max(j.created_at) AS newest_created_at
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NULL
+        {window_clause}
+        """,
+        window_params,
+    )
+    stuck_payload = await stuck_report(db, filters, older_than=older_than)
+    status = "drained"
+    if (
+        int(current.get("active_jobs") or 0)
+        or int(current.get("running_inactive") or 0)
+        or int(window.get("active_jobs") or 0)
+        or int(window.get("failed") or 0)
+        or int(stuck_payload.get("total") or 0)
+    ):
+        status = "not_drained"
+    return {
+        "status": status,
+        "current": current,
+        "window": window,
+        "stuck": stuck_payload,
+    }
+
+
 async def latency(db: AsyncSession, filters: DashboardFilters) -> list[dict[str, Any]]:
     clause = _scope_clause("j", "root")
     return await _all(
@@ -360,12 +528,44 @@ async def latency(db: AsyncSession, filters: DashboardFilters) -> list[dict[str,
     )
 
 
-async def stuck(db: AsyncSession, filters: DashboardFilters, *, older_than: timedelta = timedelta(minutes=10)) -> list[dict[str, Any]]:
-    clause = _scope_clause("j", "family")
-    params = _base_params(filters) | {"cutoff": _now() - older_than}
+async def job_type_hotspots(db: AsyncSession, filters: DashboardFilters) -> list[dict[str, Any]]:
+    clause = _scope_clause("j", "root")
     return await _all(
         db,
         f"""
+        SELECT
+          j.job_type,
+          count(*) AS total,
+          count(*) FILTER (WHERE j.status = 'queued') AS queued,
+          count(*) FILTER (WHERE j.status = 'running') AS running,
+          count(*) FILTER (
+            WHERE j.status = 'queued'
+               OR (j.status = 'running' AND j.active_attempt_id IS NOT NULL)
+          ) AS active_jobs,
+          count(*) FILTER (WHERE j.status = 'succeeded') AS succeeded,
+          count(*) FILTER (WHERE j.status = 'failed') AS failed,
+          percentile_cont(0.95) WITHIN GROUP (
+            ORDER BY EXTRACT(EPOCH FROM (j.started_at - COALESCE(j.queued_at, j.created_at)))
+          ) FILTER (WHERE j.started_at IS NOT NULL) AS queue_wait_p95_seconds,
+          percentile_cont(0.95) WITHIN GROUP (
+            ORDER BY EXTRACT(EPOCH FROM (j.finished_at - j.started_at))
+          ) FILTER (WHERE j.started_at IS NOT NULL AND j.finished_at IS NOT NULL) AS run_p95_seconds,
+          percentile_cont(0.95) WITHIN GROUP (
+            ORDER BY EXTRACT(EPOCH FROM (j.finished_at - j.created_at))
+          ) FILTER (WHERE j.finished_at IS NOT NULL) AS lifecycle_p95_seconds
+        FROM job_aggregates j
+        WHERE j.deleted_at IS NULL
+        {clause}
+        GROUP BY j.job_type
+        ORDER BY active_jobs DESC, total DESC, lifecycle_p95_seconds DESC NULLS LAST, j.job_type ASC
+        LIMIT :limit
+        """,
+        _base_params(filters),
+    )
+
+
+def _stuck_union_sql(clause: str) -> str:
+    return f"""
         (
           SELECT 'dispatch_due_not_published' AS issue, j.id::text AS job_id, j.status AS job_status, j.job_type,
                  d.id::text AS related_id, d.status AS related_status,
@@ -439,11 +639,58 @@ async def stuck(db: AsyncSession, filters: DashboardFilters, *, older_than: time
             AND j.finished_at < :cutoff
             {clause}
         )
+        """
+
+
+async def stuck(db: AsyncSession, filters: DashboardFilters, *, older_than: timedelta = timedelta(minutes=10)) -> list[dict[str, Any]]:
+    clause = _scope_clause("j", "family")
+    params = _base_params(filters) | {"cutoff": _now() - older_than}
+    return await _all(
+        db,
+        f"""
+        {_stuck_union_sql(clause)}
         ORDER BY since_at ASC NULLS LAST
         LIMIT :limit
         """,
         params,
     )
+
+
+async def stuck_total(
+    db: AsyncSession,
+    filters: DashboardFilters,
+    *,
+    older_than: timedelta = timedelta(minutes=10),
+) -> int:
+    clause = _scope_clause("j", "family")
+    params = _base_params(filters) | {"cutoff": _now() - older_than}
+    row = await _one(
+        db,
+        f"""
+        SELECT count(*) AS total
+        FROM (
+          {_stuck_union_sql(clause)}
+        ) stuck_rows
+        """,
+        params,
+    )
+    return int(row.get("total") or 0)
+
+
+async def stuck_report(
+    db: AsyncSession,
+    filters: DashboardFilters,
+    *,
+    older_than: timedelta = timedelta(minutes=10),
+) -> dict[str, Any]:
+    total = await stuck_total(db, filters, older_than=older_than)
+    sample = await stuck(db, filters, older_than=older_than)
+    return {
+        "total": total,
+        "count": total,
+        "sample": sample,
+        "truncated": total > len(sample),
+    }
 
 
 async def callbacks_summary(db: AsyncSession, filters: DashboardFilters) -> list[dict[str, Any]]:
@@ -679,32 +926,67 @@ async def recent_jobs_data(
     }
 
 
+async def flow_capacity_data(db: AsyncSession, filters: DashboardFilters, *, max_active_jobs: int) -> dict[str, Any]:
+    summary_payload = await summary(db, filters)
+    capacity_current = await global_gate(db, max_active_jobs=max_active_jobs)
+    capacity_window_payload = await capacity_window(db, filters)
+    return {
+        "generated_at": _now(),
+        "filters": filters.__dict__,
+        "health": {
+            "status": "ok",
+            "reasons": [],
+            "next_checks": _flow_capacity_next_checks(filters),
+        },
+        "summary": summary_payload,
+        "capacity": {
+            "current": capacity_current,
+            "window": capacity_window_payload,
+        },
+        "drain": await drain_status(db, filters),
+        "ingress": await ingress(db, filters),
+        "status_composition": await status_composition(db, filters),
+        "latency": await latency(db, filters),
+        "job_type_hotspots": await job_type_hotspots(db, filters),
+        "query_scopes": {
+            "capacity.current": "global_gate current active; ignores window/job_type/caller_id",
+            "capacity.window": "root scope created_at window; applies job_type/caller_id",
+            "drain.current": "family scope current active; applies root job_type/caller_id, ignores window",
+            "drain.window": "family scope created_at window; applies root job_type/caller_id",
+            "drain.stuck": "family scope stuck total/sample/truncated; applies root created_at window and root job_type/caller_id",
+            "ingress": "root event-time buckets for created/started/finished events; applies job_type/caller_id",
+            "status_composition": "dashboard root created_at buckets; applies job_type/caller_id",
+            "latency": "root scope created_at window; applies job_type/caller_id",
+            "job_type_hotspots": "root scope created_at window; applies job_type/caller_id; grouped by job_type",
+        },
+    }
+
+
 async def overview_data(db: AsyncSession, filters: DashboardFilters, *, max_active_jobs: int) -> dict[str, Any]:
     summary_payload = await summary(db, filters)
-    stuck_rows = await stuck(db, filters)
+    stuck_payload = await stuck_report(db, filters)
     callback_rows = await callbacks_summary(db, filters)
     return {
         "generated_at": _now(),
         "filters": filters.__dict__,
-        "health": health_verdict(summary=summary_payload, stuck=stuck_rows, callbacks=callback_rows),
+        "health": health_verdict(summary=summary_payload, stuck=stuck_payload["sample"], callbacks=callback_rows),
         "summary": summary_payload,
         "capacity": {"current": await global_gate(db, max_active_jobs=max_active_jobs)},
         "ingress": await ingress(db, filters),
         "latency": await latency(db, filters),
-        "stuck": {"count": len(stuck_rows), "sample": stuck_rows},
+        "stuck": stuck_payload,
     }
 
 
 async def failures_data(db: AsyncSession, filters: DashboardFilters) -> dict[str, Any]:
     callback_rows = await callbacks_summary(db, filters)
-    stuck_rows = await stuck(db, filters)
     return {
         "generated_at": _now(),
         "filters": filters.__dict__,
         "failure_groups": await failure_groups(db, filters),
         "failed_samples": await failed_samples(db, filters),
         "callbacks": callback_rows,
-        "stuck": {"count": len(stuck_rows), "sample": stuck_rows},
+        "stuck": await stuck_report(db, filters),
     }
 
 

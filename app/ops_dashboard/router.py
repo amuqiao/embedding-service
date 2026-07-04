@@ -178,19 +178,17 @@ async def recent_jobs_section(
 @router.get("/internal/jobs-dashboard/sections/flow_capacity/data")
 async def flow_capacity_section(
     _: OpsAccess,
+    db: AsyncSession = Depends(get_dashboard_db),
     filters: DashboardFilters = Depends(_filters),
 ):
-    return jsonable_encoder(
-        _planned_section_payload(
-            section="flow_capacity",
-            title="吞吐与容量",
-            filters=filters,
-            next_checks=[
-                "Phase 2 will connect ingress, drain, gate/headroom and latency signals.",
-                "./scripts/jobs.sh dashboard --since 1h",
-            ],
+    payload = await _with_timeout(
+        read_model.flow_capacity_data(
+            db,
+            filters,
+            max_active_jobs=settings.job.max_active_jobs,
         )
     )
+    return jsonable_encoder(payload)
 
 
 @router.get("/internal/jobs-dashboard/sections/failures_callbacks/data")

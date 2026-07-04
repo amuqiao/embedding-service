@@ -50,8 +50,8 @@ Dashboard 的边界：
 - 前端已有 `data source / widget / layout / renderer` 分层注册骨架。
 - 当前 renderer 已覆盖 MVP 所需基础表达：`status_line`、`metric_cards`、`echarts.line`、`echarts.stacked_bar`、`echarts.horizontal_bar`、`html.table`、`html.signal_list`、`html.summary_table`、`html.json_block`。
 - 后端当前 data source 已进入目标 key：`overview`、`recent_jobs`、`flow_capacity`、`failures_callbacks`、`job_trace`。
-- `recent_jobs` 已接入 public root Job 读模型；`flow_capacity` 当前仍是 planned payload，完整业务读模型留给 Phase 2。
-- 当前页面已经能展示总览成功闭环、最近任务、失败聚合和单 Job 追踪；但还没有完整覆盖吞吐容量归因和 callback 闭环增强。
+- `recent_jobs` 和 `flow_capacity` 已接入 DB read model。
+- 当前页面已经能展示总览成功闭环、最近任务、吞吐容量方向、失败聚合和单 Job 追踪；但还没有完整覆盖 callback 闭环增强。
 
 ## Roadmap Summary
 
@@ -380,25 +380,9 @@ MVP 使用 page-level data source，不为每个 widget 单独拆 endpoint。
 
 已完成。当前事实以 [`../current/ops-dashboard.md`](../current/ops-dashboard.md) 的 Overview、Recent Jobs 和验证说明为准。
 
-### Phase 2: MVP Flow & Capacity
+### Phase 2: MVP Flow & Capacity（已落地）
 
-目标：
-
-- 把吞吐、恢复方向、容量和延迟放到一个可读页面。
-- 复用 `line`、`stacked_bar`、`horizontal_bar`，不新增 renderer。
-- 只输出方向信号，把 broker/runtime/capacity budget 留给 CLI。
-
-交付：
-
-```text
-flow_capacity data source
-capacity cards
-ingress / drain trend
-status composition stacked bar
-latency p95 rank
-job_type hotspot table
-CLI handoff hints
-```
+已完成。当前事实以 [`../current/ops-dashboard.md`](../current/ops-dashboard.md) 的 Flow And Capacity Contract、widgets 和 CLI handoff 说明为准。
 
 ### Phase 3: MVP Failures & Callbacks
 
