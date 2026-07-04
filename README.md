@@ -206,8 +206,8 @@ OSS_PUBLIC_ENDPOINT=
 ```
 
 - `test`：运行本地 pytest。
-- `workflow-smoke`：使用内置 `job_test_echo` 验证本地 Job 创建、异步执行和状态轮询流程，不调用真实模型或外部供应商。
-- `workflow-modes-smoke`：使用内置 `job_test_workflow` 验证 `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 的 root/child Job e2e。
+- `workflow-smoke`：使用内置 `example_sleep` 验证本地 Job 创建、异步执行和状态轮询流程，不调用真实模型或外部供应商。
+- `workflow-modes-smoke`：使用内置 `example_workflow` 验证 `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 的 root/child Job e2e。
 - `smoke` / `mock-smoke` / `e2e`：当前未接入正式 LLM `job_type`，命令保留但不可用，新增正式模型能力后再恢复对应验证。
 - `env-config`：校验 env 文件键名；传 `--env-file` 和 `--app-env` 时，还会实例化应用 `Settings`，提前验证 test/prd 发布模式配置是否能安全启动。
 - `check`：运行脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest。

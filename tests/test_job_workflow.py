@@ -52,7 +52,7 @@ def _running_add_job() -> Job:
         id=uuid.uuid4(),
         caller_id="caller-1",
         client_request_id="client-add-1",
-        job_type="job_test_add",
+        job_type="example_pair",
         status="running",
         active_attempt_id=attempt_id,
         progress_percent=5,
@@ -295,7 +295,7 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
     job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_add",
+        job_type="example_pair",
         status="running",
         active_attempt_id=attempt_id,
         progress_percent=5,
@@ -361,7 +361,7 @@ async def test_run_job_attempt_retries_transient_claim_miss(monkeypatch):
     job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_add",
+        job_type="example_pair",
         status="running",
         active_attempt_id=attempt_id,
         progress_percent=5,
@@ -602,7 +602,7 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
                     "nodes": [
                         {
                             "key": "first",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "hello", "repeat": 1},
                             "depends_on": [],
                             "required": True,
@@ -610,7 +610,7 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
                         },
                         {
                             "key": "second",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "done", "repeat": 1},
                             "depends_on": ["first"],
                             "required": True,
@@ -768,7 +768,7 @@ async def test_create_ready_child_jobs_does_not_duplicate_existing_child(monkeyp
     existing_child = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="queued",
         root_job_id=root_job.id,
         workflow_node_key="first",
@@ -786,13 +786,13 @@ async def test_create_ready_child_jobs_does_not_duplicate_existing_child(monkeyp
         "nodes": [
             {
                 "key": "first",
-                "job_type": "job_test_echo",
+                "job_type": "example_sleep",
                 "job_params": {"message": "hello", "repeat": 1},
                 "depends_on": [],
             },
             {
                 "key": "second",
-                "job_type": "job_test_echo",
+                "job_type": "example_sleep",
                 "job_params": {"message": "done", "repeat": 1},
                 "depends_on": ["first"],
             },
@@ -840,7 +840,7 @@ async def test_create_ready_child_jobs_rejects_mismatched_persisted_plan_header(
         "nodes": [
             {
                 "key": "first",
-                "job_type": "job_test_echo",
+                "job_type": "example_sleep",
                 "job_params": {"message": "hello", "repeat": 1},
                 "depends_on": [],
             }
@@ -891,7 +891,7 @@ async def test_reconcile_workflow_root_creates_missing_ready_child(monkeypatch):
                     "nodes": [
                         {
                             "key": "first",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "hello", "repeat": 1},
                             "depends_on": [],
                             "required": True,
@@ -975,13 +975,13 @@ async def test_reconcile_workflow_root_creates_missing_ready_child(monkeypatch):
             [
                 {
                     "key": "first",
-                    "job_type": "job_test_echo",
+                    "job_type": "example_sleep",
                     "job_params": {"message": "hello", "repeat": 1},
                     "depends_on": [],
                 },
                 {
                     "key": "second",
-                    "job_type": "job_test_echo",
+                    "job_type": "example_sleep",
                     "job_params": {"message": "done", "repeat": 1},
                     "depends_on": [],
                 },
@@ -1014,7 +1014,7 @@ async def test_create_ready_child_jobs_rejects_invalid_persisted_plan_header(
         or [
             {
                 "key": "first",
-                "job_type": "job_test_echo",
+                "job_type": "example_sleep",
                 "job_params": {"message": "hello", "repeat": 1},
                 "depends_on": [],
             }
@@ -1067,7 +1067,7 @@ async def test_advance_workflow_after_child_success_creates_downstream_ready_chi
                     "nodes": [
                         {
                             "key": "first",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "hello", "repeat": 1},
                             "depends_on": [],
                             "required": True,
@@ -1075,7 +1075,7 @@ async def test_advance_workflow_after_child_success_creates_downstream_ready_chi
                         },
                         {
                             "key": "second",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "done", "repeat": 1},
                             "depends_on": ["first"],
                             "required": True,
@@ -1089,7 +1089,7 @@ async def test_advance_workflow_after_child_success_creates_downstream_ready_chi
     first_child = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="succeeded",
         result={"message": "hello"},
         progress_percent=100,
@@ -1199,7 +1199,7 @@ async def test_advance_workflow_after_last_child_success_finalizes_root(monkeypa
                     "nodes": [
                         {
                             "key": "only",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "done", "repeat": 1},
                             "depends_on": [],
                             "required": True,
@@ -1213,7 +1213,7 @@ async def test_advance_workflow_after_last_child_success_finalizes_root(monkeypa
     child = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="succeeded",
         result={"message": "done"},
         progress_percent=100,
@@ -1442,7 +1442,7 @@ async def test_advance_workflow_after_required_child_failed_finalizes_root_faile
                     "nodes": [
                         {
                             "key": "only",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "done", "repeat": 1},
                             "depends_on": [],
                             "required": True,
@@ -1456,7 +1456,7 @@ async def test_advance_workflow_after_required_child_failed_finalizes_root_faile
     child = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="failed",
         error={"code": "MODEL_CALL_FAILED", "message": "failed", "details": {}},
         progress_percent=100,
@@ -1529,7 +1529,7 @@ async def test_advance_workflow_allow_partial_finalizes_partial_success(monkeypa
                     "nodes": [
                         {
                             "key": "ok",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "ok", "repeat": 1},
                             "depends_on": [],
                             "required": True,
@@ -1537,7 +1537,7 @@ async def test_advance_workflow_allow_partial_finalizes_partial_success(monkeypa
                         },
                         {
                             "key": "bad",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "bad", "repeat": 1},
                             "depends_on": [],
                             "required": True,
@@ -1551,7 +1551,7 @@ async def test_advance_workflow_allow_partial_finalizes_partial_success(monkeypa
     ok_child = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="succeeded",
         result={"message": "ok"},
         progress_percent=100,
@@ -1562,7 +1562,7 @@ async def test_advance_workflow_allow_partial_finalizes_partial_success(monkeypa
     bad_child = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="failed",
         error={"code": "MODEL_CALL_FAILED", "message": "failed", "details": {}},
         progress_percent=100,
@@ -1637,7 +1637,7 @@ async def test_advance_workflow_allow_partial_finalizes_when_failed_dependency_b
                     "nodes": [
                         {
                             "key": "optional-upstream",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "bad", "repeat": 1},
                             "depends_on": [],
                             "required": False,
@@ -1645,7 +1645,7 @@ async def test_advance_workflow_allow_partial_finalizes_when_failed_dependency_b
                         },
                         {
                             "key": "required-downstream",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "blocked", "repeat": 1},
                             "depends_on": ["optional-upstream"],
                             "required": True,
@@ -1659,7 +1659,7 @@ async def test_advance_workflow_allow_partial_finalizes_when_failed_dependency_b
     failed_optional = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="failed",
         error={"code": "MODEL_CALL_FAILED", "message": "failed", "details": {}},
         progress_percent=100,
@@ -1708,7 +1708,7 @@ async def test_advance_workflow_skips_callback_side_effect_for_already_terminal_
     child = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="succeeded",
         progress_percent=100,
         root_job_id=root_job.id,
@@ -1771,13 +1771,13 @@ async def test_execute_workflow_root_rejects_cyclic_persisted_workflow_plan(monk
                     "nodes": [
                         {
                             "key": "first",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "hello", "repeat": 1},
                             "depends_on": ["second"],
                         },
                         {
                             "key": "second",
-                            "job_type": "job_test_echo",
+                            "job_type": "example_sleep",
                             "job_params": {"message": "done", "repeat": 1},
                             "depends_on": ["first"],
                         },

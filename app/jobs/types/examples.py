@@ -1,0 +1,290 @@
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+from app.core.exceptions import AppError
+from app.jobs.base import JobExecutor
+from app.jobs.registry import register_job_type
+from app.schemas.jobs import (
+    ExampleCollectParams,
+    ExampleCollectResult,
+    ExampleCollectRuntimeFields,
+    ExamplePairParams,
+    ExamplePairResult,
+    ExamplePairRuntimeFields,
+    ExampleSleepParams,
+    ExampleSleepResult,
+    ExampleSleepRuntimeFields,
+    ExampleWorkflowParams,
+    ExampleWorkflowResult,
+    ExampleWorkflowRuntimeFields,
+)
+from app.services.job_runtime import job_params_from_job
+from app.workflows import (
+    WorkflowDefinition,
+    chain,
+    chord,
+    chunks,
+    group,
+    map_items,
+    register as register_workflow,
+    starmap_items,
+    task,
+)
+
+_WORKFLOW_DEFINITION: WorkflowDefinition | None = None
+
+
+@register_job_type
+class ExampleSleepJob(JobExecutor):
+    name = "example_sleep"
+    visibility = "demo"
+    role = "root_or_leaf"
+    params_schema = ExampleSleepParams
+    runtime_fields_schema_name = "ExampleSleepRuntimeFields"
+    canonical_result_schema = ExampleSleepResult
+    public_result_schema = ExampleSleepResult
+    allow_callback = True
+    timeout_seconds = 60
+    allowed_error_codes = frozenset(
+        {
+            "INVALID_INPUT",
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "JOB_EXECUTION_FAILED",
+            "WORKFLOW_AFTER_SUCCESS_FAILED",
+            "JOB_RUNTIME_NOT_SUPPORTED",
+        }
+    )
+
+    def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        return ExampleSleepRuntimeFields(operation="sleep").model_dump()
+
+    async def _execute(self, job, db) -> dict[str, Any] | None:
+        params = ExampleSleepParams.model_validate(job_params_from_job(job))
+        if params.sleep_seconds:
+            await asyncio.sleep(params.sleep_seconds)
+        return ExampleSleepResult(
+            message=params.message,
+            repeated=[params.message for _ in range(params.repeat)],
+            count=params.repeat,
+        ).model_dump()
+
+
+@register_job_type
+class ExamplePairJob(JobExecutor):
+    name = "example_pair"
+    visibility = "demo"
+    role = "root_or_leaf"
+    params_schema = ExamplePairParams
+    runtime_fields_schema_name = "ExamplePairRuntimeFields"
+    canonical_result_schema = ExamplePairResult
+    public_result_schema = ExamplePairResult
+    allow_callback = True
+    allowed_error_codes = frozenset(
+        {
+            "INVALID_INPUT",
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "JOB_EXECUTION_FAILED",
+            "WORKFLOW_AFTER_SUCCESS_FAILED",
+            "JOB_RUNTIME_NOT_SUPPORTED",
+        }
+    )
+
+    def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        params = ExamplePairParams.model_validate(job_params)
+        normalized = {"a": params.a, "b": params.b}
+        if "sleep_seconds" in params.model_fields_set:
+            normalized["sleep_seconds"] = params.sleep_seconds
+        return normalized
+
+    def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        return ExamplePairRuntimeFields(operation="pair").model_dump()
+
+    async def _execute(self, job, db) -> dict[str, Any] | None:
+        params = ExamplePairParams.model_validate(job_params_from_job(job))
+        if params.sleep_seconds:
+            await asyncio.sleep(params.sleep_seconds)
+        return ExamplePairResult(a=params.a, b=params.b, result=params.a + params.b).model_dump()
+
+
+@register_job_type
+class ExampleWorkflowJob(JobExecutor):
+    name = "example_workflow"
+    visibility = "demo"
+    role = "root"
+    params_schema = ExampleWorkflowParams
+    runtime_fields_schema_name = "ExampleWorkflowRuntimeFields"
+    canonical_result_schema = ExampleWorkflowResult
+    public_result_schema = ExampleWorkflowResult
+    allow_callback = True
+    timeout_seconds = 120
+    allowed_error_codes = frozenset(
+        {
+            "INVALID_INPUT",
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "JOB_EXECUTION_FAILED",
+            "WORKFLOW_AFTER_SUCCESS_FAILED",
+            "JOB_RUNTIME_NOT_SUPPORTED",
+            "WORKFLOW_CHILD_FAILED",
+        }
+    )
+
+    def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        params = ExampleWorkflowParams.model_validate(job_params)
+        normalized = {"mode": params.mode, "label": params.label}
+        if "sleep_seconds" in params.model_fields_set:
+            normalized["sleep_seconds"] = params.sleep_seconds
+        return normalized
+
+    def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        return ExampleWorkflowRuntimeFields(operation="workflow_root").model_dump()
+
+    async def _execute(self, job, db) -> dict[str, Any] | None:
+        raise AppError(
+            "JOB_RUNTIME_NOT_SUPPORTED",
+            "example workflow root must be executed by workflow orchestration",
+            details={"job_id": str(job.id), "job_type": job.job_type},
+        )
+
+
+@register_job_type
+class ExampleCollectJob(JobExecutor):
+    name = "example_collect"
+    visibility = "demo"
+    role = "leaf"
+    params_schema = ExampleCollectParams
+    runtime_fields_schema_name = "ExampleCollectRuntimeFields"
+    canonical_result_schema = ExampleCollectResult
+    public_result_schema = ExampleCollectResult
+    allow_callback = True
+    timeout_seconds = 60
+    allowed_error_codes = frozenset(
+        {
+            "INVALID_INPUT",
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "JOB_EXECUTION_FAILED",
+            "WORKFLOW_AFTER_SUCCESS_FAILED",
+            "JOB_RUNTIME_NOT_SUPPORTED",
+        }
+    )
+
+    def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        params = ExampleCollectParams.model_validate(job_params)
+        normalized = {"items": params.items}
+        if "sleep_seconds" in params.model_fields_set:
+            normalized["sleep_seconds"] = params.sleep_seconds
+        return normalized
+
+    def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        return ExampleCollectRuntimeFields(operation="collect").model_dump()
+
+    async def _execute(self, job, db) -> dict[str, Any] | None:
+        params = ExampleCollectParams.model_validate(job_params_from_job(job))
+        if params.sleep_seconds:
+            await asyncio.sleep(params.sleep_seconds)
+        return ExampleCollectResult(items=params.items, count=len(params.items)).model_dump()
+
+
+def register_example_workflows() -> None:
+    register_workflow(_workflow_definition())
+
+
+def _workflow_definition() -> WorkflowDefinition:
+    global _WORKFLOW_DEFINITION
+    if _WORKFLOW_DEFINITION is None:
+        _WORKFLOW_DEFINITION = WorkflowDefinition(
+            workflow_type="example_workflow",
+            build=_workflow_expr,
+            max_nodes=10,
+        )
+    return _WORKFLOW_DEFINITION
+
+
+def _sleep_node(key: str, label: str, sleep_seconds: float) -> Any:
+    return task(
+        key,
+        "example_sleep",
+        {"message": f"{label}:{key}", "repeat": 1, "sleep_seconds": sleep_seconds},
+    )
+
+
+def _workflow_expr(params: dict[str, Any]) -> Any:
+    mode = params["mode"]
+    label = params["label"]
+    sleep_seconds = params.get("sleep_seconds", 0)
+    if mode == "single":
+        return _single_expr(label, sleep_seconds)
+    if mode == "chain":
+        return _chain_expr(label, sleep_seconds)
+    if mode == "group":
+        return _group_expr(label, sleep_seconds)
+    if mode == "chord":
+        return _chord_expr(label, sleep_seconds)
+    if mode == "map":
+        return _map_expr(label, sleep_seconds)
+    if mode == "starmap":
+        return _starmap_expr(sleep_seconds)
+    if mode == "chunks":
+        return _chunks_expr(label, sleep_seconds)
+    raise ValueError(f"unsupported example workflow mode: {mode}")
+
+
+def _single_expr(label: str, sleep_seconds: float) -> Any:
+    return _sleep_node("only", label, sleep_seconds)
+
+
+def _chain_expr(label: str, sleep_seconds: float) -> Any:
+    return chain(
+        _sleep_node("a", label, sleep_seconds),
+        _sleep_node("b", label, sleep_seconds),
+        _sleep_node("c", label, sleep_seconds),
+    )
+
+
+def _group_expr(label: str, sleep_seconds: float) -> Any:
+    return group(
+        _sleep_node("a", label, sleep_seconds),
+        _sleep_node("b", label, sleep_seconds),
+        _sleep_node("c", label, sleep_seconds),
+    )
+
+
+def _chord_expr(label: str, sleep_seconds: float) -> Any:
+    return chord(
+        group(
+            _sleep_node("a", label, sleep_seconds),
+            _sleep_node("b", label, sleep_seconds),
+        ),
+        _sleep_node("join", label, sleep_seconds),
+    )
+
+
+def _map_expr(label: str, sleep_seconds: float) -> Any:
+    return map_items(
+        "item",
+        "example_sleep",
+        [f"{label}:one", f"{label}:two"],
+        param_name="message",
+        static_job_params={"repeat": 1, "sleep_seconds": sleep_seconds},
+    )
+
+
+def _starmap_expr(sleep_seconds: float) -> Any:
+    return starmap_items(
+        "pair",
+        "example_pair",
+        [(1, 2), {"a": 3, "b": 4}],
+        arg_names=("a", "b"),
+        static_job_params={"sleep_seconds": sleep_seconds},
+    )
+
+
+def _chunks_expr(label: str, sleep_seconds: float) -> Any:
+    return chunks(
+        "chunk",
+        "example_collect",
+        [f"{label}:1", f"{label}:2", f"{label}:3", f"{label}:4", f"{label}:5"],
+        chunk_size=2,
+        static_job_params={"sleep_seconds": sleep_seconds},
+    )

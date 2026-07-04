@@ -43,7 +43,7 @@
 
 workflow child node 应引用 `role="leaf"` 或 `role="root_or_leaf"` 的 executor。`visibility="internal"` 或内部 child Job 的创建由服务内部 workflow orchestrator 完成，不经过外部 `POST /jobs` 提交准入；Job 实例是否为 child 由 `root_job_id` 和 `workflow_node_key` 共同表达：public root 的两者都为空，workflow child 的两者都非空。
 
-当前开发者示例是 `job_test_workflow`，标记为 `visibility="demo"`、`role="root"`。它覆盖 `single`、`chain`、`group`、`chord`、`map`、`starmap` 和 `chunks`，可作为本地理解 root/child 模式和压测 workflow 链路的参考，但不是正式业务 API 合同。
+当前开发者示例是 `example_workflow`，标记为 `visibility="demo"`、`role="root"`。它覆盖 `single`、`chain`、`group`、`chord`、`map`、`starmap` 和 `chunks`，可作为本地理解 root/child 模式和压测 workflow 链路的参考，但不是正式业务 API 合同。
 
 ## 新增 HTTP 接口
 

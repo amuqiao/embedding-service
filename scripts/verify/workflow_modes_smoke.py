@@ -47,15 +47,15 @@ WORKFLOW_MODE_CASES = (
 
 
 def _create_job(jobs_url: str, headers: dict[str, str], case: WorkflowModeCase) -> dict[str, Any]:
-    label = f"job_test_workflow_{case.mode}-{uuid.uuid4().hex[:8]}"
+    label = f"example_workflow_{case.mode}-{uuid.uuid4().hex[:8]}"
     return job_from_envelope(
         request_json(
             jobs_url,
             method="POST",
             headers=headers,
             payload={
-                "client_request_id": f"verify-job-test-workflow-{case.mode}-{uuid.uuid4()}",
-                "job_type": "job_test_workflow",
+                "client_request_id": f"verify-example-workflow-{case.mode}-{uuid.uuid4()}",
+                "job_type": "example_workflow",
                 "job_params": {"mode": case.mode, "label": label},
                 "metadata": {"source": "scripts/verify/workflow_modes_smoke.py", "mode": case.mode},
                 "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
@@ -91,7 +91,7 @@ def _validate_result(job: dict[str, Any], case: WorkflowModeCase) -> None:
     workflow = result.get("workflow")
     if not isinstance(workflow, dict):
         raise RuntimeError(f"{case.mode} missing workflow result: {result}")
-    if workflow.get("workflow_type") != "job_test_workflow":
+    if workflow.get("workflow_type") != "example_workflow":
         raise RuntimeError(f"{case.mode} returned wrong workflow_type: {workflow}")
     if workflow.get("outcome") != "success":
         raise RuntimeError(f"{case.mode} returned non-success outcome: {workflow}")

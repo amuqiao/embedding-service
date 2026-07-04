@@ -1,6 +1,6 @@
 # Workflow Mode Examples
 
-本目录提供 6 种内置 `job_test_workflow` 模式的真实 API 调用示例：`chain`、`group`、`chord`、`map`、`starmap` 和 `chunks`。
+本目录提供 6 种内置 `example_workflow` 模式的真实 API 调用示例：`chain`、`group`、`chord`、`map`、`starmap` 和 `chunks`。
 
 先启动本地服务：
 

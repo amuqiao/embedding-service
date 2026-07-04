@@ -212,7 +212,7 @@ LATENCY_HELP_EPILOG = """\b
 INGRESS_HELP_EPILOG = """\b
 常用示例：
   ./scripts/jobs.sh ingress --since 30m --bucket 1m
-  ./scripts/jobs.sh ingress --caller-id default --job-type job_test_echo --since 1h --json
+  ./scripts/jobs.sh ingress --caller-id default --job-type example_sleep --since 1h --json
 """
 
 CAPACITY_HELP_EPILOG = """\b

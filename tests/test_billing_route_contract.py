@@ -14,7 +14,7 @@ def _job_envelope(*, job_id: uuid.UUID) -> dict:
     return {
         "job_id": str(job_id),
         "client_request_id": "client-billing-contract",
-        "job_type": "job_test_add",
+        "job_type": "example_pair",
         "job_status": "succeeded",
         "job_progress": {
             "stage": "completed",

@@ -38,8 +38,8 @@ def default_api_url() -> str:
 
 def create_payload(mode: str) -> dict[str, Any]:
     return {
-        "client_request_id": f"example-job-test-workflow-{mode}-{uuid.uuid4()}",
-        "job_type": "job_test_workflow",
+        "client_request_id": f"example-workflow-{mode}-{uuid.uuid4()}",
+        "job_type": "example_workflow",
         "job_params": {
             "mode": mode,
             "label": f"example-{mode}-{uuid.uuid4().hex[:8]}",
@@ -83,7 +83,7 @@ def run_mode(jobs_url: str, headers: dict[str, str], mode: str, timeout_seconds:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Submit built-in job_test_workflow examples.")
+    parser = argparse.ArgumentParser(description="Submit built-in example_workflow examples.")
     parser.add_argument("--api-url", default=default_api_url())
     parser.add_argument("--mode", choices=MODES, help="Run one mode. Defaults to all six.")
     parser.add_argument("--timeout-seconds", type=int, default=60)

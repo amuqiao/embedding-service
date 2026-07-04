@@ -322,10 +322,10 @@ job_execution_attempts = 某条 Job 的一次执行尝试
 |---|---|---|
 | `poster_title_image` | `public` | `root` |
 | `arithmetic` | `demo` | `root` |
-| `job_test_workflow` | `demo` | `root` |
-| `job_test_echo` | `demo` | `root_or_leaf` |
-| `job_test_add` | `demo` | `root_or_leaf` |
-| `job_test_collect` | `demo` | `leaf` |
+| `example_workflow` | `demo` | `root` |
+| `example_sleep` | `demo` | `root_or_leaf` |
+| `example_pair` | `demo` | `root_or_leaf` |
+| `example_collect` | `demo` | `leaf` |
 | `job_real_llm_echo` | `demo` | `root_or_leaf` |
 | `job_real_llm_double_echo` | `demo` | `root_or_leaf` |
 | `poster_title_image_style_probe` | `internal` | `leaf` |

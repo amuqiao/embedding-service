@@ -46,7 +46,7 @@ BUILTIN_PROFILES: dict[str, LoadProfile] = {
     "echo": LoadProfile(
         key="echo",
         title="内置 echo Job",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         case="job-flow",
         users=4,
         spawn_rate=1.0,
@@ -56,7 +56,7 @@ BUILTIN_PROFILES: dict[str, LoadProfile] = {
     "workflow": LoadProfile(
         key="workflow",
         title="内置 workflow Job",
-        job_type="job_test_workflow",
+        job_type="example_workflow",
         case="workflow-flow",
         users=4,
         spawn_rate=1.0,

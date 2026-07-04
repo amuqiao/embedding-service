@@ -26,7 +26,7 @@ def _candidate():
         id=uuid.uuid4(),
         caller_id="caller-1",
         client_request_id="dispatch-replay",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="queued",
         active_attempt_id=attempt_id,
         progress_percent=0,

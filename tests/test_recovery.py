@@ -215,7 +215,7 @@ async def test_recovery_fails_dead_lettered_pending_dispatch(monkeypatch):
     failed_job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="failed",
         progress_percent=0,
         priority="normal",
@@ -269,7 +269,7 @@ async def test_recovery_advances_workflow_after_dead_lettered_internal_child_fai
     child = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="failed",
         root_job_id=root_job_id,
         workflow_node_key="first",
@@ -323,7 +323,7 @@ async def test_recovery_advances_workflow_after_stale_internal_child_failed(monk
     child = Job(
         id=attempt.job_id,
         caller_id="caller-1",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="failed",
         root_job_id=root_job_id,
         workflow_node_key="first",
@@ -579,7 +579,7 @@ async def test_recovery_repairs_missing_callback_outbox_and_delivers(monkeypatch
     job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         status="succeeded",
         callback_url="https://callback.example/jobs",
     )
@@ -642,7 +642,7 @@ async def test_recovery_skips_stale_attempt_when_peer_already_claimed(monkeypatc
 async def test_recovery_delivers_due_callbacks(monkeypatch):
     from app.models.job import Job
 
-    due_job = Job(id=uuid.uuid4(), job_type="job_test_add", status="failed")
+    due_job = Job(id=uuid.uuid4(), job_type="example_pair", status="failed")
     delivered: list[str] = []
 
     async def due_callbacks(*_args, **_kwargs):

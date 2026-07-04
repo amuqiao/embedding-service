@@ -9,15 +9,15 @@ from app.services.job_runtime import payload_hash
 from app.jobs.types.register import register_all_job_types
 
 
-def _job_test_add_handler():
+def _example_pair_handler():
     register_all_job_types()
-    return job_registry.get("job_test_add")
+    return job_registry.get("example_pair")
 
 
-def test_job_test_add_is_registered_and_validates_params():
-    handler = _job_test_add_handler()
+def test_example_pair_is_registered_and_validates_params():
+    handler = _example_pair_handler()
 
-    assert handler.job_type == "job_test_add"
+    assert handler.job_type == "example_pair"
     assert handler.normalize_job_params({"a": 2, "b": 3}) == {"a": 2, "b": 3}
     assert handler.normalize_job_params({"a": 2, "b": 3, "sleep_seconds": 0}) == {
         "a": 2,
@@ -37,14 +37,14 @@ def test_job_test_add_is_registered_and_validates_params():
 
 
 @pytest.mark.asyncio
-async def test_job_test_add_executes_addition_and_returns_sum():
-    handler = _job_test_add_handler()
+async def test_example_pair_executes_addition_and_returns_sum():
+    handler = _example_pair_handler()
     job_id = uuid.uuid4()
     job = Job(
         id=job_id,
         caller_id="caller-1",
         client_request_id="client-add-1",
-        job_type="job_test_add",
+        job_type="example_pair",
         status="running",
         job_params_ref={
             "storage": "db_inline",

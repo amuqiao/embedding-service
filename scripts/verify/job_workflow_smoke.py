@@ -79,7 +79,7 @@ def job_from_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Submit job_test_echo and wait for the Taskiq job flow to finish.")
+    parser = argparse.ArgumentParser(description="Submit example_sleep and wait for the Taskiq job flow to finish.")
     parser.add_argument("--api-url", required=True)
     parser.add_argument("--timeout-seconds", type=int, default=30)
     args = parser.parse_args()
@@ -92,7 +92,7 @@ def main() -> None:
     message = f"taskiq-smoke-{uuid.uuid4().hex[:8]}"
     create_payload = {
         "client_request_id": f"verify-workflow-smoke-{uuid.uuid4()}",
-        "job_type": "job_test_echo",
+        "job_type": "example_sleep",
         "job_params": {"message": message, "repeat": 2},
         "metadata": {"source": "scripts/verify/job_workflow_smoke.py"},
         "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
@@ -122,7 +122,7 @@ def main() -> None:
     if result != expected:
         raise RuntimeError(f"job {job_id} returned unexpected result: {result}")
 
-    print(f"workflow smoke ok: job_id={job_id} job_type=job_test_echo")
+    print(f"workflow smoke ok: job_id={job_id} job_type=example_sleep")
 
 
 if __name__ == "__main__":

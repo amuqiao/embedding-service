@@ -63,7 +63,7 @@ def test_cases_lists_registered_contract():
             "wait_max_seconds",
         } <= set(case["defaults"])
     assert cases["job-flow"]["kind"] == "job_flow"
-    assert cases["job-flow"]["default_job_type"] == "job_test_echo"
+    assert cases["job-flow"]["default_job_type"] == "example_sleep"
     assert cases["job-flow"]["defaults"]["time"] == "60s"
     assert cases["job-flow"]["defaults"]["users"] == 4
     assert cases["job-flow"]["post_checks"] == ["drain", "pressure"]
@@ -100,7 +100,7 @@ def test_profiles_lists_builtin_profiles():
             "wait_max_seconds",
         } <= set(profile["defaults"])
         assert "job_params" not in profile
-    assert profiles["echo"]["job_type"] == "job_test_echo"
+    assert profiles["echo"]["job_type"] == "example_sleep"
     assert profiles["echo"]["case"] == "job-flow"
     assert profiles["echo"]["defaults"]["time"] == "60s"
     assert profiles["echo"]["defaults"]["flow_timeout_seconds"] == 45.0
@@ -119,6 +119,28 @@ def test_run_rejects_non_demo_job_without_confirmation(tmp_path):
             str(env_file),
             "--job-type",
             "poster_title_image",
+            "--job-params-json",
+            "{}",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "pass --allow-real-job" in result.stderr
+
+
+def test_run_rejects_billable_demo_job_without_confirmation(tmp_path):
+    env_file = _env_file(tmp_path)
+
+    result = RUNNER.invoke(
+        cli.app,
+        [
+            "run",
+            "job-flow",
+            "--env-file",
+            str(env_file),
+            "--job-type",
+            "job_real_llm_echo",
             "--job-params-json",
             "{}",
             "--dry-run",
@@ -163,8 +185,8 @@ def test_run_dry_run_writes_manifest_without_token(tmp_path):
     assert manifest["case"]["requires_job_ids"] is False
     assert manifest["case"]["billable_risk"] is False
     assert manifest["profile"] is None
-    assert manifest["job_type"] == "job_test_echo"
-    assert manifest["job_params_source"] == "job_test_echo_defaults"
+    assert manifest["job_type"] == "example_sleep"
+    assert manifest["job_params_source"] == "example_sleep_defaults"
     assert manifest["allow_real_job"] is False
     assert manifest["users"] == 4
     assert manifest["spawn_rate"] == 1.0
@@ -265,7 +287,7 @@ def test_run_builtin_profile_uses_profile_defaults(tmp_path):
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["case_key"] == "workflow-flow"
-    assert payload["job_type"] == "job_test_workflow"
+    assert payload["job_type"] == "example_workflow"
     assert payload["profile"]["key"] == "workflow"
     assert payload["flow_timeout_seconds"] == 90.0
 
@@ -522,7 +544,7 @@ def test_pressure_uses_manifest_context(tmp_path, monkeypatch):
             {
                 "run_id": "run-2",
                 "case_key": "job-submit",
-                "job_type": "job_test_echo",
+                "job_type": "example_sleep",
                 "caller_id": "load-cli",
                 "paths": {"csv_prefix": str(run_dir / "locust")},
             }
@@ -560,7 +582,7 @@ def test_pressure_uses_manifest_context(tmp_path, monkeypatch):
         "--locust-prefix",
         str(run_dir / "locust"),
         "--job-type",
-        "job_test_echo",
+        "example_sleep",
         "--caller-id",
         "load-cli",
     ]
@@ -575,7 +597,7 @@ def test_report_uses_case_key(tmp_path):
                 "status": "succeeded",
                 "run_id": "run-3",
                 "case_key": "job-flow",
-                "job_type": "job_test_echo",
+                "job_type": "example_sleep",
                 "caller_id": "load-cli",
                 "paths": {
                     "manifest": str(run_dir / "manifest.json"),
@@ -611,7 +633,7 @@ def test_drain_uses_manifest_context(tmp_path, monkeypatch):
             {
                 "run_id": "old-run",
                 "case_key": "job-submit",
-                "job_type": "job_test_echo",
+                "job_type": "example_sleep",
                 "caller_id": "load-cli",
                 "paths": {"csv_prefix": str(run_dir / "locust")},
             }
@@ -646,7 +668,7 @@ def test_drain_uses_manifest_context(tmp_path, monkeypatch):
         "--older-than",
         "10m",
         "--job-type",
-        "job_test_echo",
+        "example_sleep",
         "--caller-id",
         "load-cli",
         "--strict",

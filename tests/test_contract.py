@@ -541,7 +541,7 @@ async def test_job_response_drops_stored_result_when_job_type_does_not_allow_sna
         id=job_id,
         caller_id="caller-1",
         client_request_id="contract-test",
-        job_type="job_test_add",
+        job_type="example_pair",
         status=status,
         progress_percent=50,
         progress_stage="calling_model",

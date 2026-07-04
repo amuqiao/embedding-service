@@ -77,7 +77,7 @@ HELP_EPILOG = """\b
 副作用与保护边界：
   job-flow、job-submit、workflow-flow 会创建 Job 并写数据库。
   非本机 API 必须传 --allow-remote-api。
-  非 job_test_* 的 job_type 必须传 --allow-real-job；真实模型业务可能产生费用。
+  非 example_* 的 job_type 必须传 --allow-real-job；真实模型业务可能产生费用。
   本入口不保存 token，不打印完整请求体，不自动重试失败 Job。
 
 \b
@@ -109,7 +109,7 @@ GUIDE_TEXT = """Load 压测心智模型
    ./scripts/load.sh drain --run-id <run_id> --strict
 
 5. 安全边界
-   默认只允许本机 API 和 job_test_* demo job_type。
+   默认只允许本机 API 和 example_* demo job_type。
    远端 API 用 --allow-remote-api；真实业务 job_type 用 --allow-real-job。
 """
 
@@ -265,21 +265,21 @@ def _job_params_env(
         env["LOAD_INTERNAL_JOB_PARAMS_JSON"] = json.dumps(job_params, ensure_ascii=False)
         env["LOAD_INTERNAL_JOB_PARAMS_SOURCE"] = job_params_source
         return env
-    if job_type == "job_test_echo":
+    if job_type == "example_sleep":
         env.update(
             {
                 "LOAD_INTERNAL_ECHO_SLEEP_SECONDS": _format_float(echo_sleep_seconds),
                 "LOAD_INTERNAL_ECHO_REPEAT": str(echo_repeat),
-                "LOAD_INTERNAL_JOB_PARAMS_SOURCE": "job_test_echo_defaults",
+                "LOAD_INTERNAL_JOB_PARAMS_SOURCE": "example_sleep_defaults",
             }
         )
         return env
-    if job_type == "job_test_workflow":
+    if job_type == "example_workflow":
         env.update(
             {
                 "LOAD_INTERNAL_WORKFLOW_MODE": workflow_mode,
                 "LOAD_INTERNAL_WORKFLOW_SLEEP_SECONDS": _format_float(workflow_sleep_seconds),
-                "LOAD_INTERNAL_JOB_PARAMS_SOURCE": "job_test_workflow_defaults",
+                "LOAD_INTERNAL_JOB_PARAMS_SOURCE": "example_workflow_defaults",
             }
         )
         return env
@@ -759,7 +759,7 @@ def run(
         typer.Option("--service-api-key", help="高风险：覆盖 SERVICE_API_KEY；会出现在 shell history/ps，优先用环境变量。"),
     ] = None,
     caller_id: Annotated[str, typer.Option("--caller-id", "--x-ai-service-caller-id", help="Caller ID。")] = "load-cli",
-    allow_real_job: Annotated[bool, typer.Option("--allow-real-job", help="允许非 job_test_* job_type。")] = False,
+    allow_real_job: Annotated[bool, typer.Option("--allow-real-job", help="允许非 example_* job_type。")] = False,
     job_type: Annotated[str | None, typer.Option("--job-type", help="覆盖 case/profile 默认 job_type。")] = None,
     job_params_json: Annotated[
         str | None,
@@ -776,9 +776,9 @@ def run(
     run_time: Annotated[str | None, typer.Option("--time", "-t", help="持续时间，例如 60s、2m。")] = None,
     run_id: Annotated[str | None, typer.Option("--run-id", help="显式 run_id。")] = None,
     output_dir: Annotated[str, typer.Option("--output-dir", help="结果目录根路径。")] = ".run/load",
-    echo_sleep_seconds: Annotated[float, typer.Option("--echo-sleep-seconds", min=0, help="job_test_echo sleep 秒数。")] = 15.0,
-    echo_repeat: Annotated[int, typer.Option("--echo-repeat", min=1, help="job_test_echo repeat。")] = 1,
-    workflow_mode: Annotated[str, typer.Option("--workflow-mode", help="job_test_workflow mode。")] = "group",
+    echo_sleep_seconds: Annotated[float, typer.Option("--echo-sleep-seconds", min=0, help="example_sleep sleep 秒数。")] = 15.0,
+    echo_repeat: Annotated[int, typer.Option("--echo-repeat", min=1, help="example_sleep repeat。")] = 1,
+    workflow_mode: Annotated[str, typer.Option("--workflow-mode", help="example_workflow mode。")] = "group",
     workflow_sleep_seconds: Annotated[float, typer.Option("--workflow-sleep-seconds", min=0, help="workflow sleep 秒数。")] = 15.0,
     wait_min_seconds: Annotated[float | None, typer.Option("--wait-min-seconds", min=0, help="Locust 用户最小等待。")] = None,
     wait_max_seconds: Annotated[float | None, typer.Option("--wait-max-seconds", min=0, help="Locust 用户最大等待。")] = None,
@@ -834,7 +834,7 @@ def ui(
         typer.Option("--service-api-key", help="高风险：覆盖 SERVICE_API_KEY；会出现在 shell history/ps，优先用环境变量。"),
     ] = None,
     caller_id: Annotated[str, typer.Option("--caller-id", "--x-ai-service-caller-id", help="Caller ID。")] = "load-cli",
-    allow_real_job: Annotated[bool, typer.Option("--allow-real-job", help="允许非 job_test_* job_type。")] = False,
+    allow_real_job: Annotated[bool, typer.Option("--allow-real-job", help="允许非 example_* job_type。")] = False,
     job_type: Annotated[str | None, typer.Option("--job-type", help="覆盖 case/profile 默认 job_type。")] = None,
     job_params_json_file: Annotated[str | None, typer.Option("--job-params-json-file", help="自定义 job_params JSON 文件。")] = None,
     query_job_ids: Annotated[
@@ -847,9 +847,9 @@ def ui(
     run_time: Annotated[str | None, typer.Option("--time", "-t", help="持续时间，例如 60s、2m。")] = None,
     run_id: Annotated[str | None, typer.Option("--run-id", help="显式 run_id。")] = None,
     output_dir: Annotated[str, typer.Option("--output-dir", help="结果目录根路径。")] = ".run/load",
-    echo_sleep_seconds: Annotated[float, typer.Option("--echo-sleep-seconds", min=0, help="job_test_echo sleep 秒数。")] = 15.0,
-    echo_repeat: Annotated[int, typer.Option("--echo-repeat", min=1, help="job_test_echo repeat。")] = 1,
-    workflow_mode: Annotated[str, typer.Option("--workflow-mode", help="job_test_workflow mode。")] = "group",
+    echo_sleep_seconds: Annotated[float, typer.Option("--echo-sleep-seconds", min=0, help="example_sleep sleep 秒数。")] = 15.0,
+    echo_repeat: Annotated[int, typer.Option("--echo-repeat", min=1, help="example_sleep repeat。")] = 1,
+    workflow_mode: Annotated[str, typer.Option("--workflow-mode", help="example_workflow mode。")] = "group",
     workflow_sleep_seconds: Annotated[float, typer.Option("--workflow-sleep-seconds", min=0, help="workflow sleep 秒数。")] = 15.0,
     wait_min_seconds: Annotated[float | None, typer.Option("--wait-min-seconds", min=0, help="Locust 用户最小等待。")] = None,
     wait_max_seconds: Annotated[float | None, typer.Option("--wait-max-seconds", min=0, help="Locust 用户最大等待。")] = None,

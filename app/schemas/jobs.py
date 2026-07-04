@@ -242,7 +242,7 @@ class RuntimeFieldsBase(StrictBaseModel):
     system: RuntimeSystemFields | None = Field(default=None, alias="_system")
 
 
-class JobTestAddParams(StrictBaseModel):
+class ExamplePairParams(StrictBaseModel):
     a: NumberValue
     b: NumberValue
     sleep_seconds: float = Field(default=0, ge=0, le=55)
@@ -257,11 +257,11 @@ class JobTestAddParams(StrictBaseModel):
         return value
 
 
-class JobTestAddRuntimeFields(StrictBaseModel):
-    operation: Literal["add"]
+class ExamplePairRuntimeFields(StrictBaseModel):
+    operation: Literal["pair"]
 
 
-class JobTestAddResult(StrictBaseModel):
+class ExamplePairResult(StrictBaseModel):
     a: NumberValue
     b: NumberValue
     result: NumberValue
@@ -276,47 +276,47 @@ class JobTestAddResult(StrictBaseModel):
         return value
 
 
-class JobTestEchoParams(StrictBaseModel):
+class ExampleSleepParams(StrictBaseModel):
     message: str = Field(min_length=1, max_length=512)
     repeat: int = Field(default=1, ge=1, le=5)
     sleep_seconds: float = Field(default=0, ge=0, le=55)
 
 
-class JobTestEchoRuntimeFields(StrictBaseModel):
-    operation: Literal["echo"]
+class ExampleSleepRuntimeFields(StrictBaseModel):
+    operation: Literal["sleep"]
 
 
-class JobTestEchoResult(StrictBaseModel):
+class ExampleSleepResult(StrictBaseModel):
     message: str
     repeated: list[str]
     count: int = Field(ge=1, le=5)
 
 
-class JobTestCollectParams(StrictBaseModel):
+class ExampleCollectParams(StrictBaseModel):
     items: list[str] = Field(min_length=1, max_length=10)
     sleep_seconds: float = Field(default=0, ge=0, le=55)
 
 
-class JobTestCollectRuntimeFields(StrictBaseModel):
+class ExampleCollectRuntimeFields(StrictBaseModel):
     operation: Literal["collect"]
 
 
-class JobTestCollectResult(StrictBaseModel):
+class ExampleCollectResult(StrictBaseModel):
     items: list[str]
     count: int = Field(ge=1, le=10)
 
 
-class JobTestWorkflowParams(StrictBaseModel):
+class ExampleWorkflowParams(StrictBaseModel):
     mode: Literal["single", "chain", "group", "chord", "map", "starmap", "chunks"]
     label: str = Field(default="workflow-smoke", min_length=1, max_length=64)
     sleep_seconds: float = Field(default=0, ge=0, le=55)
 
 
-class JobTestWorkflowRuntimeFields(StrictBaseModel):
+class ExampleWorkflowRuntimeFields(StrictBaseModel):
     operation: Literal["workflow_root"]
 
 
-class JobTestWorkflowResult(StrictBaseModel):
+class ExampleWorkflowResult(StrictBaseModel):
     schema_version: int
     job_type: str
     workflow: dict[str, Any]

@@ -9,25 +9,25 @@ from app.models.job import Job
 from app.services.job_runtime import payload_hash
 
 
-def _job_test_collect_handler():
+def _example_collect_handler():
     register_all_job_types()
-    return job_registry.get("job_test_collect")
+    return job_registry.get("example_collect")
 
 
 @pytest.mark.asyncio
-async def test_job_test_collect_executes_configured_sleep(monkeypatch):
-    handler = _job_test_collect_handler()
+async def test_example_collect_executes_configured_sleep(monkeypatch):
+    handler = _example_collect_handler()
     params = {"items": ["a", "b"], "sleep_seconds": 2}
     slept: list[float] = []
 
     async def fake_sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    monkeypatch.setattr("app.jobs.types.job_test_workflow.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("app.jobs.types.examples.asyncio.sleep", fake_sleep)
     job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
-        job_type="job_test_collect",
+        job_type="example_collect",
         status="running",
         job_params_ref={
             "storage": "db_inline",

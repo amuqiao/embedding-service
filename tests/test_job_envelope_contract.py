@@ -42,7 +42,7 @@ def _job_envelope(
     return {
         "job_id": str(job_id),
         "client_request_id": "client-add-1",
-        "job_type": "job_test_add",
+        "job_type": "example_pair",
         "job_status": job_status,
         "job_progress": {
             "stage": "completed" if job_status == "succeeded" else "accepted",
@@ -110,7 +110,7 @@ def test_post_jobs_returns_response_envelope_with_queued_job(monkeypatch):
     async def fake_submit_job_request(_db, payload, caller_id, *, request_id):
         assert caller_id == "caller-1"
         assert request_id == "req-create-add"
-        assert payload.job_type == "job_test_add"
+        assert payload.job_type == "example_pair"
         assert payload.job_params == {"a": 2, "b": 3}
         return _job_envelope(job_id=job_id, job_status="queued", job_result=None)
 
@@ -129,7 +129,7 @@ def test_post_jobs_returns_response_envelope_with_queued_job(monkeypatch):
             f"{API_PREFIX}/jobs",
             json={
                 "client_request_id": "client-add-1",
-                "job_type": "job_test_add",
+                "job_type": "example_pair",
                 "job_params": {"a": 2, "b": 3},
             },
             headers={"X-Request-ID": "req-create-add"},
@@ -154,7 +154,7 @@ def test_post_jobs_uses_default_caller_when_caller_id_header_is_disabled(monkeyp
     async def fake_submit_job_request(_db, payload, caller_id, *, request_id):
         assert caller_id == "default"
         assert request_id == "req-create-default-caller"
-        assert payload.job_type == "job_test_add"
+        assert payload.job_type == "example_pair"
         return _job_envelope(job_id=job_id, job_status="queued", job_result=None)
 
     async def fake_get_db():
@@ -169,7 +169,7 @@ def test_post_jobs_uses_default_caller_when_caller_id_header_is_disabled(monkeyp
             f"{API_PREFIX}/jobs",
             json={
                 "client_request_id": "client-add-1",
-                "job_type": "job_test_add",
+                "job_type": "example_pair",
                 "job_params": {"a": 2, "b": 3},
             },
             headers={
@@ -206,7 +206,7 @@ def test_post_jobs_rejects_invalid_caller_id_header_by_default(monkeypatch):
             f"{API_PREFIX}/jobs",
             json={
                 "client_request_id": "client-add-1",
-                "job_type": "job_test_add",
+                "job_type": "example_pair",
                 "job_params": {"a": 2, "b": 3},
             },
             headers={
@@ -260,7 +260,7 @@ def test_get_jobs_returns_response_envelope_with_standard_job_fields(monkeypatch
     job = _assert_response_envelope(response.json())
     _assert_standard_job_fields(job)
     assert job["job_id"] == str(job_id)
-    assert job["job_type"] == "job_test_add"
+    assert job["job_type"] == "example_pair"
     assert job["job_status"] == "succeeded"
     assert job["job_result"] == {"a": 2, "b": 3, "result": 5}
     assert job["job_result"]["result"] == job["job_result"]["a"] + job["job_result"]["b"]

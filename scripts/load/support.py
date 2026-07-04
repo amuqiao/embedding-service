@@ -155,7 +155,17 @@ def load_json_object(*, raw: str | None, file_path: str | None, option_name: str
 
 
 def is_demo_job_type(job_type: str | None) -> bool:
-    return bool(job_type) and job_type.startswith("job_test_")
+    if not job_type:
+        return False
+    from app.jobs import registry as job_registry
+    from app.jobs.types.register import register_all_job_types
+
+    register_all_job_types()
+    try:
+        spec = job_registry.all_job_type_specs()[job_type]
+    except KeyError as exc:
+        raise LoadError(f"unknown job_type: {job_type}", exit_code=2) from exc
+    return spec.visibility == "demo" and job_type.startswith("example_")
 
 
 def ensure_parent(path: Path) -> None:

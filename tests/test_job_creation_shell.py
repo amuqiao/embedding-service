@@ -249,7 +249,7 @@ async def test_create_job_writes_registered_workflow_plan_to_runtime_ref(monkeyp
 
     def build_workflow(job_params):
         job_params["value"] = "mutated-in-builder"
-        return task("first", "job_test_echo", {"value": job_params["value"]})
+        return task("first", "example_sleep", {"value": job_params["value"]})
 
     workflow_registry.register(
         WorkflowDefinition(
@@ -371,7 +371,7 @@ async def test_create_job_maps_invalid_workflow_plan_to_validation_error(monkeyp
     workflow_registry.register(
         WorkflowDefinition(
             workflow_type="test.workflow",
-            build=lambda params: chunks("chunk", "job_test_echo", params["items"], chunk_size=0),
+            build=lambda params: chunks("chunk", "example_sleep", params["items"], chunk_size=0),
         )
     )
 

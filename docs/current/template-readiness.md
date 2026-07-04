@@ -40,10 +40,10 @@
 
 模板内置以下测试或示例能力用于本地验证、smoke 或真实链路样例：
 
-- `job_test_echo`
-- `job_test_add`
-- `job_test_collect`
-- `job_test_workflow`
+- `example_sleep`
+- `example_pair`
+- `example_collect`
+- `example_workflow`
 - `arithmetic`
 - `job_real_llm_echo`
 - `job_real_llm_double_echo`
@@ -63,7 +63,7 @@
 | 保留 | 仅用于本地或内部验证环境继续运行模板 smoke |
 | 移除或禁用 | 不需要保留模板验证能力的业务服务 |
 
-不要把 `job_test_*` 包装成正式业务能力。正式业务应新增自己的 `job_type`、schema、executor、workflow definition 和验证脚本。`APP_ENV=test` 或 `APP_ENV=prd` 时，服务只允许外部提交 `visibility="public"` 的 `job_type`；模板 `demo` 类型仍可保留在代码中供 `local/dev` 验证，但不能作为发布环境的外部入口。
+不要把 `example_*` 包装成正式业务能力。正式业务应新增自己的 `job_type`、schema、executor、workflow definition 和验证脚本。`APP_ENV=test` 或 `APP_ENV=prd` 时，服务只允许外部提交 `visibility="public"` 的 `job_type`；模板 `demo` 类型仍可保留在代码中供 `local/dev` 验证，但不能作为发布环境的外部入口。
 
 ## 当前不包含
 

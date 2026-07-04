@@ -56,9 +56,9 @@ def test_chain_compiles_to_linear_dependencies():
         WorkflowSpec(
             workflow_type="test.chain",
             root=chain(
-                task("a", "job_test_echo", {"value": "a"}),
-                task("b", "job_test_echo", {"value": "b"}),
-                task("c", "job_test_echo", {"value": "c"}),
+                task("a", "example_sleep", {"value": "a"}),
+                task("b", "example_sleep", {"value": "b"}),
+                task("c", "example_sleep", {"value": "c"}),
             ),
         )
     )
@@ -77,9 +77,9 @@ def test_group_compiles_to_parallel_ready_nodes():
         WorkflowSpec(
             workflow_type="test.group",
             root=group(
-                task("a", "job_test_echo", {"value": "a"}),
-                task("b", "job_test_echo", {"value": "b"}),
-                task("c", "job_test_echo", {"value": "c"}),
+                task("a", "example_sleep", {"value": "a"}),
+                task("b", "example_sleep", {"value": "b"}),
+                task("c", "example_sleep", {"value": "c"}),
             ),
         )
     )
@@ -93,10 +93,10 @@ def test_chord_compiles_reducer_after_header_group():
             workflow_type="test.chord",
             root=chord(
                 group(
-                    task("a", "job_test_echo", {"value": "a"}),
-                    task("b", "job_test_echo", {"value": "b"}),
+                    task("a", "example_sleep", {"value": "a"}),
+                    task("b", "example_sleep", {"value": "b"}),
                 ),
-                task("join", "job_test_echo", {"mode": "join"}),
+                task("join", "example_sleep", {"mode": "join"}),
             ),
         )
     )
@@ -402,7 +402,7 @@ def test_map_starmap_and_chunks_expand_to_stable_node_inputs():
     mapped = compile_workflow(
         WorkflowSpec(
             workflow_type="test.map",
-            root=map_items("item", "job_test_echo", ["one", "two"], param_name="value"),
+            root=map_items("item", "example_sleep", ["one", "two"], param_name="value"),
         )
     )
     mapped_nodes = _nodes_by_key(mapped)
@@ -412,7 +412,7 @@ def test_map_starmap_and_chunks_expand_to_stable_node_inputs():
     starred = compile_workflow(
         WorkflowSpec(
             workflow_type="test.starmap",
-            root=starmap_items("pair", "job_test_add", [(1, 2), {"a": 3, "b": 4}], arg_names=("a", "b")),
+            root=starmap_items("pair", "example_pair", [(1, 2), {"a": 3, "b": 4}], arg_names=("a", "b")),
         )
     )
     starred_nodes = _nodes_by_key(starred)
@@ -422,7 +422,7 @@ def test_map_starmap_and_chunks_expand_to_stable_node_inputs():
     chunked = compile_workflow(
         WorkflowSpec(
             workflow_type="test.chunks",
-            root=chunks("chunk", "job_test_echo", [1, 2, 3, 4, 5], chunk_size=2),
+            root=chunks("chunk", "example_sleep", [1, 2, 3, 4, 5], chunk_size=2),
         )
     )
     chunked_nodes = _nodes_by_key(chunked)
@@ -437,8 +437,8 @@ def test_compiler_rejects_duplicate_keys_unknown_dependencies_cycles_and_fanout(
             WorkflowSpec(
                 workflow_type="test.duplicate",
                 root=group(
-                    task("same", "job_test_echo", {"value": 1}),
-                    task("same", "job_test_echo", {"value": 2}),
+                    task("same", "example_sleep", {"value": 1}),
+                    task("same", "example_sleep", {"value": 2}),
                 ),
             )
         )
@@ -447,7 +447,7 @@ def test_compiler_rejects_duplicate_keys_unknown_dependencies_cycles_and_fanout(
         compile_workflow(
             WorkflowSpec(
                 workflow_type="test.unknown-dep",
-                root=task("a", "job_test_echo", {"value": 1}, depends_on=("missing",)),
+                root=task("a", "example_sleep", {"value": 1}, depends_on=("missing",)),
             )
         )
 
@@ -456,8 +456,8 @@ def test_compiler_rejects_duplicate_keys_unknown_dependencies_cycles_and_fanout(
             WorkflowSpec(
                 workflow_type="test.cycle",
                 root=group(
-                    task("a", "job_test_echo", {"value": 1}, depends_on=("b",)),
-                    task("b", "job_test_echo", {"value": 2}, depends_on=("a",)),
+                    task("a", "example_sleep", {"value": 1}, depends_on=("b",)),
+                    task("b", "example_sleep", {"value": 2}, depends_on=("a",)),
                 ),
             )
         )
@@ -466,7 +466,7 @@ def test_compiler_rejects_duplicate_keys_unknown_dependencies_cycles_and_fanout(
         compile_workflow(
             WorkflowSpec(
                 workflow_type="test.limit",
-                root=map_items("item", "job_test_echo", [1, 2, 3]),
+                root=map_items("item", "example_sleep", [1, 2, 3]),
                 max_nodes=2,
             )
         )
@@ -477,7 +477,7 @@ def test_compiler_rejects_invalid_starmap_and_chunk_specs():
         compile_workflow(
             WorkflowSpec(
                 workflow_type="test.bad-starmap",
-                root=starmap_items("pair", "job_test_add", [(1, 2, 3)], arg_names=("a", "b")),
+                root=starmap_items("pair", "example_pair", [(1, 2, 3)], arg_names=("a", "b")),
             )
         )
 
@@ -485,7 +485,7 @@ def test_compiler_rejects_invalid_starmap_and_chunk_specs():
         compile_workflow(
             WorkflowSpec(
                 workflow_type="test.bad-chunks",
-                root=chunks("chunk", "job_test_echo", [1, 2], chunk_size=0),
+                root=chunks("chunk", "example_sleep", [1, 2], chunk_size=0),
             )
         )
 
@@ -495,7 +495,7 @@ def test_compiler_rejects_non_recoverable_json_payloads():
         compile_workflow(
             WorkflowSpec(
                 workflow_type="test.bad-json-key",
-                root=task("a", "job_test_echo", {"nested": {1: "value"}}),
+                root=task("a", "example_sleep", {"nested": {1: "value"}}),
             )
         )
 
@@ -503,7 +503,7 @@ def test_compiler_rejects_non_recoverable_json_payloads():
         compile_workflow(
             WorkflowSpec(
                 workflow_type="test.bad-json-number",
-                root=task("a", "job_test_echo", {"value": float("nan")}),
+                root=task("a", "example_sleep", {"value": float("nan")}),
             )
         )
 
@@ -526,19 +526,19 @@ def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
     }
     for mode, node_keys in expected.items():
         plan = compile_registered_workflow(
-            "job_test_workflow",
+            "example_workflow",
             {"mode": mode, "label": mode, "sleep_seconds": 3},
         )
         nodes = _nodes_by_key(plan)
         assert plan["kind"] == "dag_lite"
-        assert plan["workflow_type"] == "job_test_workflow"
+        assert plan["workflow_type"] == "example_workflow"
         assert tuple(nodes) == node_keys
         assert all(node["job_params"].get("sleep_seconds") == 3 for node in nodes.values())
     definition = WorkflowDefinition(
         workflow_type="test.workflow",
         build=lambda params: chain(
-            task("first", "job_test_echo", {"value": params["value"]}),
-            task("second", "job_test_echo", {"value": "done"}),
+            task("first", "example_sleep", {"value": params["value"]}),
+            task("second", "example_sleep", {"value": "done"}),
         ),
         max_nodes=5,
     )
@@ -555,7 +555,7 @@ def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
         register(
             WorkflowDefinition(
                 workflow_type="test.workflow",
-                build=lambda _params: task("other", "job_test_echo", {"value": "other"}),
+                build=lambda _params: task("other", "example_sleep", {"value": "other"}),
             )
         )
     workflow_registry.clear_for_tests()
@@ -564,8 +564,8 @@ def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
 def test_test_workflow_sleep_normalization_preserves_legacy_payload_shape():
     register_all_job_types()
 
-    workflow = job_registry.get("job_test_workflow")
-    collect = job_registry.get("job_test_collect")
+    workflow = job_registry.get("example_workflow")
+    collect = job_registry.get("example_collect")
 
     assert workflow.normalize_job_params({"mode": "group", "label": "x"}) == {
         "mode": "group",

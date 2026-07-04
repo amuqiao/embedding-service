@@ -1630,7 +1630,7 @@ def test_jobs_types_json_is_machine_readable_without_app_log_noise():
 
     payload = json.loads(result.stdout)
     job_types = {item["job_type"] for item in payload["job_types"]}
-    assert {"arithmetic", "job_test_add", "job_test_echo", "job_test_collect", "job_test_workflow"} <= job_types
+    assert {"arithmetic", "example_pair", "example_sleep", "example_collect", "example_workflow"} <= job_types
     assert "job_real_llm_echo" in job_types
     assert "job_real_llm_double_echo" in job_types
     specs = {item["job_type"]: item for item in payload["job_types"]}
@@ -1659,8 +1659,8 @@ def test_jobs_types_json_is_machine_readable_without_app_log_noise():
         assert required_keys <= set(spec)
     assert specs["poster_title_image"]["visibility"] == "public"
     assert specs["poster_title_image"]["role"] == "root"
-    assert specs["job_test_collect"]["visibility"] == "demo"
-    assert specs["job_test_collect"]["role"] == "leaf"
+    assert specs["example_collect"]["visibility"] == "demo"
+    assert specs["example_collect"]["role"] == "leaf"
     assert payload["applied_filters"] == {
         "all": False,
         "visibility": None,
@@ -1680,9 +1680,9 @@ def test_jobs_types_human_output_defaults_to_root_catalog():
     )
 
     assert "poster_title_image" in result.stdout
-    assert "job_test_workflow" in result.stdout
-    assert "job_test_collect" not in result.stdout
-    assert "job_test_echo" not in result.stdout
+    assert "example_workflow" in result.stdout
+    assert "example_collect" not in result.stdout
+    assert "example_sleep" not in result.stdout
     assert "visibility" in result.stdout
     assert "role" in result.stdout
     assert "use --all for the full registry" in result.stdout
@@ -1699,7 +1699,7 @@ def test_jobs_types_json_filters_by_visibility_and_role():
     )
 
     payload = json.loads(result.stdout)
-    assert [item["job_type"] for item in payload["job_types"]] == ["job_test_collect"]
+    assert [item["job_type"] for item in payload["job_types"]] == ["example_collect"]
     assert payload["applied_filters"] == {
         "all": False,
         "visibility": "demo",
@@ -1966,7 +1966,7 @@ def _summary_payload(
         },
         "by_job_type": [
             {
-                "job_type": "job_test_echo",
+                "job_type": "example_sleep",
                 "total": total,
                 "queued": queued,
                 "running": running_active,
@@ -2070,7 +2070,7 @@ def test_jobs_summary_default_is_human_readable(monkeypatch):
     assert "== Callbacks ==" in result.stdout
     assert "delivering" in result.stdout
     assert "delivered" in result.stdout
-    assert "job_test_echo" in result.stdout
+    assert "example_sleep" in result.stdout
     assert '"scope"' not in result.stdout
 
 
@@ -3044,13 +3044,13 @@ def test_jobs_payload_default_is_human_readable(monkeypatch):
             lambda _conn, _job_id: {
                 "id": "root-job-1",
                 "status": "failed",
-                "job_type": "job_test_echo",
+                "job_type": "example_sleep",
                 "caller_id": "default",
                 "progress_percent": 75,
                 "progress_stage": "execute",
                 "callback_status": "not_configured",
                 "job_params_ref": {"storage": "db_inline", "payload": {"message": "hello"}},
-                "runtime_ref": {"storage": "db_inline", "payload": {"job_type": "job_test_echo"}},
+                "runtime_ref": {"storage": "db_inline", "payload": {"job_type": "example_sleep"}},
                 "result": None,
                 "canonical_result": None,
                 "error": {"code": "BOOM"},
@@ -3211,13 +3211,13 @@ def test_jobs_doctor_default_prints_filter_scope(monkeypatch):
 
     result = RUNNER.invoke(
         jobs_cli_app,
-        ["doctor", "--since", "10m", "--job-type", "job_test_echo", "--caller-id", "default"],
+        ["doctor", "--since", "10m", "--job-type", "example_sleep", "--caller-id", "default"],
     )
 
     assert result.exit_code == 0
-    assert "job_type=job_test_echo" in result.stdout
+    assert "job_type=example_sleep" in result.stdout
     assert "caller_id=default" in result.stdout
-    assert "./scripts/jobs.sh list --since 10m --job-type job_test_echo --caller-id default --limit 20" in result.stdout
+    assert "./scripts/jobs.sh list --since 10m --job-type example_sleep --caller-id default --limit 20" in result.stdout
 
 
 def test_jobs_doctor_json_reports_abnormal_metrics(monkeypatch):
@@ -3792,7 +3792,7 @@ def test_jobs_pressure_payload_detects_worker_broker_stuck():
                     "issue": "published_dispatch_not_claimed",
                     "job_id": "job-1",
                     "job_status": "queued",
-                    "job_type": "job_test_echo",
+                    "job_type": "example_sleep",
                 }
             ],
         ),
@@ -3965,7 +3965,7 @@ def test_jobs_stuck_json_includes_scope_filters(monkeypatch):
                 "issue": "running_attempt_lease_expired",
                 "job_id": "job-1",
                 "job_status": "running",
-                "job_type": "job_test_echo",
+                "job_type": "example_sleep",
             }
         ]
 
@@ -3974,7 +3974,7 @@ def test_jobs_stuck_json_includes_scope_filters(monkeypatch):
 
     result = RUNNER.invoke(
         jobs_cli_app,
-        ["stuck", "--older-than", "5m", "--since", "30m", "--caller-id", "default", "--job-type", "job_test_echo", "--json"],
+        ["stuck", "--older-than", "5m", "--since", "30m", "--caller-id", "default", "--job-type", "example_sleep", "--json"],
     )
 
     assert result.exit_code == 0
@@ -3982,13 +3982,13 @@ def test_jobs_stuck_json_includes_scope_filters(monkeypatch):
     assert payload["scope"] == {
         "older_than": "5m",
         "since": "30m",
-        "job_type": "job_test_echo",
+        "job_type": "example_sleep",
         "caller_id": "default",
         "record_scope": "family",
     }
     assert payload["items"][0]["issue"] == "running_attempt_lease_expired"
     assert captured["caller_id"] == "default"
-    assert captured["job_type"] == "job_test_echo"
+    assert captured["job_type"] == "example_sleep"
     assert captured["since"] is not None
     assert captured["record_scope"] == "family"
 
@@ -4133,7 +4133,7 @@ def test_jobs_latency_json_uses_lifecycle_fields(monkeypatch):
     def fake_with_connection(action):
         return [
             {
-                "group_key": "job_test_echo",
+                "group_key": "example_sleep",
                 "total": 2,
                 "lifecycle_p95_seconds": 15.0,
             }
@@ -4234,7 +4234,7 @@ def test_jobs_dashboard_payload_composes_db_evidence_without_runtime_reads(monke
         since="30m",
         bucket="1m",
         older_than="10m",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         caller_id="default",
         max_active_jobs=10,
         stuck_limit=5,
@@ -4482,7 +4482,7 @@ def test_jobs_capacity_query_keeps_current_global_when_window_is_filtered(monkey
 
     queries.capacity(
         None,
-        job_type="job_test_echo",
+        job_type="example_sleep",
         caller_id="default",
         since="2026-06-26T00:00:00+00:00",
         window_seconds=600,
@@ -4605,7 +4605,7 @@ def test_jobs_family_scope_filters_root_family_not_only_same_job_type(monkeypatc
     queries.list_jobs(
         None,
         statuses=[],
-        job_type="job_test_workflow",
+        job_type="example_workflow",
         caller_id="default",
         client_request_id=None,
         since="2026-06-26T00:00:00+00:00",
@@ -4618,7 +4618,7 @@ def test_jobs_family_scope_filters_root_family_not_only_same_job_type(monkeypatc
     assert "(j.id = root.id OR j.root_job_id = root.id)" in sql
     assert "root.job_type = %(job_type)s" in sql
     assert "j.job_type = %(job_type)s" not in sql
-    assert captured_params[0]["job_type"] == "job_test_workflow"
+    assert captured_params[0]["job_type"] == "example_workflow"
 
 
 def test_jobs_latency_rejects_invalid_group_by():
@@ -4661,7 +4661,7 @@ def test_jobs_callbacks_summary_query_uses_callback_outbox_and_scope(monkeypatch
 
     queries.callbacks_summary(
         None,
-        job_type="job_test_echo",
+        job_type="example_sleep",
         caller_id="default",
         since="2026-06-26T00:00:00+00:00",
         record_scope="root",
@@ -4677,7 +4677,7 @@ def test_jobs_callbacks_summary_query_uses_callback_outbox_and_scope(monkeypatch
     assert "j.client_request_id IS NOT NULL" in sql
     assert "j.job_type = %(job_type)s" in sql
     assert "j.caller_id = %(caller_id)s" in sql
-    assert captured_params[0]["job_type"] == "job_test_echo"
+    assert captured_params[0]["job_type"] == "example_sleep"
     assert captured_params[0]["caller_id"] == "default"
 
 
@@ -4695,7 +4695,7 @@ def test_jobs_ingress_query_buckets_independent_event_times(monkeypatch):
     since = datetime(2026, 7, 1, 1, 0, tzinfo=timezone.utc)
     queries.ingress(
         None,
-        job_type="job_test_echo",
+        job_type="example_sleep",
         caller_id="default",
         since=since,
         bucket_seconds=60,
@@ -4720,7 +4720,7 @@ def test_jobs_ingress_query_buckets_independent_event_times(monkeypatch):
     assert "j.caller_id = %(caller_id)s" in sql
     assert captured_params[0]["since"] == since
     assert captured_params[0]["bucket_seconds"] == 60
-    assert captured_params[0]["job_type"] == "job_test_echo"
+    assert captured_params[0]["job_type"] == "example_sleep"
     assert captured_params[0]["caller_id"] == "default"
 
 
@@ -4740,7 +4740,7 @@ def test_jobs_stuck_query_accepts_scope_filters(monkeypatch):
         older_than=parse_duration("10m"),
         limit=20,
         caller_id="default",
-        job_type="job_test_echo",
+        job_type="example_sleep",
         since="2026-06-26T00:00:00+00:00",
     )
 
@@ -4753,7 +4753,7 @@ def test_jobs_stuck_query_accepts_scope_filters(monkeypatch):
     assert "d.published_at < %(cutoff)s" in published_section
     assert "d.next_attempt_at <= now()" not in published_section
     assert captured_params[0]["caller_id"] == "default"
-    assert captured_params[0]["job_type"] == "job_test_echo"
+    assert captured_params[0]["job_type"] == "example_sleep"
 
 
 def test_jobs_timeline_returns_recent_events_in_chronological_display_order(monkeypatch):
@@ -5192,9 +5192,9 @@ def test_workflow_modes_smoke_validates_successful_root_result():
         "job_status": "succeeded",
         "job_result": {
             "schema_version": 1,
-            "job_type": "job_test_workflow",
+            "job_type": "example_workflow",
             "workflow": {
-                "workflow_type": "job_test_workflow",
+                "workflow_type": "example_workflow",
                 "outcome": "success",
                 "node_count": case.expected_node_count,
                 "nodes": [
@@ -5220,9 +5220,9 @@ def test_workflow_modes_smoke_rejects_missing_child_node():
         "job_status": "succeeded",
         "job_result": {
             "schema_version": 1,
-            "job_type": "job_test_workflow",
+            "job_type": "example_workflow",
             "workflow": {
-                "workflow_type": "job_test_workflow",
+                "workflow_type": "example_workflow",
                 "outcome": "success",
                 "node_count": case.expected_node_count,
                 "nodes": [
@@ -5248,9 +5248,9 @@ def test_workflow_modes_smoke_rejects_invalid_child_result_shape():
         "job_status": "succeeded",
         "job_result": {
             "schema_version": 1,
-            "job_type": "job_test_workflow",
+            "job_type": "example_workflow",
             "workflow": {
-                "workflow_type": "job_test_workflow",
+                "workflow_type": "example_workflow",
                 "outcome": "success",
                 "node_count": case.expected_node_count,
                 "nodes": [

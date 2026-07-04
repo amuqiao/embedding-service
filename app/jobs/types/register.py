@@ -5,12 +5,12 @@ def register_all_job_types() -> None:
     from app.jobs.registry import register
     from app.jobs.types.poster_title_image.errors import register_poster_title_image_errors
     from app.jobs.types.arithmetic import ArithmeticJob
-    from app.jobs.types.job_test_add import JobTestAddJob
-    from app.jobs.types.job_test_echo import JobTestEchoJob
-    from app.jobs.types.job_test_workflow import (
-        JobTestCollectJob,
-        JobTestWorkflowJob,
-        register_test_workflows,
+    from app.jobs.types.examples import (
+        ExampleCollectJob,
+        ExamplePairJob,
+        ExampleSleepJob,
+        ExampleWorkflowJob,
+        register_example_workflows,
     )
     from app.jobs.types.job_real_llm_double_echo import JobRealLlmDoubleEchoJob
     from app.jobs.types.job_real_llm_echo import JobRealLlmEchoJob
@@ -25,10 +25,10 @@ def register_all_job_types() -> None:
     register_poster_title_image_errors()
     for executor_cls in (
         ArithmeticJob,
-        JobTestAddJob,
-        JobTestEchoJob,
-        JobTestCollectJob,
-        JobTestWorkflowJob,
+        ExamplePairJob,
+        ExampleSleepJob,
+        ExampleCollectJob,
+        ExampleWorkflowJob,
         JobRealLlmEchoJob,
         JobRealLlmDoubleEchoJob,
         PosterTitleImageJob,
@@ -37,5 +37,5 @@ def register_all_job_types() -> None:
         PosterTitleImageJoinJob,
     ):
         register(executor_cls())
-    register_test_workflows()
+    register_example_workflows()
     register_poster_title_image_workflow()

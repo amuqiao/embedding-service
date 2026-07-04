@@ -143,12 +143,12 @@ def test_job_type_registry_exposes_required_metadata():
     register_all_job_types()
     specs = job_registry.all_job_type_specs()
 
-    assert "job_test_add" in specs
-    spec = specs["job_test_add"]
-    assert spec.params_schema == "JobTestAddParams"
-    assert spec.runtime_fields_schema == "JobTestAddRuntimeFields"
-    assert spec.canonical_result_schema == "JobTestAddResult"
-    assert spec.public_result_schema == "JobTestAddResult"
+    assert "example_pair" in specs
+    spec = specs["example_pair"]
+    assert spec.params_schema == "ExamplePairParams"
+    assert spec.runtime_fields_schema == "ExamplePairRuntimeFields"
+    assert spec.canonical_result_schema == "ExamplePairResult"
+    assert spec.public_result_schema == "ExamplePairResult"
     assert spec.visibility == "demo"
     assert spec.role == "root_or_leaf"
     assert spec.allow_callback is True
@@ -173,12 +173,12 @@ def test_job_type_registry_exposes_required_metadata():
     assert arithmetic_spec.error_codes <= all_error_reasons()
     assert arithmetic_spec.prompt_specs == ()
 
-    assert "job_test_echo" in specs
-    echo_spec = specs["job_test_echo"]
-    assert echo_spec.params_schema == "JobTestEchoParams"
-    assert echo_spec.runtime_fields_schema == "JobTestEchoRuntimeFields"
-    assert echo_spec.canonical_result_schema == "JobTestEchoResult"
-    assert echo_spec.public_result_schema == "JobTestEchoResult"
+    assert "example_sleep" in specs
+    echo_spec = specs["example_sleep"]
+    assert echo_spec.params_schema == "ExampleSleepParams"
+    assert echo_spec.runtime_fields_schema == "ExampleSleepRuntimeFields"
+    assert echo_spec.canonical_result_schema == "ExampleSleepResult"
+    assert echo_spec.public_result_schema == "ExampleSleepResult"
     assert echo_spec.visibility == "demo"
     assert echo_spec.role == "root_or_leaf"
     assert echo_spec.allow_callback is True
@@ -188,12 +188,12 @@ def test_job_type_registry_exposes_required_metadata():
     assert echo_spec.error_codes <= all_error_reasons()
     assert echo_spec.prompt_specs == ()
 
-    assert "job_test_workflow" in specs
-    workflow_spec = specs["job_test_workflow"]
-    assert workflow_spec.params_schema == "JobTestWorkflowParams"
-    assert workflow_spec.runtime_fields_schema == "JobTestWorkflowRuntimeFields"
-    assert workflow_spec.canonical_result_schema == "JobTestWorkflowResult"
-    assert workflow_spec.public_result_schema == "JobTestWorkflowResult"
+    assert "example_workflow" in specs
+    workflow_spec = specs["example_workflow"]
+    assert workflow_spec.params_schema == "ExampleWorkflowParams"
+    assert workflow_spec.runtime_fields_schema == "ExampleWorkflowRuntimeFields"
+    assert workflow_spec.canonical_result_schema == "ExampleWorkflowResult"
+    assert workflow_spec.public_result_schema == "ExampleWorkflowResult"
     assert workflow_spec.visibility == "demo"
     assert workflow_spec.role == "root"
     assert workflow_spec.allow_callback is True
@@ -203,12 +203,12 @@ def test_job_type_registry_exposes_required_metadata():
     assert workflow_spec.error_codes <= all_error_reasons()
     assert workflow_spec.prompt_specs == ()
 
-    assert "job_test_collect" in specs
-    collect_spec = specs["job_test_collect"]
-    assert collect_spec.params_schema == "JobTestCollectParams"
-    assert collect_spec.runtime_fields_schema == "JobTestCollectRuntimeFields"
-    assert collect_spec.canonical_result_schema == "JobTestCollectResult"
-    assert collect_spec.public_result_schema == "JobTestCollectResult"
+    assert "example_collect" in specs
+    collect_spec = specs["example_collect"]
+    assert collect_spec.params_schema == "ExampleCollectParams"
+    assert collect_spec.runtime_fields_schema == "ExampleCollectRuntimeFields"
+    assert collect_spec.canonical_result_schema == "ExampleCollectResult"
+    assert collect_spec.public_result_schema == "ExampleCollectResult"
     assert collect_spec.visibility == "demo"
     assert collect_spec.role == "leaf"
     assert collect_spec.allow_callback is True
@@ -298,10 +298,10 @@ def test_registered_job_type_names_are_layered_contract():
         "arithmetic",
         "job_real_llm_double_echo",
         "job_real_llm_echo",
-        "job_test_add",
-        "job_test_collect",
-        "job_test_echo",
-        "job_test_workflow",
+        "example_pair",
+        "example_collect",
+        "example_sleep",
+        "example_workflow",
         "poster_title_image",
         "poster_title_image_generate_item",
         "poster_title_image_join",
@@ -363,7 +363,7 @@ def test_poster_title_image_job_types_declare_business_log_events():
 
 def _job_type_spec(**overrides) -> JobTypeSpec:
     values = {
-        "job_type": "job_test_add",
+        "job_type": "example_pair",
         "visibility": "demo",
         "role": "root_or_leaf",
         "execution_mode": "custom_executor",
@@ -384,10 +384,10 @@ def _job_type_spec(**overrides) -> JobTypeSpec:
             },
         },
         "side_effect_policy": "none",
-        "params_schema": "JobTestAddParams",
-        "runtime_fields_schema": "JobTestAddRuntimeFields",
-        "canonical_result_schema": "JobTestAddResult",
-        "public_result_schema": "JobTestAddResult",
+        "params_schema": "ExamplePairParams",
+        "runtime_fields_schema": "ExamplePairRuntimeFields",
+        "canonical_result_schema": "ExamplePairResult",
+        "public_result_schema": "ExamplePairResult",
         "callback_envelope_schema": "CallbackEnvelope[JobEnvelope]",
         "allow_callback": True,
         "result_snapshot_statuses": frozenset(),
@@ -464,7 +464,7 @@ def test_job_executor_requires_explicit_visibility_and_role():
     ],
 )
 def test_validate_job_type_registry_rejects_invalid_phase3_metadata(monkeypatch, overrides, message):
-    monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: {"job_test_add": _job_type_spec(**overrides)})
+    monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: {"example_pair": _job_type_spec(**overrides)})
     monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
 
     with pytest.raises(ValueError, match=message):
@@ -475,7 +475,7 @@ def test_validate_job_type_registry_rejects_unknown_log_event(monkeypatch):
     monkeypatch.setattr(
         job_registry,
         "all_job_type_specs",
-        lambda: {"job_test_add": _job_type_spec(log_events=("not_registered",))},
+        lambda: {"example_pair": _job_type_spec(log_events=("not_registered",))},
     )
     monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
 
@@ -483,7 +483,7 @@ def test_validate_job_type_registry_rejects_unknown_log_event(monkeypatch):
         validate_job_type_registry()
 
 
-def _prompt_config(prompt_ref: str = "prompt.ref", output_schema_ref: str = "JobTestAddResult") -> dict:
+def _prompt_config(prompt_ref: str = "prompt.ref", output_schema_ref: str = "ExamplePairResult") -> dict:
     return {
         "version": "test",
         "job_types": {},
@@ -509,13 +509,13 @@ def test_validate_job_type_registry_rejects_missing_prompt_ref(monkeypatch):
         job_registry,
         "all_job_type_specs",
         lambda: {
-            "job_test_add": _job_type_spec(
+            "example_pair": _job_type_spec(
                 prompt_specs=(
                     PromptSpec(
                         step_name="calling_model",
                         runtime_field="prompt_payload",
                         prompt_ref="missing.prompt",
-                        output_schema_ref="JobTestAddResult",
+                        output_schema_ref="ExamplePairResult",
                     ),
                 )
             )
@@ -532,13 +532,13 @@ def test_validate_job_type_registry_rejects_prompt_output_schema_mismatch(monkey
         job_registry,
         "all_job_type_specs",
         lambda: {
-            "job_test_add": _job_type_spec(
+            "example_pair": _job_type_spec(
                 prompt_specs=(
                     PromptSpec(
                         step_name="calling_model",
                         runtime_field="prompt_payload",
                         prompt_ref="prompt.ref",
-                        output_schema_ref="JobTestAddResult",
+                        output_schema_ref="ExamplePairResult",
                     ),
                 )
             )
@@ -547,7 +547,7 @@ def test_validate_job_type_registry_rejects_prompt_output_schema_mismatch(monkey
     monkeypatch.setattr(
         prompt_templates,
         "_load_prompt_config",
-        lambda: _prompt_config(output_schema_ref="JobTestEchoResult"),
+        lambda: _prompt_config(output_schema_ref="ExampleSleepResult"),
     )
 
     with pytest.raises(ValueError, match="output_schema_ref mismatch"):
@@ -559,7 +559,7 @@ def test_validate_job_type_registry_rejects_builtin_llm_without_prompt_spec(monk
         job_registry,
         "all_job_type_specs",
         lambda: {
-            "job_test_add": _job_type_spec(
+            "example_pair": _job_type_spec(
                 execution_mode="builtin_llm_text_runtime",
                 prompt_specs=(),
             )
@@ -612,13 +612,13 @@ def test_validate_job_type_registry_rejects_bad_prompt_spec_field_type(monkeypat
         job_registry,
         "all_job_type_specs",
         lambda: {
-            "job_test_add": _job_type_spec(
+            "example_pair": _job_type_spec(
                 prompt_specs=(
                     PromptSpec(
                         step_name=None,  # type: ignore[arg-type]
                         runtime_field="prompt_payload",
                         prompt_ref="prompt.ref",
-                        output_schema_ref="JobTestAddResult",
+                        output_schema_ref="ExamplePairResult",
                     ),
                 )
             )
@@ -743,8 +743,8 @@ def test_register_all_job_types_reregisters_after_clear():
 
     assert {
         "arithmetic",
-        "job_test_add",
-        "job_test_echo",
+        "example_pair",
+        "example_sleep",
         "job_real_llm_echo",
         "job_real_llm_double_echo",
     } <= set(job_registry.all_job_types())

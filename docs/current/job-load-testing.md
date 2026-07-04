@@ -103,7 +103,7 @@ Job 执行时间会直接影响 worker 吞吐和队列积压。一个 Job 如果
 Job 完成能力 ≈ worker 并发 / 单个 Job 平均执行时间
 ```
 
-这是估算，不是容量承诺。真实吞吐还会受 DB 写入、Redis/Taskiq、回调、结果大小、外部服务限流和错误重试影响。因此第一轮默认使用 `job_test_echo`，先排除真实模型供应商延迟、限流和费用，再评估模板服务自身链路。
+这是估算，不是容量承诺。真实吞吐还会受 DB 写入、Redis/Taskiq、回调、结果大小、外部服务限流和错误重试影响。因此第一轮默认使用 `example_sleep`，先排除真实模型供应商延迟、限流和费用，再评估模板服务自身链路。
 
 ### 如何形成结论
 
@@ -219,7 +219,7 @@ POST /api/v1/ai-jobs/jobs
 GET  /api/v1/ai-jobs/jobs/{job_id}
 ```
 
-第一版默认使用内置 `job_test_echo`。它不调用真实模型，适合压测 API、数据库、Taskiq 发布、worker 消费和 Job 查询路径。需要压 workflow root / internal child / root finalize 链路时，使用内置 `job_test_workflow`。这些压测类型在 registry 中标记为 `visibility="demo"`，查看完整目录时使用 `./scripts/jobs.sh types --all`。不要一开始压真实模型 `job_type`，否则模型供应商延迟、限流和费用会掩盖服务自身瓶颈。
+第一版默认使用内置 `example_sleep`。它不调用真实模型，适合压测 API、数据库、Taskiq 发布、worker 消费和 Job 查询路径。需要压 workflow root / internal child / root finalize 链路时，使用内置 `example_workflow`。这些压测类型在 registry 中标记为 `visibility="demo"`，查看完整目录时使用 `./scripts/jobs.sh types --all`。不要一开始压真实模型 `job_type`，否则模型供应商延迟、限流和费用会掩盖服务自身瓶颈。
 
 ## Case 与 Profile
 
@@ -256,7 +256,7 @@ GET  /api/v1/ai-jobs/jobs/{job_id}
 ./scripts/load.sh run --profile .run/load/profiles/poster-title-image.json --allow-real-job
 ```
 
-profile 只保存压测对象和默认参数，不保存真实业务 Job 的执行确认。非 `job_test_*` 的 `job_type` 每次运行都必须显式传 `--allow-real-job`。
+profile 只保存压测对象和默认参数，不保存真实业务 Job 的执行确认。非 `example_*` 的 `job_type` 每次运行都必须显式传 `--allow-real-job`。
 
 如果只想临时覆盖，也可以继续用 `--job-type` 和 `--job-params-json-file`，但长期复用的业务压测建议沉淀为 profile。
 
@@ -421,10 +421,10 @@ JOB flow terminal latency
 | `--job-type` | case/profile 默认值 | 压测使用的 `job_type` |
 | `--job-params-json-file` | 无 | 非内置动态压测 job 时使用的 `job_params` JSON 文件 |
 | `--job-params-json` | 无 | 高风险 inline JSON，会出现在 shell history/ps；优先使用 `--job-params-json-file` |
-| `--echo-sleep-seconds` | `15` | `job_test_echo.sleep_seconds` |
-| `--echo-repeat` | `1` | `job_test_echo.repeat` |
-| `--workflow-mode` | `group` | `job_test_workflow.mode` |
-| `--workflow-sleep-seconds` | `15` | `job_test_workflow.sleep_seconds` |
+| `--echo-sleep-seconds` | `15` | `example_sleep.sleep_seconds` |
+| `--echo-repeat` | `1` | `example_sleep.repeat` |
+| `--workflow-mode` | `group` | `example_workflow.mode` |
+| `--workflow-sleep-seconds` | `15` | `example_workflow.sleep_seconds` |
 | `--poll-interval-seconds` | case/profile 默认值 | flow 轮询间隔 |
 | `--flow-timeout-seconds` | case/profile 默认值 | flow 单个 Job 等待终态超时 |
 | `--query-job-ids-file` | 无 | `job-query` case 用 Job ID 文件 |
@@ -456,7 +456,7 @@ Workflow root / child 链路压测示例：
   --time 5m
 ```
 
-如果需要模拟失败率、大结果或可变 fan-out，不要把这些逻辑塞进 Locust，也不要把 `job_test_workflow` 扩展成通用压测 DSL。应按 [`../api/extension-guide.md`](../api/extension-guide.md) 新增明确的压测专用 `job_type`，例如暴露 `sleep_seconds`、`result_size_bytes` 和 `should_fail`。
+如果需要模拟失败率、大结果或可变 fan-out，不要把这些逻辑塞进 Locust，也不要把 `example_workflow` 扩展成通用压测 DSL。应按 [`../api/extension-guide.md`](../api/extension-guide.md) 新增明确的压测专用 `job_type`，例如暴露 `sleep_seconds`、`result_size_bytes` 和 `should_fail`。
 
 ## 指标门禁
 

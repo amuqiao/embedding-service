@@ -63,7 +63,7 @@ API 进程的 PostgreSQL async engine 和 session factory 由 FastAPI lifespan �
 | Schemas | `app/schemas/` | `HttpEnvelope` 内层 data、Job、Callback、Billing、Error 合同 |
 | Job kernel | `app/models/job.py`、`app/repositories/job_repo.py`、`app/tasks/jobs.py`、`app/tasks/recovery.py` | Job 聚合、Attempt、Dispatch outbox、Callback outbox、状态迁移和恢复 |
 | Job extension | `app/jobs/`、`app/services/job_runtime.py`、`app/services/executor.py` | `job_type` 注册、运行时快照、executor 执行和结果投影 |
-| Workflow | `app/workflows/`、`app/jobs/types/job_test_workflow.py` | DAG-lite root/child 编排、ready child 创建、child terminal 后推进和 root 汇总 |
+| Workflow | `app/workflows/`、`app/jobs/types/examples.py` | DAG-lite root/child 编排、ready child 创建、child terminal 后推进和 root 汇总 |
 | AI gateway | `app/services/ai_gateway_facade.py`、`app/services/ai_capability_kernel.py`、`app/integrations/ai_gateway.py` | 模型启用校验、provider 调用、AI call ledger、usage 和 cost 记录 |
 | Billing | `app/services/billing.py`、`app/schemas/billing.py` | 从 `ai_call_ledger_entries` 聚合 Job scope billing read model |
 

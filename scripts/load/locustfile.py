@@ -101,13 +101,13 @@ def build_job_params(job_type: str, sequence: int) -> dict[str, Any]:
         if not isinstance(value, dict):
             raise LoadConfigError("LOAD_INTERNAL_JOB_PARAMS_JSON must be an object")
         return value
-    if job_type == "job_test_echo":
+    if job_type == "example_sleep":
         return {
             "message": f"load-{sequence}",
             "repeat": int(env_optional("LOAD_INTERNAL_ECHO_REPEAT", "1") or "1"),
             "sleep_seconds": env_float("LOAD_INTERNAL_ECHO_SLEEP_SECONDS", 15.0),
         }
-    if job_type == "job_test_workflow":
+    if job_type == "example_workflow":
         return {
             "mode": env_optional("LOAD_INTERNAL_WORKFLOW_MODE", "group") or "group",
             "label": f"load-{sequence}",
