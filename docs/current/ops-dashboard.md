@@ -157,10 +157,10 @@ Job Trace
 | `job_trace` | `job_trace.status` | 当前 Job 状态和生成时间 |
 | `job_trace` | `job_trace.summary` | root identity、状态、进度、callback、生命周期 |
 | `job_trace` | `job_trace.load_summary` | 来自 Job metadata 的压测 run_id/profile/case/sequence 摘要 |
-| `job_trace` | `job_trace.payload_summary` | payload 结构摘要；不展示 full payload |
 | `job_trace` | `job_trace.workflow_summary` | workflow root/children/finalize 摘要 |
-| `job_trace` | `job_trace.result_summary` | result / canonical_result 结构摘要 |
 | `job_trace` | `job_trace.callback_summary` | 单 Job callback 状态摘要 |
+| `job_trace` | `job_trace.payload` | metadata、job_params、runtime 的结构摘要；不展示 full payload |
+| `job_trace` | `job_trace.result` | result、canonical_result、error 的结构摘要；不展示 full result |
 | `job_trace` | `job_trace.attempts` | retry decision 和 attempt 证据 |
 | `job_trace` | `job_trace.ai_calls` | AI call ledger 证据 |
 | `job_trace` | `job_trace.children` | workflow children / family 视角 |
@@ -242,7 +242,8 @@ Recent Jobs 固定为 root 视角，不提供 `scope` 控件。child / family �
 | `job` | 单条 `job_aggregates` | identity、root/child、进度、callback_status、payload summaries、error summary |
 | `load_summary` | `job.metadata` | `scripts/load.sh` 写入的 `source/run_id/profile/case_key/sequence` |
 | `workflow_summary` | `job.result` / workflow fields | root/child/finalize 结构摘要 |
-| `result_summary` | `job.result` / `canonical_result` | 只返回结构摘要，不返回完整结果 payload |
+| `payload` | `job.metadata/job_params/runtime` | 输入、metadata 和 runtime 的结构摘要；完整 payload 不进入 dashboard |
+| `result` | `job.result/canonical_result/error` | result、canonical_result 和 error 的结构摘要；完整结果不进入 dashboard |
 | `callback_summary` | callback fields | 单 Job callback 状态、attempt 和错误码摘要 |
 | `attempts` | `job_execution_attempts` by job | attempt 状态、retry decision、failure phase |
 | `ai_calls` | AI call ledger by job | provider/model/operation/status/cost 证据 |
@@ -250,7 +251,9 @@ Recent Jobs 固定为 root 视角，不提供 `scope` 控件。child / family �
 | `timeline` | status event timeline | 状态变迁和 payload summary |
 | `callbacks` | callback outbox by job | 单 Job callback delivery 证据 |
 
-`payload --full` 不进 dashboard。页面只展示结构摘要；需要完整 payload 时使用 CLI。
+Job Trace 页面按“摘要 + 明细 + 证据”分层：摘要层展示 Job Summary、Load Summary、Workflow Summary 和 Callback Summary；明细层用 JSON Block 展示 Payload 与 Result；证据层用表格展示 attempts、AI calls、children、timeline 和 callbacks。
+
+`payload --full` 不进 dashboard。页面只展示结构摘要；需要完整 payload 或完整 result 时使用 CLI。
 
 ## Renderer Contract
 

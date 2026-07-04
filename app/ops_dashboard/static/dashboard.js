@@ -513,9 +513,9 @@
         { label: "finished_at", valuePath: "job.finished_at", format: "date" },
       ],
     },
-    "job_trace.payload_summary": {
-      title: "Payload Summary",
-      question: "full payload disabled",
+    "job_trace.payload": {
+      title: "Payload",
+      question: "input and runtime shape",
       rendererType: "html.json_block",
       dataSource: "job_trace",
       value: (payload) => {
@@ -524,13 +524,6 @@
           metadata: job.metadata_summary,
           job_params: job.job_params_summary,
           runtime: job.runtime_summary,
-          result: job.result_summary,
-          canonical_result: job.canonical_result_summary,
-          error: {
-            code: job.error_code,
-            message: job.error_message,
-            summary: job.error_summary,
-          },
         };
       },
     },
@@ -571,19 +564,23 @@
         },
       ],
     },
-    "job_trace.result_summary": {
-      title: "Result Summary",
-      question: "terminal payload shape",
-      rendererType: "html.summary_table",
+    "job_trace.result": {
+      title: "Result",
+      question: "result and error shape",
+      rendererType: "html.json_block",
       dataSource: "job_trace",
-      rows: [
-        { label: "result_present", value: (payload) => getPath(payload, "job.result_summary.present") },
-        { label: "result_type", value: (payload) => getPath(payload, "job.result_summary.type") || "-" },
-        { label: "result_keys", value: (payload) => (getPath(payload, "job.result_summary.keys") || []).join(", ") || "-" },
-        { label: "canonical_present", value: (payload) => getPath(payload, "job.canonical_result_summary.present") },
-        { label: "error_code", value: (payload) => getPath(payload, "job.error_code") || "-" },
-        { label: "error_message", value: (payload) => getPath(payload, "job.error_message") || "-" },
-      ],
+      value: (payload) => {
+        const job = payload.job || {};
+        return {
+          result: job.result_summary,
+          canonical_result: job.canonical_result_summary,
+          error: {
+            code: job.error_code,
+            message: job.error_message,
+            summary: job.error_summary,
+          },
+        };
+      },
     },
     "job_trace.callback_summary": {
       title: "Callback Summary",
@@ -790,22 +787,23 @@
       target: "job-trace-widgets",
       emptyText: "输入 job_id 后加载 Job 追踪。",
       groups: [
-        { key: "summary", className: "trace-summary" },
-        { key: "details", className: "trace-content" },
+        { key: "summary", title: "Summary", className: "trace-summary" },
+        { key: "details", title: "Details", className: "trace-content" },
+        { key: "evidence", title: "Evidence", className: "trace-content" },
       ],
       placements: [
         { widgetId: "job_trace.status", target: "status-line" },
         { widgetId: "job_trace.summary", group: "summary", hostClass: "table-wrap" },
         { widgetId: "job_trace.load_summary", group: "summary", hostClass: "table-wrap" },
         { widgetId: "job_trace.workflow_summary", group: "summary", chrome: "bare", hostClass: "stat-grid" },
-        { widgetId: "job_trace.result_summary", group: "summary", hostClass: "table-wrap" },
         { widgetId: "job_trace.callback_summary", group: "summary", chrome: "bare", hostClass: "stat-grid" },
-        { widgetId: "job_trace.payload_summary", group: "summary" },
-        { widgetId: "job_trace.attempts", group: "details", hostClass: "table-wrap" },
-        { widgetId: "job_trace.ai_calls", group: "details", hostClass: "table-wrap" },
-        { widgetId: "job_trace.children", group: "details", hostClass: "table-wrap" },
-        { widgetId: "job_trace.timeline", group: "details", hostClass: "table-wrap" },
-        { widgetId: "job_trace.callbacks", group: "details", hostClass: "table-wrap" },
+        { widgetId: "job_trace.payload", group: "details" },
+        { widgetId: "job_trace.result", group: "details" },
+        { widgetId: "job_trace.attempts", group: "evidence", hostClass: "table-wrap" },
+        { widgetId: "job_trace.ai_calls", group: "evidence", hostClass: "table-wrap" },
+        { widgetId: "job_trace.children", group: "evidence", hostClass: "table-wrap" },
+        { widgetId: "job_trace.timeline", group: "evidence", hostClass: "table-wrap" },
+        { widgetId: "job_trace.callbacks", group: "evidence", hostClass: "table-wrap" },
       ],
     },
   });

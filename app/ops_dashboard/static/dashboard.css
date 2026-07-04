@@ -437,6 +437,34 @@ td.wrap {
   gap: 14px;
 }
 
+.layout-group {
+  display: grid;
+  gap: 10px;
+}
+
+.layout-group + .layout-group {
+  margin-top: 16px;
+}
+
+.layout-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 24px;
+}
+
+.layout-group-head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.layout-group-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .trace-summary {
   display: grid;
   grid-template-columns: 1.3fr 1fr;

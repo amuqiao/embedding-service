@@ -221,6 +221,8 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     assert "const RENDERERS = Object.freeze" in contract
     assert "function renderWidgetLayout" in contract
     assert "function metricValue" in contract
+    assert "layout-group-head" in contract
+    assert "group.title" in contract
     assert "const DATA_SOURCE_REGISTRY = Object.freeze" in script
     assert "const PAGE_CONTROL_REGISTRY = Object.freeze" in script
     assert "const WIDGET_REGISTRY = Object.freeze" in script
@@ -330,10 +332,26 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     for widget_id in [
         '"job_trace.load_summary"',
         '"job_trace.workflow_summary"',
-        '"job_trace.result_summary"',
+        '"job_trace.result"',
         '"job_trace.callback_summary"',
     ]:
         assert widget_id in widget_source
+    assert '"job_trace.payload"' in widget_source
+    assert '"job_trace.payload_summary"' not in widget_source
+    assert '"job_trace.result_summary"' not in widget_source
+    payload_widget = widget_source[widget_source.index('"job_trace.payload"') : widget_source.index('"job_trace.load_summary"')]
+    result_widget = widget_source[
+        widget_source.index('"job_trace.result"') : widget_source.index('"job_trace.callback_summary"')
+    ]
+    assert 'rendererType: "html.json_block"' in payload_widget
+    assert 'title: "Result"' in result_widget
+    assert 'rendererType: "html.json_block"' in result_widget
+    assert "job.result_summary" not in payload_widget
+    assert "job.canonical_result_summary" not in payload_widget
+    assert "job.error_summary" not in payload_widget
+    assert "job.result_summary" in result_widget
+    assert "job.canonical_result_summary" in result_widget
+    assert "job.error_summary" in result_widget
 
     widget_keys = set(re.findall(r'^\s{4}"([^"]+)":\s*\{', widget_source, re.M))
     layout_widget_id_list = re.findall(r'widgetId:\s*"([^"]+)"', layout_source)
@@ -348,6 +366,24 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     declared_groups = set(re.findall(r'key:\s*"([^"]+)"', layout_source))
     placement_groups = set(re.findall(r'group:\s*"([^"]+)"', layout_source))
     assert placement_groups <= declared_groups
+    assert {"summary", "details", "evidence"} <= declared_groups
+    assert 'key: "summary", title: "Summary"' in layout_source
+    assert 'key: "details", title: "Details"' in layout_source
+    assert 'key: "evidence", title: "Evidence"' in layout_source
+    assert 'group: "details"' in layout_source
+    assert 'group: "evidence"' in layout_source
+    for widget_id in ["job_trace.summary", "job_trace.load_summary", "job_trace.workflow_summary", "job_trace.callback_summary"]:
+        assert re.search(rf'widgetId:\s*"{re.escape(widget_id)}",\s*group:\s*"summary"', layout_source)
+    for widget_id in ["job_trace.payload", "job_trace.result"]:
+        assert re.search(rf'widgetId:\s*"{re.escape(widget_id)}",\s*group:\s*"details"', layout_source)
+    for widget_id in [
+        "job_trace.attempts",
+        "job_trace.ai_calls",
+        "job_trace.children",
+        "job_trace.timeline",
+        "job_trace.callbacks",
+    ]:
+        assert re.search(rf'widgetId:\s*"{re.escape(widget_id)}",\s*group:\s*"evidence"', layout_source)
 
     for field in ["rendererType:", "dataSource:", "dataPath:", "series:", "columns:", "adapter:", "groups:", "placements:"]:
         assert field in script

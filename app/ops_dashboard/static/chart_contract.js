@@ -139,8 +139,19 @@
         const groupPlacements = inlinePlacements.filter((placement) => placement.group === group.key);
         if (groupPlacements.length === 0) return "";
         const body = groupPlacements.map((placement) => renderPlacementShell(placement, widgetRegistry)).join("");
-        if (!group.className) return body;
-        return `<div class="${escapeHtml(group.className)}">${body}</div>`;
+        if (!group.title && !group.className) return body;
+        const bodyHtml = group.className ? `<div class="${escapeHtml(group.className)}">${body}</div>` : body;
+        if (!group.title) return bodyHtml;
+        const subtitle = group.subtitle ? `<span>${escapeHtml(group.subtitle)}</span>` : "";
+        return `
+          <section class="layout-group">
+            <div class="layout-group-head">
+              <h2>${escapeHtml(group.title)}</h2>
+              ${subtitle}
+            </div>
+            ${bodyHtml}
+          </section>
+        `;
       })
       .join("");
     root.innerHTML = groupHtml;
