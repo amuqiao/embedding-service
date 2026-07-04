@@ -10,7 +10,7 @@
 | [`current/ai-capability.md`](current/ai-capability.md) | 当前 AI 调用入口、model/prompt/pricing registry、AI kernel 组件和文本 provider path |
 | [`current/ai-billing.md`](current/ai-billing.md) | 当前 AI call ledger、usage/cost 事实源、Job billing 聚合和非资金账本边界 |
 | [`current/job-kernel.md`](current/job-kernel.md) | 当前 Job、幂等键、Attempt、Dispatch outbox、Callback outbox、root/child lineage 和表设计边界 |
-| [`runbooks/job-kernel-explained.md`](runbooks/job-kernel-explained.md) | 跟一个请求走完整条 Job 链路的心智模型讲解，配套 `job-kernel.md` 的事实清单，不是独立事实源；同名 `.html` 是可视化版，内容与 `.md` 一致 |
+| [`runbooks/job-kernel-explained.md`](runbooks/job-kernel-explained.md) | 跟一个请求走完整条 Job 链路的心智模型讲解，配套 `job-kernel.md` 的事实清单，不是独立事实源 |
 | [`current/workflow-kernel.md`](current/workflow-kernel.md) | 当前 DAG-lite root/child workflow、child Job 执行、root 汇总和 billing scope 行为 |
 | [`current/observability.md`](current/observability.md) | 当前日志出口、request_id、业务事件白名单、本地 `logs/` 边界和新增日志代码规范 |
 | [`current/template-readiness.md`](current/template-readiness.md) | 当前仓库作为 AI Job 微服务模板复制给新业务前的就绪边界、必改项和最小验收 |
@@ -19,9 +19,10 @@
 | [`current/ops-dashboard.md`](current/ops-dashboard.md) | 当前只读 `ops_dashboard` 路由、data source / widget / layout / renderer 注册层和 Job 运维展示边界 |
 | [`current/job-load-testing.md`](current/job-load-testing.md) | 当前 Job 压测入口、case/profile、manifest、产物、安全确认和指标语义事实 |
 | [`runbooks/job-load-testing-runbook.md`](runbooks/job-load-testing-runbook.md) | 执行一次 Job 压测、选择示例 profile、模拟 `poster_title_image` 结构、观察 dashboard 和压后诊断的唯一操作手册 |
-| [`runbooks/compose-full-dev-operations.md`](runbooks/compose-full-dev-operations.md) | 开发环境使用 `compose-full` 启动服务后，查看状态、容器内排障脚本和日志的操作手册 |
-| [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` overview、root/family scope、Job/workflow 查询和常见排障顺序的辅助说明；压测主流程以 `job-load-testing-runbook.md` 为准，命令真源以 `scripts/jobs.sh` 和 `scripts/jobs/cli.py` 为准 |
-| [`runbooks/标题生成链路.md`](runbooks/标题生成链路.md) | `poster_title_image` 从接单、style probe、生图、OSS 写入、join 到结果快照的链路定位和排障顺序 |
+| [`runbooks/compose-full-dev-operations.md`](runbooks/compose-full-dev-operations.md) | `compose-full` 开发形态的启动、状态、容器内排障脚本和日志操作；不覆盖 `local` 或 K8s |
+| [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` 只读证据查询、root/family scope、Job/workflow 排障命令含义；不承担压测主流程 |
+| [`runbooks/poster-title-image 真实流程本地验证.md`](runbooks/poster-title-image%20真实流程本地验证.md) | 用 `scripts/real-flow.sh` 创建真实 `poster_title_image` Job、确认模型/OSS/billing/输出图链路；会产生真实费用 |
+| [`runbooks/标题生成链路.md`](runbooks/标题生成链路.md) | `poster_title_image` 从接单、style probe、生图、OSS 写入、join 到结果快照的链路定位和排障顺序；不写真实流程执行步骤 |
 | [`runbooks/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/MAX_ACTIVE_JOBS%20估算与生产调优.md) | `MAX_ACTIVE_JOBS` 估算、K8s 生产调优顺序和 PostgreSQL/Redis 瓶颈判断；不是压测执行手册 |
 | [`runbooks/lifespan.md`](runbooks/lifespan.md) | API、worker、recovery 生命周期与运行期资源放置边界 |
 | [`runbooks/local-postgres-database-name.md`](runbooks/local-postgres-database-name.md) | 本地项目数据库名变更后，PostgreSQL volume 旧库与 `.env` 新库不一致的排障和修复 |
@@ -39,12 +40,26 @@
 | [`plans/workflow-kernel-design.md`](plans/workflow-kernel-design.md) | workflow 从模板能力走向正式业务编排前的剩余缺口 |
 | [`plans/implementation-terminal-acceptance.md`](plans/implementation-terminal-acceptance.md) | 模板阶段剩余验收门禁和业务接入前置条件 |
 
+## Runbook 职责边界
+
+`docs/runbooks/` 只保留可重复执行的操作、排障和心智模型手册。不要在 runbook 里复制 current 事实表、API 字段合同或计划 backlog；需要事实时链接 `docs/current/`，需要调用方合同时链接 `docs/api/`，需要未来工作时链接 `docs/plans/`。
+
+| 场景 | 默认入口 | 不放入这里的内容 |
+|---|---|---|
+| 理解 Job 内核链路 | [`runbooks/job-kernel-explained.md`](runbooks/job-kernel-explained.md) | 字段真源、表结构大表、API 合同 |
+| 查 Job 运行证据 | [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | 压测执行步骤、业务专属链路解释 |
+| 执行 Job 压测 | [`runbooks/job-load-testing-runbook.md`](runbooks/job-load-testing-runbook.md) | `load.sh` 机器合同、生产容量调优公式 |
+| 估算生产容量 | [`runbooks/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/MAX_ACTIVE_JOBS%20估算与生产调优.md) | 一次压测怎么跑、Job 明细查询命令教程 |
+| 验证 `poster_title_image` 真实流程 | [`runbooks/poster-title-image 真实流程本地验证.md`](runbooks/poster-title-image%20真实流程本地验证.md) | 标题图内部链路排障、完整 API 字段合同 |
+| 排查标题图生成链路 | [`runbooks/标题生成链路.md`](runbooks/标题生成链路.md) | real-flow 执行步骤、完整 API 字段合同 |
+| 处理运行形态问题 | [`runbooks/compose-full-dev-operations.md`](runbooks/compose-full-dev-operations.md)、[`runbooks/lifespan.md`](runbooks/lifespan.md)、[`runbooks/remote-test-env-fastapi-redis-taskiq.md`](runbooks/remote-test-env-fastapi-redis-taskiq.md)、[`runbooks/local-postgres-database-name.md`](runbooks/local-postgres-database-name.md) | 业务 Job 合同或压测报告 |
+
 ## 分层规则
 
 - `docs/current/` 只写当前代码已经落地的事实。
 - `docs/api/` 只写外部调用方和业务扩展方需要遵守的合同。
 - `docs/plans/` 只写未来计划、待办和目标方向；可保留简短 current baseline 作为上下文，但当前事实真源仍在 `docs/current/`。
-- `docs/runbooks/` 只写可重复执行的排障手册，不重复维护代码事实或 API 合同。
+- `docs/runbooks/` 只写可重复执行的操作、排障和心智模型手册，不重复维护代码事实、API 合同或计划 backlog。
 - `docs/archived/` 只保存历史设计和旧计划，归档文档不能作为当前事实源。
 
 ## 维护规则

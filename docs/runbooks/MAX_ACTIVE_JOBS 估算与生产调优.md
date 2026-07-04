@@ -342,18 +342,7 @@ PostgreSQL/Redis 未触顶
 
 ## 本地压测结论的边界
 
-当前本地报告基于单 API、单 worker、本地 PostgreSQL/Redis 容器：
-
-```text
-MAX_ACTIVE_JOBS=750
-  当前已测最高无失败档
-
-MAX_ACTIVE_JOBS=775
-  出现 HTTP 500
-  API 日志有 TooManyConnectionsError
-```
-
-这个结果只能说明当前本地形态下的接单上界。生产上如果 API/worker 以 Pod 形式部署，且连接生产 PostgreSQL，安全值必须重新测，因为这些变量都会改变环境硬上限：
+本地压测结果只能说明当前本地形态下的接单上界，不作为长期容量承诺，也不能直接外推到生产。生产上如果 API/worker 以 Pod 形式部署，且连接生产 PostgreSQL，安全值必须重新测，因为这些变量都会改变环境硬上限：
 
 - API replicas。
 - worker replicas。

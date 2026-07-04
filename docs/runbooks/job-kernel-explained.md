@@ -1,9 +1,9 @@
 # Job 机制讲解：跟一个请求走完整条链路
 
-本文是 [`job-kernel.md`](job-kernel.md) 的配套讲解文档，目标是建立心智模型，不是补充新事实。
+本文是 [`job-kernel.md`](../current/job-kernel.md) 的配套讲解文档，目标是建立心智模型，不是补充新事实。
 
-- 事实源仍然只有一个：字段名、默认值、约束、状态枚举以 `job-kernel.md` 和代码为准；本文和它冲突时，以 `job-kernel.md` 为准。
-- `job-kernel.md` 按"概念"组织（幂等 / lineage / 重试 / 恢复 / 表），适合查字典；本文按"一个请求实际怎么走"组织，适合建立地图。
+- 事实源仍然只有一个：字段名、默认值、约束、状态枚举以 [`job-kernel.md`](../current/job-kernel.md) 和代码为准；本文和它冲突时，以 [`job-kernel.md`](../current/job-kernel.md) 为准。
+- [`job-kernel.md`](../current/job-kernel.md) 按"概念"组织（幂等 / lineage / 重试 / 恢复 / 表），适合查字典；本文按"一个请求实际怎么走"组织，适合建立地图。
 - 本文不重复列举字段清单和 schema 约束，只在必要处引用。
 
 读完本文，你应该能回答："一个 Job 提交进来之后，中间任何一步卡住，系统怎么知道、怎么救、救不回来会怎样"。

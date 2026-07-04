@@ -2,6 +2,8 @@
 
 本文说明如何用 `./scripts/real-flow.sh` 验证 `poster_title_image`，覆盖本地开发和远端测试环境。推荐心智模型是：先检查配置，再准备 `reference_image` URL Ref，最后创建真实 Job。
 
+本文负责“如何创建一次真实 `poster_title_image` Job 并确认模型、OSS、billing 和输出图链路”。如果 Job 已经创建但要定位 style probe、generate item、join、Prompt 拼接或结果快照问题，看 [`标题生成链路.md`](标题生成链路.md)。完整 HTTP 字段和调用方合同以 [`../api/poster-title-image-delivery-api.md`](../api/poster-title-image-delivery-api.md) 为准。
+
 ## 先理解这件事
 
 `poster-title-image` 是真实业务流程验证入口，不是单纯的 HTTP 请求示例。它会创建真实 `poster_title_image` Job，等待 worker 执行到终态，查询 billing，并按需下载输出图做本地检测。
@@ -527,9 +529,9 @@ worker 当前读取参考图使用 `public_url`。如果 Job 已创建但 worker
 ./scripts/jobs.sh workflow <job_id>
 ```
 
-### 报 job scope_id must equal scope_job_id
+### 旧镜像报 job scope_id must equal scope_job_id
 
-这是旧应用层校验不支持 workflow 子 Job 记账到 root Job 的表现。
+这是旧应用层校验不支持 workflow 子 Job 记账到 root Job 的表现。当前代码已支持 root billing scope；只有远端或本地服务仍运行旧镜像/旧进程时，才应按本节处理。
 
 处理方式：
 
@@ -539,9 +541,9 @@ worker 当前读取参考图使用 `public_url`。如果 Job 已创建但 worker
 
 确认本地服务加载了支持 `scope_job_id` 的代码后再重跑真实流程。
 
-### 报 ck_ai_call_ledger_entries_job_scope_context
+### 旧迁移报 ck_ai_call_ledger_entries_job_scope_context
 
-这是数据库约束仍停留在旧规则：`scope_id = job_id::text`。workflow 子 Job 现在会写：
+这是数据库约束仍停留在旧规则：`scope_id = job_id::text`。当前迁移已支持 workflow 子 Job 记账到 root；只有目标数据库还没应用新迁移时，才应按本节处理。workflow 子 Job 现在会写：
 
 ```text
 scope_id = root_job_id
