@@ -20,6 +20,7 @@ from app.workflows import (
     task,
 )
 from app.workflows import registry as workflow_registry
+from app.jobs.types.example_catalog import all_example_workflow_mode_specs
 from app.jobs.types.register import register_all_job_types
 from app.jobs.types.poster_title_image.executor import _item_node_key
 
@@ -515,24 +516,37 @@ def test_workflow_registry_compiles_registered_definition():
 def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
     register_all_job_types()
 
-    expected = {
-        "single": ("only",),
-        "chain": ("a", "b", "c"),
-        "group": ("a", "b", "c"),
-        "chord": ("a", "b", "join"),
-        "map": ("item.0", "item.1"),
-        "starmap": ("pair.0", "pair.1"),
-        "chunks": ("chunk.0", "chunk.1", "chunk.2"),
+    specs = all_example_workflow_mode_specs()
+    assert tuple(item["mode"] for item in specs) == ("single", "chain", "group", "chord", "map", "starmap", "chunks")
+    assert {item["mode"]: item["primitive"] for item in specs} == {
+        "single": "task",
+        "chain": "chain",
+        "group": "group",
+        "chord": "chord",
+        "map": "map",
+        "starmap": "starmap",
+        "chunks": "chunks",
     }
-    for mode, node_keys in expected.items():
+    json.dumps(specs, ensure_ascii=False, sort_keys=True)
+
+    for spec in specs:
         plan = compile_registered_workflow(
             "example_workflow",
-            {"mode": mode, "label": mode, "sleep_seconds": 3},
+            {"mode": spec["mode"], "label": spec["mode"], "sleep_seconds": 3},
         )
         nodes = _nodes_by_key(plan)
         assert plan["kind"] == "dag_lite"
         assert plan["workflow_type"] == "example_workflow"
-        assert tuple(nodes) == node_keys
+        assert tuple(nodes) == tuple(spec["expected_node_keys"])
+        assert plan["node_count"] == spec["expected_node_count"]
+        assert {key: nodes[key]["job_type"] for key in nodes} == {
+            key: {
+                "sleep": "example_sleep",
+                "pair": "example_pair",
+                "collect": "example_collect",
+            }[kind]
+            for key, kind in spec["expected_result_kinds"].items()
+        }
         assert all(node["job_params"].get("sleep_seconds") == 3 for node in nodes.values())
     definition = WorkflowDefinition(
         workflow_type="test.workflow",
@@ -561,7 +575,7 @@ def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
     workflow_registry.clear_for_tests()
 
 
-def test_test_workflow_sleep_normalization_preserves_legacy_payload_shape():
+def test_example_workflow_sleep_normalization_preserves_payload_shape():
     register_all_job_types()
 
     workflow = job_registry.get("example_workflow")

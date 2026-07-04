@@ -21,6 +21,7 @@ from scripts.verify.job_workflow_smoke import (
     load_dotenv,
     request_json,
 )
+from app.jobs.types.example_catalog import all_example_workflow_mode_specs
 
 
 @dataclass(frozen=True)
@@ -31,18 +32,14 @@ class WorkflowModeCase:
     expected_result_kinds: dict[str, str]
 
 
-WORKFLOW_MODE_CASES = (
-    WorkflowModeCase("single", 1, ("only",), {"only": "echo"}),
-    WorkflowModeCase("chain", 3, ("a", "b", "c"), {"a": "echo", "b": "echo", "c": "echo"}),
-    WorkflowModeCase("group", 3, ("a", "b", "c"), {"a": "echo", "b": "echo", "c": "echo"}),
-    WorkflowModeCase("chord", 3, ("a", "b", "join"), {"a": "echo", "b": "echo", "join": "echo"}),
-    WorkflowModeCase("map", 2, ("item.0", "item.1"), {"item.0": "echo", "item.1": "echo"}),
-    WorkflowModeCase("starmap", 2, ("pair.0", "pair.1"), {"pair.0": "add", "pair.1": "add"}),
-    WorkflowModeCase("chunks", 3, ("chunk.0", "chunk.1", "chunk.2"), {
-        "chunk.0": "collect",
-        "chunk.1": "collect",
-        "chunk.2": "collect",
-    }),
+WORKFLOW_MODE_CASES = tuple(
+    WorkflowModeCase(
+        mode=str(spec["mode"]),
+        expected_node_count=int(spec["expected_node_count"]),
+        expected_node_keys=tuple(spec["expected_node_keys"]),
+        expected_result_kinds=dict(spec["expected_result_kinds"]),
+    )
+    for spec in all_example_workflow_mode_specs()
 )
 
 
@@ -125,19 +122,19 @@ def _validate_node_result(
 ) -> None:
     if not isinstance(result, dict):
         raise RuntimeError(f"{case.mode} node {node_key} missing result object: {result}")
-    if expected_kind == "echo":
+    if expected_kind == "sleep":
         repeated = result.get("repeated")
         if not isinstance(result.get("message"), str) or not isinstance(repeated, list) or result.get("count") != 1:
-            raise RuntimeError(f"{case.mode} node {node_key} returned invalid echo result: {result}")
+            raise RuntimeError(f"{case.mode} node {node_key} returned invalid sleep result: {result}")
         if repeated != [result["message"]]:
-            raise RuntimeError(f"{case.mode} node {node_key} returned inconsistent echo result: {result}")
+            raise RuntimeError(f"{case.mode} node {node_key} returned inconsistent sleep result: {result}")
         return
-    if expected_kind == "add":
+    if expected_kind == "pair":
         a = result.get("a")
         b = result.get("b")
         total = result.get("result")
         if not isinstance(a, (int, float)) or not isinstance(b, (int, float)) or total != a + b:
-            raise RuntimeError(f"{case.mode} node {node_key} returned invalid add result: {result}")
+            raise RuntimeError(f"{case.mode} node {node_key} returned invalid pair result: {result}")
         return
     if expected_kind == "collect":
         items = result.get("items")

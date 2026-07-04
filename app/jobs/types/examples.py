@@ -6,6 +6,7 @@ from typing import Any
 from app.core.exceptions import AppError
 from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
+from app.jobs.types.example_catalog import all_example_workflow_mode_specs
 from app.schemas.jobs import (
     ExampleCollectParams,
     ExampleCollectResult,
@@ -45,7 +46,7 @@ class ExampleSleepJob(JobExecutor):
     runtime_fields_schema_name = "ExampleSleepRuntimeFields"
     canonical_result_schema = ExampleSleepResult
     public_result_schema = ExampleSleepResult
-    allow_callback = True
+    allow_callback = False
     timeout_seconds = 60
     allowed_error_codes = frozenset(
         {
@@ -80,7 +81,7 @@ class ExamplePairJob(JobExecutor):
     runtime_fields_schema_name = "ExamplePairRuntimeFields"
     canonical_result_schema = ExamplePairResult
     public_result_schema = ExamplePairResult
-    allow_callback = True
+    allow_callback = False
     allowed_error_codes = frozenset(
         {
             "INVALID_INPUT",
@@ -117,7 +118,7 @@ class ExampleWorkflowJob(JobExecutor):
     runtime_fields_schema_name = "ExampleWorkflowRuntimeFields"
     canonical_result_schema = ExampleWorkflowResult
     public_result_schema = ExampleWorkflowResult
-    allow_callback = True
+    allow_callback = False
     timeout_seconds = 120
     allowed_error_codes = frozenset(
         {
@@ -157,7 +158,7 @@ class ExampleCollectJob(JobExecutor):
     runtime_fields_schema_name = "ExampleCollectRuntimeFields"
     canonical_result_schema = ExampleCollectResult
     public_result_schema = ExampleCollectResult
-    allow_callback = True
+    allow_callback = False
     timeout_seconds = 60
     allowed_error_codes = frozenset(
         {

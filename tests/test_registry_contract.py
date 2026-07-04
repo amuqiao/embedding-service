@@ -151,7 +151,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert spec.public_result_schema == "ExamplePairResult"
     assert spec.visibility == "demo"
     assert spec.role == "root_or_leaf"
-    assert spec.allow_callback is True
+    assert spec.allow_callback is False
     assert spec.execution_mode == "custom_executor"
     _assert_default_retry_policy(spec.retry_policy)
     assert spec.side_effect_policy == "none"
@@ -181,7 +181,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert echo_spec.public_result_schema == "ExampleSleepResult"
     assert echo_spec.visibility == "demo"
     assert echo_spec.role == "root_or_leaf"
-    assert echo_spec.allow_callback is True
+    assert echo_spec.allow_callback is False
     assert echo_spec.execution_mode == "custom_executor"
     _assert_default_retry_policy(echo_spec.retry_policy)
     assert echo_spec.side_effect_policy == "none"
@@ -196,7 +196,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert workflow_spec.public_result_schema == "ExampleWorkflowResult"
     assert workflow_spec.visibility == "demo"
     assert workflow_spec.role == "root"
-    assert workflow_spec.allow_callback is True
+    assert workflow_spec.allow_callback is False
     assert workflow_spec.execution_mode == "custom_executor"
     _assert_default_retry_policy(workflow_spec.retry_policy)
     assert workflow_spec.side_effect_policy == "none"
@@ -211,7 +211,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert collect_spec.public_result_schema == "ExampleCollectResult"
     assert collect_spec.visibility == "demo"
     assert collect_spec.role == "leaf"
-    assert collect_spec.allow_callback is True
+    assert collect_spec.allow_callback is False
     assert collect_spec.execution_mode == "custom_executor"
     _assert_default_retry_policy(collect_spec.retry_policy)
     assert collect_spec.side_effect_policy == "none"

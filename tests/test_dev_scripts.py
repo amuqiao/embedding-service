@@ -31,6 +31,7 @@ from scripts.verify.env_config_check import (
     default_env_files,
 )
 from scripts.verify.job_workflow_smoke import job_from_envelope
+from app.jobs.types.example_catalog import all_example_workflow_mode_specs
 from scripts.verify.workflow_modes_smoke import WORKFLOW_MODE_CASES, _validate_result
 
 
@@ -5185,6 +5186,26 @@ def test_verify_sh_documents_image_inspect_command():
     assert "run_image_inspect()" in tasks_sh
 
 
+def test_workflow_modes_smoke_cases_follow_example_catalog():
+    expected = {
+        item["mode"]: {
+            "expected_node_count": item["expected_node_count"],
+            "expected_node_keys": tuple(item["expected_node_keys"]),
+            "expected_result_kinds": item["expected_result_kinds"],
+        }
+        for item in all_example_workflow_mode_specs()
+    }
+
+    assert {
+        case.mode: {
+            "expected_node_count": case.expected_node_count,
+            "expected_node_keys": case.expected_node_keys,
+            "expected_result_kinds": case.expected_result_kinds,
+        }
+        for case in WORKFLOW_MODE_CASES
+    } == expected
+
+
 def test_workflow_modes_smoke_validates_successful_root_result():
     case = _workflow_mode_case("group")
     job = {
@@ -5266,5 +5287,5 @@ def test_workflow_modes_smoke_rejects_invalid_child_result_shape():
         },
     }
 
-    with pytest.raises(RuntimeError, match="invalid add result"):
+    with pytest.raises(RuntimeError, match="invalid pair result"):
         _validate_result(job, case)
