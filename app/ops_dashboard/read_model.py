@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ops_dashboard.health_rules import health_verdict
 from app.ops_dashboard.schemas import DashboardFilters
+from app.services.job_runtime import read_runtime_json
 
 ROOT_SCOPE_SQL = """
 AND {alias}.root_job_id IS NULL
@@ -23,6 +24,7 @@ AND {alias}.client_request_id IS NULL
 OPTIONAL_FILTER_BIND_TYPES = {
     "job_type": String(),
     "caller_id": String(),
+    "filter_job_id": String(),
     "client_request_id": String(),
     "run_id": String(),
     "status": String(),
@@ -93,6 +95,7 @@ def _root_job_filter_clause(alias: str) -> str:
 {ROOT_SCOPE_SQL.format(alias=alias)}
 AND (:job_type IS NULL OR {alias}.job_type = :job_type)
 AND (:caller_id IS NULL OR {alias}.caller_id = :caller_id)
+AND (:filter_job_id IS NULL OR {alias}.id::text = :filter_job_id)
 AND (:client_request_id IS NULL OR {alias}.client_request_id = :client_request_id)
 AND (:run_id IS NULL OR {alias}.metadata->>'run_id' = :run_id)
 AND (:since_at IS NULL OR {alias}.created_at >= :since_at)
@@ -935,12 +938,13 @@ async def recent_jobs_summary(
     filters: DashboardFilters,
     *,
     status: str | None,
-    client_request_id: str | None,
+    job_id: str | None,
 ) -> dict[str, Any]:
     clause = _root_job_filter_clause("j")
     params = _base_params(filters) | {
         "status": status,
-        "client_request_id": client_request_id,
+        "filter_job_id": job_id,
+        "client_request_id": None,
     }
     return await _one(
         db,
@@ -969,13 +973,14 @@ async def recent_jobs(
     filters: DashboardFilters,
     *,
     status: str | None,
-    client_request_id: str | None,
+    job_id: str | None,
     limit: int,
 ) -> list[dict[str, Any]]:
     clause = _root_job_filter_clause("j")
     params = _base_params(filters) | {
         "status": status,
-        "client_request_id": client_request_id,
+        "filter_job_id": job_id,
+        "client_request_id": None,
         "limit": limit,
     }
     rows = await _all(
@@ -1048,7 +1053,7 @@ async def recent_jobs_data(
     filters: DashboardFilters,
     *,
     status: str,
-    client_request_id: str | None,
+    job_id: str | None,
     limit: int,
 ) -> dict[str, Any]:
     normalized_status = None if status == "all" else status
@@ -1056,19 +1061,19 @@ async def recent_jobs_data(
         db,
         filters,
         status=normalized_status,
-        client_request_id=client_request_id,
+        job_id=job_id,
     )
     rows = await recent_jobs(
         db,
         filters,
         status=normalized_status,
-        client_request_id=client_request_id,
+        job_id=job_id,
         limit=limit,
     )
     return {
         "generated_at": _now(),
         "filters": filters.as_payload(),
-        "controls": {"status": status, "client_request_id": client_request_id, "limit": limit},
+        "controls": {"status": status, "job_id": job_id, "limit": limit},
         "status_options": ["all", "queued", "running", "succeeded", "failed"],
         "summary": summary_payload,
         "jobs": rows,
@@ -1228,6 +1233,39 @@ def _load_summary_of(metadata: Any) -> dict[str, Any]:
     return {"present": bool(summary), **summary}
 
 
+def _job_request_json(
+    data: dict[str, Any],
+    *,
+    metadata: dict[str, Any] | None,
+    job_params_ref: dict[str, Any],
+) -> dict[str, Any]:
+    callback = None
+    if data.get("callback_url") is not None:
+        callback = {
+            "url": data["callback_url"],
+            "events": data.get("callback_events"),
+        }
+    return {
+        "client_request_id": data.get("client_request_id"),
+        "job_type": data["job_type"],
+        "job_params": read_runtime_json(job_params_ref),
+        "callback": callback,
+        "metadata": metadata or {},
+        "options": {"priority": data["priority"]},
+    }
+
+
+def _job_output_json(
+    *,
+    status: str,
+    result: dict[str, Any] | None,
+    error: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if status == "failed":
+        return error
+    return result
+
+
 async def get_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any] | None:
     row = (
         await db.execute(
@@ -1244,11 +1282,12 @@ async def get_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any] | None:
                   j.progress_percent,
                   j.progress_stage,
                   j.progress_text,
+                  j.priority,
                   j.metadata,
                   j.job_params_ref,
-                  j.runtime_ref,
+                  j.callback_url,
+                  j.callback_events,
                   j.result,
-                  j.canonical_result,
                   j.error,
                   j.error->>'code' AS error_code,
                   j.error->>'message' AS error_message,
@@ -1286,14 +1325,20 @@ async def get_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any] | None:
     data = dict(row)
     error = data.pop("error", None)
     metadata = data.pop("metadata", None)
+    job_params_ref = data.pop("job_params_ref", None)
+    result = data.pop("result", None)
+    job_request_json = _job_request_json(data, metadata=metadata, job_params_ref=job_params_ref)
+    job_output_json = _job_output_json(status=data["status"], result=result, error=error)
+    for helper_key in (
+        "priority",
+        "callback_url",
+        "callback_events",
+    ):
+        data.pop(helper_key, None)
     return data | {
+        "job_request_json": job_request_json,
+        "job_output_json": job_output_json,
         "load_summary": _load_summary_of(metadata),
-        "metadata_summary": _summary_of(metadata),
-        "job_params_summary": _summary_of(data.pop("job_params_ref", None)),
-        "runtime_summary": _summary_of(data.pop("runtime_ref", None)),
-        "result_summary": _summary_of(data.pop("result", None)),
-        "canonical_result_summary": _summary_of(data.pop("canonical_result", None)),
-        "error_summary": _summary_of(error),
     }
 
 
@@ -1329,7 +1374,9 @@ async def callbacks(db: AsyncSession, job_id: uuid.UUID) -> list[dict[str, Any]]
         SELECT c.id::text, c.job_id::text, c.event_id::text, c.event_type,
                c.status, c.delivery_attempts, c.next_attempt_at,
                c.lease_expires_at, c.last_http_status,
-               c.last_error->>'message' AS last_error_message,
+               c.last_response AS callback_response_json,
+               c.last_error AS callback_error_json,
+               c.last_error->>'message' AS callback_error_message,
                c.first_attempt_at, c.last_attempt_at,
                c.delivered_at, c.dead_lettered_at, c.created_at, c.updated_at
         FROM callback_outbox c
@@ -1361,7 +1408,7 @@ async def timeline(db: AsyncSession, job_id: uuid.UUID, *, limit: int) -> list[d
         """,
         {"job_id": job_id, "limit": limit},
     )
-    return [row | {"payload_summary": _summary_of(row.pop("payload", None))} for row in rows]
+    return [row | {"event_payload_summary": _summary_of(row.pop("payload", None))} for row in rows]
 
 
 async def workflow_children(db: AsyncSession, root_job_id: uuid.UUID) -> list[dict[str, Any]]:

@@ -52,16 +52,20 @@ def _filters(
     job_type: str | None = Query(default=None),
     run_id: str | None = Query(default=None),
 ) -> DashboardFilters:
+    config = get_dashboard_config()
     if bucket is not None:
         raise HTTPException(status_code=400, detail="bucket is server-derived; use window only")
     if from_at is not None or to_at is not None:
         raise HTTPException(status_code=400, detail="from/to are not supported; use window")
-    effective_window = "1h" if window is None else window
+    effective_window = (
+        str(_window_config(config.max_window_seconds)["default_window"])
+        if window is None
+        else window
+    )
     if effective_window not in VALID_WINDOWS:
         raise HTTPException(status_code=400, detail=f"window must be one of: {', '.join(VALID_WINDOWS)}")
     if run_id is not None and not is_valid_run_id(run_id):
         raise HTTPException(status_code=400, detail="run_id must match [A-Za-z0-9][A-Za-z0-9_-]{0,127}")
-    config = get_dashboard_config()
     if VALID_WINDOWS[effective_window] > config.max_window_seconds:
         raise HTTPException(status_code=400, detail="window exceeds OPS_DASHBOARD_MAX_WINDOW_SECONDS")
     try:
@@ -97,6 +101,15 @@ def _planned_section_payload(
             "reasons": ["planned"],
             "next_checks": next_checks,
         },
+    }
+
+
+def _window_config(max_window_seconds: int) -> dict[str, object]:
+    windows = [key for key, seconds in VALID_WINDOWS.items() if seconds <= max_window_seconds]
+    default_window = "1h" if "1h" in windows else windows[-1]
+    return {
+        "windows": windows,
+        "default_window": default_window,
     }
 
 
@@ -151,10 +164,7 @@ async def dashboard_config(_: OpsAccess):
         "route_base": config.route_base,
         "data_sources": data_source_config(),
         "sections": section_config(),
-        "filters": {
-            "windows": list(VALID_WINDOWS),
-            "default_window": "1h",
-        },
+        "filters": _window_config(config.max_window_seconds),
     }
 
 
@@ -176,7 +186,7 @@ async def recent_jobs_section(
     filters: DashboardFilters = Depends(_filters),
     db: AsyncSession = Depends(get_dashboard_db),
     status: str = Query(default="all"),
-    client_request_id: str | None = Query(default=None),
+    job_id: uuid.UUID | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
 ):
     if status not in VALID_RECENT_JOB_STATUSES:
@@ -189,7 +199,7 @@ async def recent_jobs_section(
             db,
             filters,
             status=status,
-            client_request_id=client_request_id,
+            job_id=str(job_id) if job_id is not None else None,
             limit=limit,
         )
     )

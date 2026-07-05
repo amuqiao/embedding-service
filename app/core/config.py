@@ -464,7 +464,7 @@ class BillingSettings(ConfigSection):
 
 class OpsDashboardSettings(ConfigSection):
     enabled: bool = False
-    require_auth: bool = False
+    require_auth: bool = True
     refresh_seconds: int = 15
     max_window_seconds: int = 604_800
     query_timeout_seconds: int = 2

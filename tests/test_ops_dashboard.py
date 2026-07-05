@@ -10,14 +10,16 @@ from fastapi import FastAPI
 from fastapi import HTTPException
 from starlette.testclient import TestClient
 
+JOB_ID_UUID_PATTERN = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 
-def _dashboard_settings(*, enabled=True, require_auth=False, timeout=2):
+
+def _dashboard_settings(*, enabled=True, require_auth=False, timeout=2, max_window_seconds=604_800):
     return SimpleNamespace(
         ops_dashboard=SimpleNamespace(
             enabled=enabled,
             require_auth=require_auth,
             refresh_seconds=15,
-            max_window_seconds=604_800,
+            max_window_seconds=max_window_seconds,
             query_timeout_seconds=timeout,
         ),
         job=SimpleNamespace(max_active_jobs=1000),
@@ -81,7 +83,11 @@ def test_ops_dashboard_page_and_config_routes_work_without_auth(monkeypatch):
     monkeypatch.setattr(ops_router, "settings", settings)
     monkeypatch.setattr(ops_config, "settings", settings)
 
+    async def fake_db():
+        yield object()
+
     application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
     application.include_router(ops_router.router)
 
     with TestClient(application) as client:
@@ -122,15 +128,17 @@ def test_ops_dashboard_page_and_config_routes_work_without_auth(monkeypatch):
             "max": None,
         },
         {
-            "key": "client_request_id",
-            "type": "text",
+            "key": "job_id",
+            "type": "uuid",
             "binding": "query",
-            "param": "client_request_id",
-            "label": "client_request_id",
+            "param": "job_id",
+            "label": "job_id",
             "default": None,
             "options": [],
             "min": None,
             "max": None,
+            "placeholder": "UUID job_id",
+            "pattern": JOB_ID_UUID_PATTERN,
         },
         {
             "key": "limit",
@@ -147,7 +155,7 @@ def test_ops_dashboard_page_and_config_routes_work_without_auth(monkeypatch):
     assert data_sources["job_trace"]["controls"] == [
         {
             "key": "job_id",
-            "type": "text",
+            "type": "uuid",
             "binding": "route",
             "param": "job_id",
             "label": "job_id",
@@ -155,6 +163,8 @@ def test_ops_dashboard_page_and_config_routes_work_without_auth(monkeypatch):
             "options": [],
             "min": None,
             "max": None,
+            "placeholder": "UUID job_id",
+            "pattern": JOB_ID_UUID_PATTERN,
         },
         {
             "key": "limit",
@@ -177,6 +187,48 @@ def test_ops_dashboard_page_and_config_routes_work_without_auth(monkeypatch):
         assert set(source) == {"key", "title", "route", "refresh_seconds", "default_enabled", "controls"}
 
 
+def test_ops_dashboard_config_filters_windows_by_max_window_seconds(monkeypatch):
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False, max_window_seconds=86_400)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    application = FastAPI()
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get("/internal/jobs-dashboard/config")
+
+    assert response.status_code == 200
+    assert response.json()["filters"] == {
+        "windows": ["10m", "30m", "1h", "3h", "6h", "12h", "1d"],
+        "default_window": "1h",
+    }
+
+
+def test_ops_dashboard_config_uses_largest_allowed_default_when_1h_is_disabled(monkeypatch):
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False, max_window_seconds=1_800)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    application = FastAPI()
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get("/internal/jobs-dashboard/config")
+
+    assert response.status_code == 200
+    assert response.json()["filters"] == {
+        "windows": ["10m", "30m"],
+        "default_window": "30m",
+    }
+
+
 def test_ops_dashboard_routes_are_hidden_from_openapi_and_get_only(monkeypatch):
     from app.ops_dashboard import config as ops_config
     from app.ops_dashboard import router as ops_router
@@ -185,7 +237,11 @@ def test_ops_dashboard_routes_are_hidden_from_openapi_and_get_only(monkeypatch):
     monkeypatch.setattr(ops_router, "settings", settings)
     monkeypatch.setattr(ops_config, "settings", settings)
 
+    async def fake_db():
+        yield object()
+
     application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
     application.include_router(ops_router.router)
 
     with TestClient(application) as client:
@@ -227,11 +283,13 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     contract = Path("app/ops_dashboard/static/chart_contract.js").read_text(encoding="utf-8")
     script = Path("app/ops_dashboard/static/dashboard.js").read_text(encoding="utf-8")
     page = Path("app/ops_dashboard/static/index.html").read_text(encoding="utf-8")
+    style = Path("app/ops_dashboard/static/dashboard.css").read_text(encoding="utf-8")
 
     assert "const RENDERER_TYPES = Object.freeze" in contract
     assert "const RENDERERS = Object.freeze" in contract
     assert "function renderWidgetLayout" in contract
     assert "function metricValue" in contract
+    assert "function formatJson" in contract
     assert "layout-group-head" in contract
     assert "group.title" in contract
     assert "const DATA_SOURCE_REGISTRY = Object.freeze" in script
@@ -239,12 +297,46 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     assert "const WIDGET_REGISTRY = Object.freeze" in script
     assert "const LAYOUT_REGISTRY = Object.freeze" in script
     assert "const WIDGET_DATA_ADAPTERS = Object.freeze" in script
+    assert "appliedFilters: {}" in script
+    assert "pageControlsDirty: {}" in script
+    assert "pageControlDrafts: {}" in script
+    assert "pageJsonBySection: {}" in script
+    assert "Copy Page JSON" in script
+    assert "Export Page JSON" in script
+    assert ">Copy JSON<" not in script
+    assert ">Export JSON<" not in script
+    assert "function readGlobalFilterDraft" in script
+    assert "function refreshWithGlobalFilters" in script
+    assert "function appliedControlValue" in script
+    assert "function draftControlValue" in script
+    assert "function copyCurrentPageJson" in script
+    assert "function exportCurrentPageJson" in script
+    assert "if (state.section !== section) setActionStatus(\"\")" in script
+    assert "const form = new FormData($(\"#filters\"));" in script
+    assert "const JOB_ID_UUID_PATTERN" in script
+    assert 'type: "uuid"' in script
+    assert 'placeholder: "UUID job_id"' in script
+    assert 'pattern: JOB_ID_UUID_PATTERN' in script
+    assert '`pattern="${escapeHtml(control.pattern)}"`' in script
+    assert "navigator.clipboard.writeText(formatJson(pageJson))" in script
+    assert "new Blob([formatJson(pageJson)]" in script
     assert "state.config?.filters" in script
     assert "function initializeGlobalFilters" in script
     assert "populateSelect(document.querySelector('[name=\"window\"]')" in script
     assert "populateSelect(document.querySelector('[name=\"bucket\"]')" not in script
     assert "Unknown rendererType" in contract
+    assert "navigator.clipboard.writeText(json)" in contract
+    assert "json-block-toolbar" in contract
     assert "/internal/jobs-dashboard/static/chart_contract.js" in page
+    assert 'id="global-filter-dirty"' not in page
+    assert "筛选已修改，点击应用筛选生效" not in page
+    assert 'id="refresh" class="primary-button" type="submit">刷新</button>' in page
+    assert "grid-template-columns: repeat(auto-fit, minmax(150px, 1fr))" in style
+    assert "grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr))" in style
+    assert ".filter-actions" in style
+    assert ".trace-summary .table-wrap table" in style
+    assert ".job-search select" in style
+    assert ".query-dirty" in style
 
     expected_renderer_types = {
         "status_line",
@@ -275,6 +367,10 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     data_source_source = script[
         script.index("const DATA_SOURCE_REGISTRY = Object.freeze") : script.index("const WIDGET_REGISTRY = Object.freeze")
     ]
+    load_section_source = script[script.index("async function loadSection") : script.index("async function loadJobTrace")]
+    filter_params_source = script[script.index("function filterParams") : script.index("function refreshWithGlobalFilters")]
+    refresh_with_global_source = script[script.index("function refreshWithGlobalFilters") : script.index("async function fetchJson")]
+    filters_submit_source = script[script.index('$("#filters").addEventListener("submit"') : script.index('document.body.addEventListener("click"')]
 
     widget_renderer_types = set(re.findall(r'rendererType:\s*"([^"]+)"', widget_source))
     assert widget_renderer_types <= renderer_types
@@ -289,6 +385,22 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     assert 'route: `${BASE}/jobs/{job_id}/data`' in data_source_source
     assert "usesJobId" not in data_source_source
     assert "job_search" not in script
+    assert "clearPageJson(section);" in load_section_source
+    assert "const message = error.message || String(error);" in load_section_source
+    assert "setError(message);" in load_section_source
+    assert 'if (section === "job_trace")' in load_section_source
+    assert "查询失败，当前无可复制/导出 JSON" in load_section_source
+    assert "刷新失败，复制/导出仍为上次成功 JSON" in load_section_source
+    assert "function showJobTraceError" not in script
+    assert 'if (state.section !== "job_trace") loadSection(state.section);' not in script
+    assert "loadSection(state.section);" in script
+    assert "applyGlobalFilters" not in script
+    assert "markGlobalFiltersDirty" not in script
+    assert "const filters = state.appliedFilters" in filter_params_source
+    assert "readGlobalFilterDraft()" not in filter_params_source
+    assert "state.appliedFilters = readGlobalFilterDraft()" in refresh_with_global_source
+    assert "loadSection(state.section)" in refresh_with_global_source
+    assert "refreshWithGlobalFilters()" in filters_submit_source
     widget_data_sources = set(re.findall(r'dataSource:\s*"([^"]+)"', widget_source))
     assert widget_data_sources <= data_source_keys
     assert "recent_jobs:" in control_source
@@ -298,9 +410,9 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     for snippet in [
         'key: "status"',
         'type: "select"',
+        'type: "uuid"',
         'default: "all"',
         'options: ["all", "queued", "running", "succeeded", "failed"]',
-        'key: "client_request_id"',
         'key: "limit"',
         "default: 20",
         "max: 100",
@@ -311,6 +423,12 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
         assert snippet in control_source
     assert 'name="run_id"' in page
     assert "PAGE_CONTROL_REGISTRY[section]" in script
+    assert "data-page-query-dirty" in script
+    assert "查询条件已修改，点击查询生效" in script
+    assert "state.pageControlDrafts[section]" in script
+    assert "form.addEventListener(\"input\", updateDirtyNotice)" in script
+    assert "form.addEventListener(\"change\", updateDirtyNotice)" in script
+    assert "updateDirtyNotice();" in script
     assert "route.replace(`{${control.param}}`" in script
     assert "configured?.refresh_seconds ?? state.config?.refresh_seconds ?? 15" in script
     assert '"recent_jobs.table"' in widget_source
@@ -347,26 +465,55 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     for widget_id in [
         '"job_trace.load_summary"',
         '"job_trace.workflow_summary"',
-        '"job_trace.result"',
+        '"job_trace.job_request_json"',
+        '"job_trace.job_output_json"',
+        '"job_trace.callback_response_json"',
         '"job_trace.callback_summary"',
     ]:
         assert widget_id in widget_source
-    assert '"job_trace.payload"' in widget_source
-    assert '"job_trace.payload_summary"' not in widget_source
+    assert '"job_trace.payload"' not in widget_source
+    assert '"job_trace.result"' not in widget_source
+    assert '"job_trace.callback_result"' not in widget_source
     assert '"job_trace.result_summary"' not in widget_source
-    payload_widget = widget_source[widget_source.index('"job_trace.payload"') : widget_source.index('"job_trace.load_summary"')]
-    result_widget = widget_source[
-        widget_source.index('"job_trace.result"') : widget_source.index('"job_trace.callback_summary"')
+    request_widget = widget_source[
+        widget_source.index('"job_trace.job_request_json"') : widget_source.index('"job_trace.load_summary"')
     ]
-    assert 'rendererType: "html.json_block"' in payload_widget
-    assert 'title: "Result 明细"' in result_widget
-    assert 'rendererType: "html.json_block"' in result_widget
-    assert "job.result_summary" not in payload_widget
-    assert "job.canonical_result_summary" not in payload_widget
-    assert "job.error_summary" not in payload_widget
-    assert "job.result_summary" in result_widget
-    assert "job.canonical_result_summary" in result_widget
-    assert "job.error_summary" in result_widget
+    output_widget = widget_source[
+        widget_source.index('"job_trace.job_output_json"') : widget_source.index('"job_trace.callback_response_json"')
+    ]
+    callback_response_widget = widget_source[
+        widget_source.index('"job_trace.callback_response_json"') : widget_source.index('"job_trace.callback_summary"')
+    ]
+    assert 'rendererType: "html.json_block"' in request_widget
+    assert 'title: "Job 请求 JSON"' in request_widget
+    assert 'title: "Job 输出 JSON"' in output_widget
+    assert 'rendererType: "html.json_block"' in output_widget
+    assert 'title: "Callback 返回 JSON"' in callback_response_widget
+    assert 'rendererType: "html.json_block"' in callback_response_widget
+    assert "job.result_summary" not in request_widget
+    assert "job.canonical_result_summary" not in request_widget
+    assert "job.error_summary" not in request_widget
+    assert "job.metadata_summary" not in request_widget
+    assert "job.job_params_summary" not in request_widget
+    assert "job.runtime_summary" not in request_widget
+    assert "job.job_request_json" in request_widget
+    assert "job.job_input" not in request_widget
+    assert "job.metadata" not in request_widget
+    assert "job.job_params_ref" not in request_widget
+    assert "job.runtime_ref" not in request_widget
+    assert "job.result_summary" not in output_widget
+    assert "job.canonical_result_summary" not in output_widget
+    assert "job.error_summary" not in output_widget
+    assert "job.job_output_json" in output_widget
+    assert "return job.job_output;" not in output_widget
+    assert "job.result" not in output_widget
+    assert "job.canonical_result" not in output_widget
+    assert "job.error" not in output_widget
+    assert "callback_id: callback.id" in callback_response_widget
+    assert "last_http_status: callback.last_http_status" in callback_response_widget
+    assert "callback_response_json: callback.callback_response_json" in callback_response_widget
+    assert "callback_error_json: callback.callback_error_json" in callback_response_widget
+    assert "callback_error_message: callback.callback_error_message" in callback_response_widget
 
     widget_keys = set(re.findall(r'^\s{4}"([^"]+)":\s*\{', widget_source, re.M))
     layout_widget_id_list = re.findall(r'widgetId:\s*"([^"]+)"', layout_source)
@@ -389,7 +536,7 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     assert 'group: "evidence"' in layout_source
     for widget_id in ["job_trace.summary", "job_trace.load_summary", "job_trace.workflow_summary", "job_trace.callback_summary"]:
         assert re.search(rf'widgetId:\s*"{re.escape(widget_id)}",\s*group:\s*"summary"', layout_source)
-    for widget_id in ["job_trace.payload", "job_trace.result"]:
+    for widget_id in ["job_trace.job_request_json", "job_trace.job_output_json", "job_trace.callback_response_json"]:
         assert re.search(rf'widgetId:\s*"{re.escape(widget_id)}",\s*group:\s*"details"', layout_source)
     for widget_id in [
         "job_trace.attempts",
@@ -415,6 +562,148 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     adapters = set(re.findall(r"^\s{4}([a-z0-9_]+):", adapter_body.group("body"), re.M))
     widget_adapters = set(re.findall(r'adapter:\s*"([^"]+)"', widget_source))
     assert widget_adapters <= adapters
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_get_job_preserves_full_payload_and_result_json():
+    from app.ops_dashboard import read_model
+
+    job_id = uuid.uuid4()
+    job_params_ref = {"storage": "db_inline", "payload": {"input_text": "hello"}}
+    result = {"artifacts": [{"kind": "text", "value": "ok"}]}
+    error = {"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {"phase": "run"}}
+
+    class _Result:
+        def mappings(self):
+            return self
+
+        def first(self):
+            return {
+                "job_id": str(job_id),
+                "root_job_id": None,
+                "workflow_node_key": None,
+                "status": "failed",
+                "job_type": "job_real_llm_echo",
+                "caller_id": "caller-1",
+                "client_request_id": "client-1",
+                "progress_percent": 100,
+                "progress_stage": "failed",
+                "progress_text": None,
+                "priority": "normal",
+                "metadata": {"source": "load", "run_id": "run-1"},
+                "job_params_ref": job_params_ref,
+                "callback_url": None,
+                "callback_events": None,
+                "result": result,
+                "error": error,
+                "error_code": "JOB_EXECUTION_FAILED",
+                "error_message": "failed",
+                "active_attempt_id": None,
+                "created_at": datetime(2026, 7, 5, tzinfo=UTC),
+                "started_at": None,
+                "finished_at": datetime(2026, 7, 5, tzinfo=UTC),
+                "updated_at": datetime(2026, 7, 5, tzinfo=UTC),
+                "callback_status": "not_configured",
+            }
+
+    class _Db:
+        async def execute(self, *_args, **_kwargs):
+            return _Result()
+
+    payload = await read_model.get_job(_Db(), job_id)
+
+    assert payload["job_request_json"] == {
+        "client_request_id": "client-1",
+        "job_type": "job_real_llm_echo",
+        "job_params": {"input_text": "hello"},
+        "callback": None,
+        "metadata": {"source": "load", "run_id": "run-1"},
+        "options": {"priority": "normal"},
+    }
+    assert payload["job_output_json"] == error
+    assert read_model._job_output_json(status="succeeded", result=result, error=None) == result
+    assert read_model._job_output_json(status="running", result=None, error=None) is None
+    assert payload["load_summary"] == {"present": True, "source": "load", "run_id": "run-1"}
+    assert "metadata" not in payload
+    assert "job_params_ref" not in payload
+    assert "runtime_ref" not in payload
+    assert "result" not in payload
+    assert "canonical_result" not in payload
+    assert "error" not in payload
+    assert "job_input" not in payload
+    assert "job_output" not in payload
+    assert "job_params_summary" not in payload
+    assert "runtime_summary" not in payload
+    assert "result_summary" not in payload
+    assert "canonical_result_summary" not in payload
+    assert "error_summary" not in payload
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_get_job_fails_fast_when_job_params_ref_is_missing():
+    from app.core.exceptions import AppError
+    from app.ops_dashboard import read_model
+
+    job_id = uuid.uuid4()
+
+    class _Result:
+        def mappings(self):
+            return self
+
+        def first(self):
+            return {
+                "job_id": str(job_id),
+                "root_job_id": None,
+                "workflow_node_key": None,
+                "status": "succeeded",
+                "job_type": "job_real_llm_echo",
+                "caller_id": "caller-1",
+                "client_request_id": "client-1",
+                "progress_percent": 100,
+                "progress_stage": "succeeded",
+                "progress_text": None,
+                "priority": "normal",
+                "metadata": {},
+                "job_params_ref": None,
+                "callback_url": None,
+                "callback_events": None,
+                "result": {"ok": True},
+                "error": None,
+                "error_code": None,
+                "error_message": None,
+                "active_attempt_id": None,
+                "created_at": datetime(2026, 7, 5, tzinfo=UTC),
+                "started_at": None,
+                "finished_at": datetime(2026, 7, 5, tzinfo=UTC),
+                "updated_at": datetime(2026, 7, 5, tzinfo=UTC),
+                "callback_status": "not_configured",
+            }
+
+    class _Db:
+        async def execute(self, *_args, **_kwargs):
+            return _Result()
+
+    with pytest.raises(AppError) as exc_info:
+        await read_model.get_job(_Db(), job_id)
+
+    assert exc_info.value.code == "RUNTIME_REF_MISSING"
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_job_trace_callbacks_return_callback_response_json():
+    from app.ops_dashboard import read_model
+
+    db = _RecordingDB()
+
+    await read_model.callbacks(db, uuid.uuid4())
+
+    sql = db.statements[0]
+    assert "c.payload" not in sql
+    assert "c.last_response AS callback_response_json" in sql
+    assert "c.last_error AS callback_error_json" in sql
+    assert "c.last_error->>'message' AS callback_error_message" in sql
+    assert "c.callback_url" not in sql
+    assert "c.last_http_status" in sql
 
 
 def test_ops_dashboard_examples_page_declares_generic_renderer_fixtures(monkeypatch):
@@ -575,6 +864,27 @@ def test_ops_dashboard_job_trace_route_returns_read_model_payload(monkeypatch):
     assert response.json()["job"]["status"] == "succeeded"
 
 
+def test_ops_dashboard_job_trace_rejects_invalid_job_id(monkeypatch):
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    async def fake_db():
+        yield object()
+
+    application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get("/internal/jobs-dashboard/jobs/not-a-uuid/data")
+
+    assert response.status_code == 422
+
+
 def test_ops_dashboard_recent_jobs_route_returns_read_model_payload(monkeypatch):
     from app.ops_dashboard import config as ops_config
     from app.ops_dashboard import read_model
@@ -587,19 +897,21 @@ def test_ops_dashboard_recent_jobs_route_returns_read_model_payload(monkeypatch)
     async def fake_db():
         yield object()
 
-    async def fake_recent_jobs_data(_db, filters, *, status, client_request_id, limit):
+    query_job_id = uuid.uuid4()
+
+    async def fake_recent_jobs_data(_db, filters, *, status, job_id, limit):
         assert filters.window == "1h"
         assert filters.resolved_bucket == "1m"
         assert filters.run_id == "run-1"
         assert status == "failed"
-        assert client_request_id == "req-1"
+        assert job_id == str(query_job_id)
         assert limit == 7
         return {
             "generated_at": datetime(2026, 7, 3, tzinfo=UTC),
             "filters": filters.as_payload(),
-            "controls": {"status": status, "client_request_id": client_request_id, "limit": limit},
+            "controls": {"status": status, "job_id": job_id, "limit": limit},
             "summary": {"total": 1, "failed": 1},
-            "jobs": [{"job_id": "job-1", "status": "failed"}],
+            "jobs": [{"job_id": str(query_job_id), "status": "failed"}],
             "health": {"status": "ok", "reasons": [], "next_checks": []},
         }
 
@@ -612,14 +924,14 @@ def test_ops_dashboard_recent_jobs_route_returns_read_model_payload(monkeypatch)
     with TestClient(application) as client:
         response = client.get(
             "/internal/jobs-dashboard/sections/recent_jobs/data"
-            "?window=1h&run_id=run-1&status=failed&client_request_id=req-1&limit=7"
+            f"?window=1h&run_id=run-1&status=failed&job_id={query_job_id}&limit=7"
         )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["summary"] == {"total": 1, "failed": 1}
-    assert payload["jobs"] == [{"job_id": "job-1", "status": "failed"}]
-    assert payload["controls"] == {"status": "failed", "client_request_id": "req-1", "limit": 7}
+    assert payload["jobs"] == [{"job_id": str(query_job_id), "status": "failed"}]
+    assert payload["controls"] == {"status": "failed", "job_id": str(query_job_id), "limit": 7}
 
 
 def test_ops_dashboard_recent_jobs_rejects_invalid_status(monkeypatch):
@@ -644,6 +956,27 @@ def test_ops_dashboard_recent_jobs_rejects_invalid_status(monkeypatch):
     assert "status must be one of" in response.json()["detail"]
 
 
+def test_ops_dashboard_recent_jobs_rejects_invalid_job_id(monkeypatch):
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    async def fake_db():
+        yield object()
+
+    application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get("/internal/jobs-dashboard/sections/recent_jobs/data?job_id=not-a-uuid")
+
+    assert response.status_code == 422
+
+
 def test_ops_dashboard_recent_jobs_route_returns_504_on_timeout(monkeypatch):
     import asyncio
 
@@ -658,11 +991,11 @@ def test_ops_dashboard_recent_jobs_route_returns_504_on_timeout(monkeypatch):
     async def fake_db():
         yield object()
 
-    async def slow_recent_jobs_data(_db, _filters, *, status, client_request_id, limit):
+    async def slow_recent_jobs_data(_db, _filters, *, status, job_id, limit):
         await asyncio.sleep(0.01)
         return {
             "generated_at": datetime(2026, 7, 3, tzinfo=UTC),
-            "controls": {"status": status, "client_request_id": client_request_id, "limit": limit},
+            "controls": {"status": status, "job_id": job_id, "limit": limit},
             "summary": {},
             "jobs": [],
         }
@@ -720,6 +1053,74 @@ def test_ops_dashboard_flow_capacity_route_returns_read_model_payload(monkeypatc
     payload = response.json()
     assert payload["capacity"]["current"]["active_jobs"] == 1
     assert payload["capacity"]["current"]["headroom"] == 999
+
+
+def test_ops_dashboard_routes_use_configured_default_window_when_1h_is_disabled(monkeypatch):
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False, max_window_seconds=1_800)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    async def fake_db():
+        yield object()
+
+    async def fake_flow_capacity_data(_db, filters, *, max_active_jobs):
+        assert filters.window == "30m"
+        assert filters.range_seconds == 1_800
+        assert max_active_jobs == 1000
+        return {
+            "generated_at": datetime(2026, 7, 5, tzinfo=UTC),
+            "filters": filters.as_payload(),
+            "capacity": {"current": {"active_jobs": 0, "headroom": 1000}},
+            "ingress": [],
+            "status_composition": [],
+            "latency": [],
+            "job_type_hotspots": [],
+            "health": {"status": "ok", "reasons": [], "next_checks": []},
+        }
+
+    monkeypatch.setattr(read_model, "flow_capacity_data", fake_flow_capacity_data)
+
+    application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get("/internal/jobs-dashboard/sections/flow_capacity/data")
+
+    assert response.status_code == 200
+    assert response.json()["filters"]["window"] == "30m"
+
+
+def test_ops_dashboard_routes_reject_manual_window_above_configured_max(monkeypatch):
+    from app.ops_dashboard import config as ops_config
+    from app.ops_dashboard import read_model
+    from app.ops_dashboard import router as ops_router
+
+    settings = _dashboard_settings(require_auth=False, max_window_seconds=1_800)
+    monkeypatch.setattr(ops_router, "settings", settings)
+    monkeypatch.setattr(ops_config, "settings", settings)
+
+    async def fake_db():
+        yield object()
+
+    async def fake_flow_capacity_data(*_args, **_kwargs):
+        raise AssertionError("read model should not run for an invalid window")
+
+    monkeypatch.setattr(read_model, "flow_capacity_data", fake_flow_capacity_data)
+
+    application = FastAPI()
+    application.dependency_overrides[ops_router.get_dashboard_db] = fake_db
+    application.include_router(ops_router.router)
+
+    with TestClient(application) as client:
+        response = client.get("/internal/jobs-dashboard/sections/flow_capacity/data?window=1h")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "window exceeds OPS_DASHBOARD_MAX_WINDOW_SECONDS"
 
 
 def test_ops_dashboard_flow_capacity_route_returns_504_on_timeout(monkeypatch):
@@ -1072,7 +1473,7 @@ async def test_ops_dashboard_recent_jobs_sql_matches_public_root_list_scope():
         db,
         DashboardFilters(caller_id="caller", job_type="job_type", run_id="run-1"),
         status="failed",
-        client_request_id="req-1",
+        job_id="job-1",
         limit=7,
     )
 
@@ -1083,15 +1484,16 @@ async def test_ops_dashboard_recent_jobs_sql_matches_public_root_list_scope():
     assert "j.client_request_id IS NOT NULL" in sql
     assert "j.deleted_at IS NULL" in sql
     assert "(:status IS NULL OR j.status = :status)" in sql
-    assert "(:client_request_id IS NULL OR j.client_request_id = :client_request_id)" in sql
+    assert "(:filter_job_id IS NULL OR j.id::text = :filter_job_id)" in sql
     assert "(:run_id IS NULL OR j.metadata->>'run_id' = :run_id)" in sql
     assert "LIMIT :limit" in sql
     assert params["status"] == "failed"
-    assert params["client_request_id"] == "req-1"
+    assert params["filter_job_id"] == "job-1"
+    assert params["client_request_id"] is None
     assert params["run_id"] == "run-1"
     assert params["limit"] == 7
     assert _bind_type_name(db.statement_objects[0], "status") == "String"
-    assert _bind_type_name(db.statement_objects[0], "client_request_id") == "String"
+    assert _bind_type_name(db.statement_objects[0], "filter_job_id") == "String"
 
 
 @pytest.mark.asyncio
@@ -1105,11 +1507,11 @@ async def test_ops_dashboard_recent_jobs_data_all_status_uses_unfiltered_root_sc
         db,
         DashboardFilters(),
         status="all",
-        client_request_id=None,
+        job_id=None,
         limit=20,
     )
 
-    assert payload["controls"] == {"status": "all", "client_request_id": None, "limit": 20}
+    assert payload["controls"] == {"status": "all", "job_id": None, "limit": 20}
     assert len(db.statements) == 2
     for statement, params in zip(db.statements, db.params, strict=True):
         assert "j.root_job_id IS NULL" in statement
@@ -1117,7 +1519,22 @@ async def test_ops_dashboard_recent_jobs_data_all_status_uses_unfiltered_root_sc
         assert "j.client_request_id IS NOT NULL" in statement
         assert "(:status IS NULL OR j.status = :status)" in statement
         assert params["status"] is None
+        assert params["filter_job_id"] is None
         assert params["client_request_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_job_trace_attempts_keeps_uuid_job_id_bind_untyped():
+    from app.ops_dashboard import read_model
+
+    db = _RecordingDB()
+
+    await read_model.attempts(db, uuid.uuid4())
+
+    sql = db.statements[0]
+    statement = db.statement_objects[0]
+    assert "WHERE a.job_id = :job_id" in sql
+    assert _bind_type_name(statement, "job_id") != "String"
 
 
 @pytest.mark.asyncio

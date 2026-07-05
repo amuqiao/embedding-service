@@ -78,7 +78,7 @@ def test_ops_dashboard_defaults_and_overrides():
     default_settings = _build_settings()
 
     assert default_settings.ops_dashboard.enabled is False
-    assert default_settings.ops_dashboard.require_auth is False
+    assert default_settings.ops_dashboard.require_auth is True
     assert default_settings.ops_dashboard.refresh_seconds == 15
     assert default_settings.ops_dashboard.max_window_seconds == 604_800
     assert default_settings.ops_dashboard.query_timeout_seconds == 2
@@ -96,6 +96,9 @@ def test_ops_dashboard_defaults_and_overrides():
     assert custom_settings.ops_dashboard.refresh_seconds == 30
     assert custom_settings.ops_dashboard.max_window_seconds == 3_600
     assert custom_settings.ops_dashboard.query_timeout_seconds == 1
+
+    local_settings = _build_settings(OPS_DASHBOARD_REQUIRE_AUTH=False)
+    assert local_settings.ops_dashboard.require_auth is False
 
 
 def test_ops_dashboard_rejects_invalid_controls():

@@ -174,7 +174,7 @@ Locust 页面和 CSV 中的 `RPS` 表示每秒 HTTP 请求数。Job 服务是异
 | `failures_callbacks` | 失败聚合、失败样本、callback summary |
 | `job_trace` | 单 Job 证据链 |
 
-dashboard 不读取 Redis broker、Pod runtime、完整 payload 或对象存储内容；这些仍由 `scripts/jobs.sh` 的只读命令承担。
+dashboard 的 Job Trace 页面会展示当前接口返回的完整 Payload/Result/Job Callback JSON；Redis broker、Pod runtime 和对象存储内容仍由 `scripts/jobs.sh` 的只读命令承担。
 
 ## 验证
 

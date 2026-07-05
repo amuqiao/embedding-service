@@ -63,6 +63,10 @@
     return String(value);
   }
 
+  function formatJson(value) {
+    return JSON.stringify(value, null, 2) ?? "";
+  }
+
   function statusBadge(status) {
     const normalized = status || "neutral";
     return `<span class="badge ${escapeHtml(normalized)}">${escapeHtml(normalized)}</span>`;
@@ -378,7 +382,35 @@
     const el = targetElement(target);
     if (!el) return;
     const value = resolveValue(widget, payload);
-    el.innerHTML = `<pre class="json-block">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+    const json = formatJson(value);
+    el.innerHTML = "";
+    const shell = document.createElement("div");
+    shell.className = "json-block-shell";
+    const toolbar = document.createElement("div");
+    toolbar.className = "json-block-toolbar";
+    const copyButton = document.createElement("button");
+    copyButton.type = "button";
+    copyButton.className = "secondary-button";
+    copyButton.textContent = "Copy";
+    copyButton.setAttribute("aria-label", `${widget.title || widget.id || "JSON"} Copy`);
+    copyButton.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(json);
+        copyButton.textContent = "Copied";
+      } catch (error) {
+        copyButton.textContent = "Copy 失败";
+        copyButton.title = error?.message || String(error);
+      }
+      window.setTimeout(() => {
+        copyButton.textContent = "Copy";
+      }, 1400);
+    });
+    const pre = document.createElement("pre");
+    pre.className = "json-block";
+    pre.textContent = json;
+    toolbar.appendChild(copyButton);
+    shell.append(toolbar, pre);
+    el.appendChild(shell);
   }
 
   function resizeCharts() {
@@ -391,6 +423,7 @@
     compact,
     escapeHtml,
     formatDate,
+    formatJson,
     getPath,
     number,
     renderTable,

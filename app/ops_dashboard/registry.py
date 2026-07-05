@@ -10,6 +10,8 @@ from app.ops_dashboard.schemas import DashboardFilters
 
 SectionCollector = Callable[[AsyncSession, DashboardFilters], object]
 
+JOB_ID_UUID_PATTERN = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+
 
 @dataclass(frozen=True)
 class DashboardPageControl:
@@ -22,6 +24,8 @@ class DashboardPageControl:
     options: tuple[str, ...] = ()
     min_value: int | None = None
     max_value: int | None = None
+    placeholder: str | None = None
+    pattern: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,11 +49,13 @@ RECENT_JOBS_CONTROLS: tuple[DashboardPageControl, ...] = (
         options=("all", "queued", "running", "succeeded", "failed"),
     ),
     DashboardPageControl(
-        key="client_request_id",
-        control_type="text",
+        key="job_id",
+        control_type="uuid",
         binding="query",
-        param="client_request_id",
-        label="client_request_id",
+        param="job_id",
+        label="job_id",
+        placeholder="UUID job_id",
+        pattern=JOB_ID_UUID_PATTERN,
     ),
     DashboardPageControl(
         key="limit",
@@ -67,10 +73,12 @@ RECENT_JOBS_CONTROLS: tuple[DashboardPageControl, ...] = (
 JOB_TRACE_CONTROLS: tuple[DashboardPageControl, ...] = (
     DashboardPageControl(
         key="job_id",
-        control_type="text",
+        control_type="uuid",
         binding="route",
         param="job_id",
         label="job_id",
+        placeholder="UUID job_id",
+        pattern=JOB_ID_UUID_PATTERN,
     ),
     DashboardPageControl(
         key="limit",
@@ -122,6 +130,24 @@ DASHBOARD_DATA_SOURCES: tuple[DashboardDataSource, ...] = (
 
 
 def data_source_config() -> list[dict[str, object]]:
+    def control_payload(control: DashboardPageControl) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "key": control.key,
+            "type": control.control_type,
+            "binding": control.binding,
+            "param": control.param,
+            "label": control.label,
+            "default": control.default,
+            "options": list(control.options),
+            "min": control.min_value,
+            "max": control.max_value,
+        }
+        if control.placeholder is not None:
+            payload["placeholder"] = control.placeholder
+        if control.pattern is not None:
+            payload["pattern"] = control.pattern
+        return payload
+
     return [
         {
             "key": data_source.key,
@@ -129,20 +155,7 @@ def data_source_config() -> list[dict[str, object]]:
             "route": data_source.route,
             "refresh_seconds": data_source.refresh_seconds,
             "default_enabled": data_source.default_enabled,
-            "controls": [
-                {
-                    "key": control.key,
-                    "type": control.control_type,
-                    "binding": control.binding,
-                    "param": control.param,
-                    "label": control.label,
-                    "default": control.default,
-                    "options": list(control.options),
-                    "min": control.min_value,
-                    "max": control.max_value,
-                }
-                for control in data_source.controls
-            ],
+            "controls": [control_payload(control) for control in data_source.controls],
         }
         for data_source in DASHBOARD_DATA_SOURCES
     ]

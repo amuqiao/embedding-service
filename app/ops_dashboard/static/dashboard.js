@@ -4,14 +4,21 @@
     section: "overview",
     config: null,
     refreshTimer: null,
+    appliedFilters: {},
     pageControls: {},
+    pageControlDrafts: {},
+    pageControlsDirty: {},
+    pageJsonBySection: {},
+    actionNoticeTimer: null,
   };
 
   const Renderers = window.OpsDashboardRenderers;
+  const JOB_ID_UUID_PATTERN = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
   const {
     compact,
     escapeHtml,
     formatDate,
+    formatJson,
     getPath,
     renderWidgetLayout,
     resizeCharts,
@@ -57,11 +64,13 @@
         options: ["all", "queued", "running", "succeeded", "failed"],
       },
       {
-        key: "client_request_id",
-        type: "text",
+        key: "job_id",
+        type: "uuid",
         binding: "query",
-        param: "client_request_id",
-        label: "client_request_id",
+        param: "job_id",
+        label: "job_id",
+        placeholder: "UUID job_id",
+        pattern: JOB_ID_UUID_PATTERN,
       },
       {
         key: "limit",
@@ -77,10 +86,12 @@
     job_trace: [
       {
         key: "job_id",
-        type: "text",
+        type: "uuid",
         binding: "route",
         param: "job_id",
         label: "job_id",
+        placeholder: "UUID job_id",
+        pattern: JOB_ID_UUID_PATTERN,
       },
       {
         key: "limit",
@@ -513,18 +524,14 @@
         { label: "完成时间", valuePath: "job.finished_at", format: "date" },
       ],
     },
-    "job_trace.payload": {
-      title: "Payload 明细",
-      question: "输入与运行时结构",
+    "job_trace.job_request_json": {
+      title: "Job 请求 JSON",
+      question: "创建 Job 的请求入参",
       rendererType: "html.json_block",
       dataSource: "job_trace",
       value: (payload) => {
         const job = payload.job || {};
-        return {
-          metadata: job.metadata_summary,
-          job_params: job.job_params_summary,
-          runtime: job.runtime_summary,
-        };
+        return job.job_request_json;
       },
     },
     "job_trace.load_summary": {
@@ -564,23 +571,35 @@
         },
       ],
     },
-    "job_trace.result": {
-      title: "Result 明细",
-      question: "Result 与 error 结构",
+    "job_trace.job_output_json": {
+      title: "Job 输出 JSON",
+      question: "Job 业务出参",
       rendererType: "html.json_block",
       dataSource: "job_trace",
       value: (payload) => {
         const job = payload.job || {};
-        return {
-          result: job.result_summary,
-          canonical_result: job.canonical_result_summary,
-          error: {
-            code: job.error_code,
-            message: job.error_message,
-            summary: job.error_summary,
-          },
-        };
+        return job.job_output_json;
       },
+    },
+    "job_trace.callback_response_json": {
+      title: "Callback 返回 JSON",
+      question: "调用方 callback 返回",
+      rendererType: "html.json_block",
+      dataSource: "job_trace",
+      value: (payload) => (payload.callbacks || []).map((callback) => ({
+        callback_id: callback.id,
+        event_id: callback.event_id,
+        event_type: callback.event_type,
+        status: callback.status,
+        delivery_attempts: callback.delivery_attempts,
+        last_http_status: callback.last_http_status,
+        callback_response_json: callback.callback_response_json,
+        callback_error_json: callback.callback_error_json,
+        callback_error_message: callback.callback_error_message,
+        delivered_at: callback.delivered_at,
+        dead_lettered_at: callback.dead_lettered_at,
+        updated_at: callback.updated_at,
+      })),
     },
     "job_trace.callback_summary": {
       title: "Callback 摘要",
@@ -659,7 +678,7 @@
     },
     "job_trace.timeline": {
       title: "时间线",
-      question: "仅展示 payload 摘要",
+      question: "仅展示事件 payload 摘要",
       rendererType: "html.table",
       dataSource: "job_trace",
       dataPath: "timeline",
@@ -670,7 +689,7 @@
         { key: "from_status", label: "来源状态" },
         { key: "to_status", label: "目标状态" },
         { key: "reason", label: "原因" },
-        { key: "payload_summary", label: "payload 摘要", value: (row) => JSON.stringify(row.payload_summary), wrap: true },
+        { key: "event_payload_summary", label: "事件 payload 摘要", value: (row) => JSON.stringify(row.event_payload_summary), wrap: true },
       ],
     },
     "job_trace.callbacks": {
@@ -685,7 +704,7 @@
         { key: "status", label: "状态", render: statusBadge },
         { key: "delivery_attempts", label: "尝试次数" },
         { key: "last_http_status", label: "http" },
-        { key: "last_error_message", label: "last_error", wrap: true },
+        { key: "callback_error_message", label: "错误消息", wrap: true },
       ],
     },
   });
@@ -797,8 +816,9 @@
         { widgetId: "job_trace.load_summary", group: "summary", hostClass: "table-wrap" },
         { widgetId: "job_trace.workflow_summary", group: "summary", chrome: "bare", hostClass: "stat-grid" },
         { widgetId: "job_trace.callback_summary", group: "summary", chrome: "bare", hostClass: "stat-grid" },
-        { widgetId: "job_trace.payload", group: "details" },
-        { widgetId: "job_trace.result", group: "details" },
+        { widgetId: "job_trace.job_request_json", group: "details" },
+        { widgetId: "job_trace.job_output_json", group: "details" },
+        { widgetId: "job_trace.callback_response_json", group: "details" },
         { widgetId: "job_trace.attempts", group: "evidence", hostClass: "table-wrap" },
         { widgetId: "job_trace.ai_calls", group: "evidence", hostClass: "table-wrap" },
         { widgetId: "job_trace.children", group: "evidence", hostClass: "table-wrap" },
@@ -854,21 +874,41 @@
   function initializeGlobalFilters() {
     const config = filterConfig();
     populateSelect(document.querySelector('[name="window"]'), config.windows, config.default_window);
+    state.appliedFilters = readGlobalFilterDraft();
   }
 
-  function appendIfPresent(params, key, value) {
-    const normalized = value === undefined || value === null ? "" : String(value).trim();
+  function normalizeControlValue(value) {
+    return value === undefined || value === null ? "" : String(value).trim();
+  }
+
+  function readGlobalFilterDraft() {
+    const form = new FormData($("#filters"));
+    return {
+      window: normalizeControlValue(form.get("window") || filterConfig().default_window),
+      caller_id: normalizeControlValue(form.get("caller_id")),
+      job_type: normalizeControlValue(form.get("job_type")),
+      run_id: normalizeControlValue(form.get("run_id")),
+    };
+  }
+
+  function appendGlobalFilter(params, filters, key) {
+    const normalized = normalizeControlValue(filters[key]);
     if (normalized) params.set(key, normalized);
   }
 
   function filterParams() {
-    const form = new FormData($("#filters"));
     const params = new URLSearchParams();
-    appendIfPresent(params, "window", form.get("window") || filterConfig().default_window);
-    appendIfPresent(params, "caller_id", form.get("caller_id"));
-    appendIfPresent(params, "job_type", form.get("job_type"));
-    appendIfPresent(params, "run_id", form.get("run_id"));
+    const filters = state.appliedFilters;
+    appendGlobalFilter(params, filters, "window");
+    appendGlobalFilter(params, filters, "caller_id");
+    appendGlobalFilter(params, filters, "job_type");
+    appendGlobalFilter(params, filters, "run_id");
     return params;
+  }
+
+  function refreshWithGlobalFilters() {
+    state.appliedFilters = readGlobalFilterDraft();
+    loadSection(state.section);
   }
 
   async function fetchJson(path) {
@@ -892,15 +932,19 @@
   function initializePageControls() {
     for (const [section, controls] of Object.entries(PAGE_CONTROL_REGISTRY)) {
       state.pageControls[section] ||= {};
+      state.pageControlDrafts[section] ||= {};
       for (const control of controls) {
         if (control.default !== undefined && state.pageControls[section][control.key] === undefined) {
           state.pageControls[section][control.key] = control.default;
+        }
+        if (state.pageControlDrafts[section][control.key] === undefined && state.pageControls[section][control.key] !== undefined) {
+          state.pageControlDrafts[section][control.key] = state.pageControls[section][control.key];
         }
       }
     }
   }
 
-  function controlValue(section, control, params) {
+  function appliedControlValue(section, control, params) {
     if (params && control.key in params) return params[control.key];
     if (control.key === "job_id" && params?.jobId) return params.jobId;
     const saved = state.pageControls[section]?.[control.key];
@@ -908,11 +952,19 @@
     return control.default;
   }
 
+  function draftControlValue(section, control, params) {
+    if (params && control.key in params) return params[control.key];
+    if (control.key === "job_id" && params?.jobId) return params.jobId;
+    const draft = state.pageControlDrafts[section]?.[control.key];
+    if (draft !== undefined) return draft;
+    return appliedControlValue(section, control, params);
+  }
+
   function routeControlsReady(section, params) {
     return pageControls(section)
       .filter((control) => control.binding === "route")
       .every((control) => {
-        const value = controlValue(section, control, params);
+        const value = appliedControlValue(section, control, params);
         return value !== undefined && value !== null && String(value).trim() !== "";
       });
   }
@@ -924,7 +976,7 @@
     let route = configured?.route || source.route;
     const queryParams = source.usesFilters ? filterParams() : new URLSearchParams();
     for (const control of pageControls(key)) {
-      const value = controlValue(key, control, params);
+      const value = appliedControlValue(key, control, params);
       const normalized = value === undefined || value === null ? "" : String(value).trim();
       if (control.binding === "route") {
         if (!normalized) throw new Error(`${control.param} is required`);
@@ -940,6 +992,114 @@
 
   function setError(message) {
     $("#status-line").innerHTML = `<div class="error-state">查询失败：${escapeHtml(message)}</div>`;
+  }
+
+  function currentPageJson() {
+    if (!Object.prototype.hasOwnProperty.call(state.pageJsonBySection, state.section)) return undefined;
+    return state.pageJsonBySection[state.section];
+  }
+
+  function setPageJson(section, payload) {
+    state.pageJsonBySection[section] = payload;
+    if (state.section === section) updatePageJsonActions();
+  }
+
+  function clearPageJson(section) {
+    delete state.pageJsonBySection[section];
+    if (state.section === section) updatePageJsonActions();
+  }
+
+  function actionStatusNode() {
+    return document.getElementById("page-json-action-status");
+  }
+
+  function setActionStatus(message, tone = "neutral") {
+    const status = actionStatusNode();
+    if (!status) return;
+    if (state.actionNoticeTimer) window.clearTimeout(state.actionNoticeTimer);
+    state.actionNoticeTimer = null;
+    status.textContent = message || "";
+    status.dataset.tone = tone;
+    if (!message) return;
+    state.actionNoticeTimer = window.setTimeout(() => {
+      status.textContent = "";
+      status.dataset.tone = "neutral";
+      state.actionNoticeTimer = null;
+    }, 1800);
+  }
+
+  function ensurePageJsonActions() {
+    const toolbar = document.querySelector(".toolbar");
+    const meta = toolbar?.firstElementChild;
+    if (!meta) return null;
+    meta.classList.add("toolbar-meta");
+    let actions = document.getElementById("page-json-actions");
+    if (!actions) {
+      actions = document.createElement("div");
+      actions.id = "page-json-actions";
+      actions.className = "toolbar-actions";
+      actions.innerHTML = `
+        <button class="secondary-button" type="button" data-page-json-action="copy">Copy Page JSON</button>
+        <button class="secondary-button" type="button" data-page-json-action="export">Export Page JSON</button>
+        <span id="page-json-action-status" class="toolbar-action-status" aria-live="polite"></span>
+      `;
+      meta.appendChild(actions);
+    }
+    return actions;
+  }
+
+  function exportFileName(section) {
+    const suffix =
+      section === "job_trace" ? String(state.pageControls.job_trace?.job_id || "").trim().replace(/[^a-zA-Z0-9._-]+/g, "-") : "";
+    return suffix ? `ops-dashboard-${section}-${suffix}.json` : `ops-dashboard-${section}.json`;
+  }
+
+  function updatePageJsonActions() {
+    const actions = ensurePageJsonActions();
+    if (!actions) return;
+    const pageJson = currentPageJson();
+    const hasPageJson = pageJson !== undefined;
+    const sectionTitle = LAYOUT_REGISTRY[state.section]?.title || state.section;
+    const copyButton = actions.querySelector('[data-page-json-action="copy"]');
+    const exportButton = actions.querySelector('[data-page-json-action="export"]');
+    if (!copyButton || !exportButton) return;
+    copyButton.disabled = !hasPageJson;
+    exportButton.disabled = !hasPageJson;
+    copyButton.title = hasPageJson ? `复制 ${sectionTitle} 整页当前 JSON` : `${sectionTitle} 当前暂无已加载 JSON`;
+    exportButton.title = hasPageJson ? `导出 ${sectionTitle} 整页当前 JSON` : `${sectionTitle} 当前暂无已加载 JSON`;
+    copyButton.setAttribute("aria-label", `${sectionTitle} Copy Page JSON`);
+    exportButton.setAttribute("aria-label", `${sectionTitle} Export Page JSON`);
+    if (!hasPageJson) setActionStatus("");
+  }
+
+  async function copyCurrentPageJson() {
+    const pageJson = currentPageJson();
+    if (pageJson === undefined) return;
+    try {
+      await navigator.clipboard.writeText(formatJson(pageJson));
+      setActionStatus("已复制整页 JSON", "success");
+    } catch (error) {
+      setActionStatus(`复制失败：${error?.message || String(error)}`, "error");
+    }
+  }
+
+  function exportCurrentPageJson() {
+    const pageJson = currentPageJson();
+    if (pageJson === undefined) return;
+    try {
+      const blob = new Blob([formatJson(pageJson)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = exportFileName(state.section);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setActionStatus("已导出整页 JSON", "success");
+    } catch (error) {
+      setActionStatus(`导出失败：${error?.message || String(error)}`, "error");
+    }
   }
 
   function jobLink(value) {
@@ -969,15 +1129,17 @@
   }
 
   function setActiveSection(section) {
+    if (state.section !== section) setActionStatus("");
     state.section = section;
     document.querySelectorAll(".nav-item").forEach((item) => {
       item.classList.toggle("active", item.dataset.section === section);
     });
     $("#section-title").textContent = LAYOUT_REGISTRY[section]?.title || section;
+    updatePageJsonActions();
   }
 
   function renderControlInput(section, control, context) {
-    const value = controlValue(section, control, context);
+    const value = draftControlValue(section, control, context);
     if (control.type === "select") {
       const options = (control.options || [])
         .map((option) => `
@@ -985,7 +1147,7 @@
         `)
         .join("");
       return `
-        <label>
+        <label class="control-field control-${escapeHtml(control.key)}">
           ${escapeHtml(control.label)}
           <select name="${escapeHtml(control.key)}">${options}</select>
         </label>
@@ -997,10 +1159,13 @@
       `value="${escapeHtml(value ?? "")}"`,
       control.min !== undefined ? `min="${escapeHtml(control.min)}"` : "",
       control.max !== undefined ? `max="${escapeHtml(control.max)}"` : "",
-      control.type === "text" ? "autocomplete=\"off\"" : "",
+      control.placeholder ? `placeholder="${escapeHtml(control.placeholder)}"` : "",
+      control.pattern ? `pattern="${escapeHtml(control.pattern)}"` : "",
+      control.pattern ? `title="${escapeHtml(control.placeholder || control.label)}"` : "",
+      control.type !== "number" ? "autocomplete=\"off\"" : "",
     ].filter(Boolean).join(" ");
     return `
-      <label>
+      <label class="control-field control-${escapeHtml(control.key)}">
         ${escapeHtml(control.label)}
         <input ${attrs} />
       </label>
@@ -1014,6 +1179,7 @@
       <form id="page-controls" class="job-search">
         ${controls.map((control) => renderControlInput(section, control, context)).join("")}
         <button class="primary-button" type="submit">查询</button>
+        <span class="query-dirty" data-page-query-dirty hidden>查询条件已修改，点击查询生效</span>
       </form>
     `;
   }
@@ -1036,7 +1202,6 @@
       if (!payload) return;
     }
     renderWidgetLayout(layout, WIDGET_REGISTRY, payload, WIDGET_DATA_ADAPTERS);
-    if (pageControls(section).length > 0) bindPageControls(section);
   }
 
   function assertLayoutDataSources(section, layout) {
@@ -1059,51 +1224,68 @@
     clearRefresh();
     try {
       if (!routeControlsReady(section)) {
+        clearPageJson(section);
         renderPage(section, null);
         return;
       }
       const payload = await fetchJson(dataSourceUrl(section));
+      setPageJson(section, payload);
       renderPage(section, payload);
       scheduleRefresh(section);
     } catch (error) {
-      setError(error.message || String(error));
+      const message = error.message || String(error);
+      setError(message);
+      if (section === "job_trace") {
+        clearPageJson(section);
+        renderPage(section, null, { message: `查询失败：${message}` });
+        setActionStatus("查询失败，当前无可复制/导出 JSON", "error");
+        return;
+      }
+      setActionStatus("刷新失败，复制/导出仍为上次成功 JSON", "error");
     }
   }
 
   async function loadJobTrace(jobId) {
     if (!jobId) return;
     state.pageControls.job_trace ||= {};
+    state.pageControlDrafts.job_trace ||= {};
     state.pageControls.job_trace.job_id = jobId;
+    state.pageControlDrafts.job_trace.job_id = jobId;
     await loadSection("job_trace");
-  }
-
-  function showJobTraceError(error) {
-    const target = $("#job-trace-widgets");
-    if (target) {
-      target.innerHTML = `<div class="error-state">查询失败：${escapeHtml(error.message || String(error))}</div>`;
-      return;
-    }
-    setError(error.message || String(error));
   }
 
   function bindPageControls(section) {
     const form = $("#page-controls");
     if (!form) return;
+    const dirtyNotice = form.querySelector("[data-page-query-dirty]");
+    const updateDirtyNotice = () => {
+      const values = {};
+      for (const [key, value] of new FormData(form).entries()) {
+        values[key] = normalizeControlValue(value);
+      }
+      state.pageControlDrafts[section] = { ...(state.pageControlDrafts[section] || {}), ...values };
+      const controls = pageControls(section);
+      const dirty = controls.some((control) => normalizeControlValue(state.pageControls[section]?.[control.key] ?? control.default) !== normalizeControlValue(values[control.key]));
+      state.pageControlsDirty[section] = dirty;
+      if (dirtyNotice) dirtyNotice.hidden = !dirty;
+    };
+    form.addEventListener("input", updateDirtyNotice);
+    form.addEventListener("change", updateDirtyNotice);
+    updateDirtyNotice();
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const values = {};
       for (const [key, value] of new FormData(event.currentTarget).entries()) {
-        values[key] = String(value).trim();
+        values[key] = normalizeControlValue(value);
       }
       state.pageControls[section] = { ...(state.pageControls[section] || {}), ...values };
+      state.pageControlDrafts[section] = { ...(state.pageControlDrafts[section] || {}), ...values };
+      state.pageControlsDirty[section] = false;
+      if (dirtyNotice) dirtyNotice.hidden = true;
       if (section === "job_trace" && values.job_id) {
         window.location.hash = `job=${encodeURIComponent(values.job_id)}`;
       }
-      try {
-        await loadSection(section);
-      } catch (error) {
-        showJobTraceError(error);
-      }
+      await loadSection(section);
     });
   }
 
@@ -1143,28 +1325,31 @@
       setError(error.message || String(error));
     }
     renderNavigation();
+    ensurePageJsonActions();
+    updatePageJsonActions();
     $("#filters").addEventListener("submit", (event) => {
       event.preventDefault();
-      if (state.section !== "job_trace") loadSection(state.section);
+      refreshWithGlobalFilters();
     });
     document.body.addEventListener("click", async (event) => {
+      const actionButton = event.target.closest("[data-page-json-action]");
+      if (actionButton) {
+        if (actionButton.dataset.pageJsonAction === "copy") {
+          await copyCurrentPageJson();
+        } else if (actionButton.dataset.pageJsonAction === "export") {
+          exportCurrentPageJson();
+        }
+        return;
+      }
       const button = event.target.closest("[data-job-id]");
       if (!button) return;
       const jobId = button.dataset.jobId;
       window.location.hash = `job=${encodeURIComponent(jobId)}`;
-      try {
-        await loadJobTrace(jobId);
-      } catch (error) {
-        showJobTraceError(error);
-      }
+      await loadJobTrace(jobId);
     });
     const hashJob = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("job");
     if (hashJob) {
-      try {
-        await loadJobTrace(hashJob);
-      } catch (error) {
-        showJobTraceError(error);
-      }
+      await loadJobTrace(hashJob);
       return;
     }
     await loadSection("overview");

@@ -6,7 +6,7 @@
 
 `ops_dashboard` 用于把 Job 运维读模型可视化。它承接常驻总览、失败聚合和单 Job 追踪的只读展示；深度排障入口仍是 `scripts/jobs.sh`。
 
-本模块不负责生产部署、业务 mock 数据、对象存储内容查看、完整 payload 展示或 Redis broker / Pod runtime 的深度排查。
+本模块不负责生产部署、业务 mock 数据、通用对象存储浏览或 Redis broker / Pod runtime 的深度排查；Job Trace 仅为展示完整 Job 请求 JSON 展开 `job_params_ref`。
 
 ## Mental Model
 
@@ -43,14 +43,17 @@ Layout
 ## Current Behavior
 
 - 默认关闭，由 `OPS_DASHBOARD_ENABLED` 控制。
+- Dashboard 会展示完整 Job 输入/输出 JSON；`OPS_DASHBOARD_REQUIRE_AUTH` 默认开启，本地隔离排查时才显式关闭。
 - 路由固定在 `/internal/jobs-dashboard`，不进入 OpenAPI。
 - 后端提供 data source config、overview、recent_jobs、flow_capacity、failures_callbacks、job trace、health。
 - 前端负责 renderer contract、widget registry、layout registry、ECharts 渲染和 HTML 渲染。
 - dashboard 顶部全局过滤支持 `window`、`caller_id`、`job_type`、`run_id`；`bucket` 不作为 dashboard 控件或 query 合同暴露，而是由后端按 `window` 自动派生为 `resolved_bucket`，`run_id` 对齐 `load.sh` 写入 Job metadata 的压测身份。
-- `recent_jobs` 已接入 public root Job 读模型，支持页内 `status/client_request_id/limit` 控件；`flow_capacity` 已接入 DB read model，用于吞吐、drain、容量、延迟和 job_type 热点方向判断；`failures_callbacks` 已接入失败聚合、失败样本、callback summary 和 callback 样本。
+- 顶部全局过滤只有一个 `刷新` 动作；点击后按当前顶部控件值刷新当前 section。page-local `查询` 只提交当前 section 自己的查询条件。
+- `recent_jobs` 已接入 public root Job 读模型，支持页内 `status/job_id/limit` 控件；`flow_capacity` 已接入 DB read model，用于吞吐、drain、容量、延迟和 job_type 热点方向判断；`failures_callbacks` 已接入失败聚合、失败样本、callback summary 和 callback 样本。
 - `/internal/jobs-dashboard/examples` 是独立静态 renderer 示例页，只使用 generic fixtures，不请求 Job 读模型，也不作为业务 mock 数据源。
 - dashboard 不支持业务 mock 数据开关；旧的 `OPS_DASHBOARD_MOCK_DATA_ENABLED` 已废弃，出现在 env 文件或进程环境中都会触发配置加载失败。
-- dashboard 不直接读取 Redis broker、Pod runtime、完整 payload 或对象存储内容；这些仍由 `scripts/jobs.sh broker/runtime/payload --full` 等命令承担。
+- dashboard 不直接读取 Redis broker 或 Pod runtime。Job Trace 为展示完整 Job 请求 JSON，会通过 `job_params_ref` 展开创建 Job 时保存的 runtime JSON；引用缺失或损坏会直接暴露查询错误。
+- 页面级 `Copy JSON` / `Export JSON` 直接复用当前 section 已加载的原始 JSON；`html.json_block` 提供块级 `Copy`，复制当前 block 展示的 JSON。
 
 ## Registry Layers
 
@@ -92,7 +95,7 @@ app/ops_dashboard/static/chart_contract.js
 | key | route | refresh | 当前用途 |
 | --- | --- | --- | --- |
 | `overview` | `/internal/jobs-dashboard/sections/overview/data` | 15s | 总览健康、容量、趋势、延迟、成功率、stuck 样本 |
-| `recent_jobs` | `/internal/jobs-dashboard/sections/recent_jobs/data` | 15s | public root Job 选择器；page-local `status/client_request_id/limit` 控件合同 |
+| `recent_jobs` | `/internal/jobs-dashboard/sections/recent_jobs/data` | 15s | public root Job 选择器；page-local `status/job_id/limit` 控件合同 |
 | `flow_capacity` | `/internal/jobs-dashboard/sections/flow_capacity/data` | 30s | 吞吐/排空趋势、drain、gate/headroom、状态构成、latency p95、job_type 热点、CLI handoff |
 | `failures_callbacks` | `/internal/jobs-dashboard/sections/failures_callbacks/data` | 30s | 失败聚合、失败样本、callback summary、callback composition、callback 样本、CLI handoff |
 | `job_trace` | `/internal/jobs-dashboard/jobs/{job_id}/data` | 0 | 单 Job 证据链追踪 |
@@ -104,9 +107,9 @@ app/ops_dashboard/static/chart_contract.js
 | dataSource | control | binding | param | 用途 |
 | --- | --- | --- | --- | --- |
 | `recent_jobs` | `status` | query | `status` | 页内状态筛选，允许 `all/queued/running/succeeded/failed` |
-| `recent_jobs` | `client_request_id` | query | `client_request_id` | 按调用方幂等请求定位 root Job |
+| `recent_jobs` | `job_id` | query | `job_id` | UUID；在当前顶部筛选范围内精确定位 root Job |
 | `recent_jobs` | `limit` | query | `limit` | 限制返回行数 |
-| `job_trace` | `job_id` | route | `job_id` | 替换 `/jobs/{job_id}/data` route param |
+| `job_trace` | `job_id` | route | `job_id` | UUID；替换 `/jobs/{job_id}/data` route param |
 | `job_trace` | `limit` | query | `limit` | 限制 timeline 行数 |
 
 ## Time Filter Contract
@@ -127,11 +130,11 @@ dashboard 的时间筛选是后端 HTTP query 合同，不只是一组前端控�
 
 规则：
 
-- 默认 `window=1h`。
+- 默认 `window=1h`；当 `OPS_DASHBOARD_MAX_WINDOW_SECONDS` 小于 1 小时时，默认值为不超过上限的最大窗口。
 - `bucket` 是服务端派生值，不接受用户 query 参数；传入 `bucket` 会返回 400。
 - 不支持 `from/to` 日期选择；传入 `from` 或 `to` 会返回 400。
 - 时间范围不能超过 `OPS_DASHBOARD_MAX_WINDOW_SECONDS`。
-- `OPS_DASHBOARD_MAX_WINDOW_SECONDS` 默认 `604800`，即 7 天；如果配置调小，超过上限的 `window` 会返回 400。
+- `OPS_DASHBOARD_MAX_WINDOW_SECONDS` 默认 `604800`，即 7 天；`/config` 只向前端返回不超过该上限的窗口选项，手动传入超过上限的 `window` 会返回 400。
 - read model 使用半开区间 `[now - window, now)`；`now` 是本次请求创建 `DashboardFilters` 时的服务端时间。payload 里的 `generated_at` 是展示生成时间，不是 query upper bound。
 
 前端时间筛选只显示 `window`；同一工具条还提供 `caller_id/job_type/run_id` 全局过滤。`resolved_bucket` 可以出现在 payload 和 CLI handoff 中，用于解释图表分桶粒度；它不是用户可调的 dashboard 参数，也不通过 `/config` 暴露为前端可选项。
@@ -186,8 +189,9 @@ Job Trace
 | `job_trace` | `job_trace.load_summary` | 来自 Job metadata 的压测 run_id/profile/case/sequence 摘要 |
 | `job_trace` | `job_trace.workflow_summary` | workflow root/children/finalize 摘要 |
 | `job_trace` | `job_trace.callback_summary` | 单 Job callback 状态摘要 |
-| `job_trace` | `job_trace.payload` | metadata、job_params、runtime 的结构摘要；不展示 full payload |
-| `job_trace` | `job_trace.result` | result、canonical_result、error 的结构摘要；不展示 full result |
+| `job_trace` | `job_trace.job_request_json` | 创建 Job 的请求 JSON，包含 `client_request_id`、`job_type`、`job_params`、callback、metadata 和 options |
+| `job_trace` | `job_trace.job_output_json` | Job 业务输出 JSON；成功优先展示 `job.result`，失败展示 `job.error` |
+| `job_trace` | `job_trace.callback_response_json` | callback HTTP 返回 JSON、HTTP 状态与 callback 错误 |
 | `job_trace` | `job_trace.attempts` | retry decision 和 attempt 证据 |
 | `job_trace` | `job_trace.ai_calls` | AI call ledger 证据 |
 | `job_trace` | `job_trace.children` | workflow children / family 视角 |
@@ -214,12 +218,12 @@ Overview 不承载长任务表。需要查具体 Job 时进入 `Recent Jobs`、`
 
 ## Recent Jobs Contract
 
-`recent_jobs` 是 public root Job 选择器，用于按状态和 `client_request_id` 找到具体 Job。
+`recent_jobs` 是 public root Job 选择器，用于在当前顶部时间窗口和全局筛选下按状态或 `job_id` 找到具体 Job。
 
 | payload path | 统计口径 | 说明 |
 | --- | --- | --- |
 | `controls.status` | page-local query | `all/queued/running/succeeded/failed` |
-| `controls.client_request_id` | page-local query | 精确定位调用方幂等请求 |
+| `controls.job_id` | page-local query | 精确定位 root Job，仍受顶部时间窗口和全局筛选约束 |
 | `controls.limit` | page-local query | 1 到 100 |
 | `summary` | root scope + `created_at` time range + page controls | 当前筛选下 total、queued、running、succeeded、failed、terminal |
 | `jobs` | root scope rows | root Job 行，包含 callback/attempt/dispatch 简要状态和 `duration_or_age_seconds` |
@@ -262,15 +266,16 @@ Recent Jobs 固定为 root 视角，不提供 `scope` 控件。child / family �
 
 ## Job Trace Contract
 
-`job_trace` 是单 Job 证据链页面。它不按时间窗口筛选，只由 route control `job_id` 和 query control `limit` 决定。
+`job_trace` 是单 Job 证据链页面。它不按时间窗口筛选，只由 route control `job_id`（UUID）和 query control `limit` 决定。
 
 | payload path | 统计口径 | 说明 |
 | --- | --- | --- |
-| `job` | 单条 `job_aggregates` | identity、root/child、进度、callback_status、payload summaries、error summary |
-| `load_summary` | `job.metadata` | `scripts/load.sh` 写入的 `source/run_id/profile/case_key/sequence` |
-| `workflow_summary` | `job.result` / workflow fields | root/child/finalize 结构摘要 |
-| `payload` | `job.metadata/job_params/runtime` | 输入、metadata 和 runtime 的结构摘要；完整 payload 不进入 dashboard |
-| `result` | `job.result/canonical_result/error` | result、canonical_result 和 error 的结构摘要；完整结果不进入 dashboard |
+| `job` | 单条 `job_aggregates` | identity、root/child、进度、callback_status、`job_request_json`、`job_output_json` 和 `load_summary` |
+| `load_summary` | `job.load_summary` | `scripts/load.sh` 写入的 `source/run_id/profile/case_key/sequence` 摘要 |
+| `workflow_summary` | `job.job_output_json` / `workflow_children` | root/child/finalize 结构摘要 |
+| `job_request_json` | `job.job_request_json` | 创建 Job 的请求 JSON |
+| `job_output_json` | `job.job_output_json` | Job 业务输出 JSON |
+| `callback_response_json` | `callbacks[].callback_response_json/callback_error_json/last_http_status` | 调用方 callback HTTP 返回 JSON、HTTP 状态与错误 |
 | `callback_summary` | callback fields | 单 Job callback 状态、attempt 和错误码摘要 |
 | `attempts` | `job_execution_attempts` by job | attempt 状态、retry decision、failure phase |
 | `ai_calls` | AI call ledger by job | provider/model/operation/status/cost 证据 |
@@ -278,9 +283,9 @@ Recent Jobs 固定为 root 视角，不提供 `scope` 控件。child / family �
 | `timeline` | status event timeline | 状态变迁和 payload summary |
 | `callbacks` | callback outbox by job | 单 Job callback delivery 证据 |
 
-Job Trace 页面按“摘要 + 明细 + 证据”分层：摘要层展示 Job Summary、Load Summary、Workflow Summary 和 Callback Summary；明细层用 JSON Block 展示 Payload 与 Result；证据层用表格展示 attempts、AI calls、children、timeline 和 callbacks。
+Job Trace 页面按“摘要 + 明细 + 证据”分层：摘要层展示 Job Summary、Load Summary、Workflow Summary 和 Callback Summary；明细层用 JSON Block 展示 Job 请求 JSON、Job 输出 JSON 和 Callback 返回 JSON；证据层用表格展示 attempts、AI calls、children、timeline 和 callbacks。
 
-`payload --full` 不进 dashboard。页面只展示结构摘要；需要完整 payload 或完整 result 时使用 CLI。
+页面级复制/导出复用当前 section 的原始接口 JSON；Job 请求 JSON、Job 输出 JSON 和 Callback 返回 JSON block 复制当前 block 展示的完整 JSON。
 
 ## Renderer Contract
 

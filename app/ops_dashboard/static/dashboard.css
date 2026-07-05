@@ -141,6 +141,11 @@ code {
   margin-bottom: 16px;
 }
 
+.toolbar-meta {
+  display: grid;
+  gap: 10px;
+}
+
 .toolbar h2 {
   font-size: 24px;
   line-height: 1.2;
@@ -158,11 +163,13 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  align-items: end;
   justify-content: flex-end;
 }
 
 .filters label,
 .job-search label {
+  min-width: 0;
   display: grid;
   gap: 4px;
   color: var(--muted);
@@ -171,9 +178,11 @@ code {
 
 .filters input,
 .filters select,
-.job-search input {
+.job-search input,
+.job-search select {
   height: 36px;
-  min-width: 112px;
+  width: 100%;
+  min-width: 132px;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 0 10px;
@@ -183,16 +192,31 @@ code {
 
 .job-search {
   justify-content: flex-start;
-  align-items: end;
   margin-bottom: 16px;
 }
 
-.job-search input {
-  min-width: min(520px, 70vw);
+.job-search .control-field {
+  flex: 0 1 180px;
+}
+
+.job-search .control-job_id {
+  flex-basis: min(520px, 100%);
+}
+
+.job-search .control-limit {
+  flex-basis: 120px;
+}
+
+.query-dirty {
+  min-height: 18px;
+  align-self: end;
+  color: var(--amber);
+  font-size: 12px;
 }
 
 .icon-button,
-.primary-button {
+.primary-button,
+.secondary-button {
   height: 36px;
   border: 0;
   border-radius: 8px;
@@ -211,6 +235,49 @@ code {
   padding: 0 16px;
   color: #ffffff;
   background: #1769aa;
+}
+
+.secondary-button {
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  color: var(--text);
+  background: var(--surface);
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.toolbar-actions,
+.filter-actions,
+.json-block-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-actions {
+  justify-content: flex-end;
+}
+
+.filter-actions .primary-button {
+  min-width: 88px;
+}
+
+.toolbar-action-status {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.toolbar-action-status[data-tone="success"] {
+  color: var(--green);
+}
+
+.toolbar-action-status[data-tone="error"] {
+  color: var(--red);
 }
 
 .status-line {
@@ -276,13 +343,14 @@ code {
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
   margin-bottom: 14px;
 }
 
 .stat-card,
 .panel {
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
@@ -292,6 +360,7 @@ code {
 .stat-card {
   min-height: 88px;
   padding: 14px;
+  overflow: hidden;
 }
 
 .stat-card .label {
@@ -303,6 +372,7 @@ code {
   margin-top: 10px;
   font-size: 28px;
   font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
 .stat-card .sub {
@@ -313,7 +383,7 @@ code {
 
 .panel-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
   gap: 14px;
 }
 
@@ -395,6 +465,7 @@ code {
 }
 
 .table-wrap {
+  min-width: 0;
   overflow-x: auto;
 }
 
@@ -433,11 +504,13 @@ td.wrap {
 }
 
 .trace-content {
+  min-width: 0;
   display: grid;
   gap: 14px;
 }
 
 .layout-group {
+  min-width: 0;
   display: grid;
   gap: 10px;
 }
@@ -467,11 +540,22 @@ td.wrap {
 
 .trace-summary {
   display: grid;
-  grid-template-columns: 1.3fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+  align-items: start;
   gap: 14px;
 }
 
+.trace-summary .table-wrap table {
+  table-layout: fixed;
+}
+
+.trace-summary .table-wrap td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .json-block {
+  min-width: 0;
   max-height: 260px;
   overflow: auto;
   padding: 12px;
@@ -480,6 +564,16 @@ td.wrap {
   color: #d8e7f5;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.json-block-shell {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.json-block-toolbar {
+  justify-content: flex-end;
 }
 
 .empty-state,
@@ -517,10 +611,6 @@ td.wrap {
     justify-content: flex-start;
   }
 
-  .stat-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .panel-grid,
   .trace-summary {
     grid-template-columns: 1fr;
@@ -535,8 +625,11 @@ td.wrap {
   .filters label,
   .filters input,
   .filters select,
+  .filter-actions,
   .job-search label,
-  .job-search input {
+  .job-search input,
+  .job-search select,
+  .query-dirty {
     width: 100%;
   }
 
