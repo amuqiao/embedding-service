@@ -571,15 +571,31 @@
         },
       ],
     },
-    "job_trace.job_output_json": {
-      title: "Job 输出 JSON",
-      question: "Job 业务出参",
+    "job_trace.job_query_response_json": {
+      title: "Job 查询返回 JSON",
+      question: "调用方轮询/查询 Job 时看到的响应",
       rendererType: "html.json_block",
       dataSource: "job_trace",
       value: (payload) => {
         const job = payload.job || {};
-        return job.job_output_json;
+        return job.job_query_response_json;
       },
+    },
+    "job_trace.callback_request_json": {
+      title: "Callback 请求 JSON",
+      question: "服务端投递给调用方的 callback body",
+      rendererType: "html.json_block",
+      dataSource: "job_trace",
+      value: (payload) => (payload.callbacks || []).map((callback) => ({
+        callback_id: callback.id,
+        event_id: callback.event_id,
+        event_type: callback.event_type,
+        status: callback.status,
+        delivery_attempts: callback.delivery_attempts,
+        callback_request_json: callback.callback_request_json,
+        created_at: callback.created_at,
+        updated_at: callback.updated_at,
+      })),
     },
     "job_trace.callback_response_json": {
       title: "Callback 返回 JSON",
@@ -817,7 +833,8 @@
         { widgetId: "job_trace.workflow_summary", group: "summary", chrome: "bare", hostClass: "stat-grid" },
         { widgetId: "job_trace.callback_summary", group: "summary", chrome: "bare", hostClass: "stat-grid" },
         { widgetId: "job_trace.job_request_json", group: "details" },
-        { widgetId: "job_trace.job_output_json", group: "details" },
+        { widgetId: "job_trace.job_query_response_json", group: "details" },
+        { widgetId: "job_trace.callback_request_json", group: "details" },
         { widgetId: "job_trace.callback_response_json", group: "details" },
         { widgetId: "job_trace.attempts", group: "evidence", hostClass: "table-wrap" },
         { widgetId: "job_trace.ai_calls", group: "evidence", hostClass: "table-wrap" },

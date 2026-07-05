@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -466,49 +467,35 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
         '"job_trace.load_summary"',
         '"job_trace.workflow_summary"',
         '"job_trace.job_request_json"',
-        '"job_trace.job_output_json"',
+        '"job_trace.job_query_response_json"',
+        '"job_trace.callback_request_json"',
         '"job_trace.callback_response_json"',
         '"job_trace.callback_summary"',
     ]:
         assert widget_id in widget_source
-    assert '"job_trace.payload"' not in widget_source
-    assert '"job_trace.result"' not in widget_source
-    assert '"job_trace.callback_result"' not in widget_source
-    assert '"job_trace.result_summary"' not in widget_source
     request_widget = widget_source[
         widget_source.index('"job_trace.job_request_json"') : widget_source.index('"job_trace.load_summary"')
     ]
-    output_widget = widget_source[
-        widget_source.index('"job_trace.job_output_json"') : widget_source.index('"job_trace.callback_response_json"')
+    query_response_widget = widget_source[
+        widget_source.index('"job_trace.job_query_response_json"') : widget_source.index('"job_trace.callback_request_json"')
+    ]
+    callback_request_widget = widget_source[
+        widget_source.index('"job_trace.callback_request_json"') : widget_source.index('"job_trace.callback_response_json"')
     ]
     callback_response_widget = widget_source[
         widget_source.index('"job_trace.callback_response_json"') : widget_source.index('"job_trace.callback_summary"')
     ]
     assert 'rendererType: "html.json_block"' in request_widget
     assert 'title: "Job 请求 JSON"' in request_widget
-    assert 'title: "Job 输出 JSON"' in output_widget
-    assert 'rendererType: "html.json_block"' in output_widget
+    assert 'title: "Job 查询返回 JSON"' in query_response_widget
+    assert 'rendererType: "html.json_block"' in query_response_widget
+    assert 'title: "Callback 请求 JSON"' in callback_request_widget
+    assert 'rendererType: "html.json_block"' in callback_request_widget
     assert 'title: "Callback 返回 JSON"' in callback_response_widget
     assert 'rendererType: "html.json_block"' in callback_response_widget
-    assert "job.result_summary" not in request_widget
-    assert "job.canonical_result_summary" not in request_widget
-    assert "job.error_summary" not in request_widget
-    assert "job.metadata_summary" not in request_widget
-    assert "job.job_params_summary" not in request_widget
-    assert "job.runtime_summary" not in request_widget
     assert "job.job_request_json" in request_widget
-    assert "job.job_input" not in request_widget
-    assert "job.metadata" not in request_widget
-    assert "job.job_params_ref" not in request_widget
-    assert "job.runtime_ref" not in request_widget
-    assert "job.result_summary" not in output_widget
-    assert "job.canonical_result_summary" not in output_widget
-    assert "job.error_summary" not in output_widget
-    assert "job.job_output_json" in output_widget
-    assert "return job.job_output;" not in output_widget
-    assert "job.result" not in output_widget
-    assert "job.canonical_result" not in output_widget
-    assert "job.error" not in output_widget
+    assert "job.job_query_response_json" in query_response_widget
+    assert "callback_request_json: callback.callback_request_json" in callback_request_widget
     assert "callback_id: callback.id" in callback_response_widget
     assert "last_http_status: callback.last_http_status" in callback_response_widget
     assert "callback_response_json: callback.callback_response_json" in callback_response_widget
@@ -536,7 +523,12 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
     assert 'group: "evidence"' in layout_source
     for widget_id in ["job_trace.summary", "job_trace.load_summary", "job_trace.workflow_summary", "job_trace.callback_summary"]:
         assert re.search(rf'widgetId:\s*"{re.escape(widget_id)}",\s*group:\s*"summary"', layout_source)
-    for widget_id in ["job_trace.job_request_json", "job_trace.job_output_json", "job_trace.callback_response_json"]:
+    for widget_id in [
+        "job_trace.job_request_json",
+        "job_trace.job_query_response_json",
+        "job_trace.callback_request_json",
+        "job_trace.callback_response_json",
+    ]:
         assert re.search(rf'widgetId:\s*"{re.escape(widget_id)}",\s*group:\s*"details"', layout_source)
     for widget_id in [
         "job_trace.attempts",
@@ -565,12 +557,11 @@ def test_ops_dashboard_static_dashboard_js_declares_renderer_widget_layout_contr
 
 
 @pytest.mark.asyncio
-async def test_ops_dashboard_get_job_preserves_full_payload_and_result_json():
+async def test_ops_dashboard_get_job_preserves_full_request_json():
     from app.ops_dashboard import read_model
 
     job_id = uuid.uuid4()
     job_params_ref = {"storage": "db_inline", "payload": {"input_text": "hello"}}
-    result = {"artifacts": [{"kind": "text", "value": "ok"}]}
     error = {"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {"phase": "run"}}
 
     class _Result:
@@ -594,7 +585,6 @@ async def test_ops_dashboard_get_job_preserves_full_payload_and_result_json():
                 "job_params_ref": job_params_ref,
                 "callback_url": None,
                 "callback_events": None,
-                "result": result,
                 "error": error,
                 "error_code": "JOB_EXECUTION_FAILED",
                 "error_message": "failed",
@@ -620,23 +610,125 @@ async def test_ops_dashboard_get_job_preserves_full_payload_and_result_json():
         "metadata": {"source": "load", "run_id": "run-1"},
         "options": {"priority": "normal"},
     }
-    assert payload["job_output_json"] == error
-    assert read_model._job_output_json(status="succeeded", result=result, error=None) == result
-    assert read_model._job_output_json(status="running", result=None, error=None) is None
     assert payload["load_summary"] == {"present": True, "source": "load", "run_id": "run-1"}
-    assert "metadata" not in payload
-    assert "job_params_ref" not in payload
-    assert "runtime_ref" not in payload
-    assert "result" not in payload
-    assert "canonical_result" not in payload
-    assert "error" not in payload
-    assert "job_input" not in payload
-    assert "job_output" not in payload
-    assert "job_params_summary" not in payload
-    assert "runtime_summary" not in payload
-    assert "result_summary" not in payload
-    assert "canonical_result_summary" not in payload
-    assert "error_summary" not in payload
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_job_query_response_json_reuses_public_job_response(monkeypatch):
+    from app.ops_dashboard import read_model
+
+    job_id = uuid.uuid4()
+    captured: dict[str, Any] = {}
+
+    async def fake_get_job_response(_db, requested_job_id, caller_id, *, request_id="-"):
+        captured["job_id"] = requested_job_id
+        captured["caller_id"] = caller_id
+        captured["request_id"] = request_id
+        return {
+            "job_id": job_id,
+            "client_request_id": "client-1",
+            "job_type": "job_real_llm_echo",
+            "job_status": "running",
+            "job_progress": {"percent": 45, "stage": "calling_model", "message": "calling_model"},
+            "job_result": {"partial": True},
+            "job_error": None,
+            "cost": None,
+            "usage": None,
+            "callback": {"status": "pending", "attempt": 0, "last_error": None, "next_retry_at": None},
+            "status_url": f"/api/v1/ai-jobs/jobs/{job_id}",
+            "created_at": datetime(2026, 7, 5, tzinfo=UTC),
+            "updated_at": datetime(2026, 7, 5, tzinfo=UTC),
+            "finished_at": None,
+        }
+
+    monkeypatch.setattr(read_model, "get_job_response", fake_get_job_response)
+
+    payload = await read_model.job_query_response_json(object(), job_id, caller_id="caller-1")
+
+    assert captured == {"job_id": job_id, "caller_id": "caller-1", "request_id": "-"}
+    assert payload["job"]["job_id"] == str(job_id)
+    assert payload["job"]["job_status"] == "running"
+    assert payload["job"]["job_result"] == {"partial": True}
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_job_trace_data_includes_query_response_for_public_root(monkeypatch):
+    from app.ops_dashboard import read_model
+
+    job_id = uuid.uuid4()
+    captured: dict[str, Any] = {}
+
+    async def fake_get_job(_db, requested_job_id):
+        captured["get_job_id"] = requested_job_id
+        return {
+            "job_id": str(job_id),
+            "root_job_id": None,
+            "workflow_node_key": None,
+            "caller_id": "caller-1",
+            "job_request_json": {"job_type": "example_sleep"},
+        }
+
+    async def fake_job_query_response_json(_db, requested_job_id, *, caller_id):
+        captured["query_job_id"] = requested_job_id
+        captured["caller_id"] = caller_id
+        return {"job": {"job_id": str(requested_job_id), "job_status": "running"}}
+
+    async def empty_list(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(read_model, "get_job", fake_get_job)
+    monkeypatch.setattr(read_model, "job_query_response_json", fake_job_query_response_json)
+    monkeypatch.setattr(read_model, "attempts", empty_list)
+    monkeypatch.setattr(read_model, "callbacks", empty_list)
+    monkeypatch.setattr(read_model, "timeline", empty_list)
+    monkeypatch.setattr(read_model, "workflow_children", empty_list)
+    monkeypatch.setattr(read_model, "ai_calls", empty_list)
+
+    payload = await read_model.job_trace_data(object(), job_id)
+
+    assert captured == {"get_job_id": job_id, "query_job_id": job_id, "caller_id": "caller-1"}
+    assert payload is not None
+    assert payload["job"]["job_query_response_json"] == {"job": {"job_id": str(job_id), "job_status": "running"}}
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_job_trace_data_omits_query_response_for_child_job(monkeypatch):
+    from app.ops_dashboard import read_model
+
+    job_id = uuid.uuid4()
+    root_job_id = uuid.uuid4()
+    called = False
+
+    async def fake_get_job(_db, _requested_job_id):
+        return {
+            "job_id": str(job_id),
+            "root_job_id": str(root_job_id),
+            "workflow_node_key": "node-a",
+            "caller_id": "caller-1",
+            "job_request_json": {"job_type": "example_sleep"},
+        }
+
+    async def fake_job_query_response_json(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return {}
+
+    async def empty_list(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(read_model, "get_job", fake_get_job)
+    monkeypatch.setattr(read_model, "job_query_response_json", fake_job_query_response_json)
+    monkeypatch.setattr(read_model, "attempts", empty_list)
+    monkeypatch.setattr(read_model, "callbacks", empty_list)
+    monkeypatch.setattr(read_model, "timeline", empty_list)
+    monkeypatch.setattr(read_model, "workflow_children", empty_list)
+    monkeypatch.setattr(read_model, "ai_calls", empty_list)
+
+    payload = await read_model.job_trace_data(object(), job_id)
+
+    assert called is False
+    assert payload is not None
+    assert payload["job"]["job_query_response_json"] is None
 
 
 @pytest.mark.asyncio
@@ -667,7 +759,6 @@ async def test_ops_dashboard_get_job_fails_fast_when_job_params_ref_is_missing()
                 "job_params_ref": None,
                 "callback_url": None,
                 "callback_events": None,
-                "result": {"ok": True},
                 "error": None,
                 "error_code": None,
                 "error_message": None,
@@ -698,7 +789,7 @@ async def test_ops_dashboard_job_trace_callbacks_return_callback_response_json()
     await read_model.callbacks(db, uuid.uuid4())
 
     sql = db.statements[0]
-    assert "c.payload" not in sql
+    assert "c.payload AS callback_request_json" in sql
     assert "c.last_response AS callback_response_json" in sql
     assert "c.last_error AS callback_error_json" in sql
     assert "c.last_error->>'message' AS callback_error_message" in sql
@@ -842,12 +933,23 @@ def test_ops_dashboard_job_trace_route_returns_read_model_payload(monkeypatch):
         assert limit == 7
         return {
             "generated_at": datetime(2026, 7, 3, tzinfo=UTC),
-            "job": {"job_id": str(requested_job_id), "status": "succeeded"},
+            "job": {
+                "job_id": str(requested_job_id),
+                "status": "succeeded",
+                "job_request_json": {"job_type": "example_sleep"},
+                "job_query_response_json": {"job": {"job_id": str(requested_job_id), "job_status": "succeeded"}},
+            },
             "attempts": [],
             "ai_calls": [],
             "workflow_children": [],
             "timeline": [],
-            "callbacks": [],
+            "callbacks": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "callback_request_json": {"event": "job.succeeded"},
+                    "callback_response_json": {"accepted": True},
+                }
+            ],
         }
 
     monkeypatch.setattr(read_model, "job_trace_data", fake_job_trace_data)
@@ -860,8 +962,13 @@ def test_ops_dashboard_job_trace_route_returns_read_model_payload(monkeypatch):
         response = client.get(f"/internal/jobs-dashboard/jobs/{job_id}/data?limit=7")
 
     assert response.status_code == 200
-    assert response.json()["job"]["job_id"] == str(job_id)
-    assert response.json()["job"]["status"] == "succeeded"
+    payload = response.json()
+    assert payload["job"]["job_id"] == str(job_id)
+    assert payload["job"]["status"] == "succeeded"
+    assert payload["job"]["job_request_json"] == {"job_type": "example_sleep"}
+    assert payload["job"]["job_query_response_json"]["job"]["job_status"] == "succeeded"
+    assert payload["callbacks"][0]["callback_request_json"] == {"event": "job.succeeded"}
+    assert payload["callbacks"][0]["callback_response_json"] == {"accepted": True}
 
 
 def test_ops_dashboard_job_trace_rejects_invalid_job_id(monkeypatch):

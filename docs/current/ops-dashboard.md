@@ -190,8 +190,9 @@ Job Trace
 | `job_trace` | `job_trace.workflow_summary` | workflow root/children/finalize 摘要 |
 | `job_trace` | `job_trace.callback_summary` | 单 Job callback 状态摘要 |
 | `job_trace` | `job_trace.job_request_json` | 创建 Job 的请求 JSON，包含 `client_request_id`、`job_type`、`job_params`、callback、metadata 和 options |
-| `job_trace` | `job_trace.job_output_json` | Job 业务输出 JSON；成功优先展示 `job.result`，失败展示 `job.error` |
-| `job_trace` | `job_trace.callback_response_json` | callback HTTP 返回 JSON、HTTP 状态与 callback 错误 |
+| `job_trace` | `job_trace.job_query_response_json` | 调用方轮询/查询 Job 时拿到的当前响应 JSON |
+| `job_trace` | `job_trace.callback_request_json` | 服务端投递给调用方的 callback 请求 JSON |
+| `job_trace` | `job_trace.callback_response_json` | 调用方 callback HTTP 返回 JSON、HTTP 状态与 callback 错误 |
 | `job_trace` | `job_trace.attempts` | retry decision 和 attempt 证据 |
 | `job_trace` | `job_trace.ai_calls` | AI call ledger 证据 |
 | `job_trace` | `job_trace.children` | workflow children / family 视角 |
@@ -270,11 +271,12 @@ Recent Jobs 固定为 root 视角，不提供 `scope` 控件。child / family �
 
 | payload path | 统计口径 | 说明 |
 | --- | --- | --- |
-| `job` | 单条 `job_aggregates` | identity、root/child、进度、callback_status、`job_request_json`、`job_output_json` 和 `load_summary` |
+| `job` | 单条 `job_aggregates` + 公开查询响应投影 | identity、root/child、进度、callback_status、`job_request_json`、`job_query_response_json` 和 `load_summary` |
 | `load_summary` | `job.load_summary` | `scripts/load.sh` 写入的 `source/run_id/profile/case_key/sequence` 摘要 |
-| `workflow_summary` | `job.job_output_json` / `workflow_children` | root/child/finalize 结构摘要 |
+| `workflow_summary` | `workflow_children` | workflow child 状态摘要 |
 | `job_request_json` | `job.job_request_json` | 创建 Job 的请求 JSON |
-| `job_output_json` | `job.job_output_json` | Job 业务输出 JSON |
+| `job_query_response_json` | `job.job_query_response_json` | 调用方轮询/查询 Job 时拿到的当前响应 JSON；child/internal Job 没有调用方轮询视角时为 `null` |
+| `callback_request_json` | `callbacks[].callback_request_json` | 服务端投递给调用方 callback URL 的请求 JSON |
 | `callback_response_json` | `callbacks[].callback_response_json/callback_error_json/last_http_status` | 调用方 callback HTTP 返回 JSON、HTTP 状态与错误 |
 | `callback_summary` | callback fields | 单 Job callback 状态、attempt 和错误码摘要 |
 | `attempts` | `job_execution_attempts` by job | attempt 状态、retry decision、failure phase |
@@ -283,9 +285,9 @@ Recent Jobs 固定为 root 视角，不提供 `scope` 控件。child / family �
 | `timeline` | status event timeline | 状态变迁和 payload summary |
 | `callbacks` | callback outbox by job | 单 Job callback delivery 证据 |
 
-Job Trace 页面按“摘要 + 明细 + 证据”分层：摘要层展示 Job Summary、Load Summary、Workflow Summary 和 Callback Summary；明细层用 JSON Block 展示 Job 请求 JSON、Job 输出 JSON 和 Callback 返回 JSON；证据层用表格展示 attempts、AI calls、children、timeline 和 callbacks。
+Job Trace 页面按“摘要 + 明细 + 证据”分层：摘要层展示 Job Summary、Load Summary、Workflow Summary 和 Callback Summary；明细层用 JSON Block 展示 Job 请求 JSON、Job 查询返回 JSON、Callback 请求 JSON 和 Callback 返回 JSON；证据层用表格展示 attempts、AI calls、children、timeline 和 callbacks。
 
-页面级复制/导出复用当前 section 的原始接口 JSON；Job 请求 JSON、Job 输出 JSON 和 Callback 返回 JSON block 复制当前 block 展示的完整 JSON。
+页面级复制/导出复用当前 section 的原始接口 JSON；Job 请求 JSON、Job 查询返回 JSON、Callback 请求 JSON 和 Callback 返回 JSON block 复制当前 block 展示的完整 JSON。
 
 ## Renderer Contract
 

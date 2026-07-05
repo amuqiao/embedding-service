@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ops_dashboard.health_rules import health_verdict
 from app.ops_dashboard.schemas import DashboardFilters
+from app.schemas.jobs import JobResponseData
+from app.services.jobs import get_job_response
 from app.services.job_runtime import read_runtime_json
 
 ROOT_SCOPE_SQL = """
@@ -1255,17 +1257,6 @@ def _job_request_json(
     }
 
 
-def _job_output_json(
-    *,
-    status: str,
-    result: dict[str, Any] | None,
-    error: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if status == "failed":
-        return error
-    return result
-
-
 async def get_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any] | None:
     row = (
         await db.execute(
@@ -1287,7 +1278,6 @@ async def get_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any] | None:
                   j.job_params_ref,
                   j.callback_url,
                   j.callback_events,
-                  j.result,
                   j.error,
                   j.error->>'code' AS error_code,
                   j.error->>'message' AS error_message,
@@ -1326,9 +1316,7 @@ async def get_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any] | None:
     error = data.pop("error", None)
     metadata = data.pop("metadata", None)
     job_params_ref = data.pop("job_params_ref", None)
-    result = data.pop("result", None)
     job_request_json = _job_request_json(data, metadata=metadata, job_params_ref=job_params_ref)
-    job_output_json = _job_output_json(status=data["status"], result=result, error=error)
     for helper_key in (
         "priority",
         "callback_url",
@@ -1337,9 +1325,13 @@ async def get_job(db: AsyncSession, job_id: uuid.UUID) -> dict[str, Any] | None:
         data.pop(helper_key, None)
     return data | {
         "job_request_json": job_request_json,
-        "job_output_json": job_output_json,
         "load_summary": _load_summary_of(metadata),
     }
+
+
+async def job_query_response_json(db: AsyncSession, job_id: uuid.UUID, *, caller_id: str) -> dict[str, Any]:
+    response = await get_job_response(db, job_id, caller_id)
+    return JobResponseData(job=response).model_dump(mode="json")
 
 
 async def attempts(db: AsyncSession, job_id: uuid.UUID) -> list[dict[str, Any]]:
@@ -1374,6 +1366,7 @@ async def callbacks(db: AsyncSession, job_id: uuid.UUID) -> list[dict[str, Any]]
         SELECT c.id::text, c.job_id::text, c.event_id::text, c.event_type,
                c.status, c.delivery_attempts, c.next_attempt_at,
                c.lease_expires_at, c.last_http_status,
+               c.payload AS callback_request_json,
                c.last_response AS callback_response_json,
                c.last_error AS callback_error_json,
                c.last_error->>'message' AS callback_error_message,
@@ -1483,6 +1476,10 @@ async def job_trace_data(db: AsyncSession, job_id: uuid.UUID, *, limit: int = 10
     job = await get_job(db, job_id)
     if job is None:
         return None
+    if job.get("caller_id") and job.get("root_job_id") is None and job.get("workflow_node_key") is None:
+        job["job_query_response_json"] = await job_query_response_json(db, job_id, caller_id=job["caller_id"])
+    else:
+        job["job_query_response_json"] = None
     root_job_id = uuid.UUID(job["root_job_id"]) if job.get("root_job_id") else job_id
     return {
         "generated_at": _now(),
