@@ -1486,7 +1486,117 @@ def test_k8s_check_dashboard_runs_read_model_without_default_binding():
     assert "read_model.overview_data" in dashboard_check
     assert "read_model.failures_data" in dashboard_check
     assert "SKIP dashboard disabled" in dashboard_check
+    assert 'DashboardFilters(window="1h")' in dashboard_check
+    assert 'bucket="1m"' not in dashboard_check
     assert "replay" not in dashboard_check
+
+
+def test_k8s_check_dashboard_executes_with_current_filter_contract(tmp_path):
+    script_dir = tmp_path / "scripts"
+    lib_dir = script_dir / "lib"
+    sqlalchemy_dir = tmp_path / "sqlalchemy" / "ext"
+    app_core_dir = tmp_path / "app" / "core"
+    dashboard_dir = tmp_path / "app" / "ops_dashboard"
+    for directory in [lib_dir, sqlalchemy_dir, app_core_dir, dashboard_dir]:
+        directory.mkdir(parents=True)
+
+    (script_dir / "k8s.sh").write_text((ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    (script_dir / "k8s.sh").chmod(0o755)
+    (lib_dir / "common.sh").write_text(
+        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    for package_init in [
+        tmp_path / "sqlalchemy" / "__init__.py",
+        sqlalchemy_dir / "__init__.py",
+        tmp_path / "app" / "__init__.py",
+        app_core_dir / "__init__.py",
+        dashboard_dir / "__init__.py",
+    ]:
+        package_init.write_text("", encoding="utf-8")
+    (sqlalchemy_dir / "asyncio.py").write_text(
+        """
+class FakeSession:
+    async def __aenter__(self):
+        return object()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+def create_async_engine(url):
+    class Engine:
+        async def dispose(self):
+            pass
+
+    return Engine()
+
+
+def async_sessionmaker(engine, expire_on_commit=False):
+    return FakeSession
+""",
+        encoding="utf-8",
+    )
+    (app_core_dir / "config.py").write_text(
+        """
+from pathlib import Path
+from types import SimpleNamespace
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+settings = SimpleNamespace(
+    database=SimpleNamespace(url="postgresql+asyncpg://unused/unused"),
+    job=SimpleNamespace(max_active_jobs=12),
+    ops_dashboard=SimpleNamespace(
+        enabled=True,
+        require_auth=False,
+        refresh_seconds=15,
+        max_window_seconds=86400,
+        query_timeout_seconds=2,
+    ),
+)
+""",
+        encoding="utf-8",
+    )
+    (dashboard_dir / "schemas.py").write_text(
+        """
+class DashboardFilters:
+    def __init__(self, *, window="1h", caller_id=None, job_type=None, run_id=None, sample_limit=20, reference_at=None):
+        self.window = window
+        self.caller_id = caller_id
+        self.job_type = job_type
+        self.run_id = run_id
+        self.sample_limit = sample_limit
+        self.reference_at = reference_at
+""",
+        encoding="utf-8",
+    )
+    (dashboard_dir / "read_model.py").write_text(
+        """
+async def overview_data(db, filters, *, max_active_jobs):
+    return {"window": filters.window, "max_active_jobs": max_active_jobs}
+
+
+async def failures_data(db, filters):
+    return {"window": filters.window}
+""",
+        encoding="utf-8",
+    )
+
+    env = _clean_root_env()
+    env["KUBERNETES_SERVICE_HOST"] = "127.0.0.1"
+
+    result = subprocess.run(
+        ["./scripts/k8s.sh", "check", "dashboard"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "OK dashboard overview read_model keys=max_active_jobs,window" in result.stdout
+    assert "OK dashboard failures read_model keys=window" in result.stdout
 
 
 def test_k8s_default_check_stays_side_effect_free():

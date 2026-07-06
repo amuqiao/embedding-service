@@ -428,7 +428,7 @@ async def main() -> int:
     Session = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with Session() as db:
-            filters = DashboardFilters(window="1h", bucket="1m")
+            filters = DashboardFilters(window="1h")
             checks = [
                 (
                     "overview",
