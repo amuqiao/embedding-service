@@ -38,17 +38,19 @@
 worker 运行进程一定读得到模型
 ```
 
-如果 worker 直接运行在开发服务器宿主机，`HTDEMUCS_MODEL_DIR=.data/models/htdemucs-ft` 会解析到仓库根目录下的 `.data/models/htdemucs-ft`。如果使用 `compose-full`，worker 在容器内运行，模型目录必须能在容器内看到，通常应是 `/app/.data/models/htdemucs-ft`。
+如果 worker 直接运行在开发服务器宿主机，`HTDEMUCS_MODEL_DIR=.data/models/htdemucs-ft` 会解析到仓库根目录下的 `.data/models/htdemucs-ft`。如果使用 `compose-full`，worker 在容器内运行；当前 `docker-compose.yml` 会把宿主机 `./.data/models` 只读挂载到容器 `/app/.data/models`，因此容器内路径通常是 `/app/.data/models/htdemucs-ft`。
 
 ## 约定变量
 
-下面命令默认开发服务器地址是 `47.94.108.140`。先在本机 shell 设置连接变量，`SSH_TARGET` 和 `REMOTE_REPO` 按你的真实环境修改：
+下面命令默认开发服务器地址是 `47.94.108.140`，开发服务器仓库路径是 `/data/wangqiao/audio-stem-separator`。先在本机 shell 设置连接变量；如果账号或路径不同，按实际环境修改：
 
 ```bash
 export DEV_SERVER=47.94.108.140
-export SSH_TARGET=<ssh-user>@${DEV_SERVER}
-export REMOTE_REPO=/path/to/fastapi-best-ai-architecture
+export SSH_TARGET=wangqiao@${DEV_SERVER}
+export REMOTE_REPO=/data/wangqiao/audio-stem-separator
 export LOCAL_REPO=/Users/admin/Code/fastapi-best-ai-architecture
+export LOCAL_MISC_DIR=${LOCAL_REPO}/.data/misc
+export REMOTE_MISC_DIR=${REMOTE_REPO}/.data/misc
 export TEST_AUDIO=.data/misc/2485_0003_S6_梁萧.wav
 ```
 
@@ -68,7 +70,7 @@ ssh "$SSH_TARGET" "cd '$REMOTE_REPO' && pwd && git status --short"
 
 ## 本机：拷贝测试音频到开发服务器
 
-如果测试音频只在本机，先在本机确认格式：
+如果测试数据只在本机，先在本机确认目标音频格式：
 
 ```bash
 cd "$LOCAL_REPO"
@@ -77,23 +79,40 @@ cd "$LOCAL_REPO"
 ./scripts/media.sh audio verify htdemucs-input "$TEST_AUDIO"
 ```
 
-把测试音频拷贝到开发服务器同名路径：
+推荐把整个 `.data/misc/` 目录拷贝到开发服务器，保留后续图片、音频等真实流程测试素材：
 
 ```bash
 cd "$LOCAL_REPO"
 
-ssh "$SSH_TARGET" "mkdir -p '$REMOTE_REPO/.data/misc'"
-rsync -av "$TEST_AUDIO" "$SSH_TARGET:$REMOTE_REPO/$TEST_AUDIO"
+ssh "$SSH_TARGET" "mkdir -p '$REMOTE_MISC_DIR'"
+
+rsync -av \
+  "$LOCAL_MISC_DIR/" \
+  "$SSH_TARGET:$REMOTE_MISC_DIR/"
 ```
 
-如果开发服务器没有 `rsync`，改用 `scp`：
+源路径最后的 `/` 表示把 `misc` 目录里的内容同步到远端 `.data/misc/`，不会在远端额外嵌套一层 `misc/misc`。
+
+如果本机或开发服务器缺少 `rsync`，改用 `scp`：
 
 ```bash
 cd "$LOCAL_REPO"
 
-ssh "$SSH_TARGET" "mkdir -p '$REMOTE_REPO/.data/misc'"
-scp "$TEST_AUDIO" "$SSH_TARGET:$REMOTE_REPO/$TEST_AUDIO"
+ssh "$SSH_TARGET" "mkdir -p '$REMOTE_REPO/.data'"
+
+scp -r \
+  "$LOCAL_MISC_DIR" \
+  "$SSH_TARGET:$REMOTE_REPO/.data/"
 ```
+
+拷贝后在开发服务器验证文件列表：
+
+```bash
+ssh "$SSH_TARGET" \
+  "ls -lh '$REMOTE_MISC_DIR'"
+```
+
+如果 `rsync` 传输过程中中文文件名短暂显示成乱码，但远端 `ls -lh` 能正常显示 `2485_0003_S6_梁萧.wav`，通常只是终端传输日志的编码显示问题，不代表文件损坏。
 
 ## 开发服务器：安装运行依赖
 
@@ -102,7 +121,7 @@ scp "$TEST_AUDIO" "$SSH_TARGET:$REMOTE_REPO/$TEST_AUDIO"
 ```bash
 ssh "$SSH_TARGET"
 
-export REMOTE_REPO=/path/to/fastapi-best-ai-architecture
+export REMOTE_REPO=/data/wangqiao/audio-stem-separator
 export TEST_AUDIO=.data/misc/2485_0003_S6_梁萧.wav
 
 cd "$REMOTE_REPO"
@@ -231,15 +250,16 @@ mkdir -p .data/audio
 
 ## 开发服务器：配置环境
 
-检查 `.env` 里至少包含下面配置。不要把真实密钥写进文档或提交到 git。
+检查 `.env` 里至少包含下面配置。不要把真实密钥写进文档或提交到 git。`.env` 是本地私有文件，本机修改不会自动同步到开发服务器；开发服务器需要单独确认。
 
 ```bash
-grep -E '^(HTDEMUCS_MODEL_DIR|AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER|STORAGE_BACKEND|API_HOST|API_PORT|SERVICE_API_PREFIX)=' .env
+grep -E '^(COMPOSE_PROJECT_NAME|HTDEMUCS_MODEL_DIR|AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER|STORAGE_BACKEND|API_HOST|API_PORT|SERVICE_API_PREFIX)=' .env
 ```
 
 推荐开发服务器 CPU 首次验证使用：
 
 ```bash
+COMPOSE_PROJECT_NAME=audio-stem-separator
 HTDEMUCS_MODEL_DIR=.data/models/htdemucs-ft
 AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER=auto
 ```
@@ -247,6 +267,7 @@ AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER=auto
 GPU 开发服务器确认 CUDA 可用后，可以改成：
 
 ```bash
+COMPOSE_PROJECT_NAME=audio-stem-separator
 HTDEMUCS_MODEL_DIR=.data/models/htdemucs-ft
 AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER=cuda
 ```
@@ -274,7 +295,7 @@ AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER=cuda
 
 ## compose-full：确认 worker 能看到模型和依赖
 
-如果使用 `compose-full`，必须在 worker 容器里确认模型目录和运行依赖。宿主机模型校验通过，不代表容器内可见。
+如果使用 `compose-full`，必须在 worker 容器里确认模型目录和运行依赖。当前 compose 会把宿主机 `./.data/models` 挂载进 worker 容器；宿主机模型校验通过后，仍建议在容器内再校验一次。
 
 检查容器内配置值：
 
@@ -311,7 +332,7 @@ docker compose --profile app exec worker \
 
 | 现象 | 含义 | 处理方向 |
 |---|---|---|
-| 宿主机 `models.sh verify` 通过，容器内失败 | 模型没有挂载进 worker 容器 | 给 compose-full 增加模型目录 bind mount，或改成容器内可见的模型路径 |
+| 宿主机 `models.sh verify` 通过，容器内失败 | 模型挂载路径或 `HTDEMUCS_MODEL_DIR` 不一致 | 确认宿主机 `./.data/models` 已存在，且容器内校验路径是 `/app/.data/models/htdemucs-ft` |
 | 容器内 `import onnxruntime` 失败 | 镜像没有安装音频分离运行依赖 | 构建包含 `audio-separation` 依赖的镜像，或在运行环境显式安装 |
 | 设置了 `cuda` 但 provider 里没有 `CUDAExecutionProvider` | 容器没有 GPU 版 ONNX Runtime 或没有拿到 GPU | 检查 GPU 镜像、CUDA runtime、NVIDIA container runtime 和 Pod/容器 GPU 资源 |
 
