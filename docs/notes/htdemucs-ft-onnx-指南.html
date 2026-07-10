@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HTDemucs-FT · ONNX 模型讲解与阿里云部署指南</title>
+<style>
+:root{
+  --bg:#0f1218; --panel:#171b24; --panel-2:#1d2230; --line:#2a3040;
+  --ink:#e8eaf2; --muted:#8b93a7; --faint:#5c6377;
+  --drums:#f5a524; --bass:#8b7cf7; --other:#2dd4bf; --vocals:#f472b6;
+  --code-bg:#0b0e14; --good:#4ade80; --warn:#fbbf24;
+  --mono:"JetBrains Mono","SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:70px}
+body{
+  background:var(--bg);color:var(--ink);
+  font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",-apple-system,sans-serif;
+  line-height:1.75;font-size:16px;
+}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+
+/* ---------- nav ---------- */
+nav{
+  position:sticky;top:0;z-index:50;background:rgba(15,18,24,.88);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--line);
+}
+nav .wrap{max-width:1060px;margin:0 auto;padding:0 24px;display:flex;align-items:center;gap:22px;height:56px;overflow-x:auto}
+nav .brand{font-family:var(--mono);font-size:13px;letter-spacing:.08em;color:var(--ink);white-space:nowrap}
+nav .brand b{color:var(--other)}
+nav a{color:var(--muted);text-decoration:none;font-size:13.5px;white-space:nowrap;padding:4px 2px;border-bottom:2px solid transparent}
+nav a:hover,nav a:focus-visible{color:var(--ink);border-bottom-color:var(--other);outline:none}
+
+.wrap{max-width:1060px;margin:0 auto;padding:0 24px}
+
+/* ---------- hero ---------- */
+header{padding:72px 0 48px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.18em;color:var(--muted);text-transform:uppercase;margin-bottom:14px}
+h1{font-size:clamp(28px,4.4vw,44px);line-height:1.25;font-weight:700;letter-spacing:-.01em}
+h1 .stem-word{background:linear-gradient(90deg,var(--drums),var(--vocals),var(--bass),var(--other));-webkit-background-clip:text;background-clip:text;color:transparent}
+header p.lede{color:var(--muted);max-width:720px;margin-top:16px;font-size:17px}
+.hero-svg{margin-top:36px;width:100%;height:auto;display:block}
+.wave-anim{stroke-dasharray:1400;stroke-dashoffset:1400;animation:draw 2.2s ease-out forwards}
+.wave-anim.d1{animation-delay:.15s}.wave-anim.d2{animation-delay:.35s}
+.wave-anim.d3{animation-delay:.55s}.wave-anim.d4{animation-delay:.75s}
+@keyframes draw{to{stroke-dashoffset:0}}
+.chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
+.chip{font-family:var(--mono);font-size:12.5px;border:1px solid var(--line);border-radius:999px;padding:5px 14px;color:var(--muted)}
+.chip b{color:var(--ink);font-weight:600}
+
+/* ---------- sections ---------- */
+section{padding:56px 0;border-bottom:1px solid var(--line)}
+.sec-tag{font-family:var(--mono);font-size:12px;letter-spacing:.16em;color:var(--faint);text-transform:uppercase;margin-bottom:10px}
+h2{font-size:clamp(22px,3vw,30px);margin-bottom:20px;font-weight:700}
+h3{font-size:18px;margin:32px 0 12px;font-weight:600}
+h3 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:9px;vertical-align:2px}
+p{margin-bottom:14px;color:#c6cbd9}
+p strong,li strong{color:var(--ink)}
+ul,ol{margin:0 0 16px 1.4em;color:#c6cbd9}
+li{margin-bottom:8px}
+a{color:var(--other)}
+.note{border:1px solid var(--line);border-left:3px solid var(--warn);background:var(--panel);border-radius:8px;padding:14px 18px;margin:18px 0;font-size:15px;color:#d5cfa8}
+.note.teal{border-left-color:var(--other);color:#b9e6df}
+.figure{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px;margin:24px 0;overflow-x:auto}
+.figure figcaption{font-size:13px;color:var(--muted);margin-top:14px;font-family:var(--mono)}
+.figure svg{display:block;min-width:640px;width:100%;height:auto}
+
+/* stems grid */
+.stems{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:22px 0}
+.stem-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;border-top:3px solid var(--c)}
+.stem-card h4{font-size:15px;margin-bottom:6px;color:var(--c)}
+.stem-card p{font-size:13.5px;color:var(--muted);margin:0}
+
+/* tables */
+table{width:100%;border-collapse:collapse;margin:20px 0;font-size:14.5px}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600;font-family:var(--mono);font-size:12.5px;letter-spacing:.05em}
+td{color:#c6cbd9}
+tr td:first-child{color:var(--ink);font-weight:500}
+.tbl{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px 8px;margin:20px 0}
+.tbl table{margin:0}
+
+/* code */
+pre{
+  background:var(--code-bg);border:1px solid var(--line);border-radius:12px;
+  padding:20px 22px;overflow-x:auto;margin:18px 0;
+  font-family:var(--mono);font-size:13px;line-height:1.7;color:#dbe1ef;
+}
+code{font-family:var(--mono);font-size:.92em;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:#e3e7f3}
+pre code{background:none;border:none;padding:0}
+pre .cm{color:#5c6a85}      /* comment */
+pre .kw{color:#8b7cf7}      /* keyword */
+pre .st{color:#7fd6c7}      /* string */
+pre .fn{color:#f5a524}      /* function / flag */
+.codehead{
+  font-family:var(--mono);font-size:12px;color:var(--muted);
+  background:var(--panel-2);border:1px solid var(--line);border-bottom:none;
+  border-radius:12px 12px 0 0;padding:8px 18px;margin:18px 0 0;
+  display:flex;align-items:center;gap:8px;
+}
+.codehead+pre{margin-top:0;border-top-left-radius:0;border-top-right-radius:0}
+.codehead::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--other)}
+
+/* steps */
+.steps{counter-reset:step;margin:22px 0}
+.step{display:flex;gap:16px;padding:16px 0;border-bottom:1px dashed var(--line)}
+.step:last-child{border-bottom:none}
+.step::before{
+  counter-increment:step;content:counter(step,decimal-leading-zero);
+  font-family:var(--mono);font-size:13px;color:var(--other);
+  border:1px solid var(--line);border-radius:8px;min-width:38px;height:38px;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--panel);
+}
+.step h4{font-size:15.5px;margin-bottom:4px}
+.step p{font-size:14px;color:var(--muted);margin:0}
+
+footer{padding:44px 0 64px;color:var(--faint);font-size:13px;font-family:var(--mono)}
+footer a{color:var(--muted)}
+@media(max-width:640px){
+  nav .wrap{gap:14px}
+  .figure{padding:14px}
+}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap">
+  <span class="brand">HTDemucs-FT <b>· ONNX</b></span>
+  <a href="#intro">模型概览</a>
+  <a href="#arch">架构可视化</a>
+  <a href="#onnx">ONNX 版本</a>
+  <a href="#infer">推理代码</a>
+  <a href="#aliyun">阿里云部署</a>
+  <a href="#perf">性能优化</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="eyebrow">StemSplitio / htdemucs-ft-onnx · 音乐源分离</div>
+  <h1>把一首完整的歌，<span class="stem-word">拆回四条独立音轨</span></h1>
+  <p class="lede">HTDemucs-FT 是 Meta（Facebook Research）Demucs v4 的微调版本，也是目前开源音乐源分离（Music Source Separation）的标杆模型之一。StemSplitio 将其导出为 ONNX 格式，摆脱 PyTorch 依赖，便于跨平台、跨语言部署——包括部署到阿里云的推理服务上。</p>
+
+  <!-- 签名视觉：混合波形 → 四条 stem 展开 -->
+  <svg class="hero-svg" viewBox="0 0 1000 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="混合波形被分离为鼓、贝斯、人声、其他四条音轨的示意动画">
+    <!-- mixture -->
+    <path class="wave-anim" d="M20,130 q10,-40 20,0 q10,55 20,0 q10,-25 20,0 q10,70 20,0 q10,-50 20,0 q10,30 20,0 q10,-65 20,0 q10,45 20,0 q10,-30 20,0 q10,60 20,0 q10,-40 20,0 q10,25 20,0"
+      fill="none" stroke="#e8eaf2" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="150" y="230" fill="#8b93a7" font-size="13" font-family="monospace" text-anchor="middle">mixture · 44.1kHz 立体声</text>
+    <!-- split node -->
+    <line x1="280" y1="130" x2="340" y2="130" stroke="#2a3040" stroke-width="2"/>
+    <circle cx="340" cy="130" r="5" fill="#2dd4bf"/>
+    <path d="M345,128 C420,120 430,45 500,42" fill="none" stroke="#2a3040" stroke-width="1.6"/>
+    <path d="M345,129 C420,125 430,100 500,98" fill="none" stroke="#2a3040" stroke-width="1.6"/>
+    <path d="M345,131 C420,135 430,160 500,158" fill="none" stroke="#2a3040" stroke-width="1.6"/>
+    <path d="M345,132 C420,140 430,215 500,214" fill="none" stroke="#2a3040" stroke-width="1.6"/>
+    <!-- drums -->
+    <path class="wave-anim d1" d="M510,42 l14,0 q5,-26 10,0 l22,0 q5,-26 10,0 l22,0 q5,-26 10,0 l22,0 q5,-26 10,0 l22,0 q5,-26 10,0 l22,0 q5,-26 10,0 l22,0 q5,-26 10,0 l22,0 q5,-26 10,0 l30,0"
+      fill="none" stroke="#f5a524" stroke-width="2.2" stroke-linecap="round"/>
+    <text x="960" y="46" fill="#f5a524" font-size="13" font-family="monospace" text-anchor="end" dy="-14">drums</text>
+    <!-- bass -->
+    <path class="wave-anim d2" d="M510,98 q30,-16 60,0 t60,0 t60,0 t60,0 t60,0 t60,0 t46,0"
+      fill="none" stroke="#8b7cf7" stroke-width="2.2" stroke-linecap="round"/>
+    <text x="960" y="98" fill="#8b7cf7" font-size="13" font-family="monospace" text-anchor="end" dy="-12">bass</text>
+    <!-- other -->
+    <path class="wave-anim d3" d="M510,158 q8,-14 16,0 q8,10 16,0 q8,-18 16,0 q8,12 16,0 q8,-9 16,0 q8,16 16,0 q8,-13 16,0 q8,10 16,0 q8,-17 16,0 q8,11 16,0 q8,-14 16,0 q8,15 16,0 q8,-10 16,0 q8,12 16,0 q8,-16 16,0 q8,10 16,0 q8,-12 16,0 q8,14 16,0 q8,-10 16,0 q8,12 16,0 q8,-14 16,0 q8,10 16,0 q8,-12 16,0 q8,13 16,0 q8,-11 16,0 q8,12 16,0 q8,-13 16,0 q6,10 12,0"
+      fill="none" stroke="#2dd4bf" stroke-width="2.2" stroke-linecap="round"/>
+    <text x="960" y="158" fill="#2dd4bf" font-size="13" font-family="monospace" text-anchor="end" dy="-12">other</text>
+    <!-- vocals -->
+    <path class="wave-anim d4" d="M510,214 l40,0 q12,-34 24,0 q12,26 24,0 q12,-42 24,0 q12,30 24,0 l30,0 q12,-38 24,0 q12,28 24,0 q12,-32 24,0 l40,0 q12,-30 24,0 q12,24 24,0 l40,0"
+      fill="none" stroke="#f472b6" stroke-width="2.2" stroke-linecap="round"/>
+    <text x="960" y="214" fill="#f472b6" font-size="13" font-family="monospace" text-anchor="end" dy="-12">vocals</text>
+  </svg>
+
+  <div class="chips">
+    <span class="chip">任务 <b>4-stem 源分离</b></span>
+    <span class="chip">架构 <b>双域 U-Net + 跨域 Transformer</b></span>
+    <span class="chip">采样率 <b>44.1 kHz / 双声道</b></span>
+    <span class="chip">MUSDB-HQ SDR <b>≈ 9.0 dB</b></span>
+    <span class="chip">格式 <b>ONNX（onnxruntime 推理）</b></span>
+  </div>
+</div></header>
+
+<!-- ========== 1. 模型概览 ========== -->
+<section id="intro"><div class="wrap">
+  <div class="sec-tag">Section 1</div>
+  <h2>这是个什么模型？</h2>
+  <p><strong>Demucs</strong>（Deep Extractor for Music Sources）是 Meta 开源的音乐源分离模型系列。发展到 v4 时，架构演进为 <strong>HTDemucs（Hybrid Transformer Demucs）</strong>：在"时域 + 频域"双分支混合结构的瓶颈处引入了跨域 Transformer。而 <strong>htdemucs_ft</strong>（fine-tuned）是在 HTDemucs 基础上<strong>针对每一个 stem 分别微调</strong>得到的版本——官方实现里它实际是 4 个模型组成的"模型袋"（bag of models），每个模型专精一个音源，分离质量更高（MUSDB-HQ 测试集 SDR 约 9.0 dB，对比基础版 htdemucs 约 8.4 dB），代价是推理计算量约为基础版的 4 倍。</p>
+  <p>模型接收 <strong>44.1 kHz 立体声混音波形</strong>，输出四条同样长度的立体声波形：</p>
+
+  <div class="stems">
+    <div class="stem-card" style="--c:var(--drums)"><h4>🥁 drums</h4><p>鼓与打击乐。瞬态密集、宽频段，时域分支对它贡献最大。</p></div>
+    <div class="stem-card" style="--c:var(--bass)"><h4>🎸 bass</h4><p>贝斯。能量集中在低频，频域分支的低频分辨率是关键。</p></div>
+    <div class="stem-card" style="--c:var(--other)"><h4>🎹 other</h4><p>其他所有乐器（吉他、钢琴、合成器、弦乐……），最"杂"的一轨。</p></div>
+    <div class="stem-card" style="--c:var(--vocals)"><h4>🎤 vocals</h4><p>人声。谐波结构清晰，是卡拉OK/翻唱等应用最关心的一轨。</p></div>
+  </div>
+
+  <p><strong>StemSplitio/htdemucs-ft-onnx</strong> 这个仓库做的事情，是把上述 PyTorch 模型导出为 <strong>ONNX</strong>（Open Neural Network Exchange）格式。这样一来：推理只需要 <code>onnxruntime</code>，不需要装 PyTorch；可以在 C++ / C# / Java / Node / 移动端等环境运行；也能对接 TensorRT、OpenVINO 等加速后端——非常适合做成云上的独立推理服务。</p>
+</div></section>
+
+<!-- ========== 2. 架构可视化 ========== -->
+<section id="arch"><div class="wrap">
+  <div class="sec-tag">Section 2</div>
+  <h2>架构可视化：为什么叫 "Hybrid Transformer"</h2>
+  <p>音乐信号有两副面孔：<strong>波形（时域）</strong>擅长表达瞬态和相位（鼓点、attack），<strong>频谱（频域）</strong>擅长表达音高与谐波结构（人声、贝斯）。HTDemucs 不做二选一，而是<strong>两条 U-Net 并行</strong>，在最深处用 Transformer 让两个域互相"对话"。</p>
+
+  <figure class="figure">
+    <svg viewBox="0 0 1080 560" xmlns="http://www.w3.org/2000/svg" font-family="monospace">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8b93a7"/>
+        </marker>
+      </defs>
+      <!-- input -->
+      <rect x="20" y="245" width="110" height="70" rx="10" fill="#1d2230" stroke="#2a3040"/>
+      <text x="75" y="275" fill="#e8eaf2" font-size="13" text-anchor="middle">混音波形</text>
+      <text x="75" y="295" fill="#8b93a7" font-size="11" text-anchor="middle">(B, 2, T)</text>
+
+      <!-- split arrows -->
+      <path d="M130,268 C170,268 175,120 215,120" fill="none" stroke="#8b93a7" stroke-width="1.6" marker-end="url(#arr)"/>
+      <path d="M130,292 C170,292 175,440 215,440" fill="none" stroke="#8b93a7" stroke-width="1.6" marker-end="url(#arr)"/>
+
+      <!-- STFT -->
+      <rect x="218" y="90" width="92" height="60" rx="10" fill="#1d2230" stroke="#8b7cf7"/>
+      <text x="264" y="115" fill="#8b7cf7" font-size="13" text-anchor="middle">STFT</text>
+      <text x="264" y="133" fill="#8b93a7" font-size="10.5" text-anchor="middle">nfft=4096</text>
+
+      <!-- spectral encoder -->
+      <g>
+        <text x="470" y="52" fill="#8b7cf7" font-size="13" text-anchor="middle">频域分支（Spectral U-Net Encoder）</text>
+        <rect x="340" y="76" width="52" height="88" rx="8" fill="#242a3d" stroke="#8b7cf7"/>
+        <rect x="404" y="84" width="52" height="72" rx="8" fill="#242a3d" stroke="#8b7cf7"/>
+        <rect x="468" y="92" width="52" height="56" rx="8" fill="#242a3d" stroke="#8b7cf7"/>
+        <rect x="532" y="100" width="52" height="40" rx="8" fill="#242a3d" stroke="#8b7cf7"/>
+        <text x="366" y="125" fill="#c9c2fb" font-size="11" text-anchor="middle">Enc₁</text>
+        <text x="430" y="123" fill="#c9c2fb" font-size="11" text-anchor="middle">Enc₂</text>
+        <text x="494" y="123" fill="#c9c2fb" font-size="11" text-anchor="middle">…</text>
+        <text x="558" y="123" fill="#c9c2fb" font-size="11" text-anchor="middle">Enc₅</text>
+        <path d="M310,120 h26" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr)" fill="none"/>
+        <path d="M392,120 h8" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr)" fill="none"/>
+        <path d="M456,120 h8" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr)" fill="none"/>
+        <path d="M520,120 h8" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr)" fill="none"/>
+        <path d="M584,120 C620,120 628,208 660,214" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr)" fill="none"/>
+      </g>
+
+      <!-- time encoder -->
+      <g>
+        <text x="440" y="530" fill="#f5a524" font-size="13" text-anchor="middle">时域分支（Temporal U-Net Encoder，1D 卷积）</text>
+        <rect x="248" y="396" width="52" height="88" rx="8" fill="#2c2617" stroke="#f5a524"/>
+        <rect x="312" y="404" width="52" height="72" rx="8" fill="#2c2617" stroke="#f5a524"/>
+        <rect x="376" y="412" width="52" height="56" rx="8" fill="#2c2617" stroke="#f5a524"/>
+        <rect x="440" y="420" width="52" height="40" rx="8" fill="#2c2617" stroke="#f5a524"/>
+        <text x="274" y="445" fill="#f8cd7e" font-size="11" text-anchor="middle">Enc₁</text>
+        <text x="338" y="443" fill="#f8cd7e" font-size="11" text-anchor="middle">Enc₂</text>
+        <text x="402" y="443" fill="#f8cd7e" font-size="11" text-anchor="middle">…</text>
+        <text x="466" y="443" fill="#f8cd7e" font-size="11" text-anchor="middle">Enc₅</text>
+        <path d="M300,440 h8" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr)" fill="none"/>
+        <path d="M364,440 h8" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr)" fill="none"/>
+        <path d="M428,440 h8" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr)" fill="none"/>
+        <path d="M492,440 C560,440 596,352 660,346" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr)" fill="none"/>
+      </g>
+
+      <!-- transformer -->
+      <rect x="662" y="196" width="176" height="168" rx="14" fill="#0e2b26" stroke="#2dd4bf" stroke-width="1.6"/>
+      <text x="750" y="228" fill="#2dd4bf" font-size="14" text-anchor="middle">跨域 Transformer</text>
+      <text x="750" y="252" fill="#9adfd4" font-size="11" text-anchor="middle">自注意力（域内）</text>
+      <text x="750" y="272" fill="#9adfd4" font-size="11" text-anchor="middle">交叉注意力（跨域）</text>
+      <text x="750" y="292" fill="#8b93a7" font-size="11" text-anchor="middle">×5 层 · 稀疏注意力</text>
+      <path d="M712,308 q38,26 76,0" stroke="#2dd4bf" stroke-width="1.4" fill="none" marker-end="url(#arr)"/>
+      <path d="M788,330 q-38,-26 -76,0" stroke="#2dd4bf" stroke-width="1.4" fill="none" marker-end="url(#arr)"/>
+      <text x="750" y="352" fill="#8b93a7" font-size="10.5" text-anchor="middle">频域 ⇄ 时域 信息交换</text>
+
+      <!-- decoders -->
+      <path d="M838,240 C868,236 872,150 900,146" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr)" fill="none"/>
+      <path d="M838,322 C868,326 872,414 900,418" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr)" fill="none"/>
+      <rect x="902" y="112" width="112" height="66" rx="10" fill="#242a3d" stroke="#8b7cf7"/>
+      <text x="958" y="140" fill="#c9c2fb" font-size="12.5" text-anchor="middle">频域 Decoder</text>
+      <text x="958" y="160" fill="#8b93a7" font-size="10.5" text-anchor="middle">→ iSTFT</text>
+      <rect x="902" y="386" width="112" height="66" rx="10" fill="#2c2617" stroke="#f5a524"/>
+      <text x="958" y="414" fill="#f8cd7e" font-size="12.5" text-anchor="middle">时域 Decoder</text>
+      <text x="958" y="434" fill="#8b93a7" font-size="10.5" text-anchor="middle">转置卷积</text>
+
+      <!-- skip connections -->
+      <path d="M366,76 C560,-8 880,20 950,110" stroke="#8b7cf7" stroke-width="1" stroke-dasharray="4 5" fill="none" opacity=".55"/>
+      <path d="M274,484 C560,576 880,548 950,454" stroke="#f5a524" stroke-width="1" stroke-dasharray="4 5" fill="none" opacity=".55"/>
+      <text x="620" y="16" fill="#5c6377" font-size="10.5">U-Net 跳连（skip connections）</text>
+      <text x="620" y="556" fill="#5c6377" font-size="10.5">U-Net 跳连（skip connections）</text>
+
+      <!-- sum -->
+      <path d="M1014,145 C1046,150 1050,262 1058,270" stroke="#8b93a7" stroke-width="1.5" fill="none"/>
+      <path d="M1014,419 C1046,414 1050,296 1058,286" stroke="#8b93a7" stroke-width="1.5" fill="none"/>
+      <circle cx="1058" cy="278" r="14" fill="#1d2230" stroke="#e8eaf2"/>
+      <text x="1058" y="283" fill="#e8eaf2" font-size="14" text-anchor="middle">+</text>
+      <text x="1058" y="318" fill="#8b93a7" font-size="10.5" text-anchor="middle">相加 →</text>
+      <text x="1058" y="334" fill="#e8eaf2" font-size="10.5" text-anchor="middle">4×(2,T)</text>
+    </svg>
+    <figcaption>图 1 · HTDemucs 整体数据流：波形同时进入时域 U-Net 和（经 STFT 后的）频域 U-Net，瓶颈处由跨域 Transformer 融合，两个解码器的输出（iSTFT 还原后）逐样本相加，得到 4 条 stem。</figcaption>
+  </figure>
+
+  <h3><span class="dot" style="background:var(--bass)"></span>频域分支</h3>
+  <p>对输入做 STFT（<code>n_fft=4096, hop=1024</code>），把复数谱的实部/虚部当作通道（CaC，Complex-as-Channels）送入 2D 卷积编码器。5 层编码逐层在<strong>频率轴</strong>上下采样，直到频率维被压缩成 1，此时频域特征的形状和时域分支对齐——这正是两个域可以在瓶颈处融合的前提。解码后经 iSTFT 还原为波形。</p>
+
+  <h3><span class="dot" style="background:var(--drums)"></span>时域分支</h3>
+  <p>就是经典 Demucs 的 1D 卷积 U-Net：编码器逐层做步长为 4 的卷积下采样，解码器用转置卷积还原。它直接建模采样点，保留了频域表示容易丢失的相位与瞬态信息，对鼓这类打击乐尤其重要。</p>
+
+  <h3><span class="dot" style="background:var(--other)"></span>跨域 Transformer（模型名字里的 "T"）</h3>
+  <p>在两条 U-Net 的最深处（时间分辨率已被压缩约 1024 倍），交替堆叠两种注意力层：<strong>自注意力</strong>让每个域在长达约 7.8 秒的感受野内建模长程依赖（比如整段副歌的人声连续性）；<strong>交叉注意力</strong>让频域特征查询时域特征、时域特征查询频域特征，两个"视角"互相校准。位置信息用 2D 正弦位置编码注入。</p>
+
+  <h3><span class="dot" style="background:var(--vocals)"></span>"FT" 微调版的特殊之处</h3>
+  <p>htdemucs_ft 用了额外训练数据、并<strong>为每个音源单独微调出一个专家模型</strong>。推理时 4 个专家各跑一遍，各取所长拼出最终结果。这解释了两件事：① 它比基础版慢约 4 倍；② ONNX 导出物可能是一个打包后的模型，也可能是分 stem 的多个 <code>.onnx</code> 文件——<strong>部署前先看仓库文件列表确认</strong>。</p>
+</div></section>
+
+<!-- ========== 3. ONNX 版本 ========== -->
+<section id="onnx"><div class="wrap">
+  <div class="sec-tag">Section 3</div>
+  <h2>ONNX 版本：导出时发生了什么</h2>
+  <p>把 HTDemucs 导出成 ONNX 不是一句 <code>torch.onnx.export</code> 就完事，有两个关键工程点，直接影响你写部署代码的方式：</p>
+
+  <h3>① STFT / iSTFT 通常被移出模型</h3>
+  <p>ONNX 算子集对 <code>torch.stft / istft</code>（复数运算、中心填充等）支持不完善，所以社区的 Demucs ONNX 导出普遍采用的做法是：<strong>ONNX 图只包含神经网络主体，STFT 在前处理、iSTFT 在后处理，由宿主代码（Python/C++）完成</strong>。典型的模型 I/O 形如：</p>
+
+  <figure class="figure">
+    <svg viewBox="0 0 1040 210" xmlns="http://www.w3.org/2000/svg" font-family="monospace">
+      <defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8b93a7"/></marker></defs>
+      <rect x="14" y="70" width="130" height="70" rx="10" fill="#1d2230" stroke="#2a3040"/>
+      <text x="79" y="100" fill="#e8eaf2" font-size="12.5" text-anchor="middle">音频切片</text>
+      <text x="79" y="120" fill="#8b93a7" font-size="10.5" text-anchor="middle">mix (1,2,T)</text>
+      <path d="M144,90 h56" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr2)" fill="none"/>
+      <path d="M144,120 C170,120 176,168 200,168" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr2)" fill="none"/>
+      <rect x="202" y="146" width="120" height="46" rx="9" fill="#242a3d" stroke="#8b7cf7"/>
+      <text x="262" y="174" fill="#c9c2fb" font-size="12" text-anchor="middle">STFT（宿主侧）</text>
+      <path d="M322,168 C350,168 356,122 382,118" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr2)" fill="none"/>
+      <path d="M200,90 C300,86 330,86 382,92" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr2)" fill="none"/>
+      <rect x="384" y="56" width="240" height="98" rx="12" fill="#0e2b26" stroke="#2dd4bf" stroke-width="1.5"/>
+      <text x="504" y="94" fill="#2dd4bf" font-size="13.5" text-anchor="middle">htdemucs_ft.onnx</text>
+      <text x="504" y="116" fill="#8b93a7" font-size="10.5" text-anchor="middle">（onnxruntime 执行）</text>
+      <path d="M624,86 h52" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr2)" fill="none"/>
+      <path d="M624,124 C650,126 656,168 678,168" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr2)" fill="none"/>
+      <rect x="680" y="146" width="128" height="46" rx="9" fill="#242a3d" stroke="#8b7cf7"/>
+      <text x="744" y="174" fill="#c9c2fb" font-size="12" text-anchor="middle">iSTFT（宿主侧）</text>
+      <text x="744" y="136" fill="#8b93a7" font-size="10.5" text-anchor="middle">频域输出 (4,4,F,T')</text>
+      <text x="744" y="72" fill="#8b93a7" font-size="10.5" text-anchor="middle">时域输出 (4,2,T)</text>
+      <path d="M808,168 C846,168 852,124 880,118" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr2)" fill="none"/>
+      <path d="M676,86 C800,80 840,90 880,100" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr2)" fill="none"/>
+      <circle cx="892" cy="108" r="13" fill="#1d2230" stroke="#e8eaf2"/>
+      <text x="892" y="113" fill="#e8eaf2" font-size="13" text-anchor="middle">+</text>
+      <path d="M905,108 h44" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr2)" fill="none"/>
+      <text x="990" y="100" fill="#e8eaf2" font-size="12" text-anchor="middle">4 stems</text>
+      <text x="990" y="120" fill="#8b93a7" font-size="10.5" text-anchor="middle">(4,2,T)</text>
+    </svg>
+    <figcaption>图 2 · 常见的 Demucs ONNX 推理管线：STFT / iSTFT 由宿主代码完成，ONNX 图只负责神经网络本体，两路输出相加。</figcaption>
+  </figure>
+
+  <div class="note">具体到 StemSplitio 这个导出：输入/输出的<strong>名称、数量、形状</strong>以模型卡（Model Card）和仓库文件为准。拿到 <code>.onnx</code> 文件后，先用下一节的"体检脚本"打印 I/O 签名，再按签名写前后处理——这一步能避免绝大多数部署踩坑。若该导出已把 STFT 融入图内（部分导出用 Conv 实现 DFT 矩阵来规避算子限制），则宿主侧无需再做 STFT。</div>
+
+  <h3>② 长音频必须分段 + 重叠拼接</h3>
+  <p>模型训练时的段长约 <strong>7.8 秒</strong>（44.1kHz 下约 343,980 个采样点），且 Transformer 的注意力开销随长度平方增长。因此整首歌不能一次性喂给模型，标准做法是：切成固定长度的片段，相邻片段<strong>重叠 25%</strong>，推理后用加权窗（如三角窗）做 overlap-add 拼回，消除接缝处的咔哒声。官方还有 <code>shifts</code> 技巧（随机时移多次推理取平均）进一步提升质量，代价是成倍的耗时。</p>
+</div></section>
+
+<!-- ========== 4. 推理代码 ========== -->
+<section id="infer"><div class="wrap">
+  <div class="sec-tag">Section 4</div>
+  <h2>用 onnxruntime 跑起来</h2>
+
+  <h3>第一步：环境与模型"体检"</h3>
+  <div class="codehead">安装依赖（GPU 版按 CUDA 环境选择）</div>
+<pre><code><span class="cm"># CPU 推理</span>
+pip install onnxruntime soundfile numpy
+
+<span class="cm"># NVIDIA GPU 推理（需与 CUDA/cuDNN 版本匹配）</span>
+pip install onnxruntime-gpu soundfile numpy
+
+<span class="cm"># 从 Hugging Face 拉取模型文件</span>
+pip install huggingface_hub
+hf download StemSplitio/htdemucs-ft-onnx --local-dir ./model</code></pre>
+
+  <div class="codehead">inspect_model.py · 先打印 I/O 签名再写代码</div>
+<pre><code><span class="kw">import</span> onnxruntime <span class="kw">as</span> ort
+
+sess = ort.InferenceSession(<span class="st">"model/htdemucs_ft.onnx"</span>,
+                            providers=[<span class="st">"CPUExecutionProvider"</span>])
+
+<span class="kw">print</span>(<span class="st">"== INPUTS =="</span>)
+<span class="kw">for</span> i <span class="kw">in</span> sess.get_inputs():
+    <span class="kw">print</span>(i.name, i.shape, i.type)
+
+<span class="kw">print</span>(<span class="st">"== OUTPUTS =="</span>)
+<span class="kw">for</span> o <span class="kw">in</span> sess.get_outputs():
+    <span class="kw">print</span>(o.name, o.shape, o.type)</code></pre>
+  <p>根据打印结果对号入座：如果只有一个波形输入（如 <code>(1, 2, T)</code>），说明 STFT 已在图内，直接喂波形即可；如果同时要求波形和频谱两个输入，就需要宿主侧 STFT（参数与 HTDemucs 一致：<code>n_fft=4096, hop=1024</code>，反射填充，复数实虚部拼通道）。</p>
+
+  <h3>第二步：完整分离脚本（分段 + 重叠拼接）</h3>
+  <div class="codehead">separate.py · 以"波形进、4 stems 出"的导出为例</div>
+<pre><code><span class="kw">import</span> numpy <span class="kw">as</span> np
+<span class="kw">import</span> soundfile <span class="kw">as</span> sf
+<span class="kw">import</span> onnxruntime <span class="kw">as</span> ort
+
+SR        = 44100
+SEG_LEN   = <span class="kw">int</span>(7.8 * SR)          <span class="cm"># 训练段长 ≈ 7.8 s</span>
+OVERLAP   = 0.25                     <span class="cm"># 25% 重叠</span>
+STEMS     = [<span class="st">"drums"</span>, <span class="st">"bass"</span>, <span class="st">"other"</span>, <span class="st">"vocals"</span>]
+
+<span class="kw">def</span> <span class="fn">load_audio</span>(path):
+    wav, sr = sf.read(path, dtype=<span class="st">"float32"</span>, always_2d=<span class="kw">True</span>)
+    wav = wav.T                                      <span class="cm"># (C, T)</span>
+    <span class="kw">if</span> wav.shape[0] == 1:                            <span class="cm"># 单声道→双声道</span>
+        wav = np.repeat(wav, 2, axis=0)
+    <span class="kw">assert</span> sr == SR, <span class="st">f"请先重采样到 44100Hz（当前 {sr}）"</span>
+    <span class="kw">return</span> wav
+
+<span class="kw">def</span> <span class="fn">separate</span>(model_path, wav):
+    sess = ort.InferenceSession(model_path, providers=[
+        <span class="st">"CUDAExecutionProvider"</span>, <span class="st">"CPUExecutionProvider"</span>])
+    in_name = sess.get_inputs()[0].name
+
+    <span class="cm"># —— 归一化（Demucs 惯例：按整体均值/方差）——</span>
+    ref  = wav.mean(0)
+    mean, std = ref.mean(), ref.std() + 1e-8
+    wav_n = (wav - mean) / std
+
+    T      = wav_n.shape[-1]
+    stride = <span class="kw">int</span>(SEG_LEN * (1 - OVERLAP))
+    out    = np.zeros((4, 2, T), dtype=np.float32)
+    weight = np.zeros(T, dtype=np.float32)
+    win    = np.concatenate([                        <span class="cm"># 三角窗做加权拼接</span>
+        np.linspace(0, 1, SEG_LEN // 2, endpoint=<span class="kw">False</span>),
+        np.linspace(1, 0, SEG_LEN - SEG_LEN // 2)]).astype(np.float32)
+
+    <span class="kw">for</span> start <span class="kw">in</span> <span class="kw">range</span>(0, T, stride):
+        end   = <span class="kw">min</span>(start + SEG_LEN, T)
+        chunk = wav_n[:, start:end]
+        <span class="kw">if</span> chunk.shape[-1] < SEG_LEN:                <span class="cm"># 末尾补零到固定长度</span>
+            pad   = SEG_LEN - chunk.shape[-1]
+            chunk = np.pad(chunk, ((0, 0), (0, pad)))
+        x = chunk[<span class="kw">None</span>]                              <span class="cm"># (1, 2, SEG_LEN)</span>
+
+        y = sess.run(<span class="kw">None</span>, {in_name: x})[0][0]       <span class="cm"># (4, 2, SEG_LEN)</span>
+
+        n = end - start
+        out[..., start:end]  += y[..., :n] * win[:n]
+        weight[start:end]    += win[:n]
+        <span class="kw">if</span> end >= T: <span class="kw">break</span>
+
+    out /= np.maximum(weight, 1e-8)
+    <span class="kw">return</span> out * std + mean                          <span class="cm"># 反归一化</span>
+
+<span class="kw">if</span> __name__ == <span class="st">"__main__"</span>:
+    wav   = load_audio(<span class="st">"song.wav"</span>)
+    stems = separate(<span class="st">"model/htdemucs_ft.onnx"</span>, wav)
+    <span class="kw">for</span> name, s <span class="kw">in</span> <span class="kw">zip</span>(STEMS, stems):
+        sf.write(<span class="st">f"out_{name}.wav"</span>, s.T, SR)
+        <span class="kw">print</span>(<span class="st">"saved"</span>, name)</code></pre>
+
+  <div class="note teal">若体检脚本显示模型是"双输入 / 双输出"（波形 + 频谱进，时域 + 频域出），在上面循环内加两步：喂入前对 <code>chunk</code> 做 STFT 组装第二个输入；取出后对频域输出做 iSTFT，与时域输出<strong>相加</strong>再进行 overlap-add。若仓库是按 stem 拆分的 4 个 onnx 文件，则对每个文件各跑一遍，各取对应的那条输出。</div>
+</div></section>
+
+<!-- ========== 5. 阿里云部署 ========== -->
+<section id="aliyun"><div class="wrap">
+  <div class="sec-tag">Section 5</div>
+  <h2>部署到阿里云</h2>
+  <p>音源分离是<strong>计算密集 + 单次耗时较长</strong>（htdemucs_ft 处理一首 4 分钟歌曲：GPU 约十几秒到一分钟量级，纯 CPU 可能数分钟）的任务，建议按"<strong>异步任务</strong>"而不是"同步 HTTP 请求"来设计。阿里云上有四条主流路径：</p>
+
+  <div class="tbl"><table>
+    <tr><th>方案</th><th>适合场景</th><th>GPU 支持</th><th>特点</th></tr>
+    <tr><td>PAI-EAS<br><span style="color:var(--faint);font-size:12px">模型在线服务</span></td><td>正式生产、需要弹性伸缩的推理服务</td><td>✅ T4 / A10 等</td><td>专为模型推理设计，自带自动扩缩容、蓝绿发布、监控；支持自定义镜像部署，最省运维</td></tr>
+    <tr><td>ECS + GPU</td><td>流量稳定、想完全掌控环境</td><td>✅ gn6i(T4) / gn7i(A10)</td><td>最灵活，自己装 Docker 跑服务；成本随实例包月/按量，无弹性时利用率是关键</td></tr>
+    <tr><td>函数计算 FC<br><span style="color:var(--faint);font-size:12px">GPU 实例</span></td><td>调用低频、突发流量、想按量付费</td><td>✅（GPU 函数）</td><td>冷启动需拉大镜像（onnxruntime-gpu 镜像常 &gt;3GB），务必开启镜像加速/预留实例</td></tr>
+    <tr><td>ACK（K8s）</td><td>已有容器平台、多模型多服务编排</td><td>✅</td><td>运维成本最高，适合平台化团队</td></tr>
+  </table></div>
+  <p>下面以最常用的组合落地：<strong>Docker 镜像 → 推送 ACR（容器镜像服务）→ 部署 PAI-EAS</strong>，音频文件通过 <strong>OSS</strong> 中转。</p>
+
+  <figure class="figure">
+    <svg viewBox="0 0 1040 190" xmlns="http://www.w3.org/2000/svg" font-family="monospace">
+      <defs><marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8b93a7"/></marker></defs>
+      <rect x="16" y="66" width="118" height="58" rx="10" fill="#1d2230" stroke="#2a3040"/>
+      <text x="75" y="92" fill="#e8eaf2" font-size="12.5" text-anchor="middle">客户端</text>
+      <text x="75" y="110" fill="#8b93a7" font-size="10.5" text-anchor="middle">上传歌曲</text>
+      <path d="M134,82 h58" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr3)" fill="none"/>
+      <rect x="194" y="56" width="128" height="78" rx="10" fill="#1d2230" stroke="#f5a524"/>
+      <text x="258" y="88" fill="#f8cd7e" font-size="12.5" text-anchor="middle">OSS</text>
+      <text x="258" y="108" fill="#8b93a7" font-size="10.5" text-anchor="middle">输入/输出音频</text>
+      <path d="M322,95 h58" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr3)" fill="none"/>
+      <path d="M380,110 h-58" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr3)" fill="none"/>
+      <rect x="382" y="42" width="240" height="106" rx="12" fill="#0e2b26" stroke="#2dd4bf" stroke-width="1.5"/>
+      <text x="502" y="74" fill="#2dd4bf" font-size="13" text-anchor="middle">PAI-EAS 推理服务</text>
+      <text x="502" y="96" fill="#9adfd4" font-size="10.5" text-anchor="middle">FastAPI + onnxruntime-gpu</text>
+      <text x="502" y="116" fill="#8b93a7" font-size="10.5" text-anchor="middle">GPU: T4 / A10 · 自动扩缩容</text>
+      <path d="M622,95 h58" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr3)" fill="none"/>
+      <rect x="682" y="56" width="150" height="78" rx="10" fill="#1d2230" stroke="#8b7cf7"/>
+      <text x="757" y="88" fill="#c9c2fb" font-size="12.5" text-anchor="middle">ACR 镜像仓库</text>
+      <text x="757" y="108" fill="#8b93a7" font-size="10.5" text-anchor="middle">存放服务镜像</text>
+      <path d="M832,95 h56" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr3)" fill="none" stroke-dasharray="4 4"/>
+      <rect x="890" y="56" width="134" height="78" rx="10" fill="#1d2230" stroke="#2a3040"/>
+      <text x="957" y="88" fill="#e8eaf2" font-size="12.5" text-anchor="middle">CI / 本地</text>
+      <text x="957" y="108" fill="#8b93a7" font-size="10.5" text-anchor="middle">docker push</text>
+      <text x="502" y="176" fill="#5c6377" font-size="10.5" text-anchor="middle">长音频建议：客户端拿到任务 ID 轮询，或用 MNS/RocketMQ 做异步队列</text>
+    </svg>
+    <figcaption>图 3 · 推荐的阿里云部署拓扑：OSS 中转音频，EAS 承载 GPU 推理，ACR 管理镜像。</figcaption>
+  </figure>
+
+  <h3>Step 1 · 编写推理服务（FastAPI）</h3>
+  <div class="codehead">app.py · 接收 OSS 路径，分离后回传 OSS</div>
+<pre><code><span class="kw">import</span> os, uuid, tempfile
+<span class="kw">import</span> oss2, soundfile <span class="kw">as</span> sf
+<span class="kw">from</span> fastapi <span class="kw">import</span> FastAPI
+<span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel
+<span class="kw">from</span> separate <span class="kw">import</span> load_audio, separate, STEMS, SR   <span class="cm"># 复用上一节的代码</span>
+
+app = FastAPI()
+
+auth   = oss2.Auth(os.environ[<span class="st">"OSS_AK_ID"</span>], os.environ[<span class="st">"OSS_AK_SECRET"</span>])
+bucket = oss2.Bucket(auth,
+                     <span class="st">"https://oss-cn-hangzhou-internal.aliyuncs.com"</span>,  <span class="cm"># 同地域用内网端点，免流量费</span>
+                     os.environ[<span class="st">"OSS_BUCKET"</span>])
+
+MODEL = <span class="st">"/app/model/htdemucs_ft.onnx"</span>
+
+<span class="kw">class</span> <span class="fn">Job</span>(BaseModel):
+    input_key: <span class="kw">str</span>            <span class="cm"># OSS 上的输入音频路径，如 uploads/song.wav</span>
+
+@app.get(<span class="st">"/healthz"</span>)
+<span class="kw">def</span> <span class="fn">healthz</span>():
+    <span class="kw">return</span> {<span class="st">"ok"</span>: <span class="kw">True</span>}
+
+@app.post(<span class="st">"/separate"</span>)
+<span class="kw">def</span> <span class="fn">run</span>(job: Job):
+    tmp = tempfile.mkdtemp()
+    src = os.path.join(tmp, <span class="st">"in.wav"</span>)
+    bucket.get_object_to_file(job.input_key, src)
+
+    stems  = separate(MODEL, load_audio(src))
+    job_id = uuid.uuid4().hex[:12]
+    keys   = {}
+    <span class="kw">for</span> name, s <span class="kw">in</span> <span class="kw">zip</span>(STEMS, stems):
+        p = os.path.join(tmp, <span class="st">f"{name}.wav"</span>)
+        sf.write(p, s.T, SR)
+        key = <span class="st">f"results/{job_id}/{name}.wav"</span>
+        bucket.put_object_from_file(key, p)
+        keys[name] = key
+    <span class="kw">return</span> {<span class="st">"job_id"</span>: job_id, <span class="st">"stems"</span>: keys}</code></pre>
+  <p>生产上建议再进一步：<code>/separate</code> 只入队并返回任务 ID，由后台 worker 消费（MNS / RocketMQ / Celery），客户端轮询或走回调——避免长音频触发网关超时。</p>
+
+  <h3>Step 2 · 构建镜像</h3>
+  <div class="codehead">Dockerfile · GPU 版（EAS / ECS GPU 通用）</div>
+<pre><code><span class="kw">FROM</span> nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+<span class="kw">RUN</span> apt-get update && apt-get install -y python3 python3-pip libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+<span class="kw">WORKDIR</span> /app
+<span class="kw">COPY</span> requirements.txt .
+<span class="cm"># requirements.txt: onnxruntime-gpu fastapi uvicorn soundfile numpy oss2 pydantic</span>
+<span class="kw">RUN</span> pip3 install --no-cache-dir -r requirements.txt \
+    -i https://mirrors.aliyun.com/pypi/simple/          <span class="cm"># 用阿里 PyPI 镜像加速构建</span>
+
+<span class="kw">COPY</span> app.py separate.py ./
+<span class="kw">COPY</span> model/ ./model/                                    <span class="cm"># 模型打进镜像；更优做法见下方注释</span>
+
+<span class="kw">EXPOSE</span> 8000
+<span class="kw">CMD</span> [<span class="st">"uvicorn"</span>, <span class="st">"app:app"</span>, <span class="st">"--host"</span>, <span class="st">"0.0.0.0"</span>, <span class="st">"--port"</span>, <span class="st">"8000"</span>]</code></pre>
+  <div class="note">htdemucs_ft 的 ONNX 权重上 GB 级，打进镜像会让镜像很大、冷启动慢。更优做法：把 <code>.onnx</code> 放在 <strong>OSS 或 NAS</strong>，EAS 部署时通过存储挂载（<code>storage</code> 配置）挂到容器内，镜像里只留代码。</div>
+
+  <h3>Step 3 · 推送到 ACR 并部署 EAS</h3>
+  <div class="codehead">terminal · 镜像推送 + EAS 部署</div>
+<pre><code><span class="cm"># 1) 登录容器镜像服务（以杭州为例，个人版/企业版域名略有不同）</span>
+docker login --username=你的账号 registry.cn-hangzhou.aliyuncs.com
+
+<span class="cm"># 2) 构建并推送</span>
+docker build -t demucs-serve:v1 .
+docker tag demucs-serve:v1 registry.cn-hangzhou.aliyuncs.com/你的命名空间/demucs-serve:v1
+docker push registry.cn-hangzhou.aliyuncs.com/你的命名空间/demucs-serve:v1
+
+<span class="cm"># 3) 用 eascmd（或 PAI 控制台）创建服务</span>
+eascmd create service.json</code></pre>
+
+  <div class="codehead">service.json · EAS 服务配置示例</div>
+<pre><code>{
+  <span class="fn">"name"</span>: <span class="st">"demucs-separation"</span>,
+  <span class="fn">"containers"</span>: [{
+    <span class="fn">"image"</span>: <span class="st">"registry.cn-hangzhou.aliyuncs.com/你的命名空间/demucs-serve:v1"</span>,
+    <span class="fn">"port"</span>: 8000,
+    <span class="fn">"script"</span>: <span class="st">"uvicorn app:app --host 0.0.0.0 --port 8000"</span>
+  }],
+  <span class="fn">"metadata"</span>: {
+    <span class="fn">"instance"</span>: 1,
+    <span class="fn">"cpu"</span>: 8,
+    <span class="fn">"memory"</span>: 32000,
+    <span class="fn">"gpu"</span>: 1,
+    <span class="fn">"resource_type"</span>: <span class="st">"public"</span>       <span class="cm">// 公共资源组按量付费，T4/A10 规格在控制台选择</span>
+  },
+  <span class="fn">"storage"</span>: [{
+    <span class="fn">"mount_path"</span>: <span class="st">"/app/model"</span>,
+    <span class="fn">"oss"</span>: { <span class="fn">"path"</span>: <span class="st">"oss://你的bucket/models/htdemucs-ft-onnx/"</span> }
+  }]
+}</code></pre>
+
+  <h3>Step 4 · 验证与上线检查</h3>
+  <div class="steps">
+    <div class="step"><div><h4>健康检查</h4><p>EAS 会给服务分配访问地址与 Token：<code>curl -H "Authorization: TOKEN" https://xxx.pai-eas.aliyuncs.com/api/predict/demucs-separation/healthz</code></p></div></div>
+    <div class="step"><div><h4>端到端测试</h4><p>先把一首测试歌曲传到 OSS，POST <code>/separate</code> 带上 <code>input_key</code>，确认 4 个 stem 文件出现在 <code>results/</code> 下且可正常播放、无接缝噪声。</p></div></div>
+    <div class="step"><div><h4>超时与并发</h4><p>网关/客户端超时调到覆盖最长音频的处理时间；EAS 上将单实例并发设为 1~2（GPU 推理排队优于并行争抢显存），靠横向扩容承接流量。</p></div></div>
+    <div class="step"><div><h4>弹性与成本</h4><p>EAS 开启按 QPS/GPU 利用率的自动扩缩容，低谷缩到 0 或 1 个实例；调用极低频时改用函数计算 GPU + 预留实例更省钱。</p></div></div>
+    <div class="step"><div><h4>安全</h4><p>AK/SK 不写死在镜像里——用环境变量注入，或给 EAS 绑定 RAM 角色走 STS 临时凭证；OSS 桶设为私有，结果用签名 URL 下发。</p></div></div>
+  </div>
+</div></section>
+
+<!-- ========== 6. 性能优化 ========== -->
+<section id="perf"><div class="wrap">
+  <div class="sec-tag">Section 6</div>
+  <h2>性能与成本优化</h2>
+  <div class="tbl"><table>
+    <tr><th>手段</th><th>做法</th><th>收益 / 代价</th></tr>
+    <tr><td>Execution Provider</td><td>GPU 上 providers 顺序写 <code>["TensorRTExecutionProvider","CUDAExecutionProvider","CPUExecutionProvider"]</code>；TensorRT EP 首次会编译引擎，记得开启引擎缓存</td><td>TensorRT 常有 1.5~3× 提速；首次加载慢</td></tr>
+    <tr><td>FP16</td><td>GPU 上用 fp16 版模型或 TensorRT fp16 模式</td><td>显存减半、提速明显，音质几乎无损</td></tr>
+    <tr><td>INT8 量化</td><td><code>onnxruntime.quantization</code> 动态量化，CPU 场景收益大</td><td>速度↑ 体积↓，但源分离对精度敏感，务必 A/B 试听 SDR 回归</td></tr>
+    <tr><td>减少 shifts</td><td>线上服务把 shifts 设为 0 或 1（离线高质量导出再用大 shifts）</td><td>每减一个 shift 少一整遍推理</td></tr>
+    <tr><td>会话复用</td><td><code>InferenceSession</code> 进程内只建一次（模块级单例），开启 <code>graph_optimization_level=ORT_ENABLE_ALL</code></td><td>免去每请求数秒的模型加载</td></tr>
+    <tr><td>CPU 线程</td><td>CPU 部署时设 <code>intra_op_num_threads</code> = 物理核数，容器内配合 CPU limit</td><td>避免超卖导致的抖动</td></tr>
+  </table></div>
+
+  <h3>规格参考（估算，务必以实测为准）</h3>
+  <ul>
+    <li><strong>GPU（T4 / A10）</strong>：4 分钟歌曲的 htdemucs_ft 全 4-stem 分离通常在数十秒量级；A10 明显快于 T4。</li>
+    <li><strong>CPU（8 vCPU）</strong>：同样任务可能需要数分钟，仅适合离线批处理或低频调用。</li>
+    <li><strong>显存</strong>：单实例单并发下 8~16 GB 显存较稳妥；segment 越长显存越高。</li>
+  </ul>
+
+  <div class="note teal"><strong>许可提醒：</strong>Demucs 代码为 MIT 许可，但 htdemucs_ft 权重训练用到的部分数据集有额外限制，衍生权重的许可以 StemSplitio 仓库的 Model Card / LICENSE 声明为准；商用（尤其对用户上传的版权音乐做分离）前请确认合规。</div>
+</div></section>
+
+<footer><div class="wrap">
+  参考：Rouard, Massa &amp; Défossez, <i>Hybrid Transformers for Music Source Separation</i> (ICASSP 2023) · facebook/demucs (GitHub) · huggingface.co/StemSplitio/htdemucs-ft-onnx · 阿里云 PAI-EAS / ACR / OSS / 函数计算文档。<br>
+  本页数据（SDR、耗时、规格）为公开资料与经验估算，部署前请以官方模型卡与实测为准。
+</div></footer>
+
+</body>
+</html>

@@ -38,15 +38,12 @@
 
 ### Job Kernel Operations
 
-- 增加 outbox dead letter 的运维查询入口。
-- 评估人工重放入口；只有在 dead letter 状态、幂等键和权限边界清楚后再实现。
 - 增加 attempt、dispatch、callback 的指标和告警。
 - 增加更细粒度的 stale running 诊断事件。
 - 为 Job、Attempt、Callback、Audit event 和 AI call ledger 的不同保留期补 runbook。
 
 ### Callback Operations
 
-- 增加 Callback 投递观测面：最近错误、下一次重试、dead letter 原因。
 - 增加 callback receiver mock 的本地演示脚本或测试 fixture；正式验收要求归属终态验收文档。
 - 如未来公开 callback cost summary，必须复用 cost boundary 中的同一 projection，不在本文另开合同。
 

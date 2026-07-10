@@ -1708,6 +1708,20 @@ def test_tools_cli_help_is_available_without_env_file():
     assert "无默认持久副作用" in result.stdout
 
 
+def test_models_cli_help_is_available_without_env_file():
+    result = subprocess.run(
+        ["./scripts/models.sh", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "本地模型资产入口" in result.stdout
+    assert "htdemucs-ft" in result.stdout
+    assert "不支持自动 fallback" in result.stdout
+
+
 def test_shell_entrypoints_require_command_without_help():
     for script in (
         "./scripts/dev.sh",
@@ -1715,6 +1729,7 @@ def test_shell_entrypoints_require_command_without_help():
         "./scripts/verify.sh",
         "./scripts/k8s.sh",
         "./scripts/real-flow.sh",
+        "./scripts/models.sh",
         "./scripts/tools.sh",
     ):
         result = subprocess.run(

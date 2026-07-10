@@ -51,6 +51,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/load.sh" \
     "$ROOT_DIR/scripts/jobs.sh" \
     "$ROOT_DIR/scripts/real-flow.sh" \
+    "$ROOT_DIR/scripts/models.sh" \
     "$ROOT_DIR/scripts/tools.sh" \
     "$ROOT_DIR/scripts/verify/tasks.sh" \
     "$ROOT_DIR/scripts/verify/release_flow_smoke.sh" \
@@ -116,6 +117,8 @@ run_cli_smoke() {
   assert_generated_commands_help "load.sh" "$ROOT_DIR/scripts/load.sh" \
     guide cases list profiles init smoke run ui report pressure drain
   event "OK" "load.sh" "help"
+  "$ROOT_DIR/scripts/models.sh" --help >/dev/null
+  event "OK" "models.sh" "help"
   "$ROOT_DIR/scripts/tools.sh" --help >/dev/null
   event "OK" "tools.sh" "help"
   "$ROOT_DIR/deploy/release-test.sh" --help >/dev/null
@@ -135,6 +138,10 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/verify.sh" migration-roundtrip --help >/dev/null
   "$ROOT_DIR/scripts/verify.sh" migration-roundtrip ignored --help >/dev/null
   "$ROOT_DIR/scripts/verify.sh" env-config --help >/dev/null
+  "$ROOT_DIR/scripts/models.sh" list --help >/dev/null
+  "$ROOT_DIR/scripts/models.sh" status --help >/dev/null
+  "$ROOT_DIR/scripts/models.sh" verify --help >/dev/null
+  "$ROOT_DIR/scripts/models.sh" download --help >/dev/null
   "$ROOT_DIR/scripts/tools.sh" secret --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" guide --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" dashboard --help >/dev/null

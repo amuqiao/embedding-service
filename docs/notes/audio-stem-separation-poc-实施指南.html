@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>audio_stem_separation 接入实施指南 · 分阶段 POC 参考</title>
+<style>
+:root{
+  --bg:#0f1218; --panel:#171b24; --panel-2:#1d2230; --line:#2a3040;
+  --ink:#e8eaf2; --muted:#8b93a7; --faint:#5c6377;
+  --a:#f5a524; --b:#8b7cf7; --c:#2dd4bf; --d:#f472b6;
+  --code-bg:#0b0e14; --good:#4ade80; --warn:#fbbf24; --bad:#f87171;
+  --mono:"JetBrains Mono","SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:70px}
+body{background:var(--bg);color:var(--ink);font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",-apple-system,sans-serif;line-height:1.75;font-size:16px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+nav{position:sticky;top:0;z-index:50;background:rgba(15,18,24,.9);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav .wrap{max-width:1080px;margin:0 auto;padding:0 24px;display:flex;align-items:center;gap:20px;height:56px;overflow-x:auto}
+nav .brand{font-family:var(--mono);font-size:13px;letter-spacing:.06em;color:var(--ink);white-space:nowrap}
+nav .brand b{color:var(--c)}
+nav a{color:var(--muted);text-decoration:none;font-size:13.5px;white-space:nowrap;padding:4px 2px;border-bottom:2px solid transparent}
+nav a:hover{color:var(--ink);border-bottom-color:var(--c)}
+
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+header{padding:64px 0 40px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.16em;color:var(--muted);text-transform:uppercase;margin-bottom:14px}
+h1{font-size:clamp(26px,4vw,40px);line-height:1.3;font-weight:700;letter-spacing:-.01em}
+h1 span{background:linear-gradient(90deg,var(--a),var(--d),var(--b),var(--c));-webkit-background-clip:text;background-clip:text;color:transparent}
+header p.lede{color:var(--muted);max-width:760px;margin-top:16px;font-size:16.5px}
+.chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+.chip{font-family:var(--mono);font-size:12.5px;border:1px solid var(--line);border-radius:999px;padding:5px 14px;color:var(--muted)}
+.chip b{color:var(--ink);font-weight:600}
+
+section{padding:52px 0;border-bottom:1px solid var(--line)}
+.sec-tag{font-family:var(--mono);font-size:12px;letter-spacing:.14em;color:var(--faint);text-transform:uppercase;margin-bottom:10px}
+h2{font-size:clamp(21px,2.8vw,28px);margin-bottom:18px;font-weight:700}
+h3{font-size:17.5px;margin:28px 0 12px;font-weight:600}
+h3 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:9px;vertical-align:2px}
+p{margin-bottom:14px;color:#c6cbd9}
+p strong,li strong{color:var(--ink)}
+ul,ol{margin:0 0 16px 1.4em;color:#c6cbd9}
+li{margin-bottom:8px}
+a{color:var(--c)}
+.note{border:1px solid var(--line);border-left:3px solid var(--warn);background:var(--panel);border-radius:8px;padding:14px 18px;margin:18px 0;font-size:14.5px;color:#d5cfa8}
+.note.teal{border-left-color:var(--c);color:#b9e6df}
+.note.bad{border-left-color:var(--bad);color:#f5c2c2}
+
+.stage-badge{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12.5px;padding:4px 12px;border-radius:999px;margin-bottom:16px}
+.stage-badge.s0{background:#241a10;color:var(--a);border:1px solid #4a3418}
+.stage-badge.s1a{background:#1a1730;color:var(--b);border:1px solid #382f5c}
+.stage-badge.s1b{background:#1a2a2e;color:var(--c);border:1px solid #245055}
+.stage-badge.s2{background:#2a1420;color:var(--d);border:1px solid #522038}
+
+.flow{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;margin:20px 0;overflow-x:auto}
+.flow svg{display:block;min-width:640px;width:100%;height:auto}
+
+table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px}
+th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600;font-family:var(--mono);font-size:12px;letter-spacing:.04em}
+td{color:#c6cbd9}
+tr td:first-child{color:var(--ink);font-weight:500}
+.tbl{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:2px 6px;margin:18px 0}
+.tbl table{margin:0}
+
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:12px;padding:18px 20px;overflow-x:auto;margin:16px 0;font-family:var(--mono);font-size:12.8px;line-height:1.65;color:#dbe1ef}
+code{font-family:var(--mono);font-size:.92em;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:#e3e7f3}
+pre code{background:none;border:none;padding:0}
+pre .cm{color:#5c6a85}
+pre .kw{color:#8b7cf7}
+pre .st{color:#7fd6c7}
+pre .fn{color:#f5a524}
+.codehead{font-family:var(--mono);font-size:12px;color:var(--muted);background:var(--panel-2);border:1px solid var(--line);border-bottom:none;border-radius:12px 12px 0 0;padding:8px 18px;margin:16px 0 0;display:flex;align-items:center;gap:8px}
+.codehead+pre{margin-top:0;border-top-left-radius:0;border-top-right-radius:0}
+.codehead::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--c)}
+.codehead.json::before{background:var(--a)}
+
+.steps{counter-reset:step;margin:20px 0}
+.step{display:flex;gap:16px;padding:14px 0;border-bottom:1px dashed var(--line)}
+.step:last-child{border-bottom:none}
+.step::before{counter-increment:step;content:counter(step,decimal-leading-zero);font-family:var(--mono);font-size:13px;color:var(--c);border:1px solid var(--line);border-radius:8px;min-width:36px;height:36px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--panel)}
+.step h4{font-size:15px;margin-bottom:4px}
+.step p{font-size:13.5px;color:var(--muted);margin:0}
+
+.checklist{list-style:none;margin:16px 0 16px 0}
+.checklist li{position:relative;padding-left:30px;margin-bottom:10px;color:#c6cbd9;font-size:14.5px}
+.checklist li::before{content:"\2610";position:absolute;left:0;color:var(--c);font-family:var(--mono)}
+
+footer{padding:40px 0 60px;color:var(--faint);font-size:13px;font-family:var(--mono)}
+footer a{color:var(--muted)}
+@media(max-width:640px){nav .wrap{gap:12px}.flow{padding:12px}}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap">
+  <span class="brand">audio_stem_separation <b>· POC 实施指南</b></span>
+  <a href="#overview">总览</a>
+  <a href="#stage0">阶段0·探测</a>
+  <a href="#stage1a">主线A·job_type</a>
+  <a href="#stage1b">主线B·lease修复</a>
+  <a href="#stage2">阶段2·联调</a>
+  <a href="#poc">POC脚本</a>
+  <a href="#checklist">环境清单</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="eyebrow">fastapi-best-ai-architecture · 本地 macOS CPU 闭环</div>
+  <h1>把 htdemucs-ft ONNX <span>接进 Job Kernel</span> 的分阶段实施手册</h1>
+  <p class="lede">本文档是 <code>docs/plans/htdemucs-audio-separation-integration.md</code> 计划文档的可执行版本：按阶段拆解每一步要做什么、需要提前装好什么依赖、期望的数据格式长什么样，并附带可以直接跑起来验证模型本身是否可用的 POC 脚本骨架——建议先跑通 POC 脚本证明模型能用，再回头把逻辑搬进正式的 <code>JobExecutor</code>。</p>
+  <div class="chips">
+    <span class="chip">job_type <b>audio_stem_separation</b></span>
+    <span class="chip">范围 <b>本地 macOS · 纯 CPU</b></span>
+    <span class="chip">模型来源 <b>StemSplitio/htdemucs-ft-onnx</b></span>
+    <span class="chip">对应计划 <b>htdemucs-audio-separation-integration.md</b></span>
+  </div>
+</div></header>
+
+<!-- ========== 总览 ========== -->
+<section id="overview"><div class="wrap">
+  <div class="sec-tag">Overview</div>
+  <h2>四个阶段，谁依赖谁</h2>
+  <p>计划文档里把工作拆成"阶段 0 探测先行 → 阶段 1 两条互不依赖的主线并行 → 阶段 2 联调验证"。本文档按这个顺序展开，每一节末尾都会说清楚"做完这一步应该得到什么"。</p>
+
+  <div class="flow">
+    <svg viewBox="0 0 1000 520" xmlns="http://www.w3.org/2000/svg" font-family="monospace">
+      <defs>
+        <marker id="dep-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8b93a7"/>
+        </marker>
+      </defs>
+
+      <!-- 阶段0 -->
+      <text x="500" y="28" fill="#f5a524" font-size="14" text-anchor="middle">阶段 0 · 探测先行（必须最先做）</text>
+      <rect x="60" y="46" width="380" height="84" rx="12" fill="#1d2230" stroke="#f5a524" stroke-width="1.4"/>
+      <text x="250" y="78" fill="#e8eaf2" font-size="13.5" text-anchor="middle">ONNX I/O 签名探测</text>
+      <text x="250" y="98" fill="#8b93a7" font-size="11" text-anchor="middle">阻塞下面所有 schema / 超时预算定稿</text>
+      <text x="250" y="116" fill="#5c6377" font-size="10.5" text-anchor="middle">probe_onnx_io.py</text>
+      <rect x="560" y="46" width="380" height="84" rx="12" fill="#1d2230" stroke="#f5a524" stroke-width="1.4"/>
+      <text x="750" y="78" fill="#e8eaf2" font-size="13.5" text-anchor="middle">模型文件下载</text>
+      <text x="750" y="98" fill="#8b93a7" font-size="11" text-anchor="middle">与探测互不依赖，可同时做</text>
+      <text x="750" y="116" fill="#5c6377" font-size="10.5" text-anchor="middle">./scripts/models.sh download</text>
+
+      <!-- 汇合到阶段0->1 -->
+      <path d="M250,130 C250,158 480,158 490,170" stroke="#8b93a7" stroke-width="1.5" fill="none"/>
+      <path d="M750,130 C750,158 520,158 510,170" stroke="#8b93a7" stroke-width="1.5" fill="none"/>
+      <circle cx="500" cy="175" r="5" fill="#f5a524"/>
+      <path d="M500,180 L500,206" stroke="#8b93a7" stroke-width="1.6" marker-end="url(#dep-arr)" fill="none"/>
+      <text x="512" y="197" fill="#5c6377" font-size="10.5">探测结果：4专家签名 + bag聚合</text>
+
+      <!-- 阶段1 -->
+      <text x="500" y="230" fill="#8b7cf7" font-size="14" text-anchor="middle">阶段 1 · 两条主线并行（阶段 0 完成后开始）</text>
+      <rect x="60" y="248" width="380" height="100" rx="12" fill="#1d2230" stroke="#8b7cf7" stroke-width="1.4"/>
+      <text x="250" y="278" fill="#c9c2fb" font-size="13.5" text-anchor="middle">主线 A：job_type 实现</text>
+      <text x="250" y="298" fill="#8b93a7" font-size="11" text-anchor="middle">依赖阶段 0 探测结果</text>
+      <text x="250" y="318" fill="#5c6377" font-size="10" text-anchor="middle">app/jobs/types/audio_stem_separation/</text>
+      <text x="250" y="334" fill="#5c6377" font-size="10" text-anchor="middle">schema + executor + errors</text>
+      <rect x="560" y="248" width="380" height="100" rx="12" fill="#1d2230" stroke="#2dd4bf" stroke-width="1.4"/>
+      <text x="750" y="278" fill="#9adfd4" font-size="13.5" text-anchor="middle">主线 B：lease 窗口修复</text>
+      <text x="750" y="298" fill="#8b93a7" font-size="11" text-anchor="middle">只依赖估时方法定型，不依赖主线A实现</text>
+      <text x="750" y="318" fill="#5c6377" font-size="10" text-anchor="middle">app/repositories/job_repo.py</text>
+      <text x="750" y="334" fill="#5c6377" font-size="10" text-anchor="middle">claim/heartbeat lease 计算</text>
+
+      <!-- 汇合到阶段2 -->
+      <path d="M250,348 C250,376 480,376 490,388" stroke="#8b93a7" stroke-width="1.5" fill="none"/>
+      <path d="M750,348 C750,376 520,376 510,388" stroke="#8b93a7" stroke-width="1.5" fill="none"/>
+      <circle cx="500" cy="393" r="5" fill="#8b7cf7"/>
+      <path d="M500,398 L500,424" stroke="#8b93a7" stroke-width="1.6" marker-end="url(#dep-arr)" fill="none"/>
+
+      <!-- 阶段2 -->
+      <rect x="310" y="426" width="380" height="80" rx="12" fill="#0e2b26" stroke="#f472b6" stroke-width="1.6"/>
+      <text x="500" y="456" fill="#f9a8cc" font-size="13.5" text-anchor="middle">阶段 2 · 联调验证</text>
+      <text x="500" y="476" fill="#9adfd4" font-size="11" text-anchor="middle">数据准备 → 提交 job → 轮询/callback → 下载产物</text>
+      <text x="500" y="494" fill="#5c6377" font-size="10" text-anchor="middle">依赖主线 A + 主线 B 都完成</text>
+    </svg>
+  </div>
+
+  <div class="tbl"><table>
+    <tr><th>阶段</th><th>产出</th><th>是否阻塞下一阶段</th></tr>
+    <tr><td>阶段 0</td><td>模型真实 I/O 签名 + 本地模型文件</td><td>阻塞阶段 1 的 schema 定稿</td></tr>
+    <tr><td>阶段 1·主线 A</td><td>可注册的 <code>audio_stem_separation</code> job_type</td><td>阻塞阶段 2 联调</td></tr>
+    <tr><td>阶段 1·主线 B</td><td>lease 窗口按 <code>attempt.timeout_seconds</code> 生效</td><td>阻塞阶段 2 联调（长推理不被误判 stale）</td></tr>
+    <tr><td>阶段 2</td><td>端到端跑通：音频进 → 4 个 stem 出</td><td>—</td></tr>
+  </table></div>
+</div></section>
+
+<!-- ========== 阶段0 ========== -->
+<section id="stage0"><div class="wrap">
+  <div class="sec-tag">Stage 0</div>
+  <span class="stage-badge s0">阶段 0 · 探测先行</span>
+  <h2>先搞清楚模型到底长什么样，再定 schema</h2>
+  <p><code>StemSplitio/htdemucs-ft-onnx</code> 的真实落地不是单个 <code>htdemucs_ft.onnx</code>，而是 4 个专家 ONNX 文件：<code>htdemucs_ft_drums.onnx</code>、<code>htdemucs_ft_bass.onnx</code>、<code>htdemucs_ft_other.onnx</code>、<code>htdemucs_ft_vocals.onnx</code>。仓库还提供 <code>bag_infer.py</code> 作为官方聚合推理参考。阶段 0 不再确认"是不是多文件"，而是把这 4 个文件的本地 I/O 签名、sha256、固定窗口长度和 bag 聚合口径记录下来。<strong>这一步不做，后面写 executor 和 timeout 预算就会继续沿用旧的单文件假设。</strong></p>
+
+  <h3><span class="dot" style="background:var(--a)"></span>需要准备的依赖和环境</h3>
+  <div class="tbl"><table>
+    <tr><th>依赖</th><th>用途</th><th>安装方式（本地 macOS）</th></tr>
+    <tr><td><code>onnxruntime</code></td><td>加载并探测 ONNX 模型的 I/O 签名</td><td><code>uv add --optional audio-separation onnxruntime</code></td></tr>
+    <tr><td><code>huggingface_hub</code></td><td>从 HF 拉取模型文件</td><td><code>uv add --optional audio-separation huggingface_hub</code></td></tr>
+    <tr><td><code>soundfile</code></td><td>后续阶段读写 wav，探测阶段不是必须，可以一起装</td><td><code>uv add --optional audio-separation soundfile</code></td></tr>
+    <tr><td><code>libsndfile1</code></td><td><code>soundfile</code> 的系统依赖（macOS 用 Homebrew）</td><td><code>brew install libsndfile</code></td></tr>
+  </table></div>
+  <div class="note">这些依赖按计划文档的决策放进 <code>pyproject.toml</code> 的 <code>[project.optional-dependencies]</code> extra（例如 <code>audio-separation</code>），不进 base 依赖——本地探测/POC 阶段用 <code>uv sync --extra audio-separation</code> 显式装。</div>
+
+  <h3><span class="dot" style="background:var(--b)"></span>模型下载</h3>
+  <div class="codehead">terminal · 下载到本地目录</div>
+<pre><code><span class="cm"># 目标路径对应计划里的 HTDEMUCS_MODEL_DIR 配置约定</span>
+./scripts/models.sh download htdemucs-ft</code></pre>
+  <p><code>.data/</code> 是仓库既有的"本地验证输入，不提交"约定目录，模型文件（GB 级）天然不会被提交进 git。下载完成后，本地目录应包含 4 个专家 <code>.onnx</code> 文件，以及官方参考文件 <code>bag_infer.py</code> 和 <code>requirements.txt</code>。</p>
+
+  <h3><span class="dot" style="background:var(--c)"></span>探测脚本：确认真实 I/O 签名</h3>
+  <div class="codehead">probe_onnx_io.py</div>
+<pre><code><span class="kw">import</span> hashlib
+<span class="kw">from</span> pathlib <span class="kw">import</span> Path
+<span class="kw">import</span> onnxruntime <span class="kw">as</span> ort
+
+MODEL_DIR = Path(<span class="st">".data/models/htdemucs-ft"</span>)
+EXPERT_FILES = {
+    <span class="st">"drums"</span>: <span class="st">"htdemucs_ft_drums.onnx"</span>,
+    <span class="st">"bass"</span>: <span class="st">"htdemucs_ft_bass.onnx"</span>,
+    <span class="st">"other"</span>: <span class="st">"htdemucs_ft_other.onnx"</span>,
+    <span class="st">"vocals"</span>: <span class="st">"htdemucs_ft_vocals.onnx"</span>,
+}
+
+<span class="kw">def</span> <span class="fn">sha256_file</span>(path):
+    h = hashlib.sha256()
+    <span class="kw">with</span> path.open(<span class="st">"rb"</span>) <span class="kw">as</span> f:
+        <span class="kw">for</span> block <span class="kw">in</span> <span class="fn">iter</span>(<span class="kw">lambda</span>: f.read(1024 * 1024), <span class="st">b""</span>):
+            h.update(block)
+    <span class="kw">return</span> h.hexdigest()
+
+<span class="kw">for</span> stem, filename <span class="kw">in</span> EXPERT_FILES.items():
+    path = MODEL_DIR / filename
+    <span class="kw">print</span>(<span class="st">"=="</span>, stem, path, <span class="st">"=="</span>)
+    <span class="kw">print</span>(<span class="st">"sha256:"</span>, <span class="fn">sha256_file</span>(path))
+    sess = ort.InferenceSession(path, providers=[<span class="st">"CPUExecutionProvider"</span>])
+    <span class="kw">print</span>(<span class="st">"providers available:"</span>, ort.get_available_providers())
+    <span class="kw">print</span>(<span class="st">"-- inputs --"</span>)
+    <span class="kw">for</span> i <span class="kw">in</span> sess.get_inputs():
+        <span class="kw">print</span>(<span class="st">" "</span>, i.name, <span class="st">"shape="</span>, i.shape, <span class="st">"dtype="</span>, i.type)
+    <span class="kw">print</span>(<span class="st">"-- outputs --"</span>)
+    <span class="kw">for</span> o <span class="kw">in</span> sess.get_outputs():
+        <span class="kw">print</span>(<span class="st">" "</span>, o.name, <span class="st">"shape="</span>, o.shape, <span class="st">"dtype="</span>, o.type)
+
+<span class="kw">for</span> helper <span class="kw">in</span> [<span class="st">"bag_infer.py"</span>, <span class="st">"requirements.txt"</span>]:
+    <span class="kw">print</span>(helper, <span class="st">"exists="</span>, (MODEL_DIR / helper).exists())</code></pre>
+
+  <div class="codehead json">探测结果记录进 model_asset.yaml（示例）</div>
+<pre><code><span class="fn">onnx_model_version</span>: <span class="st">"htdemucs_ft-v1"</span>
+<span class="fn">model_bag</span>:
+  <span class="fn">reference_script</span>: <span class="st">"bag_infer.py"</span>
+  <span class="fn">aggregation</span>: <span class="st">"official_bag_infer"</span>
+  <span class="fn">segment_samples</span>: <span class="fn">343980</span>
+  <span class="fn">experts</span>:
+    <span class="fn">drums</span>:
+      <span class="fn">file_path</span>: <span class="st">"htdemucs_ft_drums.onnx"</span>
+      <span class="fn">sha256</span>: <span class="st">"&lt;sha256&gt;"</span>
+    <span class="fn">bass</span>:
+      <span class="fn">file_path</span>: <span class="st">"htdemucs_ft_bass.onnx"</span>
+      <span class="fn">sha256</span>: <span class="st">"&lt;sha256&gt;"</span>
+    <span class="fn">other</span>:
+      <span class="fn">file_path</span>: <span class="st">"htdemucs_ft_other.onnx"</span>
+      <span class="fn">sha256</span>: <span class="st">"&lt;sha256&gt;"</span>
+    <span class="fn">vocals</span>:
+      <span class="fn">file_path</span>: <span class="st">"htdemucs_ft_vocals.onnx"</span>
+      <span class="fn">sha256</span>: <span class="st">"&lt;sha256&gt;"</span>
+<span class="fn">io_signature</span>:
+  <span class="fn">mode</span>: <span class="st">"four_expert_bag"</span>
+  <span class="fn">inputs</span>:
+    - <span class="fn">name</span>: <span class="st">"mix"</span>
+      <span class="fn">shape</span>: <span class="st">"(1, 2, 343980)"</span>
+      <span class="fn">dtype</span>: <span class="st">"float32"</span>
+  <span class="fn">outputs</span>:
+    - <span class="fn">name</span>: <span class="st">"stems"</span>
+      <span class="fn">shape</span>: <span class="st">"(1, 4, 2, 343980)"</span>
+      <span class="fn">dtype</span>: <span class="st">"float32"</span>
+  <span class="fn">requires_host_stft</span>: <span class="kw">false</span></code></pre>
+
+  <div class="note teal">做完这一步应该得到：① <code>.data/models/htdemucs-ft/</code> 下有 4 个专家模型文件和官方 <code>bag_infer.py</code>；② 一份写好真实探测结果的 <code>model_asset.yaml</code> 草稿；③ 明确 executor 必须加载 4 个 session，并按官方 bag 逻辑聚合。</div>
+</div></section>
+
+<!-- ========== 主线A ========== -->
+<section id="stage1a"><div class="wrap">
+  <div class="sec-tag">Stage 1 · Track A</div>
+  <span class="stage-badge s1a">主线 A · job_type 实现</span>
+  <h2>把探测结果落成正式的 job_type</h2>
+
+  <h3><span class="dot" style="background:var(--b)"></span>目录结构</h3>
+  <div class="codehead">app/jobs/types/audio_stem_separation/</div>
+<pre><code>audio_stem_separation/
+├── __init__.py        <span class="cm"># 导出执行器供 register.py 导入</span>
+├── executor.py         <span class="cm"># AudioStemSeparationJob(JobExecutor)，单一执行器，不用 workflow</span>
+├── errors.py           <span class="cm"># 业务专属错误码</span>
+└── model_asset.yaml     <span class="cm"># 阶段 0 探测结果落地于此</span></code></pre>
+
+  <h3><span class="dot" style="background:var(--c)"></span>请求数据格式示例</h3>
+  <div class="codehead json">POST /jobs 请求体</div>
+<pre><code>{
+  <span class="fn">"job_type"</span>: <span class="st">"audio_stem_separation"</span>,
+  <span class="fn">"job_params"</span>: {
+    <span class="fn">"input_audio"</span>: {
+      <span class="fn">"oss_bucket"</span>: <span class="st">"my-bucket"</span>,
+      <span class="fn">"oss_region"</span>: <span class="st">"cn-hangzhou"</span>,
+      <span class="fn">"oss_key"</span>: <span class="st">"uploads/song.wav"</span>,
+      <span class="fn">"content_type"</span>: <span class="st">"audio/wav"</span>,
+      <span class="fn">"sha256"</span>: <span class="st">"&lt;上传时计算的 sha256&gt;"</span>,
+      <span class="fn">"public_url"</span>: <span class="st">"https://my-bucket.oss-cn-hangzhou.aliyuncs.com/uploads/song.wav"</span>
+    }
+  },
+  <span class="fn">"callback"</span>: { <span class="fn">"url"</span>: <span class="st">"https://your-service/callbacks/audio-stem"</span> }
+}</code></pre>
+
+  <div class="codehead json">成功响应 job_result（public_result）</div>
+<pre><code>{
+  <span class="fn">"stems"</span>: {
+    <span class="fn">"drums"</span>:  { <span class="fn">"public_url"</span>: <span class="st">"https://.../drums.wav"</span>,  <span class="fn">"content_type"</span>: <span class="st">"audio/wav"</span>, <span class="fn">"sha256"</span>: <span class="st">"..."</span> },
+    <span class="fn">"bass"</span>:   { <span class="fn">"public_url"</span>: <span class="st">"https://.../bass.wav"</span>,   <span class="fn">"content_type"</span>: <span class="st">"audio/wav"</span>, <span class="fn">"sha256"</span>: <span class="st">"..."</span> },
+    <span class="fn">"other"</span>:  { <span class="fn">"public_url"</span>: <span class="st">"https://.../other.wav"</span>,  <span class="fn">"content_type"</span>: <span class="st">"audio/wav"</span>, <span class="fn">"sha256"</span>: <span class="st">"..."</span> },
+    <span class="fn">"vocals"</span>: { <span class="fn">"public_url"</span>: <span class="st">"https://.../vocals.wav"</span>, <span class="fn">"content_type"</span>: <span class="st">"audio/wav"</span>, <span class="fn">"sha256"</span>: <span class="st">"..."</span> }
+  },
+  <span class="fn">"duration_ms"</span>: { <span class="fn">"inference"</span>: 184230, <span class="fn">"io"</span>: 5120, <span class="fn">"total"</span>: 189350 },
+  <span class="fn">"source_duration_seconds"</span>: 241.7
+}</code></pre>
+
+  <h3><span class="dot" style="background:var(--a)"></span>业务错误码</h3>
+  <div class="tbl"><table>
+    <tr><th>错误码</th><th>触发场景</th></tr>
+    <tr><td><code>AUDIO_STEM_INPUT_INVALID</code></td><td>非 44.1kHz / 非立体声 / 非白名单 content_type</td></tr>
+    <tr><td><code>AUDIO_STEM_DURATION_EXCEEDS_LIMIT</code></td><td>音频时长超过 <code>max_duration_seconds</code></td></tr>
+    <tr><td><code>AUDIO_STEM_MODEL_ASSET_MISSING</code></td><td>本地模型文件缺失或 sha256 不匹配</td></tr>
+    <tr><td><code>AUDIO_STEM_INFERENCE_FAILED</code></td><td>onnxruntime 推理异常</td></tr>
+    <tr><td><code>AUDIO_STEM_OUTPUT_INVALID</code></td><td>拼接后 stem 长度与输入不一致</td></tr>
+  </table></div>
+
+  <h3><span class="dot" style="background:var(--d)"></span>executor 骨架（伪代码，实际实现时参照 <code>poster_title_image/executor.py</code> 的写法）</h3>
+  <div class="codehead">executor.py（骨架）</div>
+<pre><code><span class="kw">class</span> <span class="fn">AudioStemSeparationJob</span>(JobExecutor):
+    name = <span class="st">"audio_stem_separation"</span>
+    visibility = <span class="st">"demo"</span>          <span class="cm"># 借用 demo 的准入限制语义，见计划文档"开放决策"</span>
+    role = <span class="st">"root"</span>
+    timeout_seconds = 2400          <span class="cm"># 目标音频时长 x 预估 CPU 推理倍率 + 余量</span>
+    retry_policy = JobRetryPolicy(business_execution=ExecutionRetryPolicy(max_attempts=1, ...))
+
+    <span class="kw">async def</span> <span class="fn">_execute</span>(self, job, db):
+        audio_bytes = <span class="fn">download_and_verify</span>(job)              <span class="cm"># sha256 校验</span>
+        <span class="fn">validate_sample_rate_and_channels</span>(audio_bytes)     <span class="cm"># 拒绝非 44.1kHz 立体声</span>
+        sessions = <span class="fn">get_or_load_onnx_sessions</span>()             <span class="cm"># 模块级单例：4 个专家 session</span>
+        stems = <span class="fn">segment_and_infer_bag</span>(sessions, audio_bytes) <span class="cm"># 分段 + 4专家推理 + 官方bag聚合 + overlap-add</span>
+        objects = <span class="fn">write_stems_to_oss</span>(job, stems)
+        <span class="kw">return</span> {<span class="st">"stems"</span>: objects, <span class="st">"duration_ms"</span>: {...}, ...}</code></pre>
+
+  <div class="note teal">做完这一步应该得到：能通过 <code>POST /jobs</code> 提交一个 <code>audio_stem_separation</code> job，并且 schema/registry 测试通过——但这一步不要求已经跑通真实推理逻辑，真实推理逻辑建议先在下面"POC 脚本"里独立验证。</div>
+</div></section>
+
+<!-- ========== 主线B ========== -->
+<section id="stage1b"><div class="wrap">
+  <div class="sec-tag">Stage 1 · Track B</div>
+  <span class="stage-badge s1b">主线 B · lease 窗口修复</span>
+  <h2>让 job_type 声明的 timeout_seconds 真正生效</h2>
+  <p>这是本次接入过程中发现的、独立于 htdemucs 本身的 job kernel 缺陷：<code>JobExecutor.timeout_seconds</code> 会被存进 <code>JobAttempt.timeout_seconds</code> 列，但运行中 attempt 的 lease 窗口只认全局 <code>settings.job_stale_running_seconds</code>（由 LLM 语义的 <code>MODEL_CALL_TIMEOUT_SECONDS</code> 派生），从不读这一列。</p>
+
+  <div class="flow">
+    <svg viewBox="0 0 1000 360" xmlns="http://www.w3.org/2000/svg" font-family="monospace">
+      <defs>
+        <marker id="lease-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8b93a7"/>
+        </marker>
+      </defs>
+
+      <!-- 修复前 -->
+      <text x="20" y="24" fill="#f87171" font-size="13.5">修复前 · 只认全局值</text>
+      <rect x="20" y="38" width="260" height="70" rx="10" fill="#1d2230" stroke="#f87171" stroke-width="1.4"/>
+      <text x="150" y="66" fill="#f5c2c2" font-size="12" text-anchor="middle">settings.job_stale</text>
+      <text x="150" y="82" fill="#f5c2c2" font-size="12" text-anchor="middle">_running_seconds</text>
+      <text x="150" y="98" fill="#8b93a7" font-size="10" text-anchor="middle">全局值 · 约26分钟 · 所有job_type共用</text>
+      <path d="M280,73 L336,73" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#lease-arr)" fill="none"/>
+      <rect x="340" y="38" width="290" height="70" rx="10" fill="#1d2230" stroke="#2a3040" stroke-width="1.4"/>
+      <text x="485" y="66" fill="#e8eaf2" font-size="11.5" text-anchor="middle">claim_attempt_for_execution()</text>
+      <text x="485" y="84" fill="#e8eaf2" font-size="11.5" text-anchor="middle">heartbeat_attempt()</text>
+      <path d="M630,73 L686,73" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#lease-arr)" fill="none"/>
+      <rect x="690" y="38" width="280" height="70" rx="10" fill="#1d2230" stroke="#f87171" stroke-width="1.4"/>
+      <text x="830" y="66" fill="#f5c2c2" font-size="12" text-anchor="middle">lease_expires_at</text>
+      <text x="830" y="84" fill="#8b93a7" font-size="10.5" text-anchor="middle">= now + 全局值（固定不变）</text>
+
+      <line x1="0" y1="140" x2="1000" y2="140" stroke="#2a3040" stroke-width="1" stroke-dasharray="4 5"/>
+
+      <!-- 修复后 -->
+      <text x="20" y="164" fill="#4ade80" font-size="13.5">修复后 · 取声明值与全局值的较大者</text>
+      <rect x="20" y="180" width="260" height="55" rx="10" fill="#1d2230" stroke="#2a3040" stroke-width="1.4"/>
+      <text x="150" y="204" fill="#c6cbd9" font-size="11.5" text-anchor="middle">settings.job_stale</text>
+      <text x="150" y="220" fill="#8b93a7" font-size="9.5" text-anchor="middle">_running_seconds（全局 floor）</text>
+      <rect x="20" y="248" width="260" height="55" rx="10" fill="#0e2b26" stroke="#2dd4bf" stroke-width="1.6"/>
+      <text x="150" y="272" fill="#9adfd4" font-size="11.5" text-anchor="middle">attempt.timeout_seconds</text>
+      <text x="150" y="288" fill="#9adfd4" font-size="9.5" text-anchor="middle">audio_stem_separation = 2400s</text>
+
+      <path d="M280,207 C330,207 330,255 372,258" stroke="#8b93a7" stroke-width="1.5" fill="none"/>
+      <path d="M280,275 C330,275 330,258 372,258" stroke="#8b93a7" stroke-width="1.5" fill="none"/>
+      <circle cx="382" cy="258" r="15" fill="#1d2230" stroke="#4ade80" stroke-width="1.6"/>
+      <text x="382" y="263" fill="#4ade80" font-size="12" text-anchor="middle">max</text>
+      <path d="M397,258 L440,222" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#lease-arr)" fill="none"/>
+
+      <rect x="444" y="180" width="290" height="70" rx="10" fill="#1d2230" stroke="#2a3040" stroke-width="1.4"/>
+      <text x="589" y="208" fill="#e8eaf2" font-size="11.5" text-anchor="middle">claim_attempt_for_execution()</text>
+      <text x="589" y="226" fill="#e8eaf2" font-size="11.5" text-anchor="middle">heartbeat_attempt()</text>
+      <path d="M734,215 L790,215" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#lease-arr)" fill="none"/>
+      <rect x="794" y="180" width="186" height="70" rx="10" fill="#0e2b26" stroke="#2dd4bf" stroke-width="1.6"/>
+      <text x="887" y="208" fill="#9adfd4" font-size="12" text-anchor="middle">lease_expires_at</text>
+      <text x="887" y="226" fill="#9adfd4" font-size="9.5" text-anchor="middle">= now + max(...)</text>
+      <text x="887" y="240" fill="#5c6377" font-size="9" text-anchor="middle">按 job_type 变化</text>
+
+      <text x="500" y="330" fill="#5c6377" font-size="10.5" text-anchor="middle">其他未声明 / 声明值更小的 job_type：max() 结果仍落回全局 floor，行为不变</text>
+    </svg>
+  </div>
+
+  <h3><span class="dot" style="background:var(--c)"></span>改动位置</h3>
+  <div class="tbl"><table>
+    <tr><th>文件</th><th>方法</th><th>改动</th></tr>
+    <tr><td><code>app/repositories/job_repo.py</code></td><td><code>claim_attempt_for_execution()</code></td><td>设置 <code>lease_expires_at</code> 前取 <code>max(lease_seconds, attempt.timeout_seconds)</code></td></tr>
+    <tr><td><code>app/repositories/job_repo.py</code></td><td><code>heartbeat_attempt()</code></td><td>同上</td></tr>
+  </table></div>
+  <p>两处已经在同一次查询里把 <code>JobAttempt</code>（含 <code>timeout_seconds</code>）连同 <code>Job</code> 一并锁定读出，不需要新增查询、不改调用方签名、不新增配置项。</p>
+
+  <div class="note">这条主线和主线 A 没有代码依赖，可以同时开工；唯一的软依赖是"用多大的 <code>timeout_seconds</code> 测试"要等主线 A 把估算值定下来。</div>
+  <div class="note bad">残留风险：这只是让"声明超时"和"生效 lease"对齐，不是恢复了分段级周期续约。worker 进程若在推理中途真崩溃，stale 检测延迟会变成 2400 秒量级。OSS 写入和 callback 投递仍要靠仓库既有的幂等键机制兜底。</div>
+</div></section>
+
+<!-- ========== 阶段2 ========== -->
+<section id="stage2"><div class="wrap">
+  <div class="sec-tag">Stage 2</div>
+  <span class="stage-badge s2">阶段 2 · 联调验证</span>
+  <h2>拿真实数据跑一次完整闭环</h2>
+
+  <div class="steps">
+    <div class="step"><div><h4>数据准备（转码）</h4><p>你自己准备的素材大概率是 mp3 或非 44.1kHz，job_type 拒绝这类输入且不转码，必须先手动转码。</p></div></div>
+    <div class="step"><div><h4>上传到 OSS</h4><p>用现有对象存储上传路径把转码好的 wav 传上去，拿到 <code>oss_bucket/oss_region/oss_key/sha256</code>。</p></div></div>
+    <div class="step"><div><h4>提交 Job</h4><p><code>POST /jobs</code>，<code>job_type=audio_stem_separation</code>，见"主线A"里的请求示例。</p></div></div>
+    <div class="step"><div><h4>等待执行</h4><p>本地 CPU 推理，按估算的 <code>timeout_seconds</code> 量级等待（可能是几分钟到几十分钟），可轮询 job 状态或等 callback。</p></div></div>
+    <div class="step"><div><h4>下载并试听</h4><p>从 <code>public_result.stems.*.public_url</code> 下载四条 wav，确认可播放、无接缝噪声、和原曲对得上。</p></div></div>
+  </div>
+
+  <div class="codehead">terminal · 数据准备</div>
+<pre><code>ffmpeg -i input.mp3 -ar 44100 -ac 2 input.wav</code></pre>
+
+  <div class="codehead">terminal · 提交 job（示例）</div>
+<pre><code>curl -sS -X POST http://127.0.0.1:8100/jobs \
+  -H <span class="st">"Content-Type: application/json"</span> \
+  -H <span class="st">"X-AI-Service-Caller-ID: local-poc"</span> \
+  -d @job_request.json</code></pre>
+
+  <div class="codehead">terminal · 运行环境</div>
+<pre><code><span class="cm"># 本地模式：宿主机跑 api/worker，compose 只提供 PostgreSQL/Redis</span>
+./scripts/dev.sh bootstrap   <span class="cm"># 首次执行，生成 .env、装依赖、建库</span>
+uv sync --extra audio-separation
+./scripts/dev.sh start
+./scripts/verify.sh workflow-smoke
+<span class="cm"># ... 提交真实 audio_stem_separation job 手动验证 ...</span>
+./scripts/dev.sh stop</code></pre>
+
+  <div class="note teal">做完这一步应该得到：一次完整的、有真实音频输入、有真实 4 个 stem 产物输出的端到端执行记录，可以作为后续 Non-goals 之外任何优化（GPU、public 化）的基线证据。</div>
+</div></section>
+
+<!-- ========== POC脚本 ========== -->
+<section id="poc"><div class="wrap">
+  <div class="sec-tag">POC Reference</div>
+  <h2>写 executor 之前，先用独立脚本验证模型本身能用</h2>
+  <p>把分段推理逻辑先写成一个脱离 Job Kernel 的独立脚本，跑通之后再原样搬进 <code>executor.py</code>——这样调试模型问题（采样率、分段参数、拼接杂音）时不需要每次都走一遍 <code>POST /jobs</code> 全链路。</p>
+
+  <div class="codehead">poc_separate.py · 独立分段推理脚本骨架</div>
+<pre><code><span class="kw">import</span> numpy <span class="kw">as</span> np
+<span class="kw">import</span> soundfile <span class="kw">as</span> sf
+<span class="kw">import</span> onnxruntime <span class="kw">as</span> ort
+
+SR = 44100
+SEGMENT_SECONDS = 7.8
+OVERLAP_RATIO = 0.25
+MODEL_DIR = <span class="st">".data/models/htdemucs-ft"</span>
+MODEL_FILES = {
+    <span class="st">"drums"</span>: <span class="st">"htdemucs_ft_drums.onnx"</span>,
+    <span class="st">"bass"</span>: <span class="st">"htdemucs_ft_bass.onnx"</span>,
+    <span class="st">"other"</span>: <span class="st">"htdemucs_ft_other.onnx"</span>,
+    <span class="st">"vocals"</span>: <span class="st">"htdemucs_ft_vocals.onnx"</span>,
+}
+STEMS = [<span class="st">"drums"</span>, <span class="st">"bass"</span>, <span class="st">"other"</span>, <span class="st">"vocals"</span>]
+
+<span class="kw">def</span> <span class="fn">load_wav</span>(path):
+    wav, sr = sf.read(path, dtype=<span class="st">"float32"</span>, always_2d=<span class="kw">True</span>)
+    <span class="kw">assert</span> sr == SR, <span class="st">f"需要 44100Hz，实际 {sr}——先用 ffmpeg 转码"</span>
+    wav = wav.T
+    <span class="kw">assert</span> wav.shape[0] == 2, <span class="st">"需要立体声"</span>
+    <span class="kw">return</span> wav
+
+<span class="kw">def</span> <span class="fn">get_or_load_onnx_sessions</span>():
+    providers = ort.get_available_providers()          <span class="cm"># 自动探测，本机通常只有 CPU</span>
+    <span class="kw">return</span> {
+        name: ort.InferenceSession(<span class="fn">f"{MODEL_DIR}/{filename}"</span>, providers=providers)
+        <span class="kw">for</span> name, filename <span class="kw">in</span> MODEL_FILES.items()
+    }
+
+<span class="kw">def</span> <span class="fn">run_expert_bag</span>(sessions, chunk):
+    expert_outputs = {}
+    mix = chunk[<span class="kw">None</span>]                          <span class="cm"># (1, 2, 343980)</span>
+    <span class="kw">for</span> expert_name, session <span class="kw">in</span> sessions.items():
+        in_name = session.get_inputs()[0].name
+        y = session.run(<span class="kw">None</span>, {in_name: mix})[0]   <span class="cm"># (1, 4, 2, 343980)</span>
+        expert_outputs[expert_name] = y[0]
+    <span class="kw">return</span> <span class="fn">aggregate_like_bag_infer</span>(expert_outputs)
+
+<span class="kw">def</span> <span class="fn">aggregate_like_bag_infer</span>(expert_outputs):
+    <span class="cm"># 这里必须移植官方 bag_infer.py 的聚合逻辑；不要用单个专家输出替代。</span>
+    <span class="kw">raise</span> NotImplementedError(<span class="st">"按 StemSplitio/htdemucs-ft-onnx 的 bag_infer.py 实现"</span>)
+
+<span class="kw">def</span> <span class="fn">segment_and_infer_bag</span>(sessions, wav):
+    seg_len = <span class="kw">int</span>(SEGMENT_SECONDS * SR)
+    stride = <span class="kw">int</span>(seg_len * (1 - OVERLAP_RATIO))
+    T = wav.shape[-1]
+    out = np.zeros((4, 2, T), dtype=np.float32)
+    weight = np.zeros(T, dtype=np.float32)
+    window = np.concatenate([
+        np.linspace(0, 1, seg_len // 2, endpoint=<span class="kw">False</span>),
+        np.linspace(1, 0, seg_len - seg_len // 2),
+    ]).astype(np.float32)
+
+    <span class="kw">for</span> start <span class="kw">in</span> <span class="kw">range</span>(0, T, stride):
+        end = <span class="kw">min</span>(start + seg_len, T)
+        chunk = wav[:, start:end]
+        <span class="kw">if</span> chunk.shape[-1] < seg_len:
+            chunk = np.pad(chunk, ((0, 0), (0, seg_len - chunk.shape[-1])))
+        y = <span class="fn">run_expert_bag</span>(sessions, chunk)      <span class="cm"># 每段跑 4 个专家，再按官方 bag 聚合</span>
+        n = end - start
+        out[..., start:end] += y[..., :n] * window[:n]
+        weight[start:end] += window[:n]
+        <span class="kw">if</span> end >= T:
+            <span class="kw">break</span>
+    <span class="kw">return</span> out / np.maximum(weight, 1e-8)
+
+<span class="kw">if</span> __name__ == <span class="st">"__main__"</span>:
+    wav = load_wav(<span class="st">"input.wav"</span>)
+    sessions = get_or_load_onnx_sessions()
+    stems = segment_and_infer_bag(sessions, wav)
+    <span class="kw">for</span> name, s <span class="kw">in</span> <span class="kw">zip</span>(STEMS, stems):
+        sf.write(<span class="fn">f"out_{name}.wav"</span>, s.T, SR)
+        <span class="kw">print</span>(<span class="st">"saved"</span>, name)</code></pre>
+
+  <div class="note">这份骨架刻意把 <code>aggregate_like_bag_infer()</code> 留成显式待实现点：正式 POC/executor 必须移植官方 <code>bag_infer.py</code> 的聚合逻辑，不能把任意一个专家 session 的输出当作最终结果。阶段 0 的 <code>model_asset.yaml</code> 需要记录 4 个专家模型的实测 I/O 签名和 sha256。</div>
+  <p>这个脚本本身就是"数据构建到输出"最小闭环的验证工具：跑通它 == 证明模型、依赖、分段算法都没问题，再决定要不要把这份逻辑原样搬进 <code>executor.py</code>。</p>
+</div></section>
+
+<!-- ========== 环境清单 ========== -->
+<section id="checklist"><div class="wrap">
+  <div class="sec-tag">Checklist</div>
+  <h2>按阶段准备环境（本地 macOS）</h2>
+
+  <h3><span class="dot" style="background:var(--a)"></span>阶段 0（探测 + 下载）</h3>
+  <ul class="checklist">
+    <li>Homebrew 已安装 <code>libsndfile</code>：<code>brew install libsndfile</code></li>
+    <li><code>uv sync --extra audio-separation</code> 装好 <code>onnxruntime</code>/<code>soundfile</code>/<code>huggingface_hub</code></li>
+    <li>本地磁盘有足够空间存放 GB 级模型权重（<code>.data/models/htdemucs-ft/</code>）</li>
+    <li>网络能访问 Hugging Face（或提前准备好镜像/离线下载方式）</li>
+  </ul>
+
+  <h3><span class="dot" style="background:var(--b)"></span>阶段 1（job_type 实现 + lease 修复）</h3>
+  <ul class="checklist">
+    <li>已完成阶段 0，<code>model_asset.yaml</code> 里的 <code>io_signature</code> 是实测值</li>
+    <li>本地 PostgreSQL / Redis 已通过 <code>./scripts/dev.sh bootstrap</code> 起好</li>
+    <li>新增 <code>Alembic</code> 迁移（如果 schema 涉及新表字段，本次预计不需要新表，仅新 job_type 注册）</li>
+  </ul>
+
+  <h3><span class="dot" style="background:var(--c)"></span>阶段 2（联调验证）</h3>
+  <ul class="checklist">
+    <li><code>ffmpeg</code> 已安装（<code>brew install ffmpeg</code>），用于测试音频转码</li>
+    <li>一段可以公开测试、无版权顾虑的音频素材（htdemucs 官方 MUSDB18 测试集或自己的原创素材）</li>
+    <li><code>HTDEMUCS_MODEL_DIR</code> 环境变量（或使用默认 <code>.data/models/htdemucs-ft</code>）指向阶段 0 下载好的目录</li>
+    <li><code>./scripts/dev.sh start</code> 已启动 api + worker</li>
+  </ul>
+
+  <div class="note teal">本文档只覆盖本地 macOS CPU 闭环。GPU 开发服务器迁移、镜像拆分、<code>visibility</code> 从 <code>demo</code> 升级到 <code>public</code>，都在 <code>docs/plans/htdemucs-audio-separation-integration.md</code> 的 Non-goals / Remaining Gaps 里，不在本文档展开。</div>
+</div></section>
+
+<footer><div class="wrap">
+  对应计划文档：<code>docs/plans/htdemucs-audio-separation-integration.md</code> · 模型背景资料：<code>docs/notes/htdemucs-ft-onnx-指南.html</code> · 新增 job_type 标准流程：<code>docs/api/extension-guide.md</code><br>
+  本文档是实施参考，不是当前事实文档；job_type 尚未实现，具体字段/耗时以实际编码和实测结果为准。
+</div></footer>
+
+</body>
+</html>
