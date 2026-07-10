@@ -144,6 +144,7 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/models.sh" list --help >/dev/null
   "$ROOT_DIR/scripts/models.sh" status --help >/dev/null
   "$ROOT_DIR/scripts/models.sh" verify --help >/dev/null
+  "$ROOT_DIR/scripts/models.sh" inspect --help >/dev/null
   "$ROOT_DIR/scripts/models.sh" download --help >/dev/null
   "$ROOT_DIR/scripts/media.sh" audio --help >/dev/null
   "$ROOT_DIR/scripts/media.sh" audio probe --help >/dev/null
@@ -212,6 +213,8 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/jobs/db.py" \
     "$ROOT_DIR/scripts/jobs/formatters.py" \
     "$ROOT_DIR/scripts/jobs/queries.py" \
+    "$ROOT_DIR/scripts/models/__init__.py" \
+    "$ROOT_DIR/scripts/models/inspect_onnx.py" \
     "$ROOT_DIR/scripts/real_flow/__init__.py" \
     "$ROOT_DIR/scripts/real_flow/cli.py" \
     "$ROOT_DIR/scripts/real_flow/flows/__init__.py" \
@@ -226,6 +229,7 @@ run_python_syntax() {
   event "OK" "verify/*.py" "py_compile"
   event "OK" "load/*.py" "py_compile"
   event "OK" "jobs/*.py" "py_compile"
+  event "OK" "models/*.py" "py_compile"
   event "OK" "real_flow/*.py" "py_compile"
   event "OK" "media/*.py" "py_compile"
   event "OK" "tools/*.py" "py_compile"

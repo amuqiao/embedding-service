@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # models.sh - 本地模型资产入口
 #
-# 运行环境：Bash；下载和远端校验需要 uv 或 hf CLI。
+# 运行环境：Bash；下载和远端校验需要 uv 或 hf CLI；ONNX 探测需要 Python 和 onnxruntime。
 # 作用域：管理当前仓库本地模型资产的下载路径、必需文件检查和可重复下载命令。
 # 约束：不实现自定义下载器，不登录，不自动切换镜像源，不删除模型文件。
 # 输出：默认人读；支持 --json 的只读命令 stdout 只输出 JSON。
@@ -24,11 +24,13 @@ usage() {
 运行环境：
   Requires: Bash
   Dependencies: 下载和远端校验需要 hf CLI；没有 hf 时会尝试通过 uv run hf 执行。
+                inspect 需要 Python 和 onnxruntime。
 
 命令：
   list                列出脚本已知的本地模型资产。
   status <model>      检查模型目录下的文件是否存在且非空；默认只检查必需文件。
   verify <model>      执行本地文件校验；--remote-check 时额外调用 hf cache verify。
+  inspect <model>     探测本地 ONNX 专家模型 I/O 签名和 sha256；不执行推理。
   download <model>    通过官方 hf download 下载模型到约定目录。
   help                显示帮助。
 
@@ -44,15 +46,17 @@ usage() {
 配置与环境变量：
   HF_ENDPOINT         可选，显式指定 Hugging Face endpoint，例如 https://hf-mirror.com。
   HF_CLI              可选，显式指定 hf 可执行文件路径。
+  PYTHON_BIN          可选，显式指定 Python 可执行文件路径。
   UV_CACHE_DIR        可选，uv run hf 使用的缓存目录；默认 .uv-cache。
 
 输出：
-  stdout: 人读状态、文件清单或第三方 hf 输出；--json 只用于 list/status/verify 的本地检查输出。
+  stdout: 人读状态、文件清单、ONNX 探测结果或第三方 hf 输出；--json 只用于 list/status/verify/inspect 的本地检查输出。
   stderr: 非法命令、非法参数、缺少依赖、缺失必需文件或不支持的下载源。
 
 副作用与保护边界：
   list/status 不写文件、不访问网络。
   verify 默认不访问网络；传 --remote-check 时会访问 Hugging Face 元数据并校验本地目录。
+  inspect 不写文件、不访问网络、不执行模型推理；会加载 ONNX session 读取签名。
   download 会写入 .data/models/... 或 --model-dir 指定目录；不会把模型文件加入 git。
   不支持自动 fallback 到 ModelScope 或其他镜像源；source 不支持时直接失败。
   如需镜像源，必须显式设置 HF_ENDPOINT，脚本只透传该环境变量。
@@ -61,6 +65,8 @@ usage() {
   ./scripts/models.sh list
   ./scripts/models.sh status htdemucs-ft
   ./scripts/models.sh verify htdemucs-ft
+  ./scripts/models.sh inspect htdemucs-ft
+  ./scripts/models.sh inspect htdemucs-ft --json
   ./scripts/models.sh verify htdemucs-ft --all-files
   HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh verify htdemucs-ft --remote-check
   HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh verify htdemucs-ft --remote-check --all-files
@@ -71,7 +77,7 @@ usage() {
 Exit Codes:
   0  成功
   2  缺少 command、非法命令、非法参数、未知模型、不支持的 source 或缺少依赖
-  4  模型必需文件缺失、为空或远端校验失败
+  4  模型必需文件缺失、为空、ONNX 探测失败或远端校验失败
 EOF
 }
 
@@ -154,6 +160,39 @@ Exit Codes:
   0  校验通过
   2  非法参数、未知模型或缺少 hf
   4  本地文件缺失、为空或远端校验失败
+EOF
+}
+
+inspect_usage() {
+  cat <<EOF
+用法：
+  ./scripts/models.sh inspect <model> [--model-dir DIR] [--providers PROVIDERS] [--json]
+  ./scripts/models.sh inspect -h|--help
+
+说明：
+  探测本地 ONNX 专家模型 I/O 签名和 sha256；不执行推理、不写文件、不访问网络。
+  当前 htdemucs-ft 会检查 4 个 fp32 专家 ONNX：
+  htdemucs_ft_drums.onnx、htdemucs_ft_bass.onnx、htdemucs_ft_other.onnx、htdemucs_ft_vocals.onnx。
+
+选项：
+  --model-dir DIR     覆盖模型本地目录；相对路径按仓库根目录解析。
+  --providers LIST    可选，传给 onnxruntime.InferenceSession 的 provider 列表，逗号分隔。
+  --json              输出机器可读 JSON，可重定向为阶段 0 探测证据。
+  -h, --help          显示帮助。
+
+输出：
+  stdout: 默认人读摘要；--json 输出纯 JSON。
+  stderr: 非法参数、缺少 Python/onnxruntime、模型文件缺失或 ONNX 加载失败。
+
+常用示例：
+  ./scripts/models.sh inspect htdemucs-ft
+  ./scripts/models.sh inspect htdemucs-ft --json > .run/htdemucs-ft-onnx-inspect.json
+  ./scripts/models.sh inspect htdemucs-ft --model-dir .data/models/htdemucs-ft
+
+Exit Codes:
+  0  探测成功
+  2  非法参数、未知模型、缺少 Python 或缺少 onnxruntime
+  4  模型文件缺失、为空或 ONNX session 加载失败
 EOF
 }
 
@@ -276,6 +315,30 @@ resolve_model_dir() {
   else
     resolve_repo_path "$(model_default_dir "$model")"
   fi
+}
+
+resolve_python_bin() {
+  if [[ -n "${PYTHON_BIN:-}" ]]; then
+    require_command "$PYTHON_BIN" "install Python 3 or set PYTHON_BIN"
+    printf "%s" "$PYTHON_BIN"
+  elif [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+    printf "%s" "$ROOT_DIR/.venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    command -v python3
+  elif command -v python >/dev/null 2>&1; then
+    command -v python
+  else
+    die "python is not available; run: ./scripts/dev.sh bootstrap" 2
+  fi
+}
+
+run_python_module() {
+  local module="$1"
+  shift
+  local python_bin
+  python_bin="$(resolve_python_bin)"
+  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" PYTHONUNBUFFERED=1 \
+    "$python_bin" -m "$module" "$@"
 }
 
 run_hf() {
@@ -592,6 +655,62 @@ run_verify() {
   fi
 }
 
+run_inspect() {
+  local model="${1:-}"
+  local dir_override=""
+  local dir
+  local json_output=false
+  local providers=""
+  local args
+
+  if [[ "$model" == "-h" || "$model" == "--help" || -z "$model" ]]; then
+    if [[ -n "$model" ]]; then
+      inspect_usage
+      return 0
+    fi
+    inspect_usage >&2
+    return 2
+  fi
+  shift
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --model-dir)
+        [[ $# -ge 2 ]] || die "--model-dir requires a value" 2
+        dir_override="$2"
+        shift 2
+        ;;
+      --model-dir=*)
+        dir_override="${1#--model-dir=}"
+        shift
+        ;;
+      --providers)
+        [[ $# -ge 2 ]] || die "--providers requires a value" 2
+        providers="$2"
+        shift 2
+        ;;
+      --providers=*)
+        providers="${1#--providers=}"
+        shift
+        ;;
+      --json)
+        json_output=true
+        shift
+        ;;
+      *)
+        inspect_usage >&2
+        return 2
+        ;;
+    esac
+  done
+
+  dir="$(resolve_model_dir "$model" "$dir_override")"
+  args=(--model "$model" --source "$(model_source "$model")" --repo "$(model_repo "$model")" --model-dir "$dir")
+  [[ "$json_output" == "false" ]] || args+=(--json)
+  [[ -z "$providers" ]] || args+=(--providers "$providers")
+  run_python_module scripts.models.inspect_onnx "${args[@]}"
+}
+
 run_download() {
   local model="${1:-}"
   local source="huggingface"
@@ -731,6 +850,10 @@ case "$command" in
   verify)
     shift
     run_verify "$@"
+    ;;
+  inspect)
+    shift
+    run_inspect "$@"
     ;;
   download)
     shift

@@ -1719,6 +1719,7 @@ def test_models_cli_help_is_available_without_env_file():
 
     assert "本地模型资产入口" in result.stdout
     assert "htdemucs-ft" in result.stdout
+    assert "inspect" in result.stdout
     assert "不支持自动 fallback" in result.stdout
 
 

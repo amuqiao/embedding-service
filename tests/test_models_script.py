@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -35,10 +36,64 @@ def _write_required_files(model_dir: Path) -> None:
         (model_dir / name).write_text(f"{name}\n", encoding="utf-8")
 
 
+def _write_onnx_files(model_dir: Path) -> None:
+    model_dir.mkdir(parents=True, exist_ok=True)
+    for name in REQUIRED_FILES[:4]:
+        (model_dir / name).write_text(f"{name}\n", encoding="utf-8")
+
+
 def _write_all_files(model_dir: Path) -> None:
     _write_required_files(model_dir)
     for name in OPTIONAL_FILES:
         (model_dir / name).write_text(f"{name}\n", encoding="utf-8")
+
+
+def _write_fake_onnxruntime(module_dir: Path) -> Path:
+    module = module_dir / "onnxruntime.py"
+    module.write_text(
+        "import os\n"
+        "__version__ = '1.99.0'\n"
+        "\n"
+        "class Meta:\n"
+        "    producer_name = 'fake-producer'\n"
+        "    graph_name = 'fake-graph'\n"
+        "    domain = ''\n"
+        "    description = ''\n"
+        "    version = 1\n"
+        "    custom_metadata_map = {'export': 'fake'}\n"
+        "\n"
+        "class Node:\n"
+        "    def __init__(self, name, type_, shape):\n"
+        "        self.name = name\n"
+        "        self.type = type_\n"
+        "        self.shape = shape\n"
+        "\n"
+        "class InferenceSession:\n"
+        "    def __init__(self, path, providers=None):\n"
+        "        capture = os.environ.get('FAKE_ORT_CAPTURE')\n"
+        "        if capture:\n"
+        "            with open(capture, 'a', encoding='utf-8') as handle:\n"
+        "                handle.write(path + '|' + ','.join(providers or []) + '\\n')\n"
+        "    def get_inputs(self):\n"
+        "        return [Node('mix', 'tensor(float)', [1, 2, 343980])]\n"
+        "    def get_outputs(self):\n"
+        "        return [Node('stems', 'tensor(float)', [1, 4, 2, 343980])]\n"
+        "    def get_modelmeta(self):\n"
+        "        return Meta()\n"
+        "    def get_providers(self):\n"
+        "        return ['CPUExecutionProvider']\n"
+        "\n"
+        "def get_available_providers():\n"
+        "    return ['CPUExecutionProvider']\n",
+        encoding="utf-8",
+    )
+    return module
+
+
+def _write_broken_onnxruntime(module_dir: Path) -> Path:
+    module = module_dir / "onnxruntime.py"
+    module.write_text("raise ImportError('broken ort import')\n", encoding="utf-8")
+    return module
 
 
 def test_models_list_json_has_htdemucs_asset():
@@ -69,6 +124,7 @@ def test_models_top_level_help_documents_scope_and_hf_endpoint():
     assert "HF_ENDPOINT" in result.stdout
     assert "required" in result.stdout
     assert "all-files" in result.stdout
+    assert "inspect" in result.stdout
     assert "HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh download htdemucs-ft" in result.stdout
     assert "HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh verify htdemucs-ft --remote-check --all-files" in result.stdout
 
@@ -143,7 +199,7 @@ def test_models_verify_fails_when_required_files_are_missing(tmp_path):
 
 
 def test_models_subcommands_print_usage_to_stderr_when_model_is_missing():
-    for command in ("status", "verify", "download"):
+    for command in ("status", "verify", "inspect", "download"):
         result = subprocess.run(
             ["./scripts/models.sh", command],
             cwd=ROOT_DIR,
@@ -156,6 +212,157 @@ def test_models_subcommands_print_usage_to_stderr_when_model_is_missing():
         assert result.returncode == 2
         assert result.stdout == ""
         assert "用法：" in result.stderr
+
+
+def test_models_inspect_help_documents_no_inference():
+    result = subprocess.run(
+        ["./scripts/models.sh", "inspect", "--help"],
+        cwd=ROOT_DIR,
+        env=_env(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "ONNX" in result.stdout
+    assert "sha256" in result.stdout
+    assert "不执行推理" in result.stdout
+    assert "--providers" in result.stdout
+
+
+def test_models_inspect_json_reports_onnx_signatures_and_sha256(tmp_path):
+    model_dir = tmp_path / "model"
+    _write_required_files(model_dir)
+    _write_fake_onnxruntime(tmp_path)
+    captured = tmp_path / "ort.sessions"
+    env = _env(
+        PYTHON_BIN=sys.executable,
+        PYTHONPATH=str(tmp_path),
+        FAKE_ORT_CAPTURE=str(captured),
+    )
+
+    result = subprocess.run(
+        [
+            "./scripts/models.sh",
+            "inspect",
+            "htdemucs-ft",
+            "--model-dir",
+            str(model_dir),
+            "--providers",
+            "CPUExecutionProvider",
+            "--json",
+        ],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stderr == ""
+    assert '"model":"htdemucs-ft"' in result.stdout
+    assert '"source":"huggingface"' in result.stdout
+    assert '"scope":"required"' in result.stdout
+    assert '"complete":true' in result.stdout
+    assert '"onnxruntime_version":"1.99.0"' in result.stdout
+    assert '"available_providers":["CPUExecutionProvider"]' in result.stdout
+    assert '"stem":"drums"' in result.stdout
+    assert '"size_bytes":' in result.stdout
+    assert '"producer_name":"fake-producer"' in result.stdout
+    assert '"session_providers":["CPUExecutionProvider"]' in result.stdout
+    assert '"name":"mix"' in result.stdout
+    assert '"type":"tensor(float)"' in result.stdout
+    assert '"dtype":"float"' in result.stdout
+    assert '"shape":[1,2,343980]' in result.stdout
+    assert '"name":"stems"' in result.stdout
+    assert '"shape":[1,4,2,343980]' in result.stdout
+    assert '"auxiliary_files":' in result.stdout
+    assert '"file":"bag_infer.py"' in result.stdout
+    assert '"present":true' in result.stdout
+
+    sessions = captured.read_text(encoding="utf-8").splitlines()
+    assert len(sessions) == 4
+    assert sessions[0].endswith("htdemucs_ft_drums.onnx|CPUExecutionProvider")
+
+
+def test_models_inspect_human_reports_expert_files(tmp_path):
+    model_dir = tmp_path / "model"
+    _write_required_files(model_dir)
+    _write_fake_onnxruntime(tmp_path)
+
+    result = subprocess.run(
+        ["./scripts/models.sh", "inspect", "htdemucs-ft", "--model-dir", str(model_dir)],
+        cwd=ROOT_DIR,
+        env=_env(PYTHON_BIN=sys.executable, PYTHONPATH=str(tmp_path)),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "ONNX Inspect" in result.stdout
+    assert "htdemucs_ft_vocals.onnx" in result.stdout
+    assert "sha256" in result.stdout
+    assert "session-providers CPUExecutionProvider" in result.stdout
+    assert "mix tensor(float) [1, 2, 343980]" in result.stdout
+    assert "stems tensor(float) [1, 4, 2, 343980]" in result.stdout
+    assert result.stderr == ""
+
+
+def test_models_inspect_fails_when_onnx_file_is_missing(tmp_path):
+    model_dir = tmp_path / "model"
+    _write_required_files(model_dir)
+    (model_dir / "htdemucs_ft_vocals.onnx").unlink()
+    _write_fake_onnxruntime(tmp_path)
+
+    result = subprocess.run(
+        ["./scripts/models.sh", "inspect", "htdemucs-ft", "--model-dir", str(model_dir)],
+        cwd=ROOT_DIR,
+        env=_env(PYTHON_BIN=sys.executable, PYTHONPATH=str(tmp_path)),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 4
+    assert "required ONNX file missing or empty" in result.stderr
+
+
+def test_models_inspect_succeeds_when_auxiliary_files_are_missing(tmp_path):
+    model_dir = tmp_path / "model"
+    _write_onnx_files(model_dir)
+    _write_fake_onnxruntime(tmp_path)
+
+    result = subprocess.run(
+        ["./scripts/models.sh", "inspect", "htdemucs-ft", "--model-dir", str(model_dir), "--json"],
+        cwd=ROOT_DIR,
+        env=_env(PYTHON_BIN=sys.executable, PYTHONPATH=str(tmp_path)),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert '"file":"bag_infer.py"' in result.stdout
+    assert '"present":false' in result.stdout
+    assert result.stderr == ""
+
+
+def test_models_inspect_reports_onnxruntime_import_failure_without_traceback(tmp_path):
+    model_dir = tmp_path / "model"
+    _write_onnx_files(model_dir)
+    _write_broken_onnxruntime(tmp_path)
+
+    result = subprocess.run(
+        ["./scripts/models.sh", "inspect", "htdemucs-ft", "--model-dir", str(model_dir)],
+        cwd=ROOT_DIR,
+        env=_env(PYTHON_BIN=sys.executable, PYTHONPATH=str(tmp_path)),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "onnxruntime import failed: ImportError: broken ort import" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_models_verify_passes_with_required_files(tmp_path):

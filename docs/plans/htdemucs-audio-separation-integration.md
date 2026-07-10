@@ -13,16 +13,16 @@
 - `settings.job_stale_running_seconds` 完全从 LLM 语义的 `MODEL_CALL_TIMEOUT_SECONDS` 派生（`app/core/config.py`：`worker_soft_time_limit = model_call_timeout_seconds + 300`，`worker_hard_time_limit = soft + 60`，`job_stale_running_seconds = hard + 600`），全服务所有 job_type 共享同一个值。
 - `JobRepo.claim_attempt_for_execution()` 和 `JobRepo.heartbeat_attempt()`（`app/repositories/job_repo.py:739-833`）在各自的 SQL 查询里都已经把 `JobAttempt` 整行（含 `timeout_seconds`）连同 `Job` 一起加锁读出，只是读出后没有使用该字段——这意味着两处的修复不需要改变调用方签名或新增查询。
 - 这个"声明了 per-job_type timeout_seconds、但运行时 lease 窗口不读它"的缺口，已经是 `docs/plans/job-kernel-reliability-review.md` 风险分级表中标注的 P1 条目（原文：「长模型调用期间没有周期性 lease 续约，`update_progress` 不延长 `lease_expires_at`」），且其"分面审查 § 3"进一步指出 `run_job_attempt` 只在执行前 heartbeat 一次，long-running `_execute()` 期间没有周期续约。
-- `scripts/models.sh` 已提供本地模型资产入口，当前已知 `htdemucs-ft` 会下载到 `.data/models/htdemucs-ft` 并检查 4 个专家 ONNX 文件、`bag_infer.py` 和 `requirements.txt`。
-- `pyproject.toml` 当前没有 `[project.optional-dependencies]` extra；`onnxruntime`、`soundfile` 均不在依赖列表中。
+- `scripts/models.sh` 已提供本地模型资产入口，当前已知 `htdemucs-ft` 会下载到 `.data/models/htdemucs-ft` 并检查 4 个专家 ONNX 文件、`bag_infer.py` 和 `requirements.txt`；`inspect htdemucs-ft` 可探测 4 个 ONNX 专家文件的 I/O 签名和 sha256。`pyproject.toml` 已提供 `audio-separation` 可选依赖组，包含本地探测所需的 `onnxruntime`。
+- `pyproject.toml` 已有 `[project.optional-dependencies] audio-separation`，当前包含 `onnxruntime`，用于阶段 0 ONNX I/O 探测；`soundfile` 尚未接入。
 
 ## Remaining Gaps
 
-- ONNX 模型形态已明确不是单个 `htdemucs_ft.onnx`：Hugging Face `StemSplitio/htdemucs-ft-onnx` 落地为 4 个专家文件 `htdemucs_ft_drums.onnx`、`htdemucs_ft_bass.onnx`、`htdemucs_ft_other.onnx`、`htdemucs_ft_vocals.onnx`，并提供 `bag_infer.py` 作为官方聚合推理参考。已知每个专家模型输入 `mix` 形状为 `(1, 2, 343980)`，输出 `stems` 形状为 `(1, 4, 2, 343980)`；仍需在本地探测并记录每个文件的 I/O 签名、sha256、导出版本和官方 bag 逻辑对应关系。
+- ONNX 模型形态已明确不是单个 `htdemucs_ft.onnx`：Hugging Face `StemSplitio/htdemucs-ft-onnx` 落地为 4 个专家文件 `htdemucs_ft_drums.onnx`、`htdemucs_ft_bass.onnx`、`htdemucs_ft_other.onnx`、`htdemucs_ft_vocals.onnx`，并提供 `bag_infer.py` 作为官方聚合推理参考。已知每个专家模型输入 `mix` 形状为 `(1, 2, 343980)`，输出 `stems` 形状为 `(1, 4, 2, 343980)`；仍需用 `./scripts/models.sh inspect htdemucs-ft --providers CPUExecutionProvider --json` 在本地生成探测证据，并记录每个文件的 I/O 签名、sha256、导出版本和官方 bag 逻辑对应关系。
 - 模型权重尚未落地：需要从 Hugging Face `StemSplitio/htdemucs-ft-onnx` 下载到本地目录，实施侧下载入口按 `./scripts/models.sh download htdemucs-ft` 使用。
 - lease 窗口与 per-job_type `timeout_seconds` 脱钩：这是本次接入发现的、独立于 htdemucs 本身的 job kernel 缺陷，任何声明了较长 `timeout_seconds` 的 job_type 都会受影响，不只是这一个 job_type。
 - `visibility="demo"` 语义借用：`docs/api/extension-guide.md` 定义 `demo` 是"模板示例、smoke 或压测入口，不是正式业务合同"，而 htdemucs 分离是用户想要的真实产品能力。阶段性借用 `demo` 只是为了复用它"仅 `APP_ENV=local/dev` 允许外部提交"的准入限制，不代表这是模板示例功能。
-- 运行时依赖（`onnxruntime`、`soundfile`）和系统库（`libsndfile1`）尚未接入 `pyproject.toml` / Dockerfile。
+- 运行时依赖仍未完整接入：`onnxruntime` 已在 `audio-separation` extra 中用于本地 ONNX 探测；`soundfile` 和系统库（`libsndfile1`）尚未接入 `pyproject.toml` / Dockerfile。
 - GPU 执行、镜像拆分（api/worker 分离）、生产部署、分段级周期续约心跳机制均不在本阶段范围（见 Non-goals）。
 
 ## Planned Work
@@ -31,7 +31,7 @@
 
 ### 阶段 0：探测先行（阻塞 schema 定稿，必须最先做）
 
-1. **ONNX I/O 签名探测**：已知模型是 4 文件专家袋，不再探测"是否单文件/是否多文件"。本阶段要用 `onnxruntime.InferenceSession(...).get_inputs()/get_outputs()` 分别实测 `htdemucs_ft_drums.onnx`、`htdemucs_ft_bass.onnx`、`htdemucs_ft_other.onnx`、`htdemucs_ft_vocals.onnx`，确认并记录每个专家的输入 `mix`、输出 `stems`、dtype、固定窗口长度 `343980`，同时计算 sha256；再对照官方 `bag_infer.py` 记录 executor 需要复刻的 bag 聚合逻辑。这一步必须排在 params/result schema、`model_asset.yaml` 和 timeout 预算定稿之前。
+1. **ONNX I/O 签名探测**：已知模型是 4 文件专家袋，不再探测"是否单文件/是否多文件"。本阶段用 `./scripts/models.sh inspect htdemucs-ft --providers CPUExecutionProvider --json > .run/htdemucs-ft-onnx-inspect.json` 分别实测 `htdemucs_ft_drums.onnx`、`htdemucs_ft_bass.onnx`、`htdemucs_ft_other.onnx`、`htdemucs_ft_vocals.onnx`，确认并记录每个专家的输入 `mix`、输出 `stems`、dtype、固定窗口长度 `343980`，同时计算 sha256；再对照官方 `bag_infer.py` 记录 executor 需要复刻的 bag 聚合逻辑。这一步必须排在 params/result schema、`model_asset.yaml` 和 timeout 预算定稿之前。
 2. 与探测并行、无依赖：把 htdemucs-ft ONNX 权重从 Hugging Face `StemSplitio/htdemucs-ft-onnx` 下载到本地目录；实施侧下载入口按 `./scripts/models.sh download htdemucs-ft` 使用，本计划不修改脚本。
 
 ### 阶段 1：两条互不依赖的主线（阶段 0 完成后并行推进）
@@ -75,7 +75,7 @@
 
 ### 运行时依赖与模型文件落地（可与阶段 1 并行，无强依赖）
 
-- 在 `pyproject.toml` 新增一个 `[project.optional-dependencies]` extra（例如 `audio-separation`），只包含 `onnxruntime`（CPU 版）和 `soundfile`，不进 base 依赖——api/worker 现在共用同一个环境，但只有 worker 会跑推理；`onnxruntime` 和 `onnxruntime-gpu` 是互斥的两个 PyPI 包，extra 组为未来 GPU 阶段换包留出干净接口。
+- `pyproject.toml` 已新增 `[project.optional-dependencies] audio-separation`，当前包含 `onnxruntime`，不进 base 依赖。后续真正读写音频和实现 executor 时再把 `soundfile` 纳入该 extra；`onnxruntime` 和 `onnxruntime-gpu` 是互斥的两个 PyPI 包，extra 组为未来 GPU 阶段换包留出干净接口。
 - Dockerfile 本阶段不改（不装 `libsndfile1`）：本地验证走 `local` 模式，宿主机裸跑 worker 不经过 Dockerfile，用户自行用 Homebrew 装系统依赖；等 `compose-full` 或 GPU 阶段需要时再补。
 - 新增一个目录级配置变量（例如 `HTDEMUCS_MODEL_DIR`），默认落在 `.data/models/htdemucs-ft` 下（`.data/` 是仓库既有的"本地验证输入，不提交"约定目录）。配置只表达"模型文件在哪个目录"这一稳定意图，不暴露具体文件名/版本号；executor 内部按 `model_asset.yaml` 记录的 4 个专家文件规则在该目录下查找并校验 sha256，缺失时 fail-fast 报 `AUDIO_STEM_MODEL_ASSET_MISSING`，不做静默降级。未来迁移到 GPU 服务器时只需改这一个路径值。
 - execution provider 用 `onnxruntime.get_available_providers()` 在启动/首次调用时自动探测，构造优先级列表（CUDA 优先、CPU 兜底），并用于初始化 4 个专家 ONNX session；不新增配置开关——当前机器只有 `CPUExecutionProvider` 一种可行值，配置开关形同虚设。

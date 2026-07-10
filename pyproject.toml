@@ -23,6 +23,12 @@ dependencies = [
     "typer==0.25.1",
 ]
 
+[project.optional-dependencies]
+audio-separation = [
+    "onnxruntime==1.27.0",
+    "soundfile==0.14.0",
+]
+
 [dependency-groups]
 dev = [
     "httpx2==2.5.0",

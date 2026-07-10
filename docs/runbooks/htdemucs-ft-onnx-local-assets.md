@@ -37,7 +37,13 @@ channels       2
 
 ## 前置工具
 
-模型下载需要 `hf` CLI；本仓库脚本找不到 `hf` 时会尝试通过 `uv run hf` 执行。音频探测和转换需要 `ffprobe` / `ffmpeg`。
+模型下载需要 `hf` CLI；本仓库脚本找不到 `hf` 时会尝试通过 `uv run hf` 执行。ONNX 签名探测需要可选依赖 `audio-separation` 中的 `onnxruntime`。音频探测和转换需要 `ffprobe` / `ffmpeg`。
+
+如果当前虚拟环境还没安装音频分离相关可选依赖：
+
+```bash
+uv sync --extra audio-separation
+```
 
 macOS 上如果缺少 `ffmpeg`：
 
@@ -88,6 +94,19 @@ HF_ENDPOINT=https://hf-mirror.com \
 
 ```bash
 ./scripts/models.sh verify htdemucs-ft
+```
+
+探测 4 个 ONNX 专家模型的 I/O 签名和 sha256：
+
+```bash
+./scripts/models.sh inspect htdemucs-ft --providers CPUExecutionProvider
+```
+
+机器可读探测结果可以保存为阶段 0 证据，后续人工确认后再写入 `model_asset.yaml`：
+
+```bash
+mkdir -p .run
+./scripts/models.sh inspect htdemucs-ft --providers CPUExecutionProvider --json > .run/htdemucs-ft-onnx-inspect.json
 ```
 
 需要连远端元数据一起校验时：
@@ -243,8 +262,10 @@ MODEL=htdemucs-ft
 INPUT=.data/misc/2485_0003_S6_梁萧.wav
 OUTPUT=.data/audio/2485_0003_S6_梁萧.wav
 
+mkdir -p .run
 HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh download "$MODEL"
 ./scripts/models.sh verify "$MODEL"
+./scripts/models.sh inspect "$MODEL" --providers CPUExecutionProvider --json > .run/htdemucs-ft-onnx-inspect.json
 
 ./scripts/media.sh audio probe "$INPUT"
 ./scripts/media.sh audio verify htdemucs-input "$INPUT" || {
