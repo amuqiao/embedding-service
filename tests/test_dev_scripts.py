@@ -1722,6 +1722,21 @@ def test_models_cli_help_is_available_without_env_file():
     assert "不支持自动 fallback" in result.stdout
 
 
+def test_media_cli_help_is_available_without_env_file():
+    result = subprocess.run(
+        ["./scripts/media.sh", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "本地音视频素材准备入口" in result.stdout
+    assert "audio" in result.stdout
+    assert "video" in result.stdout
+    assert "FFMPEG_BIN" in result.stdout
+
+
 def test_shell_entrypoints_require_command_without_help():
     for script in (
         "./scripts/dev.sh",
@@ -1730,6 +1745,7 @@ def test_shell_entrypoints_require_command_without_help():
         "./scripts/k8s.sh",
         "./scripts/real-flow.sh",
         "./scripts/models.sh",
+        "./scripts/media.sh",
         "./scripts/tools.sh",
     ):
         result = subprocess.run(

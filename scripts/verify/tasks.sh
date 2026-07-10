@@ -52,6 +52,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/jobs.sh" \
     "$ROOT_DIR/scripts/real-flow.sh" \
     "$ROOT_DIR/scripts/models.sh" \
+    "$ROOT_DIR/scripts/media.sh" \
     "$ROOT_DIR/scripts/tools.sh" \
     "$ROOT_DIR/scripts/verify/tasks.sh" \
     "$ROOT_DIR/scripts/verify/release_flow_smoke.sh" \
@@ -119,6 +120,8 @@ run_cli_smoke() {
   event "OK" "load.sh" "help"
   "$ROOT_DIR/scripts/models.sh" --help >/dev/null
   event "OK" "models.sh" "help"
+  "$ROOT_DIR/scripts/media.sh" --help >/dev/null
+  event "OK" "media.sh" "help"
   "$ROOT_DIR/scripts/tools.sh" --help >/dev/null
   event "OK" "tools.sh" "help"
   "$ROOT_DIR/deploy/release-test.sh" --help >/dev/null
@@ -142,6 +145,11 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/models.sh" status --help >/dev/null
   "$ROOT_DIR/scripts/models.sh" verify --help >/dev/null
   "$ROOT_DIR/scripts/models.sh" download --help >/dev/null
+  "$ROOT_DIR/scripts/media.sh" audio --help >/dev/null
+  "$ROOT_DIR/scripts/media.sh" audio probe --help >/dev/null
+  "$ROOT_DIR/scripts/media.sh" audio verify --help >/dev/null
+  "$ROOT_DIR/scripts/media.sh" audio prepare --help >/dev/null
+  "$ROOT_DIR/scripts/media.sh" video --help >/dev/null
   "$ROOT_DIR/scripts/tools.sh" secret --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" guide --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" dashboard --help >/dev/null
@@ -210,12 +218,16 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/real_flow/flows/llm_job_billing.py" \
     "$ROOT_DIR/scripts/real_flow/flows/oss_image_upload.py" \
     "$ROOT_DIR/scripts/real_flow/flows/poster_title_image.py" \
+    "$ROOT_DIR/scripts/media/__init__.py" \
+    "$ROOT_DIR/scripts/media/audio.py" \
+    "$ROOT_DIR/scripts/media/video.py" \
     "$ROOT_DIR/scripts/tools/env_url.py"
   event "OK" "dev/check_ports.py" "py_compile"
   event "OK" "verify/*.py" "py_compile"
   event "OK" "load/*.py" "py_compile"
   event "OK" "jobs/*.py" "py_compile"
   event "OK" "real_flow/*.py" "py_compile"
+  event "OK" "media/*.py" "py_compile"
   event "OK" "tools/*.py" "py_compile"
 }
 

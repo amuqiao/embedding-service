@@ -27,15 +27,22 @@ usage() {
 
 命令：
   list                列出脚本已知的本地模型资产。
-  status <model>      检查模型目录下的必需文件是否存在且非空；不访问网络。
-  verify <model>      执行本地必需文件校验；--remote-check 时额外调用 hf cache verify。
+  status <model>      检查模型目录下的文件是否存在且非空；默认只检查必需文件。
+  verify <model>      执行本地文件校验；--remote-check 时额外调用 hf cache verify。
   download <model>    通过官方 hf download 下载模型到约定目录。
   help                显示帮助。
 
 已知模型：
   htdemucs-ft         StemSplitio/htdemucs-ft-onnx -> .data/models/htdemucs-ft
 
+下载与校验范围：
+  required            默认范围，只包含当前 htdemucs 推理必需的 6 个文件：
+                      4 个 fp32 专家 .onnx、bag_infer.py、requirements.txt。
+  all-files           完整 Hugging Face 仓库范围；包含 README、.gitattributes 和 4 个 fp16 权重。
+                      只有传 --all-files 时才下载或要求校验这些非必需文件。
+
 配置与环境变量：
+  HF_ENDPOINT         可选，显式指定 Hugging Face endpoint，例如 https://hf-mirror.com。
   HF_CLI              可选，显式指定 hf 可执行文件路径。
   UV_CACHE_DIR        可选，uv run hf 使用的缓存目录；默认 .uv-cache。
 
@@ -48,14 +55,18 @@ usage() {
   verify 默认不访问网络；传 --remote-check 时会访问 Hugging Face 元数据并校验本地目录。
   download 会写入 .data/models/... 或 --model-dir 指定目录；不会把模型文件加入 git。
   不支持自动 fallback 到 ModelScope 或其他镜像源；source 不支持时直接失败。
+  如需镜像源，必须显式设置 HF_ENDPOINT，脚本只透传该环境变量。
 
 常用示例：
   ./scripts/models.sh list
   ./scripts/models.sh status htdemucs-ft
-  ./scripts/models.sh download htdemucs-ft
-  ./scripts/models.sh download htdemucs-ft --dry-run
-  ./scripts/models.sh download htdemucs-ft --revision <commit-sha>
   ./scripts/models.sh verify htdemucs-ft
+  ./scripts/models.sh verify htdemucs-ft --all-files
+  HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh verify htdemucs-ft --remote-check
+  HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh verify htdemucs-ft --remote-check --all-files
+  HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh download htdemucs-ft --dry-run
+  HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh download htdemucs-ft
+  HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh download htdemucs-ft --all-files
 
 Exit Codes:
   0  成功
@@ -88,45 +99,56 @@ EOF
 status_usage() {
   cat <<EOF
 用法：
-  ./scripts/models.sh status <model> [--model-dir DIR] [--json]
+  ./scripts/models.sh status <model> [--model-dir DIR] [--all-files] [--json]
   ./scripts/models.sh status -h|--help
 
 说明：
-  检查模型目录下的必需文件是否存在且非空；不访问网络。
+  检查模型目录下的文件是否存在且非空；不访问网络。
+  默认 scope=required，只检查当前 htdemucs 推理必需的 6 个文件。
+  传 --all-files 时，scope=all-files，检查 Hugging Face 仓库当前已知的 12 个文件。
 
 选项：
   --model-dir DIR     覆盖模型本地目录；相对路径按仓库根目录解析。
+  --all-files         检查完整仓库文件；默认只检查必需文件。
   --json              输出机器可读 JSON。
   -h, --help          显示帮助。
 
 常用示例：
   ./scripts/models.sh status htdemucs-ft
   ./scripts/models.sh status htdemucs-ft --model-dir .data/models/htdemucs-ft
+  ./scripts/models.sh status htdemucs-ft --all-files
+  ./scripts/models.sh status htdemucs-ft --json
 EOF
 }
 
 verify_usage() {
   cat <<EOF
 用法：
-  ./scripts/models.sh verify <model> [--model-dir DIR] [--revision REV] [--remote-check]
-  ./scripts/models.sh verify <model> [--model-dir DIR] [--json]
+  ./scripts/models.sh verify <model> [--model-dir DIR] [--revision REV] [--remote-check] [--all-files]
+  ./scripts/models.sh verify <model> [--model-dir DIR] [--all-files] [--json]
   ./scripts/models.sh verify -h|--help
 
 说明：
-  默认只执行本地必需文件校验，缺失或空文件会返回 4。
-  传 --remote-check 时，额外调用 hf cache verify 校验本地目录和 Hugging Face revision。
+  默认 scope=required，只执行本地必需文件校验，缺失或空文件会返回 4。
+  传 --remote-check 时，额外调用 hf cache verify 校验本地已有文件和 Hugging Face revision。
+  传 --all-files 时，scope=all-files，并要求完整仓库文件都存在。
 
 选项：
   --model-dir DIR     覆盖模型本地目录；相对路径按仓库根目录解析。
   --revision REV      Hugging Face revision，建议正式复现时固定 commit hash。
   --remote-check      调用 hf cache verify；可能访问网络。
+  --all-files         校验完整仓库文件；默认只校验必需文件。
   --token TOKEN       传给 hf；当前 htdemucs-ft 不需要 token，保留给私有仓库。
   --json              只输出本地检查 JSON；不能和 --remote-check 同用。
   -h, --help          显示帮助。
 
 常用示例：
   ./scripts/models.sh verify htdemucs-ft
-  ./scripts/models.sh verify htdemucs-ft --remote-check --revision <commit-sha>
+  ./scripts/models.sh verify htdemucs-ft --all-files
+  ./scripts/models.sh verify htdemucs-ft --remote-check
+  HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh verify htdemucs-ft --remote-check
+  ./scripts/models.sh verify htdemucs-ft --remote-check --all-files --revision <commit-sha>
+  HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh verify htdemucs-ft --remote-check --all-files
 
 Exit Codes:
   0  校验通过
@@ -142,13 +164,15 @@ download_usage() {
   ./scripts/models.sh download -h|--help
 
 说明：
-  通过官方 hf download 下载模型到约定目录。下载逻辑完全交给 hf CLI，不在本脚本中重写断点续传或差异下载。
+  通过官方 hf download 下载模型到约定目录。默认只下载当前模型运行必需文件。
+  下载逻辑完全交给 hf CLI，不在本脚本中重写断点续传或差异下载。
 
 选项：
   --model-dir DIR     覆盖模型本地目录；相对路径按仓库根目录解析。
   --source SOURCE     下载源；当前只支持 huggingface。
   --revision REV      Hugging Face revision，建议正式复现时固定 commit hash。
   --dry-run           只让 hf 计算将下载的文件，不写模型文件。
+  --all-files         下载仓库全部文件；默认不下载 fp16 权重、README 等非必需文件。
   --token TOKEN       传给 hf；当前 htdemucs-ft 不需要 token，保留给私有仓库。
   --max-workers N     传给 hf download 的并发数。
   -h, --help          显示帮助。
@@ -161,6 +185,10 @@ download_usage() {
   ./scripts/models.sh download htdemucs-ft
   ./scripts/models.sh download htdemucs-ft --dry-run
   ./scripts/models.sh download htdemucs-ft --revision <commit-sha>
+  HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh download htdemucs-ft --dry-run
+  HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh download htdemucs-ft
+  HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh download htdemucs-ft --all-files
+  HF_ENDPOINT=https://hf-mirror.com ./scripts/models.sh download htdemucs-ft --max-workers 1
 
 Exit Codes:
   0  下载命令成功，且非 dry-run 时本地必需文件存在且非空
@@ -206,6 +234,32 @@ EOF
   esac
 }
 
+model_optional_files() {
+  case "$1" in
+    htdemucs-ft)
+      cat <<EOF
+.gitattributes
+README.md
+htdemucs_ft_bass_fp16weights.onnx
+htdemucs_ft_drums_fp16weights.onnx
+htdemucs_ft_other_fp16weights.onnx
+htdemucs_ft_vocals_fp16weights.onnx
+EOF
+      ;;
+    *) die "unknown model: $1" 2 ;;
+  esac
+}
+
+model_files_for_scope() {
+  local model="$1"
+  local scope="$2"
+
+  model_required_files "$model"
+  if [[ "$scope" == "all-files" ]]; then
+    model_optional_files "$model"
+  fi
+}
+
 json_escape() {
   local value="$1"
   value="${value//\\/\\\\}"
@@ -237,9 +291,10 @@ run_hf() {
   fi
 }
 
-missing_required_files() {
+missing_files_for_scope() {
   local model="$1"
   local dir="$2"
+  local scope="$3"
   local file
   local path
 
@@ -248,12 +303,13 @@ missing_required_files() {
     if [[ ! -s "$path" ]]; then
       printf "%s\n" "$file"
     fi
-  done < <(model_required_files "$model")
+  done < <(model_files_for_scope "$model" "$scope")
 }
 
-required_files_complete() {
+files_complete_for_scope() {
   local model="$1"
   local dir="$2"
+  local scope="$3"
   local file
   local path
 
@@ -262,13 +318,14 @@ required_files_complete() {
     if [[ ! -s "$path" ]]; then
       return 1
     fi
-  done < <(model_required_files "$model")
+  done < <(model_files_for_scope "$model" "$scope")
   return 0
 }
 
 print_status_human() {
   local model="$1"
   local dir="$2"
+  local scope="$3"
   local repo
   local source
   local file
@@ -281,8 +338,13 @@ print_status_human() {
   row "model" "$model" ""
   row "source" "$source" "$repo"
   row "local-dir" "$dir" ""
+  row "scope" "$scope" "$([[ "$scope" == "all-files" ]] && printf 'complete Hugging Face repo' || printf 'runtime required files')"
 
-  section "Required Files"
+  if [[ "$scope" == "all-files" ]]; then
+    section "All Files"
+  else
+    section "Required Files"
+  fi
   while IFS= read -r file; do
     path="$dir/$file"
     if [[ -s "$path" ]]; then
@@ -291,12 +353,13 @@ print_status_human() {
       status="MISSING"
     fi
     event "$status" "$file" "$path"
-  done < <(model_required_files "$model")
+  done < <(model_files_for_scope "$model" "$scope")
 }
 
 print_status_json() {
   local model="$1"
   local dir="$2"
+  local scope="$3"
   local repo
   local source
   local file
@@ -306,13 +369,14 @@ print_status_json() {
   repo="$(model_repo "$model")"
   source="$(model_source "$model")"
 
-  required_files_complete "$model" "$dir" || complete=false
+  files_complete_for_scope "$model" "$dir" "$scope" || complete=false
 
-  printf '{"model":"%s","source":"%s","repo":"%s","local_dir":"%s","complete":%s,"files":[' \
+  printf '{"model":"%s","source":"%s","repo":"%s","local_dir":"%s","scope":"%s","complete":%s,"files":[' \
     "$(json_escape "$model")" \
     "$(json_escape "$source")" \
     "$(json_escape "$repo")" \
     "$(json_escape "$dir")" \
+    "$(json_escape "$scope")" \
     "$complete"
 
   while IFS= read -r file; do
@@ -326,7 +390,7 @@ print_status_json() {
       "$(json_escape "$file")" \
       "$([[ -e "$path" ]] && printf true || printf false)" \
       "$([[ -s "$path" ]] && printf true || printf false)"
-  done < <(model_required_files "$model")
+  done < <(model_files_for_scope "$model" "$scope")
   printf ']}\n'
 }
 
@@ -359,8 +423,9 @@ run_list() {
 }
 
 parse_model_dir_args() {
-  # Sets PARSED_MODEL_DIR_OVERRIDE and PARSED_JSON_OUTPUT for status-like commands.
+  # Sets PARSED_MODEL_DIR_OVERRIDE, PARSED_ALL_FILES and PARSED_JSON_OUTPUT for status-like commands.
   PARSED_MODEL_DIR_OVERRIDE=""
+  PARSED_ALL_FILES=false
   PARSED_JSON_OUTPUT=false
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -377,6 +442,10 @@ parse_model_dir_args() {
         PARSED_JSON_OUTPUT=true
         shift
         ;;
+      --all-files)
+        PARSED_ALL_FILES=true
+        shift
+        ;;
       *)
         die "unknown argument: $1" 2
         ;;
@@ -387,6 +456,7 @@ parse_model_dir_args() {
 run_status() {
   local model="${1:-}"
   local dir
+  local scope
 
   if [[ "$model" == "-h" || "$model" == "--help" || -z "$model" ]]; then
     if [[ -n "$model" ]]; then
@@ -400,10 +470,15 @@ run_status() {
 
   parse_model_dir_args "$@"
   dir="$(resolve_model_dir "$model" "$PARSED_MODEL_DIR_OVERRIDE")"
-  if [[ "$PARSED_JSON_OUTPUT" == "true" ]]; then
-    print_status_json "$model" "$dir"
+  if [[ "$PARSED_ALL_FILES" == "true" ]]; then
+    scope="all-files"
   else
-    print_status_human "$model" "$dir"
+    scope="required"
+  fi
+  if [[ "$PARSED_JSON_OUTPUT" == "true" ]]; then
+    print_status_json "$model" "$dir" "$scope"
+  else
+    print_status_human "$model" "$dir" "$scope"
   fi
 }
 
@@ -412,10 +487,12 @@ run_verify() {
   local dir
   local revision=""
   local remote_check=false
+  local all_files=false
   local token=""
   local json_output=false
   local missing
   local hf_args
+  local scope
 
   if [[ "$model" == "-h" || "$model" == "--help" || -z "$model" ]]; then
     if [[ -n "$model" ]]; then
@@ -452,6 +529,10 @@ run_verify() {
         remote_check=true
         shift
         ;;
+      --all-files)
+        all_files=true
+        shift
+        ;;
       --token)
         [[ $# -ge 2 ]] || die "--token requires a value" 2
         token="$2"
@@ -475,25 +556,36 @@ run_verify() {
   [[ "$remote_check" == "false" || "$json_output" == "false" ]] || die "--json cannot be combined with --remote-check because hf output is not controlled by this script" 2
 
   dir="$(resolve_model_dir "$model" "$PARSED_MODEL_DIR_OVERRIDE")"
-  if [[ "$json_output" == "true" ]]; then
-    print_status_json "$model" "$dir"
+  if [[ "$all_files" == "true" ]]; then
+    scope="all-files"
   else
-    print_status_human "$model" "$dir"
+    scope="required"
+  fi
+  if [[ "$json_output" == "true" ]]; then
+    print_status_json "$model" "$dir" "$scope"
+  else
+    print_status_human "$model" "$dir" "$scope"
   fi
 
-  missing="$(missing_required_files "$model" "$dir")"
+  missing="$(missing_files_for_scope "$model" "$dir" "$scope")"
   if [[ -z "$missing" ]]; then
     :
   else
     if [[ "$json_output" != "true" ]]; then
-      printf "ERROR: required model files are missing or empty:\n%s\n" "$missing" >&2
+      printf "ERROR: model files for scope '%s' are missing or empty:\n%s\n" "$scope" "$missing" >&2
     fi
     return 4
   fi
 
   if [[ "$remote_check" == "true" ]]; then
     section "Remote Check"
-    hf_args=(cache verify "$(model_repo "$model")" --local-dir "$dir" --fail-on-missing-files)
+    if [[ "$all_files" == "false" ]]; then
+      event "NOTE" "scope" "required; hf may warn about optional remote files missing locally"
+    fi
+    hf_args=(cache verify "$(model_repo "$model")" --local-dir "$dir")
+    if [[ "$all_files" == "true" ]]; then
+      hf_args+=(--fail-on-missing-files)
+    fi
     [[ -z "$revision" ]] || hf_args+=(--revision "$revision")
     [[ -z "$token" ]] || hf_args+=(--token "$token")
     run_hf "${hf_args[@]}" || return 4
@@ -507,9 +599,11 @@ run_download() {
   local dir
   local revision=""
   local dry_run=false
+  local all_files=false
   local token=""
   local max_workers=""
   local hf_args
+  local file
 
   if [[ "$model" == "-h" || "$model" == "--help" || -z "$model" ]]; then
     if [[ -n "$model" ]]; then
@@ -554,6 +648,10 @@ run_download() {
         dry_run=true
         shift
         ;;
+      --all-files)
+        all_files=true
+        shift
+        ;;
       --token)
         [[ $# -ge 2 ]] || die "--token requires a value" 2
         token="$2"
@@ -592,6 +690,11 @@ run_download() {
   [[ "$dry_run" == "false" ]] || event "DRY-RUN" "$model" "hf will not write model files"
 
   hf_args=(download "$(model_repo "$model")" --local-dir "$dir")
+  if [[ "$all_files" == "false" ]]; then
+    while IFS= read -r file; do
+      hf_args+=(--include "$file")
+    done < <(model_required_files "$model")
+  fi
   [[ -z "$revision" ]] || hf_args+=(--revision "$revision")
   [[ "$dry_run" == "false" ]] || hf_args+=(--dry-run)
   [[ -z "$token" ]] || hf_args+=(--token "$token")
@@ -600,7 +703,11 @@ run_download() {
   run_hf "${hf_args[@]}" || return 4
 
   if [[ "$dry_run" == "false" ]]; then
-    run_verify "$model" --model-dir "$dir"
+    if [[ "$all_files" == "true" ]]; then
+      run_verify "$model" --model-dir "$dir" --all-files
+    else
+      run_verify "$model" --model-dir "$dir"
+    fi
   fi
 }
 

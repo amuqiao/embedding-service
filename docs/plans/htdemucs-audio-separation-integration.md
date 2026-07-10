@@ -64,13 +64,14 @@
 
 ### 数据准备前置条件（阻塞阶段 2 的手动验证，用户自行完成）
 
-用户自行准备的测试音频大概率是 mp3 格式或非 44.1kHz 采样率，而本 job_type 拒绝这类输入且不做转码。数据准备阶段需要用户自行执行类似：
+用户自行准备的测试音频大概率是 mp3 格式或非 44.1kHz 采样率，而本 job_type 拒绝这类输入且不做转码。数据准备阶段应先用本地媒体素材入口转换并校验：
 
 ```
-ffmpeg -i input.mp3 -ar 44100 -ac 2 input.wav
+./scripts/media.sh audio prepare htdemucs-input input.mp3 --output .data/audio/input.wav
+./scripts/media.sh audio verify htdemucs-input .data/audio/input.wav
 ```
 
-将输入转换为 44.1kHz 立体声 WAV 后再上传，否则请求会在 params 校验阶段被 `AUDIO_STEM_INPUT_INVALID` 拒绝。
+`prepare htdemucs-input` 底层会调用 `ffmpeg` 生成 44.1kHz 双声道 WAV，并调用 `ffprobe` 校验产物；`verify htdemucs-input` 底层也会调用 `ffprobe` 检查容器、采样率和声道。将输入转换为 44.1kHz 立体声 WAV 后再上传，否则请求会在 params 校验阶段被 `AUDIO_STEM_INPUT_INVALID` 拒绝。
 
 ### 运行时依赖与模型文件落地（可与阶段 1 并行，无强依赖）
 

@@ -60,12 +60,13 @@
 ./scripts/deploy.sh check
 ./scripts/load.sh --help
 ./scripts/models.sh --help
+./scripts/media.sh --help
 ./scripts/jobs.sh --help
 ./scripts/job-ops.sh --help
 ./scripts/k8s.sh --help
 ```
 
-`scripts/` 维护 10 类稳定入口，职责互不重叠：`dev.sh` 本地服务生命周期、`verify.sh` 一次性验证、`deploy.sh` compose 部署形态、`k8s.sh` 已部署 Pod 内手动运维、`load.sh` 项目级压测入口、`jobs.sh` Job 只读查询与排障、`job-ops.sh` Job 写操作运维入口、`real-flow.sh` 手动真实模型/对象存储流程验证、`models.sh` 本地模型资产下载与必需文件检查、`tools.sh` 无默认持久副作用的本地开发辅助工具。完整命令以各脚本 `-h` 输出和 `scripts/README.md` 为准。
+`scripts/` 维护 11 类稳定入口，职责互不重叠：`dev.sh` 本地服务生命周期、`verify.sh` 一次性验证、`deploy.sh` compose 部署形态、`k8s.sh` 已部署 Pod 内手动运维、`load.sh` 项目级压测入口、`jobs.sh` Job 只读查询与排障、`job-ops.sh` Job 写操作运维入口、`real-flow.sh` 手动真实模型/对象存储流程验证、`models.sh` 本地模型资产下载与必需文件检查、`media.sh` 本地音视频素材探测、校验和准备、`tools.sh` 无默认持久副作用的本地开发辅助工具。完整命令以各脚本 `-h` 输出和 `scripts/README.md` 为准。
 
 `start`、`stop`、`restart`、`status` 支持指定服务：
 

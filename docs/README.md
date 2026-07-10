@@ -22,6 +22,7 @@
 | [`runbooks/compose-full-dev-operations.md`](runbooks/compose-full-dev-operations.md) | `compose-full` 开发形态的启动、状态、容器内排障脚本和日志操作；不覆盖 `local` 或 K8s |
 | [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` 只读证据查询、root/family scope、Job/workflow 排障命令含义；不承担压测主流程 |
 | [`runbooks/poster-title-image 真实流程本地验证.md`](runbooks/poster-title-image%20真实流程本地验证.md) | 用 `scripts/real-flow.sh` 创建真实 `poster_title_image` Job、确认模型/OSS/billing/输出图链路；会产生真实费用 |
+| [`runbooks/htdemucs-ft-onnx-local-assets.md`](runbooks/htdemucs-ft-onnx-local-assets.md) | 用 `scripts/models.sh` 和 `scripts/media.sh` 准备 htdemucs-ft ONNX 本地模型资产和 44.1kHz 双声道 WAV 测试音频；不提交 Job |
 | [`runbooks/标题生成链路.md`](runbooks/标题生成链路.md) | `poster_title_image` 从接单、style probe、生图、OSS 写入、join 到结果快照的链路定位和排障顺序；不写真实流程执行步骤 |
 | [`runbooks/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/MAX_ACTIVE_JOBS%20估算与生产调优.md) | `MAX_ACTIVE_JOBS` 估算、K8s 生产调优顺序和 PostgreSQL/Redis 瓶颈判断；不是压测执行手册 |
 | [`runbooks/lifespan.md`](runbooks/lifespan.md) | API、worker、recovery 生命周期与运行期资源放置边界 |
@@ -52,6 +53,7 @@
 | 执行 Job 压测 | [`runbooks/job-load-testing-runbook.md`](runbooks/job-load-testing-runbook.md) | `load.sh` 机器合同、生产容量调优公式 |
 | 估算生产容量 | [`runbooks/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/MAX_ACTIVE_JOBS%20估算与生产调优.md) | 一次压测怎么跑、Job 明细查询命令教程 |
 | 验证 `poster_title_image` 真实流程 | [`runbooks/poster-title-image 真实流程本地验证.md`](runbooks/poster-title-image%20真实流程本地验证.md) | 标题图内部链路排障、完整 API 字段合同 |
+| 准备 htdemucs-ft ONNX 本地模型与测试音频 | [`runbooks/htdemucs-ft-onnx-local-assets.md`](runbooks/htdemucs-ft-onnx-local-assets.md) | `audio_stem_separation` 实现计划、模型推理代码、Job 提交流程 |
 | 排查标题图生成链路 | [`runbooks/标题生成链路.md`](runbooks/标题生成链路.md) | real-flow 执行步骤、完整 API 字段合同 |
 | 处理运行形态问题 | [`runbooks/compose-full-dev-operations.md`](runbooks/compose-full-dev-operations.md)、[`runbooks/lifespan.md`](runbooks/lifespan.md)、[`runbooks/remote-test-env-fastapi-redis-taskiq.md`](runbooks/remote-test-env-fastapi-redis-taskiq.md)、[`runbooks/local-postgres-database-name.md`](runbooks/local-postgres-database-name.md) | 业务 Job 合同或压测报告 |
 
