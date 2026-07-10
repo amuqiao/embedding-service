@@ -4,6 +4,13 @@ from pydantic import BaseModel
 
 from app.schemas.billing import BillingEnvelope, JobBillingResponseData, ScopeBillingResponseData
 from app.schemas.jobs import (
+    AudioStemSeparationDurationMs,
+    AudioStemSeparationInputObject,
+    AudioStemSeparationOutputObject,
+    AudioStemSeparationParams,
+    AudioStemSeparationResult,
+    AudioStemSeparationRuntimeFields,
+    AudioStemSeparationStemOutputs,
     ArithmeticParams,
     ArithmeticResult,
     ArithmeticRuntimeFields,
@@ -82,6 +89,13 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
         JobRealLlmDoubleEchoParams,
         JobRealLlmDoubleEchoRuntimeFields,
         JobRealLlmDoubleEchoResult,
+        AudioStemSeparationInputObject,
+        AudioStemSeparationParams,
+        AudioStemSeparationRuntimeFields,
+        AudioStemSeparationOutputObject,
+        AudioStemSeparationStemOutputs,
+        AudioStemSeparationDurationMs,
+        AudioStemSeparationResult,
         RuntimeSystemFields,
         OssUrlRef,
         PosterTitleImageReferenceImage,

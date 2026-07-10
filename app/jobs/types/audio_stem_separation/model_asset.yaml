@@ -1,0 +1,47 @@
+model:
+  name: htdemucs-ft
+  repo: StemSplitio/htdemucs-ft-onnx
+  version: htdemucs-ft-onnx-fp32
+  source_reference: bag_infer.py
+runtime:
+  sample_rate: 44100
+  channels: 2
+  segment_samples: 343980
+  segment_seconds: 7.8
+  overlap_ratio: 0.25
+  input:
+    name: mix
+    dtype: float
+    shape: [1, 2, 343980]
+  output:
+    name: stems
+    dtype: float
+    shape: [1, 4, 2, 343980]
+stems:
+  - drums
+  - bass
+  - other
+  - vocals
+bag_aggregation:
+  source_reference: bag_infer.py
+  strategy: one_hot_target_row
+  note: >
+    htdemucs_ft bag uses a one-hot weight matrix: each specialist model
+    contributes only one target stem row from its full 4-stem output.
+experts:
+  drums:
+    file: htdemucs_ft_drums.onnx
+    target_row: 0
+    sha256: f76b68af36066e38885b369299b5032a861038f9b49da5aa6cf1c31cfa69cf27
+  bass:
+    file: htdemucs_ft_bass.onnx
+    target_row: 1
+    sha256: 2a74d9283fc2336fcc58d50f87a7080aff57aea372f65cfe3f0211ea1ff16182
+  other:
+    file: htdemucs_ft_other.onnx
+    target_row: 2
+    sha256: 90e11806c1bb558ca9d9c7e909d28a2854f7f217982e90482dbed6442513daad
+  vocals:
+    file: htdemucs_ft_vocals.onnx
+    target_row: 3
+    sha256: 8c5d5e2da1f27050240bb80236673307ee3b40d4b064066d9350f4d64bfd544d

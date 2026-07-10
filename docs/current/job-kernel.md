@@ -321,6 +321,7 @@ job_execution_attempts = 某条 Job 的一次执行尝试
 | job_type | visibility | role |
 |---|---|---|
 | `poster_title_image` | `public` | `root` |
+| `audio_stem_separation` | `demo` | `root` |
 | `arithmetic` | `demo` | `root` |
 | `example_workflow` | `demo` | `root` |
 | `example_sleep` | `demo` | `root_or_leaf` |
@@ -335,6 +336,8 @@ job_execution_attempts = 某条 Job 的一次执行尝试
 `visibility` 决定外部提交准入：`APP_ENV=local/dev` 允许外部提交 `public` 和 `demo`；`APP_ENV=test/prd` 只允许外部提交 `public`；`internal` 只供服务内部 workflow child 使用，任何环境都不能被外部直接提交。
 
 `example_*` 是模板内置示例 family，作为低副作用 Job 合同参考和默认压测目标。它们统一标记为 `visibility="demo"`，`allow_callback=False`，不调用 LLM、不访问对象存储、不发起外部 HTTP，也不写真实业务副作用。正式业务可以参考它们的 schema、executor、registry 和 workflow definition 组织方式，但不继承它们的 `job_type`、结果 schema 或压测参数。
+
+`audio_stem_separation` 当前也标记为 `visibility="demo"`，用于本地和开发环境验证 htdemucs-ft ONNX 音乐源分离闭环；它不是模板 smoke 示例。该 job_type 会读取 OSS WAV 输入、加载本地 ONNX 权重并写出四条音频 stem，因此使用前必须先配置输入来源白名单和本地模型目录。
 
 ### Workflow Lineage
 
@@ -763,6 +766,15 @@ job_audit_events         排障时间线，不参与状态推进
 | `MODEL_CALL_TIMEOUT_SECONDS` | AI 调用主 timeout；代码由它派生 worker timeout 链和 stale running 阈值 |
 | `MAX_ACTIVE_JOBS` | active Job 接单上限；超出时创建请求返回繁忙 |
 | `CALLBACK_TIMEOUT_SECONDS` | Callback 单次 HTTP 请求超时 |
+
+当前也存在少量业务 `job_type` 配置，语义只绑定对应业务能力：
+
+| 配置 | 当前含义 |
+|---|---|
+| `POSTER_TITLE_IMAGE_MAX_ITEMS` / `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` | `poster_title_image` 的批量数量和单 item 出图数量上限 |
+| `POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS` / `POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS` | `poster_title_image` 参考图输入 OSS 来源白名单 |
+| `AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS` / `AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS` | `audio_stem_separation` 输入 WAV OSS 来源白名单 |
+| `HTDEMUCS_MODEL_DIR` | `audio_stem_separation` 使用的 htdemucs-ft ONNX required 模型目录 |
 
 新增或调整 Job 配置时，应优先暴露业务可理解的主控变量；worker timeout、stale running、callback claim window 等联动值由 `Settings` 统一派生并做 fail-fast 校验。
 

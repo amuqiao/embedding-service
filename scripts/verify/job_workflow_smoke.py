@@ -117,7 +117,7 @@ def main() -> None:
     if last_job["job_status"] != "succeeded":
         raise RuntimeError(f"job {job_id} finished with {last_job['job_status']}: {last_job}")
 
-    expected = {"message": message, "repeated": [message, message], "count": 2}
+    expected = {"message": message, "repeated": [message, message], "count": 2, "payload": ""}
     result = last_job.get("job_result")
     if result != expected:
         raise RuntimeError(f"job {job_id} returned unexpected result: {result}")

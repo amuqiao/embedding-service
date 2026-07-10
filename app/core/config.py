@@ -75,6 +75,9 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": ("job", "poster_title_image_max_draw_count"),
     "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS": ("job", "poster_title_image_allowed_oss_buckets_raw"),
     "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS": ("job", "poster_title_image_allowed_oss_regions_raw"),
+    "AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS": ("job", "audio_stem_separation_allowed_oss_buckets_raw"),
+    "AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS": ("job", "audio_stem_separation_allowed_oss_regions_raw"),
+    "HTDEMUCS_MODEL_DIR": ("job", "htdemucs_model_dir_raw"),
     "CALLBACK_TIMEOUT_SECONDS": ("callback", "timeout_seconds"),
     "PROMPT_CONFIG_PATH": ("registry", "prompt_config_path_raw"),
     "LOG_LEVEL": ("observability", "log_level"),
@@ -500,6 +503,9 @@ class JobSettings(ConfigSection):
     poster_title_image_max_draw_count: int = 4
     poster_title_image_allowed_oss_buckets_raw: str = "local-dev"
     poster_title_image_allowed_oss_regions_raw: str = "local"
+    audio_stem_separation_allowed_oss_buckets_raw: str = "local-dev"
+    audio_stem_separation_allowed_oss_regions_raw: str = "local"
+    htdemucs_model_dir_raw: str = ".data/models/htdemucs-ft"
     orphan_timeout_seconds: int = 300
     dispatch_max_publish_attempts: int = 12
     recovery_interval_seconds: int = 60
@@ -533,6 +539,16 @@ class JobSettings(ConfigSection):
             self.poster_title_image_allowed_oss_regions_raw,
             env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
         )
+        _comma_separated_non_empty_values(
+            self.audio_stem_separation_allowed_oss_buckets_raw,
+            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
+        )
+        _comma_separated_non_empty_values(
+            self.audio_stem_separation_allowed_oss_regions_raw,
+            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
+        )
+        if not self.htdemucs_model_dir_raw.strip():
+            raise ValueError("HTDEMUCS_MODEL_DIR must not be empty")
         return self
 
     @property
@@ -548,6 +564,24 @@ class JobSettings(ConfigSection):
             self.poster_title_image_allowed_oss_regions_raw,
             env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
         )
+
+    @property
+    def audio_stem_separation_allowed_oss_buckets(self) -> tuple[str, ...]:
+        return _comma_separated_non_empty_values(
+            self.audio_stem_separation_allowed_oss_buckets_raw,
+            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
+        )
+
+    @property
+    def audio_stem_separation_allowed_oss_regions(self) -> tuple[str, ...]:
+        return _comma_separated_non_empty_values(
+            self.audio_stem_separation_allowed_oss_regions_raw,
+            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
+        )
+
+    @property
+    def htdemucs_model_dir(self) -> Path:
+        return _resolve_repo_path(self.htdemucs_model_dir_raw)
 
 
 class ObservabilitySettings(ConfigSection):

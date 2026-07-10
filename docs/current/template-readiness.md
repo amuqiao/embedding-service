@@ -29,10 +29,11 @@
 | 数据库与 Redis | 为新服务使用独立 database 和独立 Redis URL/实例 |
 | 模型配置 | 按业务更新 `MODEL_CONFIG_PATH` 指向的模型目录和 required env |
 | `poster_title_image` 模型配置 | 使用 `poster_title_image` 时，确认 `app/jobs/types/poster_title_image/models.yaml` 引用的公开生图模型和内部 style probe 模型都存在于模型目录且能力匹配 |
+| `audio_stem_separation` 模型资产 | 使用 `audio_stem_separation` 时，先用 `scripts/models.sh` 下载 htdemucs-ft required 权重，并按运行环境设置 `HTDEMUCS_MODEL_DIR` |
 | Prompt 配置 | 按业务更新 `PROMPT_CONFIG_PATH` 指向的基础配置，或维护 `app/jobs/types/<job_type>/prompts.yaml`；同步检查 Prompt/output schema 绑定 |
 | 价格配置 | 如果启用 billing，更新 `PRICING_CONFIG_PATH`，并保留 ledger 事实源 |
 | 对象存储 | 多副本或平台部署不能使用 `STORAGE_BACKEND=local`，应接外部对象存储 |
-| 业务输入 OSS 白名单 | 使用 `poster_title_image` 时，按 CPP 输入来源配置 `POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS` 和 `POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS` |
+| 业务输入 OSS 白名单 | 使用 `poster_title_image` 或 `audio_stem_separation` 时，分别按输入来源配置对应 `*_ALLOWED_OSS_BUCKETS` 和 `*_ALLOWED_OSS_REGIONS` |
 | Callback 签名 | 设置业务级 `CALLBACK_SIGNING_SECRET`，不要复用模板本地值 |
 | 运行环境 | 设置 `APP_ENV`；`test/prd` 使用同一套发布模式校验 |
 

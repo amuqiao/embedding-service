@@ -24,6 +24,10 @@ from app.jobs.types.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
     POSTER_TITLE_IMAGE_REFERENCE_INVALID,
 )
+from app.jobs.types.audio_stem_separation.errors import (
+    AUDIO_STEM_INPUT_INVALID,
+    AUDIO_STEM_MODEL_ASSET_MISSING,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -289,6 +293,24 @@ def test_job_type_registry_exposes_required_metadata():
         {"style_probe", "additional_prompt", "layout_rules"}
     )
 
+    assert "audio_stem_separation" in specs
+    audio_spec = specs["audio_stem_separation"]
+    assert audio_spec.params_schema == "AudioStemSeparationParams"
+    assert audio_spec.runtime_fields_schema == "AudioStemSeparationRuntimeFields"
+    assert audio_spec.canonical_result_schema == "AudioStemSeparationResult"
+    assert audio_spec.public_result_schema == "AudioStemSeparationResult"
+    assert audio_spec.visibility == "demo"
+    assert audio_spec.role == "root"
+    assert audio_spec.allow_callback is True
+    assert audio_spec.execution_mode == "custom_executor"
+    _assert_default_retry_policy(audio_spec.retry_policy)
+    assert audio_spec.side_effect_policy == "none"
+    assert audio_spec.timeout_seconds == 2400
+    assert audio_spec.error_codes <= all_error_reasons()
+    assert AUDIO_STEM_INPUT_INVALID in audio_spec.error_codes
+    assert AUDIO_STEM_MODEL_ASSET_MISSING in audio_spec.error_codes
+    assert audio_spec.prompt_specs == ()
+
 
 def test_registered_job_type_names_are_layered_contract():
     register_all_job_types()
@@ -302,6 +324,7 @@ def test_registered_job_type_names_are_layered_contract():
         "example_collect",
         "example_sleep",
         "example_workflow",
+        "audio_stem_separation",
         "poster_title_image",
         "poster_title_image_generate_item",
         "poster_title_image_join",

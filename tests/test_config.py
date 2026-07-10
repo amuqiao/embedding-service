@@ -200,6 +200,38 @@ def test_poster_title_image_oss_allowlist_rejects_empty_values(key, value):
         _build_settings(**{key: value})
 
 
+def test_audio_stem_separation_config_defaults_and_overrides():
+    default_settings = _build_settings()
+    assert default_settings.job.audio_stem_separation_allowed_oss_buckets == ("local-dev",)
+    assert default_settings.job.audio_stem_separation_allowed_oss_regions == ("local",)
+    assert default_settings.job.htdemucs_model_dir == config_module.ROOT_DIR / ".data/models/htdemucs-ft"
+
+    custom_settings = _build_settings(
+        AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS="audio-dev, audio-prod,audio-dev",
+        AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS="local,cn-shanghai",
+        HTDEMUCS_MODEL_DIR="/tmp/htdemucs-ft",
+    )
+
+    assert custom_settings.job.audio_stem_separation_allowed_oss_buckets == ("audio-dev", "audio-prod")
+    assert custom_settings.job.audio_stem_separation_allowed_oss_regions == ("local", "cn-shanghai")
+    assert str(custom_settings.job.htdemucs_model_dir) == "/tmp/htdemucs-ft"
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS", ""),
+        ("AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS", "audio-dev,,audio-prod"),
+        ("AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS", ""),
+        ("AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS", "local,"),
+        ("HTDEMUCS_MODEL_DIR", ""),
+    ],
+)
+def test_audio_stem_separation_config_rejects_empty_values(key, value):
+    with pytest.raises(ValidationError, match=key):
+        _build_settings(**{key: value})
+
+
 def test_settings_requires_callback_signing_secret():
     with pytest.raises(ValidationError, match="CALLBACK_SIGNING_SECRET"):
         _build_settings(CALLBACK_SIGNING_SECRET="")
