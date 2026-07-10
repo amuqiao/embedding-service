@@ -774,7 +774,10 @@ job_audit_events         排障时间线，不参与状态推进
 | `POSTER_TITLE_IMAGE_MAX_ITEMS` / `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` | `poster_title_image` 的批量数量和单 item 出图数量上限 |
 | `POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS` / `POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS` | `poster_title_image` 参考图输入 OSS 来源白名单 |
 | `AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS` / `AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS` | `audio_stem_separation` 输入 WAV OSS 来源白名单 |
+| `AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER` | `audio_stem_separation` 的 ONNX Runtime provider 模式：`auto` 有 CUDA 用 CUDA 否则 CPU，`cpu` 强制 CPU，`cuda` 强制 CUDA 且不可用时失败 |
 | `HTDEMUCS_MODEL_DIR` | `audio_stem_separation` 使用的 htdemucs-ft ONNX required 模型目录 |
+
+`AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER=cuda` 只表示运行期必须选择 `CUDAExecutionProvider`；部署镜像或虚拟环境仍需安装 GPU 版 ONNX Runtime，并确保 Pod/容器能看到 NVIDIA GPU。当前项目默认依赖只包含 CPU 版 `onnxruntime`，避免本地 CPU 开发和通用验证被 GPU wheel 拉取、CUDA 运行时或镜像源问题阻塞。
 
 新增或调整 Job 配置时，应优先暴露业务可理解的主控变量；worker timeout、stale running、callback claim window 等联动值由 `Settings` 统一派生并做 fail-fast 校验。
 

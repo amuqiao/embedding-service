@@ -204,16 +204,19 @@ def test_audio_stem_separation_config_defaults_and_overrides():
     default_settings = _build_settings()
     assert default_settings.job.audio_stem_separation_allowed_oss_buckets == ("local-dev",)
     assert default_settings.job.audio_stem_separation_allowed_oss_regions == ("local",)
+    assert default_settings.job.audio_stem_separation_execution_provider == "auto"
     assert default_settings.job.htdemucs_model_dir == config_module.ROOT_DIR / ".data/models/htdemucs-ft"
 
     custom_settings = _build_settings(
         AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS="audio-dev, audio-prod,audio-dev",
         AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS="local,cn-shanghai",
+        AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER="cuda",
         HTDEMUCS_MODEL_DIR="/tmp/htdemucs-ft",
     )
 
     assert custom_settings.job.audio_stem_separation_allowed_oss_buckets == ("audio-dev", "audio-prod")
     assert custom_settings.job.audio_stem_separation_allowed_oss_regions == ("local", "cn-shanghai")
+    assert custom_settings.job.audio_stem_separation_execution_provider == "cuda"
     assert str(custom_settings.job.htdemucs_model_dir) == "/tmp/htdemucs-ft"
 
 
@@ -224,6 +227,7 @@ def test_audio_stem_separation_config_defaults_and_overrides():
         ("AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS", "audio-dev,,audio-prod"),
         ("AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS", ""),
         ("AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS", "local,"),
+        ("AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER", "gpu"),
         ("HTDEMUCS_MODEL_DIR", ""),
     ],
 )

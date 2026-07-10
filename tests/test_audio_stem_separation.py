@@ -6,11 +6,13 @@ import numpy as np
 import pytest
 
 from app.core.exceptions import AppError
+from app.integrations.onnx_runtime import OnnxRuntimeIntegrationError, OnnxSessionRuntime
 from app.integrations.object_storage import bare_sha256, sha256_digest
 from app.jobs import registry as job_registry
 from app.jobs.types import audio_stem_separation as audio_pkg
 from app.jobs.types.audio_stem_separation import executor as audio_executor
 from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
+from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_RUNTIME_UNAVAILABLE
 from app.jobs.types.register import register_all_job_types
 from app.models.job import Job
 from app.schemas.jobs import AudioStemSeparationParams
@@ -65,6 +67,21 @@ def _job(*, params: dict, output_prefix: str = "outputs") -> Job:
         created_at=datetime(2026, 7, 10, 10, 0, tzinfo=UTC),
         updated_at=datetime(2026, 7, 10, 10, 0, tzinfo=UTC),
     )
+
+
+class FakeSettings:
+    class Job:
+        oss_input_max_bytes = 5_242_880
+        audio_stem_separation_allowed_oss_buckets = ("local-dev",)
+        audio_stem_separation_allowed_oss_regions = ("local",)
+
+    class Storage:
+        oss_public_endpoint = ""
+        oss_bucket = ""
+        oss_region = ""
+
+    job = Job()
+    storage = Storage()
 
 
 class FakeStorage:
@@ -134,6 +151,29 @@ class FakeONNXSession:
         return [raw]
 
 
+class FakeNode:
+    name = "mix"
+    type = "tensor(float)"
+    shape = [1, 2, 8]
+
+
+class FakeOutputNode:
+    name = "stems"
+    type = "tensor(float)"
+    shape = [1, 4, 2, 8]
+
+
+class FakeRuntimeSession:
+    def get_inputs(self):
+        return [FakeNode()]
+
+    def get_outputs(self):
+        return [FakeOutputNode()]
+
+    def get_providers(self):
+        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
 def _runner_with_fake_sessions(*, segment_samples: int = 8, overlap_ratio: float = 0.25):
     runner = object.__new__(audio_executor.HTDemucsONNXRunner)
     runner.model_dir = None
@@ -165,7 +205,8 @@ def test_audio_stem_separation_params_contract_accepts_wav_refs_only():
         AudioStemSeparationParams.model_validate({"input_audio": invalid})
 
 
-def test_audio_stem_separation_normalizes_and_rejects_disallowed_input_ref():
+def test_audio_stem_separation_normalizes_and_rejects_disallowed_input_ref(monkeypatch):
+    monkeypatch.setattr(audio_executor, "settings", FakeSettings())
     handler = _handler()
     ref = _url_ref("input.wav", b"audio")
 
@@ -233,7 +274,88 @@ def test_audio_stem_separation_runner_does_not_add_extra_tail_segment():
     assert np.allclose(result.stems["vocals"], 4)
 
 
+def test_audio_stem_separation_runner_uses_configured_execution_provider_mode(tmp_path, monkeypatch):
+    calls = []
+    asset = {
+        "model": {"version": "test-model"},
+        "runtime": {
+            "sample_rate": 44100,
+            "channels": 2,
+            "segment_samples": 8,
+            "overlap_ratio": 0.25,
+            "input": {"name": "mix", "dtype": "float", "shape": [1, 2, 8]},
+            "output": {"name": "stems", "dtype": "float", "shape": [1, 4, 2, 8]},
+        },
+        "experts": {
+            stem: {"file": f"{stem}.onnx", "sha256": "sha", "target_row": index}
+            for index, stem in enumerate(audio_executor.SOURCES)
+        },
+    }
+    for stem in audio_executor.SOURCES:
+        (tmp_path / f"{stem}.onnx").write_bytes(b"onnx")
+
+    def fake_create_inference_session(path, *, execution_provider_mode):
+        calls.append({"path": path.name, "execution_provider_mode": execution_provider_mode})
+        return OnnxSessionRuntime(
+            session=FakeRuntimeSession(),
+            requested_providers=("CUDAExecutionProvider", "CPUExecutionProvider"),
+            actual_providers=("CUDAExecutionProvider", "CPUExecutionProvider"),
+            execution_provider="CUDAExecutionProvider",
+        )
+
+    monkeypatch.setattr(audio_executor, "_hash_file", lambda _path: "sha")
+    monkeypatch.setattr(audio_executor, "create_inference_session", fake_create_inference_session)
+
+    runner = audio_executor.HTDemucsONNXRunner(
+        model_dir=tmp_path,
+        asset=asset,
+        execution_provider_mode="cuda",
+    )
+
+    assert runner.providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    assert runner.execution_provider == "CUDAExecutionProvider"
+    assert [call["execution_provider_mode"] for call in calls] == ["cuda"] * 4
+    assert {call["path"] for call in calls} == {f"{stem}.onnx" for stem in audio_executor.SOURCES}
+
+
+def test_audio_stem_separation_runner_reports_runtime_unavailable(tmp_path, monkeypatch):
+    asset = {
+        "model": {"version": "test-model"},
+        "runtime": {
+            "sample_rate": 44100,
+            "channels": 2,
+            "segment_samples": 8,
+            "overlap_ratio": 0.25,
+            "input": {"name": "mix", "dtype": "float", "shape": [1, 2, 8]},
+            "output": {"name": "stems", "dtype": "float", "shape": [1, 4, 2, 8]},
+        },
+        "experts": {
+            stem: {"file": f"{stem}.onnx", "sha256": "sha", "target_row": index}
+            for index, stem in enumerate(audio_executor.SOURCES)
+        },
+    }
+    for stem in audio_executor.SOURCES:
+        (tmp_path / f"{stem}.onnx").write_bytes(b"onnx")
+
+    def fake_create_inference_session(_path, *, execution_provider_mode):
+        assert execution_provider_mode == "cuda"
+        raise OnnxRuntimeIntegrationError("CUDAExecutionProvider is not available")
+
+    monkeypatch.setattr(audio_executor, "_hash_file", lambda _path: "sha")
+    monkeypatch.setattr(audio_executor, "create_inference_session", fake_create_inference_session)
+
+    with pytest.raises(AppError) as exc_info:
+        audio_executor.HTDemucsONNXRunner(
+            model_dir=tmp_path,
+            asset=asset,
+            execution_provider_mode="cuda",
+        )
+
+    assert exc_info.value.code == AUDIO_STEM_RUNTIME_UNAVAILABLE
+
+
 def test_audio_stem_separation_reads_input_from_public_url(monkeypatch):
+    monkeypatch.setattr(audio_executor, "settings", FakeSettings())
     data = b"audio-bytes"
     captured: dict[str, object] = {}
     input_audio = audio_executor.AudioStemSeparationInputObject.model_validate(_url_ref("input.wav", data))

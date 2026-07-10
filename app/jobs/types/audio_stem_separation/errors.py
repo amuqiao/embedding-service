@@ -3,6 +3,7 @@ from app.core.error_registry import ErrorSpec, register_error_specs
 AUDIO_STEM_INPUT_INVALID = "AUDIO_STEM_INPUT_INVALID"
 AUDIO_STEM_DURATION_EXCEEDS_LIMIT = "AUDIO_STEM_DURATION_EXCEEDS_LIMIT"
 AUDIO_STEM_MODEL_ASSET_MISSING = "AUDIO_STEM_MODEL_ASSET_MISSING"
+AUDIO_STEM_RUNTIME_UNAVAILABLE = "AUDIO_STEM_RUNTIME_UNAVAILABLE"
 AUDIO_STEM_INFERENCE_FAILED = "AUDIO_STEM_INFERENCE_FAILED"
 AUDIO_STEM_OUTPUT_INVALID = "AUDIO_STEM_OUTPUT_INVALID"
 
@@ -44,6 +45,14 @@ AUDIO_STEM_ERROR_SPECS: dict[str, ErrorSpec] = {
         AUDIO_STEM_OUTPUT_INVALID,
         "audio stem output invalid",
         502,
+        scope="job",
+        owner="audio_stem_separation",
+    ),
+    AUDIO_STEM_RUNTIME_UNAVAILABLE: ErrorSpec(
+        "111006",
+        AUDIO_STEM_RUNTIME_UNAVAILABLE,
+        "audio stem runtime unavailable",
+        500,
         scope="job",
         owner="audio_stem_separation",
     ),

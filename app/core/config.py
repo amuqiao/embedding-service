@@ -77,6 +77,7 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS": ("job", "poster_title_image_allowed_oss_regions_raw"),
     "AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS": ("job", "audio_stem_separation_allowed_oss_buckets_raw"),
     "AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS": ("job", "audio_stem_separation_allowed_oss_regions_raw"),
+    "AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER": ("job", "audio_stem_separation_execution_provider"),
     "HTDEMUCS_MODEL_DIR": ("job", "htdemucs_model_dir_raw"),
     "CALLBACK_TIMEOUT_SECONDS": ("callback", "timeout_seconds"),
     "PROMPT_CONFIG_PATH": ("registry", "prompt_config_path_raw"),
@@ -505,6 +506,7 @@ class JobSettings(ConfigSection):
     poster_title_image_allowed_oss_regions_raw: str = "local"
     audio_stem_separation_allowed_oss_buckets_raw: str = "local-dev"
     audio_stem_separation_allowed_oss_regions_raw: str = "local"
+    audio_stem_separation_execution_provider: str = "auto"
     htdemucs_model_dir_raw: str = ".data/models/htdemucs-ft"
     orphan_timeout_seconds: int = 300
     dispatch_max_publish_attempts: int = 12
@@ -547,6 +549,8 @@ class JobSettings(ConfigSection):
             self.audio_stem_separation_allowed_oss_regions_raw,
             env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
         )
+        if self.audio_stem_separation_execution_provider not in {"auto", "cpu", "cuda"}:
+            raise ValueError("AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER must be auto, cpu, or cuda")
         if not self.htdemucs_model_dir_raw.strip():
             raise ValueError("HTDEMUCS_MODEL_DIR must not be empty")
         return self

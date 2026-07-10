@@ -7,13 +7,18 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import yaml
 
 from app.core.config import settings
 from app.core.exceptions import AppError
+from app.integrations.onnx_runtime import (
+    ExecutionProviderMode,
+    OnnxRuntimeIntegrationError,
+    create_inference_session,
+)
 from app.integrations.object_storage import bare_sha256, sha256_digest
 from app.integrations.storage import storage
 from app.jobs.adapters.http_url_input import read_http_url_bytes
@@ -26,6 +31,7 @@ from app.jobs.types.audio_stem_separation.errors import (
     AUDIO_STEM_INPUT_INVALID,
     AUDIO_STEM_MODEL_ASSET_MISSING,
     AUDIO_STEM_OUTPUT_INVALID,
+    AUDIO_STEM_RUNTIME_UNAVAILABLE,
 )
 from app.models.job import Job
 from app.schemas.jobs import (
@@ -45,7 +51,7 @@ SOURCES = ("drums", "bass", "other", "vocals")
 AUDIO_WAV_CONTENT_TYPE = "audio/wav"
 DEFAULT_TIMEOUT_SECONDS = 2400
 
-_RUNNER_CACHE: dict[tuple[str, str], "HTDemucsONNXRunner"] = {}
+_RUNNER_CACHE: dict[tuple[str, str, str], "HTDemucsONNXRunner"] = {}
 _RUNNER_CACHE_LOCK = threading.Lock()
 
 
@@ -122,15 +128,6 @@ def _validate_session_signature(session: Any, *, stem: str, asset: dict[str, Any
         raise AppError(AUDIO_STEM_MODEL_ASSET_MISSING, f"{stem} ONNX output signature does not match model_asset")
 
 
-def _providers_for_runtime(ort: Any) -> list[str]:
-    available = list(ort.get_available_providers())
-    if "CUDAExecutionProvider" in available:
-        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    if "CPUExecutionProvider" in available:
-        return ["CPUExecutionProvider"]
-    raise AppError(AUDIO_STEM_MODEL_ASSET_MISSING, "CPUExecutionProvider is not available")
-
-
 def _segment_ranges(*, total_len: int, segment_samples: int, stride: int) -> list[tuple[int, int]]:
     if total_len < 1:
         raise AppError(AUDIO_STEM_INPUT_INVALID, "audio input must not be empty")
@@ -142,15 +139,7 @@ def _segment_ranges(*, total_len: int, segment_samples: int, stride: int) -> lis
 
 
 class HTDemucsONNXRunner:
-    def __init__(self, *, model_dir: Path, asset: dict[str, Any]) -> None:
-        try:
-            import onnxruntime as ort
-        except ModuleNotFoundError as exc:
-            raise AppError(
-                AUDIO_STEM_MODEL_ASSET_MISSING,
-                "onnxruntime is not installed; run: uv sync --extra audio-separation",
-            ) from exc
-
+    def __init__(self, *, model_dir: Path, asset: dict[str, Any], execution_provider_mode: ExecutionProviderMode) -> None:
         self.model_dir = model_dir
         self.asset = asset
         self.sample_rate = int(asset["runtime"]["sample_rate"])
@@ -158,12 +147,13 @@ class HTDemucsONNXRunner:
         self.segment_samples = int(asset["runtime"]["segment_samples"])
         self.overlap_ratio = float(asset["runtime"]["overlap_ratio"])
         self.model_version = str(asset["model"]["version"])
-        self.providers = _providers_for_runtime(ort)
+        self.execution_provider_mode = execution_provider_mode
+        self.providers: list[str] = []
         self.sessions: dict[str, Any] = {}
-        self.execution_provider = self.providers[0]
-        self._load_sessions(ort)
+        self.execution_provider = execution_provider_mode
+        self._load_sessions()
 
-    def _load_sessions(self, ort: Any) -> None:
+    def _load_sessions(self) -> None:
         experts = self.asset.get("experts")
         if not isinstance(experts, dict):
             raise AppError(AUDIO_STEM_MODEL_ASSET_MISSING, "model_asset experts must be an object")
@@ -185,15 +175,14 @@ class HTDemucsONNXRunner:
                     details={"stem": stem, "path": str(path)},
                 )
             try:
-                session = ort.InferenceSession(str(path), providers=self.providers)
-            except Exception as exc:
-                raise AppError(AUDIO_STEM_MODEL_ASSET_MISSING, f"failed to load {stem} ONNX session") from exc
-            _validate_session_signature(session, stem=stem, asset=self.asset)
-            self.sessions[stem] = session
-        first = next(iter(self.sessions.values()))
-        providers = list(first.get_providers())
-        if providers:
-            self.execution_provider = str(providers[0])
+                runtime = create_inference_session(path, execution_provider_mode=self.execution_provider_mode)
+            except OnnxRuntimeIntegrationError as exc:
+                raise AppError(AUDIO_STEM_RUNTIME_UNAVAILABLE, f"failed to load {stem} ONNX session: {exc}") from exc
+            _validate_session_signature(runtime.session, stem=stem, asset=self.asset)
+            self.sessions[stem] = runtime.session
+            if not self.providers:
+                self.providers = list(runtime.requested_providers)
+                self.execution_provider = runtime.execution_provider
 
     def separate(self, mix: np.ndarray) -> SeparationOutput:
         if mix.dtype != np.float32:
@@ -282,11 +271,16 @@ def _chunk_window(
 
 def _runner() -> HTDemucsONNXRunner:
     model_dir = settings.job.htdemucs_model_dir
-    cache_key = (str(model_dir), str(MODEL_ASSET_PATH))
+    execution_provider_mode = cast(ExecutionProviderMode, settings.job.audio_stem_separation_execution_provider)
+    cache_key = (str(model_dir), str(MODEL_ASSET_PATH), execution_provider_mode)
     with _RUNNER_CACHE_LOCK:
         runner = _RUNNER_CACHE.get(cache_key)
         if runner is None:
-            runner = HTDemucsONNXRunner(model_dir=model_dir, asset=_load_model_asset())
+            runner = HTDemucsONNXRunner(
+                model_dir=model_dir,
+                asset=_load_model_asset(),
+                execution_provider_mode=execution_provider_mode,
+            )
             _RUNNER_CACHE[cache_key] = runner
         return runner
 
@@ -406,6 +400,7 @@ class AudioStemSeparationJob(JobExecutor):
             AUDIO_STEM_INPUT_INVALID,
             AUDIO_STEM_MODEL_ASSET_MISSING,
             AUDIO_STEM_OUTPUT_INVALID,
+            AUDIO_STEM_RUNTIME_UNAVAILABLE,
         }
     )
 
@@ -419,7 +414,7 @@ class AudioStemSeparationJob(JobExecutor):
         runtime = asset["runtime"]
         return AudioStemSeparationRuntimeFields(
             onnx_model_version=str(asset["model"]["version"]),
-            execution_provider="auto",
+            execution_provider=settings.job.audio_stem_separation_execution_provider,
             segment_seconds=float(runtime["segment_seconds"]),
             overlap_ratio=float(runtime["overlap_ratio"]),
         ).model_dump()
