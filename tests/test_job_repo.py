@@ -945,6 +945,128 @@ async def test_claim_attempt_for_execution_accepts_queued_attempt_after_uncertai
 
 
 @pytest.mark.asyncio
+async def test_claim_attempt_for_execution_uses_attempt_timeout_when_longer_than_global_lease():
+    attempt_id = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="long-lease-claim",
+        job_type="long_audio_job",
+        status="queued",
+        active_attempt_id=attempt_id,
+        progress_percent=0,
+        metadata_={},
+    )
+    attempt = _attempt(
+        id=attempt_id,
+        job_id=job.id,
+        status="pending",
+        timeout_seconds=2400,
+    )
+    db = _FakeDB()
+    db.results.extend([_ScalarResult(job), _ScalarResult(attempt)])
+
+    claimed = await JobRepo.claim_attempt_for_execution(
+        db,
+        attempt_id,
+        worker_id="worker-long",
+        lease_seconds=900,
+    )
+
+    assert claimed is not None
+    assert attempt.leased_at is not None
+    assert attempt.lease_expires_at is not None
+    assert (attempt.lease_expires_at - attempt.leased_at).total_seconds() == 2400
+
+
+@pytest.mark.asyncio
+async def test_claim_attempt_for_execution_keeps_global_lease_floor_when_attempt_timeout_is_shorter():
+    attempt_id = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="short-lease-claim",
+        job_type="short_job",
+        status="queued",
+        active_attempt_id=attempt_id,
+        progress_percent=0,
+        metadata_={},
+    )
+    attempt = _attempt(
+        id=attempt_id,
+        job_id=job.id,
+        status="pending",
+        timeout_seconds=60,
+    )
+    db = _FakeDB()
+    db.results.extend([_ScalarResult(job), _ScalarResult(attempt)])
+
+    claimed = await JobRepo.claim_attempt_for_execution(
+        db,
+        attempt_id,
+        worker_id="worker-short",
+        lease_seconds=900,
+    )
+
+    assert claimed is not None
+    assert attempt.leased_at is not None
+    assert attempt.lease_expires_at is not None
+    assert (attempt.lease_expires_at - attempt.leased_at).total_seconds() == 900
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_attempt_uses_attempt_timeout_when_longer_than_global_lease():
+    lease_token = uuid.uuid4()
+    attempt = _attempt(status="running", lease_token=lease_token, timeout_seconds=2400)
+    job = Job(
+        id=attempt.job_id,
+        caller_id="caller-1",
+        client_request_id="long-lease-heartbeat",
+        job_type="long_audio_job",
+        status="running",
+        active_attempt_id=attempt.id,
+        progress_percent=5,
+        metadata_={},
+    )
+    db = _FakeDB()
+    db.results.append(_OneRowResult((job, attempt)))
+
+    updated = await JobRepo.heartbeat_attempt(db, attempt.id, lease_token=lease_token, lease_seconds=900)
+
+    assert updated is True
+    assert attempt.heartbeat_at is not None
+    assert attempt.lease_expires_at is not None
+    assert (attempt.lease_expires_at - attempt.heartbeat_at).total_seconds() == 2400
+    assert db.flushed is True
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_attempt_keeps_global_lease_floor_when_attempt_timeout_is_shorter():
+    lease_token = uuid.uuid4()
+    attempt = _attempt(status="running", lease_token=lease_token, timeout_seconds=60)
+    job = Job(
+        id=attempt.job_id,
+        caller_id="caller-1",
+        client_request_id="short-lease-heartbeat",
+        job_type="short_job",
+        status="running",
+        active_attempt_id=attempt.id,
+        progress_percent=5,
+        metadata_={},
+    )
+    db = _FakeDB()
+    db.results.append(_OneRowResult((job, attempt)))
+
+    updated = await JobRepo.heartbeat_attempt(db, attempt.id, lease_token=lease_token, lease_seconds=900)
+
+    assert updated is True
+    assert attempt.heartbeat_at is not None
+    assert attempt.lease_expires_at is not None
+    assert (attempt.lease_expires_at - attempt.heartbeat_at).total_seconds() == 900
+    assert db.flushed is True
+
+
+@pytest.mark.asyncio
 async def test_lease_dispatch_for_publish_claims_due_dispatch_intent():
     attempt_id = uuid.uuid4()
     job = Job(

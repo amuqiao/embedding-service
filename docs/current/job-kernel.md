@@ -652,13 +652,14 @@ Attempt 执行权
     -> mark attempt failed / retry / Job failed
 ```
 
-`worker_soft_time_limit`、`worker_hard_time_limit` 和 `job_stale_running_seconds` 由 `MODEL_CALL_TIMEOUT_SECONDS` 派生，用于保持配置不变量和 stale running 接管窗口单调递增。当前运行路径实际用到的是 `job_stale_running_seconds` 作为 attempt lease window；soft / hard time limit 不是独立 flat env。
+`worker_soft_time_limit`、`worker_hard_time_limit` 和 `job_stale_running_seconds` 由 `MODEL_CALL_TIMEOUT_SECONDS` 派生，用于保持配置不变量和 stale running 接管窗口单调递增。当前运行路径用 `job_stale_running_seconds` 作为全局 attempt lease floor；claim 和 heartbeat 写入 `lease_expires_at` 时会取 `max(job_stale_running_seconds, job_execution_attempts.timeout_seconds)`。因此 job_type 声明的较长 `timeout_seconds` 可以拉长 attempt lease，但不能缩短全局保护窗口。`timeout_seconds` 当前不是 runner 层统一强制终止期限；soft / hard time limit 也不是独立 flat env。
 
 | 边界 | 当前作用 |
 |---|---|
 | `MODEL_CALL_TIMEOUT_SECONDS` | 截断单次 AI provider 调用等待 |
 | attempt lease / heartbeat | 让多 worker 和 recovery 判断谁仍有执行权 |
-| `job_stale_running_seconds` | attempt lease window；lease 过期后 recovery 才接管 stale running attempt |
+| `job_stale_running_seconds` | 全局 attempt lease floor；lease 过期后 recovery 才接管 stale running attempt |
+| `job_execution_attempts.timeout_seconds` | attempt 创建时固化的声明超时；大于全局 floor 时拉长 claim / heartbeat 后的 lease 窗口 |
 | `worker_soft_time_limit` / `worker_hard_time_limit` | 派生保护窗口和配置不变量；当前不作为独立 env 配置 |
 
 ## 删除模型

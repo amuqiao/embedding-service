@@ -16,6 +16,10 @@ SUBMISSION_KEY_KIND_CLIENT_REQUEST_ID = "client_request_id"
 
 class JobRepo:
     @staticmethod
+    def _effective_attempt_lease_seconds(attempt: JobAttempt, lease_seconds: int) -> int:
+        return max(lease_seconds, attempt.timeout_seconds)
+
+    @staticmethod
     async def advisory_lock_for_client_request(db: AsyncSession, caller_id: str, client_request_id: str) -> None:
         await db.execute(
             text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
@@ -776,7 +780,9 @@ class JobRepo:
         attempt.worker_id = worker_id
         attempt.lease_token = lease_token
         attempt.leased_at = now
-        attempt.lease_expires_at = now + timedelta(seconds=lease_seconds)
+        attempt.lease_expires_at = now + timedelta(
+            seconds=JobRepo._effective_attempt_lease_seconds(attempt, lease_seconds)
+        )
         attempt.heartbeat_at = now
         attempt.started_at = now
         attempt.updated_at = now
@@ -826,7 +832,9 @@ class JobRepo:
         job, attempt = row
         now = datetime.now(timezone.utc)
         attempt.heartbeat_at = now
-        attempt.lease_expires_at = now + timedelta(seconds=lease_seconds)
+        attempt.lease_expires_at = now + timedelta(
+            seconds=JobRepo._effective_attempt_lease_seconds(attempt, lease_seconds)
+        )
         attempt.updated_at = now
         job.updated_at = now
         await db.flush()

@@ -28,11 +28,12 @@ lineage 有持久化约束，软删除不直接物理删除业务视图。
 |---|---|---|---|
 | P0 | `caller_id` 由共享 `SERVICE_API_KEY` 后的 `X-AI-Service-Caller-ID` 决定，未与凭证绑定 | 任一持有服务密钥的调用方可伪装其他 caller，造成跨 caller 查询、幂等键碰撞或回调混淆 | 上线多 caller 前必须改成凭证映射 caller，或每个 caller 独立 token 且服务端派生 caller |
 | P1 | `MAX_ACTIVE_JOBS` 容量锁在创建 Job / Attempt / outbox 前释放 | 并发投递可突破活跃 Job 上限，压垮 worker、Redis 或 callback 积压 | 将容量判断与创建放在同一事务锁窗口，或使用数据库 semaphore / quota 表 |
-| P1 | 长模型调用期间没有周期性 lease 续约，`update_progress` 不延长 `lease_expires_at` | 旧 worker 的数据库写会被 CAS 拦住，但外部模型、OSS、计费副作用仍可能重复发生 | 长执行必须有周期性 heartbeat，外部副作用必须有幂等键和账本约束 |
+| P1 | 长模型调用期间没有周期性 lease 续约，`update_progress` 不延长 `lease_expires_at` | 已部分缓解：claim / heartbeat 已使用 `max(job_stale_running_seconds, attempt.timeout_seconds)`，较长 job_type timeout 不会被全局 floor 提前判 stale；但 `_execute()` 期间仍无周期性续约，旧 worker 的数据库写会被 CAS 拦住，外部模型、OSS、计费副作用仍可能重复发生 | 长执行仍需要周期性 heartbeat；外部副作用必须有幂等键和账本约束 |
 | P1 | Callback 接收方把“重复事件已处理”返回为 `accepted=false` 时，服务会按拒收持续重试直到失败 | 去重实现稍有偏差就会把成功业务事件拖入 callback dead-letter | API 合同明确重复事件应返回 `accepted=true`，测试覆盖重复投递 ACK 语义 |
 | P1 | root workflow 失败详情会向公开查询和 callback 暴露 child id、node key、child 原始错误 | 内部拓扑、节点命名和 provider 错误可能泄漏给外部系统 | 对公开 `job_error` 做脱敏映射，内部详情只保留在审计日志或管理查询 |
 | P1 | `scripts/k8s.sh check` 设计上打印完整数据库和 Redis 密码 | 排障输出容易进入终端记录或日志系统 | 默认脱敏，只有显式 `--show-secrets --confirm` 才输出明文 |
 | P2 | `ai_call_ledger_entries.job_id` 与 `attempt_id` 缺少复合外键约束 | 正常写路径之外的数据损坏可能让计费/审计 ledger 指向错误 Attempt | 增加 `(job_id, attempt_id)` 到 `job_execution_attempts(job_id, id)` 的复合约束 |
+| P2 | job_type `timeout_seconds` 缺少上界和运行形态校验 | 过大的声明超时会把 stale recovery / retry 发现时间静默拉长到同量级 | 为 registry 增加按运行形态可解释的 timeout 上界，或把长任务 timeout 纳入单独的容量/运维评审 |
 | P2 | `root_job_id`、active `submission_key`、retry chain 主要依赖 repository 写路径维持形状 | 旁路写入或未来改造可能破坏 family、删除恢复或 retry 语义 | 补充 DB trigger / partial unique / 复合外键，把当前写路径不变量下沉到数据库 |
 | P2 | Callback URL 和 ack details 日志过宽 | URL query secret、目标响应体或错误细节可能污染日志 | 日志只保留 host/path/status，ack details 限长并过滤敏感字段 |
 | P2 | `CallbackOutbox` ORM 默认值与配置/迁移默认值不一致 | 绕过 service 创建 outbox 时重试策略不一致 | 移除 ORM 业务默认或对齐到配置语义，并用测试锁住 |
@@ -77,16 +78,17 @@ Attempt claim 使用 active attempt、状态、purpose、lease token 和行锁�
 
 风险不在数据库终态覆盖，而在长执行期间的外部副作用：
 
-- `run_job_attempt` 在执行前 heartbeat，但长模型调用期间没有周期性续约。
+- `run_job_attempt` 在执行前 heartbeat；claim / heartbeat 的 lease 窗口已取 `max(job_stale_running_seconds, attempt.timeout_seconds)`，但长模型调用期间没有周期性续约。
 - `update_progress` 更新 `heartbeat_at`，但不延长 `lease_expires_at`。
-- recovery 可能把长时间无 heartbeat 的 Attempt 判定为 stale，并创建 retry。
+- recovery 仍可能在较长 attempt timeout 过期后把长时间无 heartbeat 的 Attempt 判定为 stale，并创建 retry。
 - 旧 worker 的终态写入会失败，但它已经发出的模型请求、OSS 写入、provider 计费可能无法撤回。
 
 硬化目标：
 
-- worker 执行长任务时定期 heartbeat 并延长 lease。
+- worker 执行长任务时定期 heartbeat 并延长 lease；当前仅已完成 per-attempt timeout 拉长 claim / heartbeat lease 窗口。
 - 模型调用、OSS artifact、AI ledger、callback 都要有稳定幂等键，允许重复执行但只记一次业务结果。
 - worker soft/hard timeout、stale running timeout、provider timeout 必须有集中校验，确保 stale 判断晚于合法执行窗口。
+- job_type `timeout_seconds` 需要有可解释上界，避免单个 job_type 静默把 stale recovery 窗口拉到不可运维的量级。
 
 ### 4. Dispatch outbox 与恢复收敛
 
