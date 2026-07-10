@@ -9,7 +9,13 @@ from typer.testing import CliRunner
 from scripts.real_flow.cli import app
 from app.integrations.aliyun_oss import AliyunOSSConfig
 from app.integrations.ai_adapters.base import ImageGenerationResult
-from scripts.real_flow.flows import adapter_image_probe, llm_job_billing, oss_image_upload, poster_title_image
+from scripts.real_flow.flows import (
+    adapter_image_probe,
+    audio_stem_separation,
+    llm_job_billing,
+    oss_image_upload,
+    poster_title_image,
+)
 
 
 runner = CliRunner()
@@ -427,6 +433,130 @@ def test_oss_upload_image_cli_requires_explicit_image():
     assert "OSS image upload requires --image" in result.stderr
 
 
+def test_audio_stem_separation_build_payload_cli_forwards_options(monkeypatch):
+    captured_build = {}
+    captured_write = {}
+
+    def fake_build_payload(**kwargs):
+        captured_build.update(kwargs)
+        return {"job_type": "audio_stem_separation"}, {"provider": "local"}
+
+    def fake_write_or_print_payload(payload, *, output):
+        captured_write["payload"] = payload
+        captured_write["output"] = output
+
+    monkeypatch.setattr(audio_stem_separation, "build_payload", fake_build_payload)
+    monkeypatch.setattr(audio_stem_separation, "write_or_print_payload", fake_write_or_print_payload)
+
+    result = runner.invoke(
+        app,
+        [
+            "audio-stem-separation",
+            "build-payload",
+            "--env-file",
+            "env_test/.env",
+            "--input-file",
+            ".data/misc/input.wav",
+            "--max-duration-seconds",
+            "12.5",
+            "--client-request-id",
+            "audio-client-1",
+            "--confirm-upload",
+            "--key-prefix",
+            "real-flow/audio/input",
+            "--signed-url-expires-seconds",
+            "600",
+            "--output",
+            ".run/audio-payload.json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured_build == {
+        "env_file": "env_test/.env",
+        "input_file": ".data/misc/input.wav",
+        "input_url_ref_json": None,
+        "input_public_url": None,
+        "input_internal_url": None,
+        "input_sha256": None,
+        "max_duration_seconds": 12.5,
+        "client_request_id": "audio-client-1",
+        "confirm_upload": True,
+        "key_prefix": "real-flow/audio/input",
+        "signed_url_expires_seconds": 600,
+    }
+    assert captured_write == {
+        "payload": {"job_type": "audio_stem_separation"},
+        "output": ".run/audio-payload.json",
+    }
+
+
+def test_audio_stem_separation_run_cli_forwards_payload_file_options(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(audio_stem_separation, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "audio-stem-separation",
+            "run",
+            "--confirm-run",
+            "--confirm-upload",
+            "--api-url",
+            "http://127.0.0.1:18200",
+            "--env-file",
+            "env_test/.env",
+            "--allow-remote-api",
+            "--service-api-key",
+            "test-token",
+            "--x-ai-service-caller-id",
+            "default",
+            "--timeout-seconds",
+            "10",
+            "--poll-interval-seconds",
+            "0.5",
+            "--client-request-id",
+            "audio-client-2",
+            "--payload-file",
+            ".run/audio-payload.json",
+            "--download-outputs",
+            "--output-dir",
+            ".run/audio-stems",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "confirm_run": True,
+        "confirm_upload": True,
+        "api_url": "http://127.0.0.1:18200",
+        "env_file": "env_test/.env",
+        "allow_remote_api": True,
+        "service_api_key": "test-token",
+        "caller_id": "default",
+        "timeout_seconds": 10,
+        "poll_interval_seconds": 0.5,
+        "client_request_id": "audio-client-2",
+        "payload_file": ".run/audio-payload.json",
+        "input_file": None,
+        "input_url_ref_json": None,
+        "input_public_url": None,
+        "input_internal_url": None,
+        "input_sha256": None,
+        "max_duration_seconds": None,
+        "key_prefix": None,
+        "signed_url_expires_seconds": 3600,
+        "download_outputs": True,
+        "output_dir": ".run/audio-stems",
+        "json_output": True,
+    }
+
+
 def test_adapter_image_probe_cli_requires_confirm_cost():
     result = runner.invoke(app, ["adapter-image-probe"])
 
@@ -661,6 +791,48 @@ def test_real_flow_builds_poster_title_image_payload_with_caller_model_id():
     )
 
     assert payload["job_params"]["items"][0]["model_id"] == "gpt-image-custom"
+
+
+def test_real_flow_builds_audio_stem_separation_payload():
+    input_audio = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.wav",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.wav",
+        "content_type": "audio/wav",
+        "sha256": "a" * 64,
+    }
+
+    payload = audio_stem_separation.build_job_payload(
+        input_audio=input_audio,
+        client_request_id="audio-client-1",
+        max_duration_seconds=30.5,
+    )
+
+    assert payload == {
+        "client_request_id": "audio-client-1",
+        "job_type": "audio_stem_separation",
+        "job_params": {
+            "input_audio": input_audio,
+            "max_duration_seconds": 30.5,
+        },
+        "metadata": {"source": "scripts/real-flow.sh audio-stem-separation"},
+        "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
+    }
+
+
+def test_audio_stem_separation_rejects_mixed_input_sources():
+    with pytest.raises(audio_stem_separation.FlowError, match="exactly one"):
+        audio_stem_separation.resolve_input_audio(
+            input_file="input.wav",
+            input_url_ref_json=None,
+            input_public_url="https://local-dev.oss-local.aliyuncs.com/audio/input.wav",
+            input_internal_url="https://local-dev.oss-local-internal.aliyuncs.com/audio/input.wav",
+            input_sha256="a" * 64,
+            app_env={"STORAGE_BACKEND": "local"},
+            max_duration_seconds=None,
+            confirm_upload=False,
+            key_prefix=None,
+            signed_url_expires_seconds=3600,
+        )
 
 
 def test_poster_title_image_run_supports_items_json_with_multiple_references(tmp_path, monkeypatch, capsys):
@@ -1191,6 +1363,356 @@ def test_real_flow_run_uses_env_file_for_remote_api_and_service_key(tmp_path, mo
     assert calls[0]["headers"]["Authorization"] == "Bearer file-secret"
     assert calls[0]["headers"]["X-AI-Service-Caller-ID"] == "default"
     assert calls[1]["url"] == "http://test-cms-poster-title.epubgame.com/api/v1/ai-jobs/jobs/job-remote/billing"
+
+
+def test_audio_stem_separation_run_uses_payload_file_api_flow(tmp_path, monkeypatch, capsys):
+    clear_storage_env(monkeypatch)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text(
+        "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
+        encoding="utf-8",
+    )
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
+    input_audio = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.wav",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.wav",
+        "content_type": "audio/wav",
+        "sha256": "a" * 64,
+    }
+    payload_file = tmp_path / "audio-payload.json"
+    payload_file.write_text(
+        json.dumps(
+            audio_stem_separation.build_job_payload(
+                input_audio=input_audio,
+                client_request_id="audio-client-1",
+                max_duration_seconds=60.0,
+            )
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_request_json(url, *, method, headers, payload=None, timeout_seconds=10):
+        calls.append({"url": url, "method": method, "headers": headers, "payload": payload})
+        return {"code": "0", "data": {"job": {"job_id": "audio-job-1", "job_status": "queued"}}}
+
+    def stem_ref(name: str) -> dict[str, str]:
+        return {
+            "public_url": f"https://local-dev.oss-local.aliyuncs.com/output/audio-job-1/{name}.wav",
+            "internal_url": f"https://local-dev.oss-local-internal.aliyuncs.com/output/audio-job-1/{name}.wav",
+            "content_type": "audio/wav",
+            "sha256": "b" * 64,
+        }
+
+    monkeypatch.setattr(llm_job_billing, "request_json", fake_request_json)
+    monkeypatch.setattr(
+        llm_job_billing,
+        "poll_job_envelope",
+        lambda **kwargs: {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "audio-job-1",
+                    "job_status": "succeeded",
+                    "job_type": "audio_stem_separation",
+                    "job_result": {
+                        "stems": {
+                            "drums": stem_ref("drums"),
+                            "bass": stem_ref("bass"),
+                            "other": stem_ref("other"),
+                            "vocals": stem_ref("vocals"),
+                        }
+                    },
+                }
+            },
+        },
+    )
+
+    audio_stem_separation.run(
+        confirm_run=True,
+        confirm_upload=False,
+        api_url=None,
+        env_file=None,
+        allow_remote_api=False,
+        service_api_key=None,
+        caller_id="caller-1",
+        timeout_seconds=1,
+        poll_interval_seconds=0.1,
+        client_request_id=None,
+        payload_file=str(payload_file),
+        input_file=None,
+        input_url_ref_json=None,
+        input_public_url=None,
+        input_internal_url=None,
+        input_sha256=None,
+        max_duration_seconds=None,
+        key_prefix=None,
+        signed_url_expires_seconds=3600,
+        download_outputs=False,
+        output_dir=".data/audio-stems",
+        json_output=True,
+    )
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["summary"]["job_id"] == "audio-job-1"
+    assert result["summary"]["job_type"] == "audio_stem_separation"
+    assert result["summary"]["stems_count"] == 4
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"] == "http://127.0.0.1:18200/api/v1/ai-jobs/jobs"
+    assert calls[0]["payload"]["job_type"] == "audio_stem_separation"
+    assert calls[0]["payload"]["job_params"]["input_audio"] == input_audio
+
+
+def test_audio_stem_separation_run_does_not_download_outputs_for_failed_job(tmp_path, monkeypatch, capsys):
+    clear_storage_env(monkeypatch)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text(
+        "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
+        encoding="utf-8",
+    )
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
+    payload_file = tmp_path / "audio-payload.json"
+    payload_file.write_text(
+        json.dumps(
+            {
+                "client_request_id": "audio-client-failed",
+                "job_type": "audio_stem_separation",
+                "job_params": {
+                    "input_audio": {
+                        "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.wav",
+                        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.wav",
+                        "content_type": "audio/wav",
+                        "sha256": "a" * 64,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        llm_job_billing,
+        "request_json",
+        lambda url, *, method, headers, payload=None, timeout_seconds=10: {
+            "code": "0",
+            "data": {"job": {"job_id": "audio-job-failed", "job_status": "queued"}},
+        },
+    )
+    monkeypatch.setattr(
+        llm_job_billing,
+        "poll_job_envelope",
+        lambda **_kwargs: {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "audio-job-failed",
+                    "job_status": "failed",
+                    "job_type": "audio_stem_separation",
+                    "error": {"code": "AUDIO_STEM_INFERENCE_FAILED"},
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        audio_stem_separation,
+        "download_output_artifacts",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("failed jobs must not download outputs")),
+    )
+
+    with pytest.raises(audio_stem_separation.FlowError, match="finished with failed"):
+        audio_stem_separation.run(
+            confirm_run=True,
+            confirm_upload=False,
+            api_url=None,
+            env_file=None,
+            allow_remote_api=False,
+            service_api_key=None,
+            caller_id="caller-1",
+            timeout_seconds=1,
+            poll_interval_seconds=0.1,
+            client_request_id=None,
+            payload_file=str(payload_file),
+            input_file=None,
+            input_url_ref_json=None,
+            input_public_url=None,
+            input_internal_url=None,
+            input_sha256=None,
+            max_duration_seconds=None,
+            key_prefix=None,
+            signed_url_expires_seconds=3600,
+            download_outputs=True,
+            output_dir=".data/audio-stems",
+            json_output=True,
+        )
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["summary"]["job_status"] == "failed"
+    assert result["summary"]["artifacts"] == []
+
+
+def test_audio_stem_separation_run_cleans_staged_input_after_terminal_job(tmp_path, monkeypatch):
+    clear_storage_env(monkeypatch)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text(
+        "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
+        encoding="utf-8",
+    )
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
+    input_audio = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.wav",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.wav",
+        "content_type": "audio/wav",
+        "sha256": "a" * 64,
+    }
+    staged_input = {
+        "provider": "aliyun_oss",
+        "bucket": "bucket-a",
+        "region": "cn-hangzhou",
+        "key": "project-a/audio/input.wav",
+        "url_ref": input_audio,
+    }
+    cleanup_calls = []
+
+    monkeypatch.setattr(
+        audio_stem_separation,
+        "build_payload",
+        lambda **_kwargs: (
+            audio_stem_separation.build_job_payload(
+                input_audio=input_audio,
+                client_request_id="audio-client-cleanup",
+                max_duration_seconds=None,
+            ),
+            staged_input,
+        ),
+    )
+    monkeypatch.setattr(audio_stem_separation, "cleanup_staged_input", lambda staged_input, app_env: cleanup_calls.append(staged_input))
+    monkeypatch.setattr(
+        llm_job_billing,
+        "request_json",
+        lambda url, *, method, headers, payload=None, timeout_seconds=10: {
+            "code": "0",
+            "data": {"job": {"job_id": "audio-job-cleanup", "job_status": "queued"}},
+        },
+    )
+    monkeypatch.setattr(
+        llm_job_billing,
+        "poll_job_envelope",
+        lambda **_kwargs: {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "audio-job-cleanup",
+                    "job_status": "succeeded",
+                    "job_type": "audio_stem_separation",
+                    "job_result": {"stems": {}},
+                }
+            },
+        },
+    )
+
+    audio_stem_separation.run(
+        confirm_run=True,
+        confirm_upload=True,
+        api_url=None,
+        env_file=None,
+        allow_remote_api=False,
+        service_api_key=None,
+        caller_id="caller-1",
+        timeout_seconds=1,
+        poll_interval_seconds=0.1,
+        client_request_id=None,
+        payload_file=None,
+        input_file="input.wav",
+        input_url_ref_json=None,
+        input_public_url=None,
+        input_internal_url=None,
+        input_sha256=None,
+        max_duration_seconds=None,
+        key_prefix=None,
+        signed_url_expires_seconds=3600,
+        download_outputs=False,
+        output_dir=".data/audio-stems",
+        json_output=True,
+    )
+
+    assert cleanup_calls == [staged_input]
+
+
+def test_audio_stem_separation_run_keeps_staged_input_when_create_response_is_unknown(tmp_path, monkeypatch):
+    clear_storage_env(monkeypatch)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text(
+        "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
+        encoding="utf-8",
+    )
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
+    input_audio = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.wav",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.wav",
+        "content_type": "audio/wav",
+        "sha256": "a" * 64,
+    }
+    staged_input = {"provider": "aliyun_oss", "bucket": "bucket-a", "region": "cn-hangzhou", "key": "project-a/audio/input.wav"}
+    cleanup_calls = []
+
+    monkeypatch.setattr(
+        audio_stem_separation,
+        "build_payload",
+        lambda **_kwargs: (
+            audio_stem_separation.build_job_payload(
+                input_audio=input_audio,
+                client_request_id="audio-client-unknown",
+                max_duration_seconds=None,
+            ),
+            staged_input,
+        ),
+    )
+    monkeypatch.setattr(audio_stem_separation, "cleanup_staged_input", lambda staged_input, app_env: cleanup_calls.append(staged_input))
+    monkeypatch.setattr(llm_job_billing, "request_json", lambda *_args, **_kwargs: {"code": "0", "data": {}})
+
+    with pytest.raises(llm_job_billing.FlowError, match="response missing data.job"):
+        audio_stem_separation.run(
+            confirm_run=True,
+            confirm_upload=True,
+            api_url=None,
+            env_file=None,
+            allow_remote_api=False,
+            service_api_key=None,
+            caller_id="caller-1",
+            timeout_seconds=1,
+            poll_interval_seconds=0.1,
+            client_request_id=None,
+            payload_file=None,
+            input_file="input.wav",
+            input_url_ref_json=None,
+            input_public_url=None,
+            input_internal_url=None,
+            input_sha256=None,
+            max_duration_seconds=None,
+            key_prefix=None,
+            signed_url_expires_seconds=3600,
+            download_outputs=False,
+            output_dir=".data/audio-stems",
+            json_output=True,
+        )
+
+    assert cleanup_calls == []
 
 
 def test_real_flow_run_uses_double_job_type(tmp_path, monkeypatch):

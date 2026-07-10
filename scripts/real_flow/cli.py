@@ -4,7 +4,13 @@ from typing import Annotated
 
 import typer
 
-from scripts.real_flow.flows import adapter_image_probe, llm_job_billing, oss_image_upload, poster_title_image
+from scripts.real_flow.flows import (
+    adapter_image_probe,
+    audio_stem_separation,
+    llm_job_billing,
+    oss_image_upload,
+    poster_title_image,
+)
 
 
 POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
@@ -218,6 +224,43 @@ ADAPTER_IMAGE_PROBE_HELP_EPILOG = """\b
   不经过服务 HTTP Job，不查询 billing，不打印图片二进制。
 """
 
+AUDIO_STEM_SEPARATION_HELP_EPILOG = """\b
+常用示例：
+  # 构建完整 create-job payload；默认输出到 stdout。
+  ./scripts/real-flow.sh audio-stem-separation build-payload \\
+    --env-file .env \\
+    --input-file .data/misc/2485_0003_S6_梁萧.wav > .run/audio-stem-payload.json
+
+\b
+  # 使用已构建 payload 提交真实 Job。
+  ./scripts/real-flow.sh audio-stem-separation run \\
+    --confirm-run \\
+    --env-file .env \\
+    --payload-file .run/audio-stem-payload.json \\
+    --json
+
+\b
+  # 直接用本地 WAV 构建入参并提交；STORAGE_BACKEND=aliyun_oss 时需要 --confirm-upload。
+  ./scripts/real-flow.sh audio-stem-separation run \\
+    --confirm-run \\
+    --env-file env_test/.env \\
+    --allow-remote-api \\
+    --api-url http://test-cms-poster-title.epubgame.com \\
+    --confirm-upload \\
+    --input-file .data/misc/2485_0003_S6_梁萧.wav \\
+    --download-outputs \\
+    --json
+
+\b
+输入要求：
+  input_file 必须是 htdemucs-input：WAV、44.1kHz、双声道。
+  build-payload 不提交 Job；使用 --input-file 时会先 stage/upload 输入音频来生成 URL Ref。
+  run 会真实提交 Job、等待终态，并可下载四条 stem。
+  --env-file 沿用 real-flow 既有配置入口；运行时环境变量仍优先于 env 文件。
+  本地文件会先 stage/upload 成 input_audio URL Ref，Job 本身仍按 public_url 读取输入，不直接接收本地文件路径。
+  本地 STORAGE_BACKEND=local 只适合 public_url 已能被 API/worker 读取的环境；远端测试优先使用 STORAGE_BACKEND=aliyun_oss + --confirm-upload。
+"""
+
 
 HELP_EPILOG = f"""\b
 作用域：
@@ -242,6 +285,7 @@ HELP_EPILOG = f"""\b
   ./scripts/real-flow.sh llm-job-billing --confirm-cost --model-id gpt-5.4-mini
   ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini
   ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png
+  ./scripts/real-flow.sh audio-stem-separation build-payload --input-file .data/misc/2485_0003_S6_梁萧.wav
   ./scripts/real-flow.sh adapter-image-probe --confirm-cost --json
   ./scripts/real-flow.sh poster-title-image --confirm-cost --reference .data/title/英语.png --language es --title-text "Cuando el amor se alejo" --json
 
@@ -254,10 +298,11 @@ HELP_EPILOG = f"""\b
 
 \b
 副作用与保护边界：
-  真实模型 Job 命令必须显式传入 --confirm-cost。
+  LLM/image 计费命令必须显式传入 --confirm-cost；audio-stem-separation run 必须显式传入 --confirm-run。
   adapter-image-probe 必须显式传入 --confirm-cost，会直接调用真实 OpenAI image adapter。
   oss-upload-image 必须显式传入 --confirm-upload。
   poster-title-image 在 STORAGE_BACKEND=aliyun_oss 且使用本地参考图时也必须传入 --confirm-upload。
+  audio-stem-separation 在 STORAGE_BACKEND=aliyun_oss 且使用本地音频时也必须传入 --confirm-upload。
   非本机 --api-url 必须显式传入 --allow-remote-api。
   远端测试 OSS 配置优先通过 --env-file 指向测试环境配置文件。
   --service-api-key 会出现在 shell history 和进程参数中；共享机器或 CI 优先通过 SERVICE_API_KEY 环境变量注入。
@@ -275,6 +320,16 @@ app = typer.Typer(
     help="真实业务流程验证入口。",
     epilog=HELP_EPILOG,
     no_args_is_help=False,
+    add_completion=False,
+    rich_markup_mode=None,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
+
+audio_stem_separation_app = typer.Typer(
+    name="audio-stem-separation",
+    help="真实验证 htdemucs-ft ONNX 音乐源分离 Job。",
+    epilog=AUDIO_STEM_SEPARATION_HELP_EPILOG,
+    no_args_is_help=True,
     add_completion=False,
     rich_markup_mode=None,
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -566,6 +621,205 @@ def oss_upload_image_command(
     except oss_image_upload.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(exc.exit_code) from exc
+
+
+@audio_stem_separation_app.command("build-payload", help="构建 audio_stem_separation create-job payload，不提交 Job。")
+def audio_stem_separation_build_payload_command(
+    env_file: Annotated[
+        str | None,
+        typer.Option("--env-file", help="显式配置文件路径；默认读取仓库根目录 .env，运行时环境变量优先。"),
+    ] = None,
+    input_file: Annotated[
+        str | None,
+        typer.Option("--input-file", help="本地 htdemucs-input WAV；脚本会 stage/upload 后生成 input_audio URL Ref。"),
+    ] = None,
+    input_url_ref_json: Annotated[
+        str | None,
+        typer.Option("--input-url-ref-json", help="读取已有 audio URL Ref JSON；传 - 表示 stdin。"),
+    ] = None,
+    input_public_url: Annotated[
+        str | None,
+        typer.Option("--input-public-url", help="已有 audio URL Ref 的 public_url。"),
+    ] = None,
+    input_internal_url: Annotated[
+        str | None,
+        typer.Option("--input-internal-url", help="已有 audio URL Ref 的 internal_url。"),
+    ] = None,
+    input_sha256: Annotated[
+        str | None,
+        typer.Option("--input-sha256", help="已有 audio object 的 64 位小写 SHA-256。"),
+    ] = None,
+    max_duration_seconds: Annotated[
+        float | None,
+        typer.Option("--max-duration-seconds", min=0.1, help="传给 Job 的最大输入时长限制，并用于本地输入预校验。"),
+    ] = None,
+    client_request_id: Annotated[
+        str | None,
+        typer.Option("--client-request-id", help="显式 client_request_id；默认自动生成。"),
+    ] = None,
+    confirm_upload: Annotated[
+        bool,
+        typer.Option("--confirm-upload", help="确认 STORAGE_BACKEND=aliyun_oss 时会上传本地音频到阿里云 OSS。"),
+    ] = False,
+    key_prefix: Annotated[
+        str | None,
+        typer.Option("--key-prefix", help="本地 stage 或 OSS upload 的输入对象业务前缀。"),
+    ] = None,
+    signed_url_expires_seconds: Annotated[
+        int,
+        typer.Option("--signed-url-expires-seconds", min=1, help="Aliyun OSS 上传后生成的临时 signed_url 有效秒数。"),
+    ] = 3600,
+    output: Annotated[
+        str,
+        typer.Option("--output", help="payload 输出路径；- 表示 stdout。"),
+    ] = "-",
+) -> None:
+    try:
+        payload, _staged_input = audio_stem_separation.build_payload(
+            env_file=env_file,
+            input_file=input_file,
+            input_url_ref_json=input_url_ref_json,
+            input_public_url=input_public_url,
+            input_internal_url=input_internal_url,
+            input_sha256=input_sha256,
+            max_duration_seconds=max_duration_seconds,
+            client_request_id=client_request_id,
+            confirm_upload=confirm_upload,
+            key_prefix=key_prefix,
+            signed_url_expires_seconds=signed_url_expires_seconds,
+        )
+        audio_stem_separation.write_or_print_payload(payload, output=output)
+    except audio_stem_separation.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+
+
+@audio_stem_separation_app.command("run", help="提交 audio_stem_separation 真实 Job，等待终态并可下载四条 stem。")
+def audio_stem_separation_run_command(
+    confirm_run: Annotated[
+        bool,
+        typer.Option("--confirm-run", help="确认本命令会真实提交 Job、占用模型推理资源并写输出对象。"),
+    ] = False,
+    confirm_upload: Annotated[
+        bool,
+        typer.Option("--confirm-upload", help="确认 STORAGE_BACKEND=aliyun_oss 时会上传本地音频到阿里云 OSS。"),
+    ] = False,
+    api_url: Annotated[
+        str | None,
+        typer.Option("--api-url", help="API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导，远端 URL 必须配合 --allow-remote-api。"),
+    ] = None,
+    env_file: Annotated[
+        str | None,
+        typer.Option("--env-file", help="显式配置文件路径；默认读取仓库根目录 .env，运行时环境变量优先。"),
+    ] = None,
+    allow_remote_api: Annotated[
+        bool,
+        typer.Option("--allow-remote-api", help="允许 --api-url 或 API_URL 指向非本机地址；用于显式测试远端环境。"),
+    ] = False,
+    service_api_key: Annotated[
+        str | None,
+        typer.Option("--service-api-key", help="覆盖 SERVICE_API_KEY，作为 Authorization: Bearer token 发送。"),
+    ] = None,
+    caller_id: Annotated[
+        str,
+        typer.Option("--caller-id", "--x-ai-service-caller-id", help="X-AI-Service-Caller-ID。"),
+    ] = "real-flow-cli",
+    timeout_seconds: Annotated[
+        int,
+        typer.Option("--timeout-seconds", min=1, help="等待 Job 到达终态的最长秒数。"),
+    ] = 2400,
+    poll_interval_seconds: Annotated[
+        float,
+        typer.Option("--poll-interval-seconds", min=0.1, help="轮询 Job 状态的间隔秒数。"),
+    ] = 5.0,
+    client_request_id: Annotated[
+        str | None,
+        typer.Option("--client-request-id", help="显式 client_request_id；默认自动生成。"),
+    ] = None,
+    payload_file: Annotated[
+        str | None,
+        typer.Option("--payload-file", help="已构建的 audio_stem_separation create-job payload JSON。"),
+    ] = None,
+    input_file: Annotated[
+        str | None,
+        typer.Option("--input-file", help="本地 htdemucs-input WAV；不能与 --payload-file 同时使用。"),
+    ] = None,
+    input_url_ref_json: Annotated[
+        str | None,
+        typer.Option("--input-url-ref-json", help="读取已有 audio URL Ref JSON；传 - 表示 stdin。"),
+    ] = None,
+    input_public_url: Annotated[
+        str | None,
+        typer.Option("--input-public-url", help="已有 audio URL Ref 的 public_url。"),
+    ] = None,
+    input_internal_url: Annotated[
+        str | None,
+        typer.Option("--input-internal-url", help="已有 audio URL Ref 的 internal_url。"),
+    ] = None,
+    input_sha256: Annotated[
+        str | None,
+        typer.Option("--input-sha256", help="已有 audio object 的 64 位小写 SHA-256。"),
+    ] = None,
+    max_duration_seconds: Annotated[
+        float | None,
+        typer.Option("--max-duration-seconds", min=0.1, help="传给 Job 的最大输入时长限制，并用于本地输入预校验。"),
+    ] = None,
+    key_prefix: Annotated[
+        str | None,
+        typer.Option("--key-prefix", help="本地 stage 或 OSS upload 的输入对象业务前缀。"),
+    ] = None,
+    signed_url_expires_seconds: Annotated[
+        int,
+        typer.Option("--signed-url-expires-seconds", min=1, help="public_url 不可读时生成临时 signed URL 的有效秒数。"),
+    ] = 3600,
+    download_outputs: Annotated[
+        bool,
+        typer.Option("--download-outputs", help="下载 Job 结果里的 drums/bass/other/vocals WAV 到本地目录，并校验 sha256。"),
+    ] = False,
+    output_dir: Annotated[
+        str,
+        typer.Option("--output-dir", help="--download-outputs 的本地保存目录。"),
+    ] = audio_stem_separation.DEFAULT_OUTPUT_DIR,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="输出 summary 和原始 HTTP envelope responses。"),
+    ] = False,
+) -> None:
+    try:
+        audio_stem_separation.run(
+            confirm_run=confirm_run,
+            confirm_upload=confirm_upload,
+            api_url=api_url,
+            env_file=env_file,
+            allow_remote_api=allow_remote_api,
+            service_api_key=service_api_key,
+            caller_id=caller_id,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            client_request_id=client_request_id,
+            payload_file=payload_file,
+            input_file=input_file,
+            input_url_ref_json=input_url_ref_json,
+            input_public_url=input_public_url,
+            input_internal_url=input_internal_url,
+            input_sha256=input_sha256,
+            max_duration_seconds=max_duration_seconds,
+            key_prefix=key_prefix,
+            signed_url_expires_seconds=signed_url_expires_seconds,
+            download_outputs=download_outputs,
+            output_dir=output_dir,
+            json_output=json_output,
+        )
+    except audio_stem_separation.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+
+
+app.add_typer(
+    audio_stem_separation_app,
+    name="audio-stem-separation",
+    help="真实验证 htdemucs-ft ONNX 音乐源分离 Job。",
+)
 
 
 @app.command(

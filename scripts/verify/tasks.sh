@@ -218,6 +218,7 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/real_flow/__init__.py" \
     "$ROOT_DIR/scripts/real_flow/cli.py" \
     "$ROOT_DIR/scripts/real_flow/flows/__init__.py" \
+    "$ROOT_DIR/scripts/real_flow/flows/audio_stem_separation.py" \
     "$ROOT_DIR/scripts/real_flow/flows/llm_job_billing.py" \
     "$ROOT_DIR/scripts/real_flow/flows/oss_image_upload.py" \
     "$ROOT_DIR/scripts/real_flow/flows/poster_title_image.py" \
