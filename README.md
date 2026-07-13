@@ -237,7 +237,7 @@ Job 只读排障由 `jobs.sh` 承接：
 
 `jobs.sh` 只执行只读查询，不创建 Job、不取消、不重试、不补偿、不重放 callback。无参默认输出 Job overview；`guide` 解释系统态、恢复态、运输和运行时、单 Job 轨迹四层排障模型。默认输出面向人读，`--json` 输出纯 JSON，适合 AI、CI 或运维平台解析。`verify.sh check` 会校验入口 help、子命令 help、Python 语法和测试；help 校验不连接数据库。
 
-脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/jobs.sh` 调度 `scripts/jobs/` 中的只读 Job 排障能力，`scripts/deploy.sh` 只调度 compose 部署能力，`scripts/k8s.sh` 只提供 Pod 内连接检查和 Alembic 运维入口，`scripts/models.sh` 只管理 `.data/models/` 下的本地模型资产下载、路径和必需文件检查，`scripts/media.sh` 只管理本地音视频素材探测、校验和准备，`scripts/tools.sh` 只提供无默认持久副作用的本地开发辅助工具。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。本地脚本变量、应用配置和 compose 编排变量统一从根目录 `.env` 或运行时环境读取；不再维护 `scripts/.env`。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
+脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/jobs.sh` 调度 `scripts/jobs/` 中的只读 Job 排障能力，`scripts/deploy.sh` 只调度 compose 部署能力，`scripts/k8s.sh` 只提供 Pod 内连接检查和 Alembic 运维入口，`scripts/models.sh` 只管理 `.data/models/` 下的本地模型资产下载、路径和必需文件检查，`scripts/media.sh` 只管理本地音视频素材探测、校验和准备，`scripts/tools.sh` 只提供无默认持久副作用的本地开发辅助工具，`scripts/triton-bench.sh` 只直连 Triton 推理服务做保守阶梯压测。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。本地脚本变量、应用配置和 compose 编排变量统一从根目录 `.env` 或运行时环境读取；不再维护 `scripts/.env`。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
 
 入口脚本约束：
 
@@ -250,6 +250,7 @@ Job 只读排障由 `jobs.sh` 承接：
 - `scripts/models.sh` 只管理本地模型资产下载、路径和必需文件检查；不执行模型推理，不自动切换下载源，不删除本地模型。
 - `scripts/media.sh` 只管理本地音视频素材探测、校验和准备；不下载模型、不执行推理、不提交 Job、不上传对象存储。
 - `scripts/tools.sh` 只放无默认持久副作用的小型开发辅助工具，不读取或修改 `.env`。
+- `scripts/triton-bench.sh` 只直连 audio stem Triton endpoint；不创建 Job、不访问 DB/Redis/OSS、不触发 callback。
 - 不新增 silent fallback、默认吞错或跨职责兼容别名；命令不满足前置条件时应直接报错。
 - `local` 与 `compose-full` 的 API / worker 运行模式必须互斥；脚本发现混跑或残留进程时应 fail-fast 或在 status 中明确告警。
 

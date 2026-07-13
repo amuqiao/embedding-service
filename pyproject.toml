@@ -24,10 +24,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+audio-triton = [
+    "soundfile==0.14.0",
+    "tritonclient[http]==2.70.0",
+]
 audio-separation = [
     "onnxruntime==1.27.0",
     "soundfile==0.14.0",
-    "tritonclient[http]",
+    "tritonclient[http]==2.70.0",
 ]
 
 [dependency-groups]

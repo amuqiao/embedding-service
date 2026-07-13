@@ -49,6 +49,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/deploy.sh" \
     "$ROOT_DIR/scripts/k8s.sh" \
     "$ROOT_DIR/scripts/load.sh" \
+    "$ROOT_DIR/scripts/triton-bench.sh" \
     "$ROOT_DIR/scripts/jobs.sh" \
     "$ROOT_DIR/scripts/real-flow.sh" \
     "$ROOT_DIR/scripts/models.sh" \
@@ -118,6 +119,9 @@ run_cli_smoke() {
   assert_generated_commands_help "load.sh" "$ROOT_DIR/scripts/load.sh" \
     guide cases list profiles init smoke run ui report pressure drain
   event "OK" "load.sh" "help"
+  assert_generated_commands_help "triton-bench.sh" "$ROOT_DIR/scripts/triton-bench.sh" \
+    doctor run
+  event "OK" "triton-bench.sh" "help"
   "$ROOT_DIR/scripts/models.sh" --help >/dev/null
   event "OK" "models.sh" "help"
   "$ROOT_DIR/scripts/media.sh" --help >/dev/null
@@ -175,6 +179,8 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/load.sh" report --help >/dev/null
   "$ROOT_DIR/scripts/load.sh" pressure --help >/dev/null
   "$ROOT_DIR/scripts/load.sh" drain --help >/dev/null
+  "$ROOT_DIR/scripts/triton-bench.sh" doctor --help >/dev/null
+  "$ROOT_DIR/scripts/triton-bench.sh" run --help >/dev/null
   "$ROOT_DIR/deploy/release-test.sh" prepare --help >/dev/null
   "$ROOT_DIR/deploy/release-test.sh" --push --help >/dev/null
   "$ROOT_DIR/deploy/release-master.sh" prepare --help >/dev/null
@@ -208,6 +214,8 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/load/locustfile.py" \
     "$ROOT_DIR/scripts/load/profiles.py" \
     "$ROOT_DIR/scripts/load/support.py" \
+    "$ROOT_DIR/scripts/triton_bench/__init__.py" \
+    "$ROOT_DIR/scripts/triton_bench/cli.py" \
     "$ROOT_DIR/scripts/jobs/__init__.py" \
     "$ROOT_DIR/scripts/jobs/cli.py" \
     "$ROOT_DIR/scripts/jobs/db.py" \
@@ -229,6 +237,7 @@ run_python_syntax() {
   event "OK" "dev/check_ports.py" "py_compile"
   event "OK" "verify/*.py" "py_compile"
   event "OK" "load/*.py" "py_compile"
+  event "OK" "triton_bench/*.py" "py_compile"
   event "OK" "jobs/*.py" "py_compile"
   event "OK" "models/*.py" "py_compile"
   event "OK" "real_flow/*.py" "py_compile"
