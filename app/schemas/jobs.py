@@ -574,10 +574,23 @@ class AudioStemSeparationParams(StrictBaseModel):
     max_duration_seconds: float | None = Field(default=None, gt=0, le=3600)
 
 
+class AudioStemSeparationTritonParams(AudioStemSeparationParams):
+    pass
+
+
 class AudioStemSeparationRuntimeFields(RuntimeFieldsBase):
     operation: Literal["audio_stem_separation"] = "audio_stem_separation"
     onnx_model_version: str = Field(min_length=1, max_length=128)
     execution_provider: str = Field(min_length=1, max_length=128)
+    segment_seconds: float = Field(gt=0)
+    overlap_ratio: float = Field(gt=0, lt=1)
+
+
+class AudioStemSeparationTritonRuntimeFields(RuntimeFieldsBase):
+    operation: Literal["audio_stem_separation_triton"] = "audio_stem_separation_triton"
+    onnx_model_version: str = Field(min_length=1, max_length=128)
+    model_service: Literal["triton"] = "triton"
+    triton_model_version: str = Field(min_length=1, max_length=64)
     segment_seconds: float = Field(gt=0)
     overlap_ratio: float = Field(gt=0, lt=1)
 
@@ -619,6 +632,20 @@ class AudioStemSeparationResult(StrictBaseModel):
     channels: Literal[2] = 2
     onnx_model_version: str = Field(min_length=1, max_length=128)
     execution_provider: str = Field(min_length=1, max_length=128)
+    duration_ms: AudioStemSeparationDurationMs
+
+
+class AudioStemSeparationTritonResult(StrictBaseModel):
+    schema_version: Literal["default"] = "default"
+    job_type: Literal["audio_stem_separation_triton"] = "audio_stem_separation_triton"
+    stems: AudioStemSeparationStemOutputs
+    source_duration_seconds: float = Field(gt=0)
+    segment_count: int = Field(ge=1)
+    sample_rate: Literal[44100] = 44100
+    channels: Literal[2] = 2
+    onnx_model_version: str = Field(min_length=1, max_length=128)
+    model_service: Literal["triton"] = "triton"
+    triton_model_version: str = Field(min_length=1, max_length=64)
     duration_ms: AudioStemSeparationDurationMs
 
 

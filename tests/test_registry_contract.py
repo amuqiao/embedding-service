@@ -311,6 +311,24 @@ def test_job_type_registry_exposes_required_metadata():
     assert AUDIO_STEM_MODEL_ASSET_MISSING in audio_spec.error_codes
     assert audio_spec.prompt_specs == ()
 
+    assert "audio_stem_separation_triton" in specs
+    audio_triton_spec = specs["audio_stem_separation_triton"]
+    assert audio_triton_spec.params_schema == "AudioStemSeparationTritonParams"
+    assert audio_triton_spec.runtime_fields_schema == "AudioStemSeparationTritonRuntimeFields"
+    assert audio_triton_spec.canonical_result_schema == "AudioStemSeparationTritonResult"
+    assert audio_triton_spec.public_result_schema == "AudioStemSeparationTritonResult"
+    assert audio_triton_spec.visibility == "demo"
+    assert audio_triton_spec.role == "root"
+    assert audio_triton_spec.allow_callback is True
+    assert audio_triton_spec.execution_mode == "custom_executor"
+    _assert_default_retry_policy(audio_triton_spec.retry_policy)
+    assert audio_triton_spec.side_effect_policy == "none"
+    assert audio_triton_spec.timeout_seconds == 2400
+    assert audio_triton_spec.error_codes <= all_error_reasons()
+    assert AUDIO_STEM_INPUT_INVALID in audio_triton_spec.error_codes
+    assert AUDIO_STEM_MODEL_ASSET_MISSING in audio_triton_spec.error_codes
+    assert audio_triton_spec.prompt_specs == ()
+
 
 def test_registered_job_type_names_are_layered_contract():
     register_all_job_types()
@@ -325,6 +343,7 @@ def test_registered_job_type_names_are_layered_contract():
         "example_sleep",
         "example_workflow",
         "audio_stem_separation",
+        "audio_stem_separation_triton",
         "poster_title_image",
         "poster_title_image_generate_item",
         "poster_title_image_join",

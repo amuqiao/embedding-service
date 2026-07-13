@@ -27,6 +27,7 @@ dependencies = [
 audio-separation = [
     "onnxruntime==1.27.0",
     "soundfile==0.14.0",
+    "tritonclient[http]",
 ]
 
 [dependency-groups]

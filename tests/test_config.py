@@ -206,18 +206,30 @@ def test_audio_stem_separation_config_defaults_and_overrides():
     assert default_settings.job.audio_stem_separation_allowed_oss_regions == ("local",)
     assert default_settings.job.audio_stem_separation_execution_provider == "auto"
     assert default_settings.job.htdemucs_model_dir == config_module.ROOT_DIR / ".data/models/htdemucs-ft"
+    assert default_settings.job.audio_stem_triton_url == ""
+    assert default_settings.job.audio_stem_triton_token_value == ""
+    assert default_settings.job.audio_stem_triton_model_version == "1"
+    assert default_settings.job.audio_stem_triton_request_timeout_seconds == 300
 
     custom_settings = _build_settings(
         AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS="audio-dev, audio-prod,audio-dev",
         AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS="local,cn-shanghai",
         AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER="cuda",
         HTDEMUCS_MODEL_DIR="/tmp/htdemucs-ft",
+        AUDIO_STEM_TRITON_URL="service.cn-hangzhou.pai-eas.aliyuncs.com/api/predict/audio_stem_triton",
+        AUDIO_STEM_TRITON_TOKEN="triton-token",
+        AUDIO_STEM_TRITON_MODEL_VERSION="2",
+        AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS=120,
     )
 
     assert custom_settings.job.audio_stem_separation_allowed_oss_buckets == ("audio-dev", "audio-prod")
     assert custom_settings.job.audio_stem_separation_allowed_oss_regions == ("local", "cn-shanghai")
     assert custom_settings.job.audio_stem_separation_execution_provider == "cuda"
     assert str(custom_settings.job.htdemucs_model_dir) == "/tmp/htdemucs-ft"
+    assert custom_settings.job.audio_stem_triton_url == "service.cn-hangzhou.pai-eas.aliyuncs.com/api/predict/audio_stem_triton"
+    assert custom_settings.job.audio_stem_triton_token_value == "triton-token"
+    assert custom_settings.job.audio_stem_triton_model_version == "2"
+    assert custom_settings.job.audio_stem_triton_request_timeout_seconds == 120
 
 
 @pytest.mark.parametrize(
@@ -229,6 +241,10 @@ def test_audio_stem_separation_config_defaults_and_overrides():
         ("AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS", "local,"),
         ("AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER", "gpu"),
         ("HTDEMUCS_MODEL_DIR", ""),
+        ("AUDIO_STEM_TRITON_URL", "http://service.cn-hangzhou.pai-eas.aliyuncs.com/api/predict/audio_stem_triton"),
+        ("AUDIO_STEM_TRITON_URL", " service.cn-hangzhou.pai-eas.aliyuncs.com/api/predict/audio_stem_triton"),
+        ("AUDIO_STEM_TRITON_MODEL_VERSION", ""),
+        ("AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS", 0),
     ],
 )
 def test_audio_stem_separation_config_rejects_empty_values(key, value):
@@ -385,6 +401,7 @@ def test_settings_secrets_are_not_dumped_or_repr_exposed():
         SERVICE_API_KEY="secret-service-token",
         CALLBACK_SIGNING_SECRET="secret-callback-token",
         OPENAI_API_KEY="secret-openai-token",
+        AUDIO_STEM_TRITON_TOKEN="secret-triton-token",
     )
 
     dumped = repr(s.model_dump())
@@ -393,9 +410,11 @@ def test_settings_secrets_are_not_dumped_or_repr_exposed():
     assert "secret-service-token" not in dumped
     assert "secret-callback-token" not in dumped
     assert "secret-openai-token" not in dumped
+    assert "secret-triton-token" not in dumped
     assert "secret-service-token" not in rendered
     assert "secret-callback-token" not in rendered
     assert "secret-openai-token" not in rendered
+    assert "secret-triton-token" not in rendered
 
 
 def test_callback_delivery_window_is_anchored_to_http_timeout_not_retry_delay():

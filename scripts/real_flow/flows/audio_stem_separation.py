@@ -17,6 +17,8 @@ from scripts.real_flow.flows import llm_job_billing, oss_image_upload, poster_ti
 FlowError = llm_job_billing.FlowError
 ROOT_DIR = llm_job_billing.ROOT_DIR
 DEFAULT_JOB_TYPE = "audio_stem_separation"
+TRITON_JOB_TYPE = "audio_stem_separation_triton"
+SUPPORTED_JOB_TYPES = (DEFAULT_JOB_TYPE, TRITON_JOB_TYPE)
 DEFAULT_INPUT_KEY_PREFIX = "real-flow/audio-stem-separation/input"
 DEFAULT_OUTPUT_DIR = ".data/real-flow/audio-stem-separation"
 AUDIO_WAV_CONTENT_TYPE = "audio/wav"
@@ -39,6 +41,15 @@ def _display_path(path: Path) -> str:
 
 def _bare_sha256(data: bytes) -> str:
     return oss_image_upload.bare_sha256(data)
+
+
+def validate_job_type(job_type: str) -> str:
+    if job_type not in SUPPORTED_JOB_TYPES:
+        raise FlowError(
+            f"audio stem separation job_type must be one of: {', '.join(SUPPORTED_JOB_TYPES)}",
+            exit_code=2,
+        )
+    return job_type
 
 
 def _required_mapping_str(ref: dict[str, Any], key: str, *, label: str) -> str:
@@ -282,22 +293,27 @@ def resolve_input_audio(
 def build_job_payload(
     *,
     input_audio: dict[str, str],
+    job_type: str,
     client_request_id: str | None,
     max_duration_seconds: float | None,
 ) -> dict[str, Any]:
+    validated_job_type = validate_job_type(job_type)
     job_params: dict[str, Any] = {"input_audio": input_audio}
     if max_duration_seconds is not None:
         job_params["max_duration_seconds"] = max_duration_seconds
     return {
-        "client_request_id": client_request_id or f"real-flow-audio-stem-separation-{uuid.uuid4()}",
-        "job_type": DEFAULT_JOB_TYPE,
+        "client_request_id": client_request_id or f"real-flow-{validated_job_type.replace('_', '-')}-{uuid.uuid4()}",
+        "job_type": validated_job_type,
         "job_params": job_params,
-        "metadata": {"source": "scripts/real-flow.sh audio-stem-separation"},
+        "metadata": {
+            "source": "scripts/real-flow.sh audio-stem-separation",
+            "job_type": validated_job_type,
+        },
         "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
     }
 
 
-def _load_payload_file(path: str) -> dict[str, Any]:
+def _load_payload_file(path: str, *, job_type: str | None = None) -> dict[str, Any]:
     source = _resolve_repo_path(path)
     if not source.is_file():
         raise FlowError(f"payload file not found: {source}", exit_code=2)
@@ -307,12 +323,16 @@ def _load_payload_file(path: str) -> dict[str, Any]:
         raise FlowError(f"payload file is invalid JSON: {exc}", exit_code=2) from exc
     if not isinstance(payload, dict):
         raise FlowError("payload file must contain a JSON object", exit_code=2)
-    if payload.get("job_type") == DEFAULT_JOB_TYPE and isinstance(payload.get("job_params"), dict):
+    if payload.get("job_type") in SUPPORTED_JOB_TYPES and isinstance(payload.get("job_params"), dict):
+        if job_type is not None and payload.get("job_type") != job_type:
+            raise FlowError(f"payload job_type must match --job-type {job_type}", exit_code=2)
         return payload
+    target_job_type = validate_job_type(job_type or DEFAULT_JOB_TYPE)
     if isinstance(payload.get("input_audio"), dict):
         max_duration_seconds = payload.get("max_duration_seconds")
         return build_job_payload(
             input_audio=_input_ref_from_mapping(payload["input_audio"], label="payload file input_audio"),
+            job_type=target_job_type,
             client_request_id=None,
             max_duration_seconds=max_duration_seconds if isinstance(max_duration_seconds, (int, float)) else None,
         )
@@ -322,10 +342,14 @@ def _load_payload_file(path: str) -> dict[str, Any]:
             max_duration_seconds = nested.get("max_duration_seconds")
             return build_job_payload(
                 input_audio=_input_ref_from_mapping(nested["input_audio"], label="payload file job_params.input_audio"),
+                job_type=target_job_type,
                 client_request_id=str(payload.get("client_request_id")) if payload.get("client_request_id") is not None else None,
                 max_duration_seconds=max_duration_seconds if isinstance(max_duration_seconds, (int, float)) else None,
             )
-    raise FlowError("payload file must contain audio_stem_separation create payload or job_params", exit_code=2)
+    raise FlowError(
+        "payload file must contain audio_stem_separation/audio_stem_separation_triton create payload or job_params",
+        exit_code=2,
+    )
 
 
 def write_or_print_payload(payload: dict[str, Any], *, output: str | None) -> None:
@@ -342,6 +366,7 @@ def write_or_print_payload(payload: dict[str, Any], *, output: str | None) -> No
 def build_payload(
     *,
     env_file: str | None,
+    job_type: str,
     input_file: str | None,
     input_url_ref_json: str | None,
     input_public_url: str | None,
@@ -368,6 +393,7 @@ def build_payload(
     )
     return build_job_payload(
         input_audio=input_audio,
+        job_type=job_type,
         client_request_id=client_request_id,
         max_duration_seconds=max_duration_seconds,
     ), staged_input
@@ -505,6 +531,7 @@ def run(
     caller_id: str,
     timeout_seconds: int,
     poll_interval_seconds: float,
+    job_type: str,
     client_request_id: str | None,
     payload_file: str | None,
     input_file: str | None,
@@ -521,6 +548,7 @@ def run(
 ) -> None:
     if not confirm_run:
         raise FlowError("audio stem separation real flow requires --confirm-run", exit_code=2)
+    target_job_type = validate_job_type(job_type)
     context = llm_job_billing.resolve_runtime_context(
         env_file=env_file,
         api_url=api_url,
@@ -538,10 +566,11 @@ def run(
         if payload_file is not None:
             if any([input_file, input_url_ref_json, input_public_url, input_internal_url, input_sha256]):
                 raise FlowError("--payload-file cannot be combined with audio input source options", exit_code=2)
-            payload = _load_payload_file(payload_file)
+            payload = _load_payload_file(payload_file, job_type=target_job_type)
         else:
             payload, staged_input = build_payload(
                 env_file=env_file,
+                job_type=target_job_type,
                 input_file=input_file,
                 input_url_ref_json=input_url_ref_json,
                 input_public_url=input_public_url,
@@ -553,8 +582,8 @@ def run(
                 key_prefix=key_prefix,
                 signed_url_expires_seconds=signed_url_expires_seconds,
             )
-        if payload.get("job_type") != DEFAULT_JOB_TYPE:
-            raise FlowError(f"payload job_type must be {DEFAULT_JOB_TYPE}", exit_code=2)
+        if payload.get("job_type") not in SUPPORTED_JOB_TYPES:
+            raise FlowError(f"payload job_type must be one of: {', '.join(SUPPORTED_JOB_TYPES)}", exit_code=2)
         if client_request_id is not None:
             payload["client_request_id"] = client_request_id
 

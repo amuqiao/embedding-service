@@ -327,7 +327,7 @@ app = typer.Typer(
 
 audio_stem_separation_app = typer.Typer(
     name="audio-stem-separation",
-    help="真实验证 htdemucs-ft ONNX 音乐源分离 Job。",
+    help="真实验证 htdemucs-ft 音乐源分离 Job，支持本地 ONNX 和 Triton 模型服务两种 job_type。",
     epilog=AUDIO_STEM_SEPARATION_HELP_EPILOG,
     no_args_is_help=True,
     add_completion=False,
@@ -623,7 +623,10 @@ def oss_upload_image_command(
         raise typer.Exit(exc.exit_code) from exc
 
 
-@audio_stem_separation_app.command("build-payload", help="构建 audio_stem_separation create-job payload，不提交 Job。")
+@audio_stem_separation_app.command(
+    "build-payload",
+    help="构建 audio_stem_separation/audio_stem_separation_triton create-job payload，不提交 Job。",
+)
 def audio_stem_separation_build_payload_command(
     env_file: Annotated[
         str | None,
@@ -633,6 +636,10 @@ def audio_stem_separation_build_payload_command(
         str | None,
         typer.Option("--input-file", help="本地 htdemucs-input WAV；脚本会 stage/upload 后生成 input_audio URL Ref。"),
     ] = None,
+    job_type: Annotated[
+        str,
+        typer.Option("--job-type", help="提交的音频分离 job_type：audio_stem_separation 或 audio_stem_separation_triton。"),
+    ] = audio_stem_separation.DEFAULT_JOB_TYPE,
     input_url_ref_json: Annotated[
         str | None,
         typer.Option("--input-url-ref-json", help="读取已有 audio URL Ref JSON；传 - 表示 stdin。"),
@@ -677,6 +684,7 @@ def audio_stem_separation_build_payload_command(
     try:
         payload, _staged_input = audio_stem_separation.build_payload(
             env_file=env_file,
+            job_type=job_type,
             input_file=input_file,
             input_url_ref_json=input_url_ref_json,
             input_public_url=input_public_url,
@@ -694,7 +702,10 @@ def audio_stem_separation_build_payload_command(
         raise typer.Exit(exc.exit_code) from exc
 
 
-@audio_stem_separation_app.command("run", help="提交 audio_stem_separation 真实 Job，等待终态并可下载四条 stem。")
+@audio_stem_separation_app.command(
+    "run",
+    help="提交 audio_stem_separation/audio_stem_separation_triton 真实 Job，等待终态并可下载四条 stem。",
+)
 def audio_stem_separation_run_command(
     confirm_run: Annotated[
         bool,
@@ -736,9 +747,13 @@ def audio_stem_separation_run_command(
         str | None,
         typer.Option("--client-request-id", help="显式 client_request_id；默认自动生成。"),
     ] = None,
+    job_type: Annotated[
+        str,
+        typer.Option("--job-type", help="提交的音频分离 job_type：audio_stem_separation 或 audio_stem_separation_triton。"),
+    ] = audio_stem_separation.DEFAULT_JOB_TYPE,
     payload_file: Annotated[
         str | None,
-        typer.Option("--payload-file", help="已构建的 audio_stem_separation create-job payload JSON。"),
+        typer.Option("--payload-file", help="已构建的 audio_stem_separation/audio_stem_separation_triton create-job payload JSON。"),
     ] = None,
     input_file: Annotated[
         str | None,
@@ -796,6 +811,7 @@ def audio_stem_separation_run_command(
             caller_id=caller_id,
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
+            job_type=job_type,
             client_request_id=client_request_id,
             payload_file=payload_file,
             input_file=input_file,

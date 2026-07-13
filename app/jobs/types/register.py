@@ -5,6 +5,7 @@ def register_all_job_types() -> None:
     from app.jobs.registry import register
     from app.jobs.types.audio_stem_separation import AudioStemSeparationJob
     from app.jobs.types.audio_stem_separation.errors import register_audio_stem_separation_errors
+    from app.jobs.types.audio_stem_separation_triton import AudioStemSeparationTritonJob
     from app.jobs.types.poster_title_image.errors import register_poster_title_image_errors
     from app.jobs.types.arithmetic import ArithmeticJob
     from app.jobs.types.examples import (
@@ -39,6 +40,7 @@ def register_all_job_types() -> None:
         PosterTitleImageGenerateItemJob,
         PosterTitleImageJoinJob,
         AudioStemSeparationJob,
+        AudioStemSeparationTritonJob,
     ):
         register(executor_cls())
     register_example_workflows()

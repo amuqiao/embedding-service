@@ -79,6 +79,10 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS": ("job", "audio_stem_separation_allowed_oss_regions_raw"),
     "AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER": ("job", "audio_stem_separation_execution_provider"),
     "HTDEMUCS_MODEL_DIR": ("job", "htdemucs_model_dir_raw"),
+    "AUDIO_STEM_TRITON_URL": ("job", "audio_stem_triton_url"),
+    "AUDIO_STEM_TRITON_TOKEN": ("job", "audio_stem_triton_token"),
+    "AUDIO_STEM_TRITON_MODEL_VERSION": ("job", "audio_stem_triton_model_version"),
+    "AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS": ("job", "audio_stem_triton_request_timeout_seconds"),
     "CALLBACK_TIMEOUT_SECONDS": ("callback", "timeout_seconds"),
     "PROMPT_CONFIG_PATH": ("registry", "prompt_config_path_raw"),
     "LOG_LEVEL": ("observability", "log_level"),
@@ -508,6 +512,10 @@ class JobSettings(ConfigSection):
     audio_stem_separation_allowed_oss_regions_raw: str = "local"
     audio_stem_separation_execution_provider: str = "auto"
     htdemucs_model_dir_raw: str = ".data/models/htdemucs-ft"
+    audio_stem_triton_url: str = ""
+    audio_stem_triton_token: SecretStr = Field(default=SecretStr(""), repr=False)
+    audio_stem_triton_model_version: str = "1"
+    audio_stem_triton_request_timeout_seconds: float = 300
     orphan_timeout_seconds: int = 300
     dispatch_max_publish_attempts: int = 12
     recovery_interval_seconds: int = 60
@@ -525,6 +533,7 @@ class JobSettings(ConfigSection):
             "JOB_RECOVERY_INTERVAL_SECONDS": self.recovery_interval_seconds,
             "JOB_RECOVERY_BATCH_SIZE": self.recovery_batch_size,
             "JOB_RECOVERY_CALLBACK_BATCH_SIZE": self.recovery_callback_batch_size,
+            "AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS": self.audio_stem_triton_request_timeout_seconds,
         }
         for name, value in positive_fields.items():
             if value <= 0:
@@ -553,6 +562,12 @@ class JobSettings(ConfigSection):
             raise ValueError("AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER must be auto, cpu, or cuda")
         if not self.htdemucs_model_dir_raw.strip():
             raise ValueError("HTDEMUCS_MODEL_DIR must not be empty")
+        if self.audio_stem_triton_url.strip() and "://" in self.audio_stem_triton_url:
+            raise ValueError("AUDIO_STEM_TRITON_URL must not include http:// or https://")
+        if self.audio_stem_triton_url != self.audio_stem_triton_url.strip():
+            raise ValueError("AUDIO_STEM_TRITON_URL must not have leading or trailing whitespace")
+        if not self.audio_stem_triton_model_version.strip():
+            raise ValueError("AUDIO_STEM_TRITON_MODEL_VERSION must not be empty")
         return self
 
     @property
@@ -586,6 +601,10 @@ class JobSettings(ConfigSection):
     @property
     def htdemucs_model_dir(self) -> Path:
         return _resolve_repo_path(self.htdemucs_model_dir_raw)
+
+    @property
+    def audio_stem_triton_token_value(self) -> str:
+        return self.audio_stem_triton_token.get_secret_value()
 
 
 class ObservabilitySettings(ConfigSection):

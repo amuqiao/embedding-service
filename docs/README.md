@@ -10,6 +10,7 @@
 | [`current/ai-capability.md`](current/ai-capability.md) | 当前 AI 调用入口、model/prompt/pricing registry、AI kernel 组件和文本 provider path |
 | [`current/ai-billing.md`](current/ai-billing.md) | 当前 AI call ledger、usage/cost 事实源、Job billing 聚合和非资金账本边界 |
 | [`current/job-kernel.md`](current/job-kernel.md) | 当前 Job、幂等键、Attempt、Dispatch outbox、Callback outbox、root/child lineage 和表设计边界 |
+| [`current/audio-stem-separation-triton.md`](current/audio-stem-separation-triton.md) | `audio_stem_separation_triton` 当前调用链、FastAPI/Triton/model repository 职责边界、固定 tensor I/O、配置、schema/result 和 real-flow 验证入口；不替代外部 Triton 部署手册 |
 | [`runbooks/job-kernel-explained.md`](runbooks/job-kernel-explained.md) | 跟一个请求走完整条 Job 链路的心智模型讲解，配套 `job-kernel.md` 的事实清单，不是独立事实源 |
 | [`current/workflow-kernel.md`](current/workflow-kernel.md) | 当前 DAG-lite root/child workflow、child Job 执行、root 汇总和 billing scope 行为 |
 | [`current/observability.md`](current/observability.md) | 当前日志出口、request_id、业务事件白名单、本地 `logs/` 边界和新增日志代码规范 |

@@ -776,8 +776,14 @@ job_audit_events         排障时间线，不参与状态推进
 | `AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS` / `AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS` | `audio_stem_separation` 输入 WAV OSS 来源白名单 |
 | `AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER` | `audio_stem_separation` 的 ONNX Runtime provider 模式：`auto` 有 CUDA 用 CUDA 否则 CPU，`cpu` 强制 CPU，`cuda` 强制 CUDA 且不可用时失败 |
 | `HTDEMUCS_MODEL_DIR` | `audio_stem_separation` 使用的 htdemucs-ft ONNX required 模型目录 |
+| `AUDIO_STEM_TRITON_URL` | `audio_stem_separation_triton` 调用的 Triton HTTP endpoint；按 `tritonclient` 约定不包含 `http://` 或 `https://` |
+| `AUDIO_STEM_TRITON_TOKEN` | `audio_stem_separation_triton` 调用 EAS/Triton 服务时使用的 Authorization Token |
+| `AUDIO_STEM_TRITON_MODEL_VERSION` | `audio_stem_separation_triton` 请求的 Triton 模型版本目录，默认 `1` |
+| `AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS` | `audio_stem_separation_triton` 单次 Triton infer HTTP 请求超时秒数 |
 
 `AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER=cuda` 只表示运行期必须选择 `CUDAExecutionProvider`；部署镜像或虚拟环境仍需安装 GPU 版 ONNX Runtime，并确保 Pod/容器能看到 NVIDIA GPU。当前项目默认依赖只包含 CPU 版 `onnxruntime`，避免本地 CPU 开发和通用验证被 GPU wheel 拉取、CUDA 运行时或镜像源问题阻塞。
+
+`audio_stem_separation_triton` 是独立 job_type，保留 `audio_stem_separation` 的输入/输出业务合同，但模型推理通过 Triton HTTP 服务完成；音频下载、WAV 校验、分段、overlap-add、结果上传和 callback 仍由本服务负责。Triton worker 镜像需额外安装 `tritonclient[http]`，且 `AUDIO_STEM_TRITON_URL` 为空时该 job_type 首次执行会快速失败，不会回退到本地 ONNX Runtime。
 
 新增或调整 Job 配置时，应优先暴露业务可理解的主控变量；worker timeout、stale running、callback claim window 等联动值由 `Settings` 统一派生并做 fail-fast 校验。
 

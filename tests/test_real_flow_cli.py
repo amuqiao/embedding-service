@@ -457,6 +457,8 @@ def test_audio_stem_separation_build_payload_cli_forwards_options(monkeypatch):
             "env_test/.env",
             "--input-file",
             ".data/misc/input.wav",
+            "--job-type",
+            "audio_stem_separation_triton",
             "--max-duration-seconds",
             "12.5",
             "--client-request-id",
@@ -474,6 +476,7 @@ def test_audio_stem_separation_build_payload_cli_forwards_options(monkeypatch):
     assert result.exit_code == 0
     assert captured_build == {
         "env_file": "env_test/.env",
+        "job_type": "audio_stem_separation_triton",
         "input_file": ".data/misc/input.wav",
         "input_url_ref_json": None,
         "input_public_url": None,
@@ -521,6 +524,8 @@ def test_audio_stem_separation_run_cli_forwards_payload_file_options(monkeypatch
             "0.5",
             "--client-request-id",
             "audio-client-2",
+            "--job-type",
+            "audio_stem_separation_triton",
             "--payload-file",
             ".run/audio-payload.json",
             "--download-outputs",
@@ -541,6 +546,7 @@ def test_audio_stem_separation_run_cli_forwards_payload_file_options(monkeypatch
         "caller_id": "default",
         "timeout_seconds": 10,
         "poll_interval_seconds": 0.5,
+        "job_type": "audio_stem_separation_triton",
         "client_request_id": "audio-client-2",
         "payload_file": ".run/audio-payload.json",
         "input_file": None,
@@ -803,6 +809,7 @@ def test_real_flow_builds_audio_stem_separation_payload():
 
     payload = audio_stem_separation.build_job_payload(
         input_audio=input_audio,
+        job_type="audio_stem_separation",
         client_request_id="audio-client-1",
         max_duration_seconds=30.5,
     )
@@ -814,8 +821,38 @@ def test_real_flow_builds_audio_stem_separation_payload():
             "input_audio": input_audio,
             "max_duration_seconds": 30.5,
         },
-        "metadata": {"source": "scripts/real-flow.sh audio-stem-separation"},
+        "metadata": {
+            "source": "scripts/real-flow.sh audio-stem-separation",
+            "job_type": "audio_stem_separation",
+        },
         "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
+    }
+
+
+def test_real_flow_builds_audio_stem_separation_triton_payload():
+    input_audio = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.wav",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.wav",
+        "content_type": "audio/wav",
+        "sha256": "a" * 64,
+    }
+
+    payload = audio_stem_separation.build_job_payload(
+        input_audio=input_audio,
+        job_type="audio_stem_separation_triton",
+        client_request_id="audio-triton-client-1",
+        max_duration_seconds=30.5,
+    )
+
+    assert payload["client_request_id"] == "audio-triton-client-1"
+    assert payload["job_type"] == "audio_stem_separation_triton"
+    assert payload["job_params"] == {
+        "input_audio": input_audio,
+        "max_duration_seconds": 30.5,
+    }
+    assert payload["metadata"] == {
+        "source": "scripts/real-flow.sh audio-stem-separation",
+        "job_type": "audio_stem_separation_triton",
     }
 
 
@@ -1388,6 +1425,7 @@ def test_audio_stem_separation_run_uses_payload_file_api_flow(tmp_path, monkeypa
         json.dumps(
             audio_stem_separation.build_job_payload(
                 input_audio=input_audio,
+                job_type="audio_stem_separation",
                 client_request_id="audio-client-1",
                 max_duration_seconds=60.0,
             )
@@ -1442,6 +1480,7 @@ def test_audio_stem_separation_run_uses_payload_file_api_flow(tmp_path, monkeypa
         caller_id="caller-1",
         timeout_seconds=1,
         poll_interval_seconds=0.1,
+        job_type="audio_stem_separation",
         client_request_id=None,
         payload_file=str(payload_file),
         input_file=None,
@@ -1538,6 +1577,7 @@ def test_audio_stem_separation_run_does_not_download_outputs_for_failed_job(tmp_
             caller_id="caller-1",
             timeout_seconds=1,
             poll_interval_seconds=0.1,
+            job_type="audio_stem_separation",
             client_request_id=None,
             payload_file=str(payload_file),
             input_file=None,
@@ -1591,6 +1631,7 @@ def test_audio_stem_separation_run_cleans_staged_input_after_terminal_job(tmp_pa
         lambda **_kwargs: (
             audio_stem_separation.build_job_payload(
                 input_audio=input_audio,
+                job_type="audio_stem_separation",
                 client_request_id="audio-client-cleanup",
                 max_duration_seconds=None,
             ),
@@ -1632,6 +1673,7 @@ def test_audio_stem_separation_run_cleans_staged_input_after_terminal_job(tmp_pa
         caller_id="caller-1",
         timeout_seconds=1,
         poll_interval_seconds=0.1,
+        job_type="audio_stem_separation",
         client_request_id=None,
         payload_file=None,
         input_file="input.wav",
@@ -1677,6 +1719,7 @@ def test_audio_stem_separation_run_keeps_staged_input_when_create_response_is_un
         lambda **_kwargs: (
             audio_stem_separation.build_job_payload(
                 input_audio=input_audio,
+                job_type="audio_stem_separation",
                 client_request_id="audio-client-unknown",
                 max_duration_seconds=None,
             ),
@@ -1697,6 +1740,7 @@ def test_audio_stem_separation_run_keeps_staged_input_when_create_response_is_un
             caller_id="caller-1",
             timeout_seconds=1,
             poll_interval_seconds=0.1,
+            job_type="audio_stem_separation",
             client_request_id=None,
             payload_file=None,
             input_file="input.wav",
