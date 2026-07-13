@@ -1,9 +1,9 @@
 # Job 机制讲解：跟一个请求走完整条链路
 
-本文是 [`job-kernel.md`](../current/job-kernel.md) 的配套讲解文档，目标是建立心智模型，不是补充新事实。
+本文是 [`job-kernel.md`](../../current/job-kernel.md) 的配套讲解文档，目标是建立心智模型，不是补充新事实。
 
-- 事实源仍然只有一个：字段名、默认值、约束、状态枚举以 [`job-kernel.md`](../current/job-kernel.md) 和代码为准；本文和它冲突时，以 [`job-kernel.md`](../current/job-kernel.md) 为准。
-- [`job-kernel.md`](../current/job-kernel.md) 按"概念"组织（幂等 / lineage / 重试 / 恢复 / 表），适合查字典；本文按"一个请求实际怎么走"组织，适合建立地图。
+- 事实源仍然只有一个：字段名、默认值、约束、状态枚举以 [`job-kernel.md`](../../current/job-kernel.md) 和代码为准；本文和它冲突时，以 [`job-kernel.md`](../../current/job-kernel.md) 为准。
+- [`job-kernel.md`](../../current/job-kernel.md) 按"概念"组织（幂等 / lineage / 重试 / 恢复 / 表），适合查字典；本文按"一个请求实际怎么走"组织，适合建立地图。
 - 本文不重复列举字段清单和 schema 约束，只在必要处引用。
 
 读完本文，你应该能回答："一个 Job 提交进来之后，中间任何一步卡住，系统怎么知道、怎么救、救不回来会怎样"。
@@ -204,7 +204,7 @@ Recovery 明确不做的事，理解这条边界比理解它做什么更重要�
 
 也就是说，Recovery 只能修"账本之间没对齐"的问题，修不了"业务本身该不该重跑"的问题——后者的决定权始终在 `job_type` 声明的 retry policy 里，创建 attempt 时就已经固化成 snapshot，事后改代码也不会回头影响已经存在的 attempt。
 
-**当前一个需要留意的缺口**：dispatch publish 重试耗尽进入 `dead_letter` 后，missing-dispatch 巡检会看到 outbox 已经存在而不会补建，due-dispatch 巡检又不会选中已经 `dead_letter` 的行——这条路径目前没有让 Job 自动收敛到一个明确终态，Job 可能长时间停在 `queued`。这是 [`../plans/job-kernel-reliability-review.md`](../plans/job-kernel-reliability-review.md) 里记录的 P1 项，属于"知道、还没修"，不是"没意识到"。
+**当前一个需要留意的缺口**：dispatch publish 重试耗尽进入 `dead_letter` 后，missing-dispatch 巡检会看到 outbox 已经存在而不会补建，due-dispatch 巡检又不会选中已经 `dead_letter` 的行——这条路径目前没有让 Job 自动收敛到一个明确终态，Job 可能长时间停在 `queued`。这是 [`../../plans/job-kernel-reliability-review.md`](../../plans/job-kernel-reliability-review.md) 里记录的 P1 项，属于"知道、还没修"，不是"没意识到"。
 
 ## Part 4：一个 Job 可能其实是一串 Job
 
@@ -320,7 +320,7 @@ job_stale_running_seconds   1260s   recovery 才把 attempt 当 stale，必须�
 - 上面提到的 dispatch dead-letter 收敛缺口。
 - 长任务执行期间没有独立的心跳续约线程，只靠进度点顺带续约。
 
-完整清单、风险分级和验收标准见 [`../plans/job-kernel-reliability-review.md`](../plans/job-kernel-reliability-review.md)，这份文档只负责让你知道"骨架讲的通"，硬不硬化是另一个独立的决策，不在本文讨论范围。
+完整清单、风险分级和验收标准见 [`../../plans/job-kernel-reliability-review.md`](../../plans/job-kernel-reliability-review.md)，这份文档只负责让你知道"骨架讲的通"，硬不硬化是另一个独立的决策，不在本文讨论范围。
 
 ## 附：高频问题
 

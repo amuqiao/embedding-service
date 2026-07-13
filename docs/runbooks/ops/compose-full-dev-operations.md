@@ -186,7 +186,7 @@ docker compose logs --tail=100 postgres
 docker compose logs --tail=100 redis
 ```
 
-Job 压测主流程见 [`job-load-testing-runbook.md`](job-load-testing-runbook.md)。如果 `./scripts/jobs.sh pressure` 需要 `--api-log`，它默认适合读取宿主机本地 `dev.sh` 产生的 `logs/api.log`。`compose-full` 下没有同名宿主机日志文件；需要先把 compose 日志导出成文件，再传给脚本：
+Job 压测主流程见 [`job-load-testing-runbook.md`](../job/job-load-testing-runbook.md)。如果 `./scripts/jobs.sh pressure` 需要 `--api-log`，它默认适合读取宿主机本地 `dev.sh` 产生的 `logs/api.log`。`compose-full` 下没有同名宿主机日志文件；需要先把 compose 日志导出成文件，再传给脚本：
 
 ```bash
 mkdir -p .run

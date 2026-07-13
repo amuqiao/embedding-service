@@ -11,7 +11,7 @@
 | [`current/ai-billing.md`](current/ai-billing.md) | 当前 AI call ledger、usage/cost 事实源、Job billing 聚合和非资金账本边界 |
 | [`current/job-kernel.md`](current/job-kernel.md) | 当前 Job、幂等键、Attempt、Dispatch outbox、Callback outbox、root/child lineage 和表设计边界 |
 | [`current/audio-stem-separation-triton.md`](current/audio-stem-separation-triton.md) | `audio_stem_separation_triton` 当前调用链、FastAPI/Triton/model repository 职责边界、固定 tensor I/O、配置、schema/result 和 real-flow 验证入口；不替代外部 Triton 部署手册 |
-| [`runbooks/job-kernel-explained.md`](runbooks/job-kernel-explained.md) | 跟一个请求走完整条 Job 链路的心智模型讲解，配套 `job-kernel.md` 的事实清单，不是独立事实源 |
+| [`runbooks/job/job-kernel-explained.md`](runbooks/job/job-kernel-explained.md) | 跟一个请求走完整条 Job 链路的心智模型讲解，配套 `job-kernel.md` 的事实清单，不是独立事实源 |
 | [`current/workflow-kernel.md`](current/workflow-kernel.md) | 当前 DAG-lite root/child workflow、child Job 执行、root 汇总和 billing scope 行为 |
 | [`current/observability.md`](current/observability.md) | 当前日志出口、request_id、业务事件白名单、本地 `logs/` 边界和新增日志代码规范 |
 | [`current/template-readiness.md`](current/template-readiness.md) | 当前仓库作为 AI Job 微服务模板复制给新业务前的就绪边界、必改项和最小验收 |
@@ -19,17 +19,18 @@
 | [`current/script-entrypoint-contract.md`](current/script-entrypoint-contract.md) | 当前脚本入口 `-h`、子命令 help、输出、副作用、示例和验证的 envelope 合同 |
 | [`current/ops-dashboard.md`](current/ops-dashboard.md) | 当前只读 `ops_dashboard` 路由、data source / widget / layout / renderer 注册层和 Job 运维展示边界 |
 | [`current/job-load-testing.md`](current/job-load-testing.md) | 当前 Job 压测入口、case/profile、manifest、产物、安全确认和指标语义事实 |
-| [`runbooks/job-load-testing-runbook.md`](runbooks/job-load-testing-runbook.md) | 执行一次 Job 压测、选择示例 profile、模拟 `poster_title_image` 结构、观察 dashboard 和压后诊断的唯一操作手册 |
-| [`runbooks/compose-full-dev-operations.md`](runbooks/compose-full-dev-operations.md) | `compose-full` 开发形态的启动、状态、容器内排障脚本和日志操作；不覆盖 `local` 或 K8s |
-| [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | `scripts/jobs.sh` 只读证据查询、root/family scope、Job/workflow 排障命令含义；不承担压测主流程 |
+| [`runbooks/job/job-load-testing-runbook.md`](runbooks/job/job-load-testing-runbook.md) | 执行一次 Job 压测、选择示例 profile、模拟 `poster_title_image` 结构、观察 dashboard 和压后诊断的唯一操作手册 |
+| [`runbooks/ops/compose-full-dev-operations.md`](runbooks/ops/compose-full-dev-operations.md) | `compose-full` 开发形态的启动、状态、容器内排障脚本和日志操作；不覆盖 `local` 或 K8s |
+| [`runbooks/job/jobs使用与排障手册.md`](runbooks/job/jobs使用与排障手册.md) | `scripts/jobs.sh` 只读证据查询、root/family scope、Job/workflow 排障命令含义；不承担压测主流程 |
 | [`runbooks/poster-title-image 真实流程本地验证.md`](runbooks/poster-title-image%20真实流程本地验证.md) | 用 `scripts/real-flow.sh` 创建真实 `poster_title_image` Job、确认模型/OSS/billing/输出图链路；会产生真实费用 |
-| [`runbooks/htdemucs-ft-onnx-local-assets.md`](runbooks/htdemucs-ft-onnx-local-assets.md) | 用 `scripts/models.sh` 和 `scripts/media.sh` 准备 htdemucs-ft ONNX 本地模型资产和 44.1kHz 双声道 WAV 测试音频；不提交 Job |
-| [`runbooks/audio-stem-separation-dev-server-runbook.md`](runbooks/audio-stem-separation-dev-server-runbook.md) | 在开发服务器准备 `audio_stem_separation` 模型、测试音频、compose-full 可见性检查和真实 Job 验证；不替代 `deploy.sh` |
+| [`runbooks/audio/htdemucs-ft-onnx-local-assets.md`](runbooks/audio/htdemucs-ft-onnx-local-assets.md) | 用 `scripts/models.sh` 和 `scripts/media.sh` 准备 htdemucs-ft ONNX 本地模型资产和 44.1kHz 双声道 WAV 测试音频；不提交 Job |
+| [`runbooks/audio/audio-stem-separation-dev-server-runbook.md`](runbooks/audio/audio-stem-separation-dev-server-runbook.md) | 在开发服务器准备 `audio_stem_separation` 模型、测试音频、compose-full 可见性检查和真实 Job 验证；不替代 `deploy.sh` |
+| [`runbooks/audio/audio-stem-separation-triton-real-flow-benchmark.md`](runbooks/audio/audio-stem-separation-triton-real-flow-benchmark.md) | 用 `real-flow.sh` 验证 `audio_stem_separation_triton` 真实业务链路，并附 2026-07-13 开发服务器 baseline 样本；不作为生产容量承诺 |
 | [`runbooks/标题生成链路.md`](runbooks/标题生成链路.md) | `poster_title_image` 从接单、style probe、生图、OSS 写入、join 到结果快照的链路定位和排障顺序；不写真实流程执行步骤 |
-| [`runbooks/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/MAX_ACTIVE_JOBS%20估算与生产调优.md) | `MAX_ACTIVE_JOBS` 估算、K8s 生产调优顺序和 PostgreSQL/Redis 瓶颈判断；不是压测执行手册 |
-| [`runbooks/lifespan.md`](runbooks/lifespan.md) | API、worker、recovery 生命周期与运行期资源放置边界 |
-| [`runbooks/local-postgres-database-name.md`](runbooks/local-postgres-database-name.md) | 本地项目数据库名变更后，PostgreSQL volume 旧库与 `.env` 新库不一致的排障和修复 |
-| [`runbooks/remote-test-env-fastapi-redis-taskiq.md`](runbooks/remote-test-env-fastapi-redis-taskiq.md) | 远端测试环境 FastAPI 依赖漂移、Redis 5 和 Taskiq broker 排障记录 |
+| [`runbooks/job/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/job/MAX_ACTIVE_JOBS%20估算与生产调优.md) | `MAX_ACTIVE_JOBS` 估算、K8s 生产调优顺序和 PostgreSQL/Redis 瓶颈判断；不是压测执行手册 |
+| [`runbooks/ops/lifespan.md`](runbooks/ops/lifespan.md) | API、worker、recovery 生命周期与运行期资源放置边界 |
+| [`runbooks/ops/local-postgres-database-name.md`](runbooks/ops/local-postgres-database-name.md) | 本地项目数据库名变更后，PostgreSQL volume 旧库与 `.env` 新库不一致的排障和修复 |
+| [`runbooks/ops/remote-test-env-fastapi-redis-taskiq.md`](runbooks/ops/remote-test-env-fastapi-redis-taskiq.md) | 远端测试环境 FastAPI 依赖漂移、Redis 5 和 Taskiq broker 排障记录 |
 | [`api/service-contract.md`](api/service-contract.md) | 当前 HTTP envelope、Job、Callback、Billing、认证和公开 route 合同 |
 | [`api/extension-guide.md`](api/extension-guide.md) | 新增 `job_type`、HTTP 接口、模型、Prompt 和对象存储产物的接入入口 |
 | [`api/业务语种规范.md`](api/业务语种规范.md) | CPP / AI / RS 三方共享语种代码、`in` 例外和 AI 服务语种目录接口规范 |
@@ -50,15 +51,16 @@
 
 | 场景 | 默认入口 | 不放入这里的内容 |
 |---|---|---|
-| 理解 Job 内核链路 | [`runbooks/job-kernel-explained.md`](runbooks/job-kernel-explained.md) | 字段真源、表结构大表、API 合同 |
-| 查 Job 运行证据 | [`runbooks/jobs使用与排障手册.md`](runbooks/jobs使用与排障手册.md) | 压测执行步骤、业务专属链路解释 |
-| 执行 Job 压测 | [`runbooks/job-load-testing-runbook.md`](runbooks/job-load-testing-runbook.md) | `load.sh` 机器合同、生产容量调优公式 |
-| 估算生产容量 | [`runbooks/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/MAX_ACTIVE_JOBS%20估算与生产调优.md) | 一次压测怎么跑、Job 明细查询命令教程 |
+| 理解 Job 内核链路 | [`runbooks/job/job-kernel-explained.md`](runbooks/job/job-kernel-explained.md) | 字段真源、表结构大表、API 合同 |
+| 查 Job 运行证据 | [`runbooks/job/jobs使用与排障手册.md`](runbooks/job/jobs使用与排障手册.md) | 压测执行步骤、业务专属链路解释 |
+| 执行 Job 压测 | [`runbooks/job/job-load-testing-runbook.md`](runbooks/job/job-load-testing-runbook.md) | `load.sh` 机器合同、生产容量调优公式 |
+| 估算生产容量 | [`runbooks/job/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/job/MAX_ACTIVE_JOBS%20估算与生产调优.md) | 一次压测怎么跑、Job 明细查询命令教程 |
 | 验证 `poster_title_image` 真实流程 | [`runbooks/poster-title-image 真实流程本地验证.md`](runbooks/poster-title-image%20真实流程本地验证.md) | 标题图内部链路排障、完整 API 字段合同 |
-| 准备 htdemucs-ft ONNX 本地模型与测试音频 | [`runbooks/htdemucs-ft-onnx-local-assets.md`](runbooks/htdemucs-ft-onnx-local-assets.md) | `audio_stem_separation` 实现计划、模型推理代码、Job 提交流程 |
-| 在开发服务器验证 `audio_stem_separation` | [`runbooks/audio-stem-separation-dev-server-runbook.md`](runbooks/audio-stem-separation-dev-server-runbook.md) | 自动下载模型、生产部署、K8s 资源管理、模型推理代码 |
+| 准备 htdemucs-ft ONNX 本地模型与测试音频 | [`runbooks/audio/htdemucs-ft-onnx-local-assets.md`](runbooks/audio/htdemucs-ft-onnx-local-assets.md) | `audio_stem_separation` 实现计划、模型推理代码、Job 提交流程 |
+| 在开发服务器验证 `audio_stem_separation` | [`runbooks/audio/audio-stem-separation-dev-server-runbook.md`](runbooks/audio/audio-stem-separation-dev-server-runbook.md) | 自动下载模型、生产部署、K8s 资源管理、模型推理代码 |
+| 压测 `audio_stem_separation_triton` 真实流程 | [`runbooks/audio/audio-stem-separation-triton-real-flow-benchmark.md`](runbooks/audio/audio-stem-separation-triton-real-flow-benchmark.md) | Triton model repository 部署、生产容量承诺、旧本地 ONNX Job 验证；文内 baseline 只作复现对比样本 |
 | 排查标题图生成链路 | [`runbooks/标题生成链路.md`](runbooks/标题生成链路.md) | real-flow 执行步骤、完整 API 字段合同 |
-| 处理运行形态问题 | [`runbooks/compose-full-dev-operations.md`](runbooks/compose-full-dev-operations.md)、[`runbooks/lifespan.md`](runbooks/lifespan.md)、[`runbooks/remote-test-env-fastapi-redis-taskiq.md`](runbooks/remote-test-env-fastapi-redis-taskiq.md)、[`runbooks/local-postgres-database-name.md`](runbooks/local-postgres-database-name.md) | 业务 Job 合同或压测报告 |
+| 处理运行形态问题 | [`runbooks/ops/compose-full-dev-operations.md`](runbooks/ops/compose-full-dev-operations.md)、[`runbooks/ops/lifespan.md`](runbooks/ops/lifespan.md)、[`runbooks/ops/remote-test-env-fastapi-redis-taskiq.md`](runbooks/ops/remote-test-env-fastapi-redis-taskiq.md)、[`runbooks/ops/local-postgres-database-name.md`](runbooks/ops/local-postgres-database-name.md) | 业务 Job 合同或压测报告 |
 
 ## 分层规则
 

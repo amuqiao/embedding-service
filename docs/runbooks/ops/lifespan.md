@@ -318,12 +318,12 @@ APP_ENV 不会决定：
 只改文档时，至少检查：
 
 ```bash
-git diff -- docs/runbooks/lifespan.md docs/README.md
+git diff -- docs/runbooks/ops/lifespan.md docs/README.md
 ```
 
 ## 维护规则
 
-- 本文只写生命周期判断方法和当前维护边界；当前架构总览以 [`../current/architecture.md`](../current/architecture.md) 为准。
+- 本文只写生命周期判断方法和当前维护边界；当前架构总览以 [`../../current/architecture.md`](../../current/architecture.md) 为准。
 - 不把未来想做但尚未落地的 lifecycle 方案写成当前事实。
 - 不把 FastAPI `lifespan` 称为“整个项目生命周期”。
 - 不把 `APP_ENV` 写成生命周期开关。

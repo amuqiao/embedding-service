@@ -1,6 +1,6 @@
 # Job 压测 Runbook
 
-本文是 Job 压测的唯一操作手册：负责说明一次压测怎么跑、怎么选择 profile、怎么观察 dashboard、压后怎么判断结果。当前工具事实以 [`../current/job-load-testing.md`](../current/job-load-testing.md) 为准；Job 查询排障命令细节见 [`jobs使用与排障手册.md`](jobs使用与排障手册.md)；生产容量调优框架见 [`MAX_ACTIVE_JOBS 估算与生产调优.md`](MAX_ACTIVE_JOBS%20估算与生产调优.md)。
+本文是 Job 压测的唯一操作手册：负责说明一次压测怎么跑、怎么选择 profile、怎么观察 dashboard、压后怎么判断结果。当前工具事实以 [`../../current/job-load-testing.md`](../../current/job-load-testing.md) 为准；Job 查询排障命令细节见 [`jobs使用与排障手册.md`](jobs使用与排障手册.md)；生产容量调优框架见 [`MAX_ACTIVE_JOBS 估算与生产调优.md`](MAX_ACTIVE_JOBS%20估算与生产调优.md)。
 
 本文不维护 `load.sh` 的完整参数合同、不复制 dashboard data source 字段表、不记录某次临时压测报告。
 
@@ -407,4 +407,4 @@ docker compose logs --no-color api > .run/load/api.log
   --api-log .run/load/api.log
 ```
 
-compose-full 的启动、容器状态和日志操作见 [`compose-full-dev-operations.md`](compose-full-dev-operations.md)。
+compose-full 的启动、容器状态和日志操作见 [`compose-full-dev-operations.md`](../ops/compose-full-dev-operations.md)。

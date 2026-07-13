@@ -1,6 +1,6 @@
 # Job 压测当前事实
 
-本文只记录当前已经落地的 Job 压测能力、入口合同、内置 case/profile、产物和指标语义。一次压测怎么执行、怎么观察 dashboard、怎么判断是否进入下一档，见 [`../runbooks/job-load-testing-runbook.md`](../runbooks/job-load-testing-runbook.md)。
+本文只记录当前已经落地的 Job 压测能力、入口合同、内置 case/profile、产物和指标语义。一次压测怎么执行、怎么观察 dashboard、怎么判断是否进入下一档，见 [`../runbooks/job/job-load-testing-runbook.md`](../runbooks/job/job-load-testing-runbook.md)。
 
 本文不维护压测操作流水账、生产容量采购结论、Grafana/k6/JMeter 平台方案或真实模型供应商压测结果。
 
