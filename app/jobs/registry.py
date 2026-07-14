@@ -18,7 +18,7 @@ def register(executor: JobExecutor) -> JobExecutor:
 
 
 def register_job_type(cls: type[JobExecutor]) -> type[JobExecutor]:
-    register(cls())
+    setattr(cls, "__job_type_registered__", True)
     return cls
 
 

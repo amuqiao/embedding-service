@@ -2,15 +2,39 @@
 
 本文记录新增业务能力时应修改的稳定入口。具体实现先沿用现有目录和测试风格，不新增平行规范文档。
 
+## 新增 tool / capability
+
+新增 tool 和 capability 只走统一注册入口，不在业务代码中散落 definition。
+
+新增 tool：
+
+1. 在 `app/tools/<name>.py` 中实现单一底层执行边界；tool 不依赖 `app/jobs` 或 `app/capabilities`。
+2. 如需 request / result schema，在 `app/schemas/jobs.py` 或对应 schema 模块中定义，并加入 `app/schemas/registry.py`。
+3. 在 `app/tools/register.py` 中创建 `ToolDefinition`，声明 `tool_ref`、kind、entrypoint、schema、required settings、error codes 和 log events。
+4. 只在进程级必需依赖上使用 `startup_validators`；可选模型链路或 demo job 依赖留在执行路径或专项 real-flow / verify 中 fail-fast。
+5. 补充或调整 `tests/test_registry_contract.py`、`tests/test_capability_tool_registry.py` 和 `tests/test_tools_script.py`。
+
+新增 capability：
+
+1. 在 `app/capabilities/<domain>/` 中实现 capability service；capability 只消费 frozen plan，不读写 Job 状态。
+2. 定义 plan / result schema，并加入 `app/schemas/registry.py`。
+3. 在 `app/capabilities/register.py` 中创建 `CapabilityDefinition`，声明 `capability_ref`、plan/result schema、service entrypoint、allowed tools、error codes 和 log events。
+4. 需要使用 capability 的 `job_type` 在 executor 上声明 `allowed_capability_refs`。
+5. 补充 capability service 测试、registry contract 测试和 current 文档。
+
+当前准入测试会阻止 `ToolDefinition(...)` / `CapabilityDefinition(...)` 散落到统一注册入口之外；`./scripts/tools.sh registry --json` 的 graph 也是精确快照，新增注册关系必须同步更新。
+
 ## 新增 job_type
 
 1. 在 `app/schemas/jobs.py` 中定义 Params、Runtime fields 和 Result schema。
 2. 在 `app/jobs/types/<job_type>.py` 或 `app/jobs/types/<job_type>/` 中实现 `JobExecutor`。简单 job 可继续使用单文件；正式业务或带 prompt、errors、workflow 的复杂 job 使用包目录，至少保留 `executor.py` 和 `__init__.py`，按需增加 `errors.py`、`prompts.yaml` 等业务内聚文件。
-3. 在 executor 上声明稳定 `name`、`visibility`、`role`、`params_schema`、`runtime_fields_schema_name`、`canonical_result_schema`、`public_result_schema`、`retry_policy` 和 side-effect 元数据。
+3. 在 executor 上使用 `@register_job_type` 标记源码准入，并声明稳定 `name`、`visibility`、`role`、`params_schema`、`runtime_fields_schema_name`、`canonical_result_schema`、`public_result_schema`、`retry_policy`、`allowed_capability_refs` 和 side-effect 元数据。
 4. 在 `app/jobs/types/register.py` 显式导入并注册。
 5. 如需模型调用，通过 `app/services/ai_gateway_facade.py` 进入，不直接调用 provider adapter。
 6. 如需大输入或大结果，使用 runtime ref、result ref 和对象存储边界，不把大 payload 直接塞进 Job response。
 7. 补充 schema、registry、workflow 和 contract 测试。
+
+`@register_job_type` 只作为静态源码标记，不在 import executor 时写入全局 registry。源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 `app/jobs/types/register.py` 的注册结果；新增 executor 文件但忘记接入 composition root 会导致验证失败。
 
 `job_type` 名称是外部合同；发布后不要随意改名。`job_params` 字段由该 `job_type` 独占校验，不在通用 Job envelope 中新增业务专用字段。
 

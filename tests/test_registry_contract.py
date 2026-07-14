@@ -69,6 +69,156 @@ def _literal_error_reasons() -> set[str]:
     return reasons
 
 
+def _string_constant_from_assignment(node: ast.Assign | ast.AnnAssign) -> tuple[str, str] | None:
+    target: ast.expr
+    if isinstance(node, ast.Assign):
+        if len(node.targets) != 1:
+            return None
+        target = node.targets[0]
+    else:
+        target = node.target
+    if not isinstance(target, ast.Name):
+        return None
+    if not isinstance(node.value, ast.Constant) or not isinstance(node.value.value, str):
+        return None
+    return target.id, node.value.value
+
+
+def _string_constants(tree: ast.Module) -> dict[str, str]:
+    constants: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        assignment = _string_constant_from_assignment(node)
+        if assignment is None:
+            continue
+        name, value = assignment
+        constants[name] = value
+    return constants
+
+
+def _decorator_name(decorator: ast.expr) -> str:
+    if isinstance(decorator, ast.Name):
+        return decorator.id
+    if isinstance(decorator, ast.Attribute):
+        return decorator.attr
+    if isinstance(decorator, ast.Call):
+        return _decorator_name(decorator.func)
+    return ""
+
+
+def _registered_job_type_names_in_source() -> set[str]:
+    names: set[str] = set()
+    for path in (APP_DIR / "jobs" / "types").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        constants = _string_constants(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if not any(_decorator_name(decorator) == "register_job_type" for decorator in node.decorator_list):
+                continue
+            found_name = False
+            for item in node.body:
+                if not isinstance(item, (ast.Assign, ast.AnnAssign)):
+                    continue
+                assignment = _string_constant_from_assignment(item)
+                if assignment is not None:
+                    name, value = assignment
+                    if name != "name":
+                        continue
+                    names.add(value)
+                    found_name = True
+                    break
+                target: ast.expr
+                if isinstance(item, ast.Assign):
+                    if not any(isinstance(target, ast.Name) and target.id == "name" for target in item.targets):
+                        continue
+                else:
+                    if not isinstance(item.target, ast.Name) or item.target.id != "name":
+                        continue
+                if isinstance(item.value, ast.Name) and item.value.id in constants:
+                    names.add(constants[item.value.id])
+                    found_name = True
+                    break
+                raise AssertionError(f"{path}:{item.lineno} register_job_type class must declare static name")
+            if not found_name:
+                raise AssertionError(f"{path}:{node.lineno} register_job_type class must declare static name")
+    return names
+
+
+def _package_name_for_path(path: Path) -> str:
+    relative = path.relative_to(ROOT).with_suffix("")
+    parts = list(relative.parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    else:
+        parts.pop()
+    return ".".join(parts)
+
+
+def _resolve_import_from_module(path: Path, node: ast.ImportFrom) -> str:
+    if node.level == 0:
+        return node.module or ""
+    package_parts = _package_name_for_path(path).split(".")
+    base = package_parts[: len(package_parts) - node.level + 1]
+    if node.module:
+        base.extend(node.module.split("."))
+    return ".".join(base)
+
+
+def _constructor_aliases(path: Path, tree: ast.Module, name: str) -> set[str]:
+    modules = {
+        "ToolDefinition": "app.tools.definitions",
+        "CapabilityDefinition": "app.capabilities.definitions",
+    }
+    aliases = {name}
+    expected_module = modules[name]
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if _resolve_import_from_module(path, node) != expected_module:
+            continue
+        for alias in node.names:
+            if alias.name == name:
+                aliases.add(alias.asname or alias.name)
+    return aliases
+
+
+def _constructor_call_locations(name: str) -> set[str]:
+    locations: set[str] = set()
+    for path in APP_DIR.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        aliases = _constructor_aliases(path, tree, name)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func_name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+            if func_name in aliases:
+                locations.add(path.relative_to(ROOT).as_posix())
+    return locations
+
+
+def _imported_modules_from_tree(path: Path, tree: ast.Module) -> set[str]:
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            module = _resolve_import_from_module(path, node)
+            if module:
+                imported.add(module)
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                imported.add(f"{module}.{alias.name}" if module else alias.name)
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+    return imported
+
+
+def _imported_modules(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return _imported_modules_from_tree(path, tree)
+
+
 def test_all_business_routes_have_registered_operation_ids():
     route_operation_ids = {
         route.operation_id
@@ -489,8 +639,9 @@ def test_job_type_registry_exposes_required_metadata():
 def test_registered_job_type_names_are_layered_contract():
     register_all_job_types()
     specs = job_registry.all_job_type_specs()
+    source_job_type_names = _registered_job_type_names_in_source()
 
-    assert {
+    expected_job_type_names = {
         "arithmetic",
         "job_real_llm_double_echo",
         "job_real_llm_echo",
@@ -504,13 +655,75 @@ def test_registered_job_type_names_are_layered_contract():
         "poster_title_image_generate_item",
         "poster_title_image_join",
         "poster_title_image_style_probe",
-    } <= set(specs)
+    }
+    assert source_job_type_names == expected_job_type_names
+    assert set(specs) == source_job_type_names
     assert {name for name, spec in specs.items() if spec.visibility == "public"} >= {"poster_title_image"}
     assert {name for name, spec in specs.items() if spec.visibility == "internal"} >= {
         "poster_title_image_generate_item",
         "poster_title_image_join",
         "poster_title_image_style_probe",
     }
+
+
+def test_register_job_type_decorator_is_marker_not_registration_side_effect():
+    before = set(job_registry.all_job_types())
+
+    @job_registry.register_job_type
+    class MarkerOnlyJob(JobExecutor):
+        name: str = "test_marker_only_job"
+        visibility = "demo"
+        role = "root"
+        params_schema = None
+        runtime_fields_schema_name = "dict"
+        canonical_result_schema = None
+        public_result_schema = None
+
+        def runtime_job_fields(self, job_params):
+            return {}
+
+    assert getattr(MarkerOnlyJob, "__job_type_registered__") is True
+    assert set(job_registry.all_job_types()) == before
+
+
+def test_tool_and_capability_definitions_only_live_in_composition_roots():
+    assert _constructor_call_locations("ToolDefinition") == {"app/tools/register.py"}
+    assert _constructor_call_locations("CapabilityDefinition") == {"app/capabilities/register.py"}
+
+
+def test_audio_job_does_not_import_other_audio_executor_private_helpers():
+    imported_modules = _imported_modules(APP_DIR / "jobs/types/audio_stem_separation_triton/executor.py")
+
+    assert "app.jobs.types.audio_stem_separation.executor" not in imported_modules
+
+
+def test_import_scanner_expands_from_import_aliases(tmp_path):
+    absolute = tmp_path / "absolute.py"
+    relative = APP_DIR / "capabilities" / "example.py"
+
+    assert "app.jobs" in _imported_modules_from_tree(absolute, ast.parse("from app import jobs\n"))
+    assert "app.jobs" in _imported_modules_from_tree(relative, ast.parse("from .. import jobs\n"))
+
+
+def test_registry_layers_do_not_depend_on_callers():
+    violations: list[str] = []
+    rules = {
+        APP_DIR / "capabilities": ("app.jobs", "app.integrations"),
+        APP_DIR / "tools": ("app.jobs", "app.capabilities"),
+        APP_DIR / "integrations": ("app.jobs", "app.capabilities", "app.tools"),
+    }
+    for directory, forbidden_prefixes in rules.items():
+        for path in directory.rglob("*.py"):
+            module_refs = _imported_modules(path)
+            forbidden = sorted(
+                ref
+                for ref in module_refs
+                if any(ref == prefix or ref.startswith(f"{prefix}.") for prefix in forbidden_prefixes)
+            )
+            if forbidden:
+                violations.append(f"{path.relative_to(ROOT)} imports {forbidden}")
+
+    assert violations == []
 
 
 def test_poster_title_image_retry_policy_is_scoped_to_transient_leaf_execution():

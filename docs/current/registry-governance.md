@@ -26,9 +26,9 @@ Job Type
 | Tool registry | `app/tools/registry.py`、`app/tools/register.py` | 注册 `ToolDefinition`，支持 freeze 和测试清理 |
 | Job Type registry | `app/jobs/registry.py`、`app/jobs/base.py` | `JobTypeSpec.allowed_capability_refs` 声明 job type 可用 capability |
 | Error registry | `app/core/error_registry.py` | `ErrorSpec` 包含 `visibility` 和 `projection_targets` 元数据 |
-| Registry check | `app/core/registry_checks.py` | 校验 error、operation、job type、capability、tool、schema、log event、entrypoint、settings、error projection、import direction 和 route operation |
+| Registry check | `app/core/registry_checks.py`、`tests/test_registry_contract.py` | 校验 error、operation、job type、capability、tool、schema、log event、entrypoint、settings、error projection、注册入口、import direction 和 route operation |
 
-API startup 和 worker startup 都执行同一组注册和校验。`app/jobs/types/register.py` 仍是当前 composition root：它显式调用 tool、capability、error、job type 和 workflow 注册入口。注册完成后 API/worker 会 freeze error、tool 和 capability registry；freeze 后相同 definition 可幂等重复注册，变更 definition 会失败。
+API startup 和 worker startup 都执行同一组注册和校验。`app/jobs/types/register.py` 仍是当前 composition root：它显式调用 tool、capability、error、job type 和 workflow 注册入口。`@register_job_type` 只作为源码准入标记，import executor 不写入全局 registry。注册完成后 API/worker 会 freeze error、tool 和 capability registry；freeze 后相同 definition 可幂等重复注册，变更 definition 会失败。
 
 开发者查看当前注册清单使用只读命令：
 
@@ -43,7 +43,7 @@ Tool `startup_validators` 只用于 API/worker 进程级必需依赖。可选能
 
 ## 当前 Graph 校验
 
-当前 `validate_all_registries()` 会 fail-fast 校验：
+当前 registry checks 和 contract tests 会 fail-fast 校验：
 
 - `capability_ref` / `tool_ref` 格式合法。
 - `job_type.allowed_capability_refs` 引用已注册 capability。
@@ -57,7 +57,10 @@ Tool `startup_validators` 只用于 API/worker 进程级必需依赖。可选能
 - internal error 的 `projection_targets` 必须指向已注册 public error。
 - public HTTP operation 不能引用 internal error。
 - job type public error contract 不能声明 internal error。
-- `app/capabilities` 不依赖 `app/jobs`，也不跳过 tool 直接依赖 `app/integrations`；`app/tools` 不反向依赖 `app/jobs` / `app/capabilities`；`app/integrations` 不反向依赖 `app/jobs` / `app/capabilities` / `app/tools`。
+- 源码中 `@register_job_type` 声明的 job type 必须全部出现在 `app/jobs/types/register.py` composition root 的注册结果中。
+- `ToolDefinition(...)` 只允许出现在 `app/tools/register.py`，`CapabilityDefinition(...)` 只允许出现在 `app/capabilities/register.py`。
+- `./scripts/tools.sh registry --json` 的当前 graph 是精确测试快照；新增 tool、capability 或 job capability 关系时必须同步测试和文档。
+- import direction 由 registry contract 测试覆盖：`app/capabilities` 不依赖 `app/jobs`，也不跳过 tool 直接依赖 `app/integrations`；`app/tools` 不反向依赖 `app/jobs` / `app/capabilities`；`app/integrations` 不反向依赖 `app/jobs` / `app/capabilities` / `app/tools`。
 - operation registry、job type registry、prompt config、route operation 和 error code 唯一性仍按既有规则校验。
 
 校验失败会中止启动或测试，不做自动跳过、silent fallback 或动态降级。
@@ -98,6 +101,18 @@ AudioInputPlanSnapshot
 ```
 
 `public_url` 和 `internal_url` 仍属于调用方 payload 兼容字段；执行期不把完整 URL 当作权威对象身份。
+
+## 当前准入规则
+
+新增 `job_type` 必须在 executor 上使用 `@register_job_type` 源码标记，并在 `app/jobs/types/register.py` 显式导入和注册。`@register_job_type` 不产生 import-time 注册副作用；源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 composition root 注册结果；新增文件但忘记接入 composition root 会失败。
+
+新增 tool 必须通过 `app/tools/register.py` 创建 `ToolDefinition`。新增 capability 必须通过 `app/capabilities/register.py` 创建 `CapabilityDefinition`。不要在业务 executor、capability service、tool 实现或测试外路径中直接散落 definition 构造。
+
+新增 capability 与 tool 的 schema、entrypoint、error code、log event 和 settings 引用必须能被 `validate_capability_tool_registry()` 校验。新增 job type 的 `allowed_capability_refs` 必须引用已注册 capability。
+
+`ToolDefinition.startup_validators` 只允许表达进程级必需依赖；可选模型链路、demo job 或特定业务运行时依赖必须在对应执行路径或专项 real-flow / verify 中显式失败，不能扩大为 API/worker 全局启动依赖。
+
+当前 registry 治理保持轻量：不做数据库 catalog、动态插件加载、运行时 capability 开关、管理后台或 public registry API。
 
 ## 当前边界
 

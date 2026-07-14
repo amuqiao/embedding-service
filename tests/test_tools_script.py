@@ -97,22 +97,77 @@ def test_tools_registry_json_prints_registered_graph():
 
     data = json.loads(result.stdout)
     assert result.stderr == ""
-    assert {tool["tool_ref"] for tool in data["tools"]} >= {
-        "object_storage_read:1",
-        "audio_decode_normalize:1",
+    assert data == {
+        "capabilities": [
+            {
+                "allowed_tool_refs": ["audio_decode_normalize:1", "object_storage_read:1"],
+                "capability_ref": "media.audio_input:2",
+                "error_codes": [
+                    "AUDIO_STEM_DURATION_EXCEEDS_LIMIT",
+                    "AUDIO_STEM_INPUT_INVALID",
+                    "AUDIO_STEM_RUNTIME_UNAVAILABLE",
+                    "INPUT_HASH_MISMATCH",
+                    "INPUT_TOO_LARGE",
+                    "OSS_BUCKET_NOT_CONFIGURED",
+                    "OSS_FETCH_FAILED",
+                    "OSS_OBJECT_NOT_FOUND",
+                    "OSS_REGION_NOT_CONFIGURED",
+                ],
+                "log_events": [],
+                "plan_schema": "AudioInputPlanSnapshot",
+                "result_schema": "PreparedAudioInputMetadata",
+                "service_entrypoint": "app.capabilities.media.audio_input:prepare_audio_input",
+            }
+        ],
+        "job_capabilities": [
+            {
+                "allowed_capability_refs": ["media.audio_input:2"],
+                "job_type": "audio_stem_separation",
+                "role": "root",
+                "visibility": "demo",
+            },
+            {
+                "allowed_capability_refs": ["media.audio_input:2"],
+                "job_type": "audio_stem_separation_triton",
+                "role": "root",
+                "visibility": "demo",
+            },
+        ],
+        "tools": [
+            {
+                "entrypoint": "app.tools.media_audio:decode_normalize_audio",
+                "error_codes": [
+                    "AUDIO_STEM_DURATION_EXCEEDS_LIMIT",
+                    "AUDIO_STEM_INPUT_INVALID",
+                    "AUDIO_STEM_RUNTIME_UNAVAILABLE",
+                ],
+                "kind": "media_transform",
+                "log_events": [],
+                "request_schema": "AudioDecodeNormalizeRequest",
+                "required_settings": [],
+                "result_schema": None,
+                "startup_validators": [],
+                "tool_ref": "audio_decode_normalize:1",
+            },
+            {
+                "entrypoint": "app.tools.object_storage:read_object_bytes",
+                "error_codes": [
+                    "INPUT_TOO_LARGE",
+                    "OSS_BUCKET_NOT_CONFIGURED",
+                    "OSS_FETCH_FAILED",
+                    "OSS_OBJECT_NOT_FOUND",
+                    "OSS_REGION_NOT_CONFIGURED",
+                ],
+                "kind": "object_storage",
+                "log_events": [],
+                "request_schema": "CanonicalObjectRefSnapshot",
+                "required_settings": ["storage.backend", "job.oss_input_max_bytes"],
+                "result_schema": None,
+                "startup_validators": [],
+                "tool_ref": "object_storage_read:1",
+            },
+        ],
     }
-    audio_tool = next(item for item in data["tools"] if item["tool_ref"] == "audio_decode_normalize:1")
-    assert audio_tool["request_schema"] == "AudioDecodeNormalizeRequest"
-    assert audio_tool["result_schema"] is None
-    assert audio_tool["startup_validators"] == []
-    capability = next(item for item in data["capabilities"] if item["capability_ref"] == "media.audio_input:2")
-    assert capability["allowed_tool_refs"] == ["audio_decode_normalize:1", "object_storage_read:1"]
-    job_capabilities = {
-        item["job_type"]: item["allowed_capability_refs"]
-        for item in data["job_capabilities"]
-    }
-    assert job_capabilities["audio_stem_separation"] == ["media.audio_input:2"]
-    assert job_capabilities["audio_stem_separation_triton"] == ["media.audio_input:2"]
 
 
 def test_tools_registry_rejects_unknown_argument():

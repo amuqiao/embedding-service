@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,9 +12,6 @@ from app.core.exceptions import AppError
 from app.integrations.object_storage import bare_sha256, sha256_digest
 from app.jobs.types import audio_stem_shared
 from app.schemas.jobs import AudioStemSeparationInputObject
-
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def _url_ref(key: str, data: bytes, *, content_type: str = "audio/wav") -> dict:
@@ -319,41 +315,3 @@ def test_audio_decode_normalize_tool_rejects_missing_probe_runtime(monkeypatch):
         )
 
     assert exc_info.value.code == "AUDIO_STEM_RUNTIME_UNAVAILABLE"
-
-
-def _imported_modules(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module is not None:
-            imported.add(node.module)
-        if isinstance(node, ast.Import):
-            imported.update(alias.name for alias in node.names)
-    return imported
-
-
-def test_audio_job_does_not_import_other_audio_executor_private_helpers():
-    imported_modules = _imported_modules(ROOT / "app/jobs/types/audio_stem_separation_triton/executor.py")
-
-    assert "app.jobs.types.audio_stem_separation.executor" not in imported_modules
-
-
-def test_registry_layers_do_not_depend_on_callers():
-    violations: list[str] = []
-    rules = {
-        ROOT / "app/capabilities": ("app.jobs", "app.integrations"),
-        ROOT / "app/tools": ("app.jobs", "app.capabilities"),
-        ROOT / "app/integrations": ("app.jobs", "app.capabilities", "app.tools"),
-    }
-    for directory, forbidden_prefixes in rules.items():
-        for path in directory.rglob("*.py"):
-            module_refs = _imported_modules(path)
-            forbidden = sorted(
-                ref
-                for ref in module_refs
-                if any(ref == prefix or ref.startswith(f"{prefix}.") for prefix in forbidden_prefixes)
-            )
-            if forbidden:
-                violations.append(f"{path.relative_to(ROOT)} imports {forbidden}")
-
-    assert violations == []
