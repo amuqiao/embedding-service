@@ -39,8 +39,6 @@
 | [`plans/hardening.md`](plans/hardening.md) | 不阻塞主干开发的运维硬化 backlog |
 | [`plans/ops-dashboard-post-mvp.md`](plans/ops-dashboard-post-mvp.md) | `ops_dashboard` MVP 后的表格可用性、长窗口分析、Job Trace 可视化、环境诊断和安全边界后续优化计划 |
 | [`plans/job-kernel-reliability-review.md`](plans/job-kernel-reliability-review.md) | Job 机制生产可靠性、一致性、安全性和测试覆盖审查结论 |
-| [`plans/registry-governance-architecture.md`](plans/registry-governance-architecture.md) | 统一注册治理、ref 规范、registry graph、错误投影和 `validate_all_registries()` 演进计划 |
-| [`plans/job-capability-tool-registry-architecture.md`](plans/job-capability-tool-registry-architecture.md) | `Job Type -> Capability -> Tool -> Integration Adapter` 能力层边界、snapshot 合同、首个 media capability 和持久化门槛计划 |
 | [`plans/htdemucs-audio-separation-integration.md`](plans/htdemucs-audio-separation-integration.md) | 接入 `audio_stem_separation`（htdemucs-ft ONNX 音乐源分离）job_type 的本地 CPU 闭环接入计划，含 lease 窗口修复 |
 | [`plans/ai-capability-enhancement.md`](plans/ai-capability-enhancement.md) | 多模态 provider、正式业务 `job_type`、node/child attribution 和业务 e2e 后续计划 |
 | [`plans/ai-capability-cost-boundary-design.md`](plans/ai-capability-cost-boundary-design.md) | `job_cost_summary`、node/child cost attribution、多模态成本路径和持久化 usage 扩展后续计划 |

@@ -1,6 +1,8 @@
 # 统一注册治理架构计划
 
-本文定义本项目代码注册机制的统一治理后续计划。`Job Type -> Capability -> Tool -> Error` 的基础 ref、definition、graph validation 和首个 media capability 已落地；当前事实以 [`../current/registry-governance.md`](../current/registry-governance.md) 为准。本文只保留尚未完成的治理硬化工作。
+> 归档说明：本文是已完成的历史计划，不再作为当前事实源或 active plan。当前 registry governance 事实以 [`../../current/registry-governance.md`](../../current/registry-governance.md) 为准。
+
+本文记录本项目代码注册机制统一治理的历史方案。`Job Type -> Capability -> Tool -> Error` 的基础 ref、definition、graph validation、error projection、import direction guard 和首个 media capability 已落地。
 
 ## 定位
 

@@ -1,6 +1,8 @@
 # Job Capability 与 Tool Registry 架构地基计划
 
-本文定义 Job 能力层后续演进计划。`Job Type -> Capability -> Tool -> Integration Adapter` 的最小注册骨架、Source/Snapshot 合同和首个音频 media capability 已落地；当前事实以 [`../current/registry-governance.md`](../current/registry-governance.md) 为准。本文只保留尚未完成的能力层治理事项。
+> 归档说明：本文是已完成的历史计划，不再作为当前事实源或 active plan。当前 registry governance、capability/tool 注册和首个 media capability 事实以 [`../../current/registry-governance.md`](../../current/registry-governance.md) 为准。
+
+本文记录 Job 能力层注册治理的历史方案。`Job Type -> Capability -> Tool -> Integration Adapter` 的最小注册骨架、Source/Snapshot 合同和首个音频 media capability 已落地。
 
 ## 定位
 
