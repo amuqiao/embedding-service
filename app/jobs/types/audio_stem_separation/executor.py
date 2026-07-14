@@ -21,8 +21,8 @@ from app.integrations.onnx_runtime import (
 )
 from app.integrations.object_storage import bare_sha256, sha256_digest
 from app.integrations.storage import storage
-from app.jobs.adapters.http_url_input import read_http_url_bytes
-from app.jobs.adapters.oss_url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
+from app.jobs.payload_adapters.http_url_input import read_http_url_bytes
+from app.jobs.payload_adapters.oss_url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
 from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
 from app.jobs.types.audio_stem_separation.errors import (

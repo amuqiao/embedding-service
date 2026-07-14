@@ -97,8 +97,9 @@ FastAPI Job API
         |
         v
 Taskiq worker
-  从 OSS 下载 WAV
-  校验 URL Ref、sha256、content_type、bucket/region 白名单
+  校验 URL Ref、content_type、bucket/region 白名单
+  通过 input_audio.public_url 读取 WAV bytes
+  校验 sha256
   读取 WAV，要求 44100Hz stereo
   转成 float32 ndarray
   按 7.8s segment 切块，不足补 0

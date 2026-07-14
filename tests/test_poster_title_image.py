@@ -1160,7 +1160,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
 
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.storage", local_storage)
     monkeypatch.setattr(
-        "app.jobs.adapters.http_url_input.urllib.request.build_opener",
+        "app.jobs.payload_adapters.http_url_input.urllib.request.build_opener",
         lambda *_args: _ReferenceOpener(),
     )
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.output_target_from_job", lambda _job: output_target)

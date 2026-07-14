@@ -1,4 +1,4 @@
-from app.jobs.adapters.oss_url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
+from app.jobs.payload_adapters.oss_url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
 
 
 def test_oss_url_ref_adapter_projects_cdn_public_url():

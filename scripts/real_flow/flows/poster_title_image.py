@@ -18,7 +18,7 @@ from app.integrations.image import (
     POSTER_TITLE_IMAGE_REFERENCE_POLICY,
     validate_image_bytes,
 )
-from app.jobs.adapters.oss_url_ref import canonical_ref_from_oss_url_ref
+from app.jobs.payload_adapters.oss_url_ref import canonical_ref_from_oss_url_ref
 from scripts.jobs import formatters
 from scripts.real_flow.flows import llm_job_billing, oss_image_upload
 from scripts.verify import image_inspect

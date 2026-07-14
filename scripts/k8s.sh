@@ -470,7 +470,7 @@ import time
 
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
 from app.integrations.object_storage import sha256_digest
-from app.jobs.adapters.oss_url_ref import oss_url_ref_from_output_object
+from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
 
 
 TEST_CONTENT = b"fastapi-best-ai-architecture k8s oss connectivity check\n"

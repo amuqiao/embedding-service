@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.exceptions import AppError
-from app.jobs.adapters.http_url_input import _NoRedirectHandler, read_http_url_bytes
+from app.jobs.payload_adapters.http_url_input import _NoRedirectHandler, read_http_url_bytes
 
 
 class _Response:
@@ -34,7 +34,7 @@ def test_read_http_url_bytes_reads_with_size_limit(monkeypatch):
             recorded["timeout"] = timeout
             return _Response(b"abc")
 
-    monkeypatch.setattr("app.jobs.adapters.http_url_input.urllib.request.build_opener", lambda *_args: _Opener())
+    monkeypatch.setattr("app.jobs.payload_adapters.http_url_input.urllib.request.build_opener", lambda *_args: _Opener())
 
     assert read_http_url_bytes("https://bucket.oss-region.aliyuncs.com/key.png", timeout_seconds=3, max_bytes=3) == b"abc"
     assert recorded == {"url": "https://bucket.oss-region.aliyuncs.com/key.png", "timeout": 3}
@@ -45,7 +45,7 @@ def test_read_http_url_bytes_rejects_oversized_response(monkeypatch):
         def open(self, _request, *, timeout):
             return _Response(b"abcd")
 
-    monkeypatch.setattr("app.jobs.adapters.http_url_input.urllib.request.build_opener", lambda *_args: _Opener())
+    monkeypatch.setattr("app.jobs.payload_adapters.http_url_input.urllib.request.build_opener", lambda *_args: _Opener())
 
     with pytest.raises(AppError) as exc:
         read_http_url_bytes("https://bucket.oss-region.aliyuncs.com/key.png", max_bytes=3)
@@ -66,7 +66,7 @@ def test_read_http_url_bytes_maps_http_errors_to_invalid_input(monkeypatch, stat
                 None,
             )
 
-    monkeypatch.setattr("app.jobs.adapters.http_url_input.urllib.request.build_opener", lambda *_args: _Opener())
+    monkeypatch.setattr("app.jobs.payload_adapters.http_url_input.urllib.request.build_opener", lambda *_args: _Opener())
 
     with pytest.raises(AppError) as exc:
         read_http_url_bytes("https://bucket.oss-region.aliyuncs.com/key.png")
@@ -80,7 +80,7 @@ def test_read_http_url_bytes_maps_network_errors_to_invalid_input(monkeypatch):
         def open(self, _request, *, timeout):
             raise urllib.error.URLError("timed out")
 
-    monkeypatch.setattr("app.jobs.adapters.http_url_input.urllib.request.build_opener", lambda *_args: _Opener())
+    monkeypatch.setattr("app.jobs.payload_adapters.http_url_input.urllib.request.build_opener", lambda *_args: _Opener())
 
     with pytest.raises(AppError) as exc:
         read_http_url_bytes("https://bucket.oss-region.aliyuncs.com/key.png")

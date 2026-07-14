@@ -456,7 +456,7 @@ URL Ref JSON 示例：
 
 ```bash
 grep -n "public_endpoint=settings.storage.oss_public_endpoint" /mnt/app/jobs/types/poster_title_image/executor.py
-test -f /mnt/app/jobs/adapters/oss_url_ref.py && echo "has oss_url_ref adapter"
+test -f /mnt/app/jobs/payload_adapters/oss_url_ref.py && echo "has oss_url_ref adapter"
 ```
 
 再检查运行时配置：

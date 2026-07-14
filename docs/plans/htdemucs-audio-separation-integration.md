@@ -7,7 +7,7 @@
 ## Current Baseline
 
 - `app/jobs/types/poster_title_image/` 是当前唯一的正式业务包目录范式（`executor.py` + `errors.py` + `models.yaml`/`prompts.yaml`），可作为目录结构参照，但它是 workflow root（`role="root"`，`_execute()` 直接 `raise JOB_RUNTIME_NOT_SUPPORTED`，实际执行由 chord/group workflow 驱动）。`audio_stem_separation` 不需要这套编排——它是单一原子推理步骤，直接在 `_execute()` 内完成分段、4 个专家 ONNX 推理、官方 one-hot bag 聚合与 overlap-add，不注册 workflow definition。
-- `app/jobs/adapters/oss_url_ref.py` 的 `canonical_ref_from_oss_url_ref()` / `oss_url_ref_from_output_object()` 已经是本仓库校验和构造 OSS 引用对象的统一入口，`poster_title_image` 的 reference/输出图片已经在用。
+- `app/jobs/payload_adapters/oss_url_ref.py` 的 `canonical_ref_from_oss_url_ref()` / `oss_url_ref_from_output_object()` 已经是本仓库校验和构造 OSS 引用对象的统一入口，`poster_title_image` 的 reference/输出图片已经在用。
 - `app/jobs/base.py` 的 `JobExecutor.timeout_seconds`（默认 300）会被 `app/services/jobs.py` 读出，并经 `JobRepo.create_initial_attempt` 写入 `JobAttempt.timeout_seconds` 列（`app/models/job.py`，`NOT NULL`）。
 - `JobRepo.claim_attempt_for_execution()` 和 `JobRepo.heartbeat_attempt()` 设置 `lease_expires_at` 时，使用 `max(settings.job_stale_running_seconds, attempt.timeout_seconds)`：job_type 声明的较长 `timeout_seconds` 可以拉长 attempt lease，但不能缩短全局保护窗口。
 - `settings.job_stale_running_seconds` 仍从 LLM 语义的 `MODEL_CALL_TIMEOUT_SECONDS` 派生（`app/core/config.py`：`worker_soft_time_limit = model_call_timeout_seconds + 300`，`worker_hard_time_limit = soft + 60`，`job_stale_running_seconds = hard + 600`），作为全服务共享的 attempt lease floor。

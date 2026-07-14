@@ -2652,7 +2652,7 @@ def test_jobs_workflow_entrypoint_accepts_child_job_id(monkeypatch):
 
 
 def test_jobs_runbook_documents_scopes_and_new_entrypoints():
-    content = (ROOT_DIR / "docs/runbooks/jobs使用与排障手册.md").read_text(encoding="utf-8")
+    content = (ROOT_DIR / "docs/runbooks/job/jobs使用与排障手册.md").read_text(encoding="utf-8")
 
     assert "root" in content
     assert "family" in content

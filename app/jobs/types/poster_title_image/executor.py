@@ -22,8 +22,8 @@ from app.integrations.image import (
 )
 from app.integrations.object_storage import sha256_digest
 from app.integrations.storage import storage
-from app.jobs.adapters.http_url_input import read_http_url_bytes
-from app.jobs.adapters.oss_url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
+from app.jobs.payload_adapters.http_url_input import read_http_url_bytes
+from app.jobs.payload_adapters.oss_url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
 from app.jobs.base import ExecutionRetryPolicy, JobExecutor, JobRetryPolicy
 from app.jobs.model_selection import (
     poster_title_image_generation_allowed_model_ids,

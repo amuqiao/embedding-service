@@ -6,7 +6,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from app.core.exceptions import AppError
 from app.integrations.object_storage import CanonicalObjectRef, bare_sha256
-from app.jobs.adapters.cpp_oss_url_ref import (
+from app.jobs.payload_adapters.cpp_oss_url_ref import (
     canonical_ref_from_cpp_oss_url_ref,
     cpp_oss_url_ref_from_output_object,
 )
