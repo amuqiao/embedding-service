@@ -11,7 +11,7 @@ import numpy as np
 from app.capabilities.media.audio_input import (
     AUDIO_WAV_CONTENT_TYPE,
     MEDIA_AUDIO_INPUT_CAPABILITY_REF,
-    prepare_audio_wav_input,
+    prepare_audio_input,
 )
 from app.core.config import settings
 from app.core.exceptions import AppError
@@ -28,7 +28,7 @@ from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
 from app.jobs.types.audio_stem_shared import (
     DEFAULT_TIMEOUT_SECONDS,
     SOURCES,
-    build_audio_wav_input_plan,
+    build_audio_input_plan,
     chunk_window as _chunk_window,
     load_model_asset as _load_model_asset,
     make_transition_window as _make_transition_window,
@@ -206,7 +206,7 @@ class AudioStemSeparationTritonJob(JobExecutor):
 
     def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = AudioStemSeparationTritonParams.model_validate(job_params)
-        build_audio_wav_input_plan(params.input_audio, max_duration_seconds=params.max_duration_seconds)
+        build_audio_input_plan(params.input_audio, max_duration_seconds=params.max_duration_seconds)
         return params.model_dump(exclude_none=True)
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
@@ -214,7 +214,7 @@ class AudioStemSeparationTritonJob(JobExecutor):
         asset = _load_model_asset()
         runtime = asset["runtime"]
         return AudioStemSeparationTritonRuntimeFields(
-            media_input_plan=build_audio_wav_input_plan(
+            media_input_plan=build_audio_input_plan(
                 params.input_audio,
                 max_duration_seconds=params.max_duration_seconds,
             ),
@@ -231,7 +231,7 @@ class AudioStemSeparationTritonJob(JobExecutor):
         total_started = time.monotonic()
         io_started = time.monotonic()
         runtime_fields = AudioStemSeparationTritonRuntimeFields.model_validate(runtime_fields_from_job(job))
-        input_audio = prepare_audio_wav_input(runtime_fields.media_input_plan)
+        input_audio = prepare_audio_input(runtime_fields.media_input_plan)
         io_ms = int((time.monotonic() - io_started) * 1000)
 
         runner = _runner()

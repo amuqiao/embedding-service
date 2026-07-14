@@ -829,6 +829,24 @@ def test_real_flow_builds_audio_stem_separation_payload():
     }
 
 
+def test_real_flow_builds_audio_stem_separation_payload_with_mp3_ref():
+    input_audio = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.mp3",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.mp3",
+        "content_type": "audio/mpeg",
+        "sha256": "a" * 64,
+    }
+
+    payload = audio_stem_separation.build_job_payload(
+        input_audio=input_audio,
+        job_type="audio_stem_separation",
+        client_request_id="audio-client-mp3",
+        max_duration_seconds=30.5,
+    )
+
+    assert payload["job_params"]["input_audio"]["content_type"] == "audio/mpeg"
+
+
 def test_real_flow_builds_audio_stem_separation_triton_payload():
     input_audio = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.wav",

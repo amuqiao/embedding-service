@@ -555,10 +555,13 @@ class PosterTitleImageParams(StrictBaseModel):
         return self
 
 
+AudioInputContentType = Literal["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3"]
+
+
 class AudioStemSeparationInputObject(StrictBaseModel):
     public_url: str = Field(min_length=1)
     internal_url: str = Field(min_length=1)
-    content_type: Literal["audio/wav"]
+    content_type: AudioInputContentType
     sha256: str
 
     @field_validator("sha256")
@@ -574,7 +577,7 @@ class CanonicalObjectRefSnapshot(StrictBaseModel):
     bucket: str = Field(min_length=1)
     region: str = Field(min_length=1)
     key: str = Field(min_length=1)
-    content_type: Literal["audio/wav"]
+    content_type: AudioInputContentType
     content_hash: str
 
     @field_validator("content_hash")
@@ -595,11 +598,27 @@ class MediaFetchSpec(StrictBaseModel):
     redirect_policy: Literal["forbid"] = "forbid"
 
 
-class AudioWavInputPlanSnapshot(StrictBaseModel):
-    capability_ref: Literal["media.audio_input:1"] = "media.audio_input:1"
-    tool_refs: tuple[Literal["object_storage_read:1"], ...] = ("object_storage_read:1",)
+class AudioDecodeNormalizeSpec(StrictBaseModel):
+    source_content_type: AudioInputContentType
+    target_sample_rate: Literal[44100] = 44100
+    target_channels: Literal[2] = 2
+
+
+class AudioDecodeNormalizeRequest(StrictBaseModel):
+    data: bytes
+    decode: AudioDecodeNormalizeSpec
+    max_duration_seconds: float | None = Field(default=None, gt=0, le=3600)
+
+
+class AudioInputPlanSnapshot(StrictBaseModel):
+    capability_ref: Literal["media.audio_input:2"] = "media.audio_input:2"
+    tool_refs: tuple[Literal["object_storage_read:1"], Literal["audio_decode_normalize:1"]] = (
+        "object_storage_read:1",
+        "audio_decode_normalize:1",
+    )
     source: CanonicalObjectRefSnapshot
     fetch: MediaFetchSpec
+    decode: AudioDecodeNormalizeSpec
     max_duration_seconds: float | None = Field(default=None, gt=0, le=3600)
 
 
@@ -620,7 +639,7 @@ class AudioStemSeparationTritonParams(AudioStemSeparationParams):
 
 class AudioStemSeparationRuntimeFields(RuntimeFieldsBase):
     operation: Literal["audio_stem_separation"] = "audio_stem_separation"
-    media_input_plan: AudioWavInputPlanSnapshot
+    media_input_plan: AudioInputPlanSnapshot
     onnx_model_version: str = Field(min_length=1, max_length=128)
     execution_provider: str = Field(min_length=1, max_length=128)
     segment_seconds: float = Field(gt=0)
@@ -629,7 +648,7 @@ class AudioStemSeparationRuntimeFields(RuntimeFieldsBase):
 
 class AudioStemSeparationTritonRuntimeFields(RuntimeFieldsBase):
     operation: Literal["audio_stem_separation_triton"] = "audio_stem_separation_triton"
-    media_input_plan: AudioWavInputPlanSnapshot
+    media_input_plan: AudioInputPlanSnapshot
     onnx_model_version: str = Field(min_length=1, max_length=128)
     model_service: Literal["triton"] = "triton"
     triton_model_version: str = Field(min_length=1, max_length=64)

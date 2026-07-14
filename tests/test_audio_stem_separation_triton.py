@@ -40,14 +40,14 @@ def _handler():
 def _media_input_plan(params: dict) -> dict:
     input_audio = params["input_audio"]
     return {
-        "capability_ref": "media.audio_input:1",
-        "tool_refs": ("object_storage_read:1",),
+        "capability_ref": "media.audio_input:2",
+        "tool_refs": ("object_storage_read:1", "audio_decode_normalize:1"),
         "source": {
             "provider": "aliyun_oss",
             "bucket": "local-dev",
             "region": "local",
             "key": "input.wav",
-            "content_type": "audio/wav",
+            "content_type": input_audio["content_type"],
             "content_hash": f"sha256:{input_audio['sha256']}",
         },
         "fetch": {
@@ -55,6 +55,11 @@ def _media_input_plan(params: dict) -> dict:
             "endpoint_key": "canonical_object_ref",
             "max_bytes": 5_242_880,
             "redirect_policy": "forbid",
+        },
+        "decode": {
+            "source_content_type": input_audio["content_type"],
+            "target_sample_rate": 44100,
+            "target_channels": 2,
         },
         **({"max_duration_seconds": params["max_duration_seconds"]} if params.get("max_duration_seconds") else {}),
     }
@@ -196,13 +201,17 @@ def _asset(*, segment_samples: int = 8, overlap_ratio: float = 0.25) -> dict:
     }
 
 
-def test_audio_stem_separation_triton_params_contract_accepts_wav_refs_only():
+def test_audio_stem_separation_triton_params_contract_accepts_supported_audio_refs():
     ref = _url_ref("input.wav", b"audio")
     params = AudioStemSeparationTritonParams.model_validate({"input_audio": ref})
 
     assert params.input_audio.content_type == "audio/wav"
 
-    invalid = _url_ref("input.mp3", b"audio", content_type="audio/mpeg")
+    mp3 = _url_ref("input.mp3", b"audio", content_type="audio/mpeg")
+    params = AudioStemSeparationTritonParams.model_validate({"input_audio": mp3})
+    assert params.input_audio.content_type == "audio/mpeg"
+
+    invalid = _url_ref("input.bin", b"audio", content_type="application/octet-stream")
     with pytest.raises(Exception):
         AudioStemSeparationTritonParams.model_validate({"input_audio": invalid})
 
@@ -339,8 +348,13 @@ def test_audio_stem_separation_triton_runtime_fields_reflect_model_asset(monkeyp
         "overlap_ratio": 0.25,
         "system": None,
     }
-    assert fields["media_input_plan"]["capability_ref"] == "media.audio_input:1"
+    assert fields["media_input_plan"]["capability_ref"] == "media.audio_input:2"
     assert fields["media_input_plan"]["source"]["content_hash"] == f"sha256:{ref['sha256']}"
+    assert fields["media_input_plan"]["decode"] == {
+        "source_content_type": "audio/wav",
+        "target_sample_rate": 44100,
+        "target_channels": 2,
+    }
 
 
 def test_audio_stem_separation_triton_runner_calls_each_remote_model_and_preserves_edges():
@@ -440,7 +454,7 @@ async def test_audio_stem_separation_triton_executes_fake_runner_and_writes_four
     monkeypatch.setattr(triton_executor, "storage", fake_storage)
     monkeypatch.setattr(
         triton_executor,
-        "prepare_audio_wav_input",
+        "prepare_audio_input",
         lambda _plan: media_audio_input.PreparedAudioInput(
             data=np.zeros((2, 4), dtype=np.float32),
             sample_rate=44100,

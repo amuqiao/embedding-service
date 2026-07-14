@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # tools.sh - 本地无副作用工具入口
 #
-# 运行环境：Bash；secret/env-url 子命令需要 Python 标准库。
+# 运行环境：Bash；secret/env-url/registry 子命令需要 Python 标准库。
 # 作用域：提供与服务生命周期、部署、验证和 Job 排障无关的小型开发辅助工具。
-# 约束：默认不读取 .env，不写文件，不访问网络；stdout 保持可复制的结果。
+# 约束：默认不修改 .env，不写文件，不访问网络；stdout 保持可复制的结果。
 
 set -euo pipefail
 
@@ -27,27 +27,64 @@ usage() {
 命令：
   secret              生成 URL-safe 随机 secret，适合 SERVICE_API_KEY 这类 Bearer token。
   env-url             生成 DATABASE_URL 或 REDIS_URL，并默认输出解析摘要。
+  registry            查看已注册 tool、capability 和 job_type capability 关系。
   help                显示帮助。
 
 输出：
-  stdout: 子命令结果；secret 只输出生成值；env-url 输出可复制到 .env 的 env 行和注释摘要。
+  stdout: 子命令结果；secret 只输出生成值；env-url 输出可复制到 .env 的 env 行和注释摘要；registry 输出只读清单。
   stderr: 非法命令、非法参数或缺少依赖。
 
 副作用与保护边界：
-  默认不读取 .env，不写文件，不访问网络。
-  secret 只生成随机值；env-url 只生成 URL 文本和解析摘要。
+  默认不修改 .env，不写文件，不访问网络。
+  secret 只生成随机值；env-url 只生成 URL 文本和解析摘要；registry 只读取代码注册事实和应用配置。
 
 常用示例：
   ./scripts/tools.sh secret
   ./scripts/tools.sh secret --prefix prd_
+  ./scripts/tools.sh registry
+  ./scripts/tools.sh registry --json
   printf '%s' 'raw-password' | ./scripts/tools.sh env-url postgres --username app_user --host postgres.fortress --database app_db --password-stdin
   printf '%s' 'raw-password' | ./scripts/tools.sh env-url redis --host 192.168.0.5 --port 6390 --db 8 --password-stdin
   ./scripts/tools.sh secret -h
   ./scripts/tools.sh env-url -h
+  ./scripts/tools.sh registry -h
 
 Exit Codes:
   0  成功
   2  缺少 command、非法命令、非法参数或缺少依赖
+EOF
+}
+
+registry_usage() {
+  cat <<EOF
+用法：
+  ./scripts/tools.sh registry [--json]
+  ./scripts/tools.sh registry -h|--help
+
+说明：
+  查看当前代码注册的 tool、capability 和 job_type -> capability 关系。
+  本命令只调用 registry composition root，不启动 API/worker，不访问网络，不修改 .env。
+  composition root 可能读取应用配置；命令输出仍只展示代码注册事实。
+
+选项：
+  --json              输出机器可读 JSON。
+  -h, --help          显示帮助。
+
+输出：
+  stdout: 默认输出人读清单；--json 输出 JSON。
+  stderr: 非法参数或缺少 Python。
+
+副作用与保护边界：
+  - 本命令不执行 registry consistency 校验；验证请使用 ./scripts/verify.sh check。
+  - 本命令不代表 public API，只用于开发者查看代码事实。
+
+常用示例：
+  ./scripts/tools.sh registry
+  ./scripts/tools.sh registry --json
+
+Exit Codes:
+  0  成功
+  2  非法参数或缺少 Python
 EOF
 }
 
@@ -195,6 +232,20 @@ run_secret() {
   TOOLS_SECRET_PREFIX="$prefix" "$python_bin" -c 'import os, secrets; print(os.environ["TOOLS_SECRET_PREFIX"] + secrets.token_urlsafe(32))'
 }
 
+run_registry() {
+  local python_bin
+
+  case "${1:-}" in
+    -h|--help)
+      registry_usage
+      return 0
+      ;;
+  esac
+
+  python_bin="$(resolve_python_bin)"
+  "$python_bin" "$ROOT_DIR/scripts/tools/registry.py" "$@"
+}
+
 resolve_python_bin() {
   if [[ -n "${PYTHON_BIN:-}" ]]; then
     require_command "$PYTHON_BIN" "install Python 3 or set PYTHON_BIN"
@@ -226,6 +277,10 @@ case "$command" in
   env-url)
     shift
     run_env_url "$@"
+    ;;
+  registry)
+    shift
+    run_registry "$@"
     ;;
   *)
     usage >&2

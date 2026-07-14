@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -45,6 +46,87 @@ def test_tools_env_url_help_describes_fixed_encoding_rules():
     assert "REDIS_URL" in result.stdout
     assert "生成时始终执行 URL encode" in result.stdout
     assert "不提供 --no-encode" in result.stdout
+
+
+def test_tools_registry_help_describes_registered_graph():
+    result = subprocess.run(
+        ["./scripts/tools.sh", "registry", "--help"],
+        cwd=ROOT_DIR,
+        env=_env(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "tool" in result.stdout
+    assert "capability" in result.stdout
+    assert "job_type" in result.stdout
+    assert "--json" in result.stdout
+
+
+def test_tools_registry_prints_registered_graph():
+    result = subprocess.run(
+        ["./scripts/tools.sh", "registry"],
+        cwd=ROOT_DIR,
+        env=_env(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stderr == ""
+    assert "Tools" in result.stdout
+    assert "object_storage_read:1" in result.stdout
+    assert "audio_decode_normalize:1" in result.stdout
+    assert "Capabilities" in result.stdout
+    assert "media.audio_input:2" in result.stdout
+    assert "Job Type Capabilities" in result.stdout
+    assert "audio_stem_separation" in result.stdout
+    assert "audio_stem_separation_triton" in result.stdout
+
+
+def test_tools_registry_json_prints_registered_graph():
+    result = subprocess.run(
+        ["./scripts/tools.sh", "registry", "--json"],
+        cwd=ROOT_DIR,
+        env=_env(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    data = json.loads(result.stdout)
+    assert result.stderr == ""
+    assert {tool["tool_ref"] for tool in data["tools"]} >= {
+        "object_storage_read:1",
+        "audio_decode_normalize:1",
+    }
+    audio_tool = next(item for item in data["tools"] if item["tool_ref"] == "audio_decode_normalize:1")
+    assert audio_tool["request_schema"] == "AudioDecodeNormalizeRequest"
+    assert audio_tool["result_schema"] is None
+    assert audio_tool["startup_validators"] == []
+    capability = next(item for item in data["capabilities"] if item["capability_ref"] == "media.audio_input:2")
+    assert capability["allowed_tool_refs"] == ["audio_decode_normalize:1", "object_storage_read:1"]
+    job_capabilities = {
+        item["job_type"]: item["allowed_capability_refs"]
+        for item in data["job_capabilities"]
+    }
+    assert job_capabilities["audio_stem_separation"] == ["media.audio_input:2"]
+    assert job_capabilities["audio_stem_separation_triton"] == ["media.audio_input:2"]
+
+
+def test_tools_registry_rejects_unknown_argument():
+    result = subprocess.run(
+        ["./scripts/tools.sh", "registry", "--format", "table"],
+        cwd=ROOT_DIR,
+        env=_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "--format" in result.stderr
 
 
 def test_tools_secret_generates_urlsafe_token_only_on_stdout():

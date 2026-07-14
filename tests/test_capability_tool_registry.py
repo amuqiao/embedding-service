@@ -15,6 +15,10 @@ def _entrypoint():
     return None
 
 
+def _failing_entrypoint():
+    raise RuntimeError("validator failed")
+
+
 def _job_type_spec(*, allowed_capability_refs: frozenset[str] = frozenset()) -> JobTypeSpec:
     return JobTypeSpec(
         job_type="example_pair",
@@ -136,6 +140,13 @@ def test_capability_tool_registry_rejects_missing_entrypoint():
     tool_registry.register(_tool(entrypoint_path="tests.test_capability_tool_registry:missing"))
 
     with pytest.raises(ValueError, match="entrypoint_path"):
+        validate_capability_tool_registry()
+
+
+def test_capability_tool_registry_executes_startup_validators():
+    tool_registry.register(_tool(startup_validators=("tests.test_capability_tool_registry:_failing_entrypoint",)))
+
+    with pytest.raises(ValueError, match="startup validator failed"):
         validate_capability_tool_registry()
 
 

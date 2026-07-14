@@ -18,12 +18,13 @@ job-ops.sh      Job 写操作运维入口
 real-flow.sh    手动真实模型/对象存储流程验证
 models.sh       本地模型资产下载、路径和必需文件检查
 media.sh        本地音视频素材探测、校验和准备
-tools.sh        无默认持久副作用的本地开发辅助工具
+tools.sh        无默认持久副作用的本地开发辅助工具和只读代码清单查看
 ```
 
 新增脚本前，先判断它是否属于已有入口的子命令。只有当职责边界不同、生命周期不同或安全边界不同，才新增顶层 `*.sh`。模型权重这类会写入 `.data/models/`、可能访问远端但不执行真实推理的本地资产准备，归属 `models.sh`，不放入默认无持久副作用的 `tools.sh`。
 音视频素材探测、转码准备和业务输入格式校验归属 `media.sh`；它只处理本地素材文件，不下载模型、不执行推理、不提交 Job、不上传对象存储。
 Triton 直压归属 `triton-bench.sh`；它只直连推理服务，不创建 FastAPI Job，不访问 DB/Redis/OSS，不触发 callback，不替代 `load.sh` 的业务链路压测。
+已注册 tool、capability 和 job_type capability 关系归属 `tools.sh registry` 只读查看；当前治理事实见 `docs/current/registry-governance.md`。
 
 ## 入口职责
 

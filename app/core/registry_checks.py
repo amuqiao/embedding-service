@@ -342,7 +342,11 @@ def validate_capability_tool_registry() -> None:
         if unknown_settings:
             raise ValueError(f"{owner} references unknown settings: {unknown_settings}")
         for startup_validator in definition.startup_validators:
-            _resolve_entrypoint(startup_validator, owner=owner, field_name="startup_validators")
+            validator = _resolve_entrypoint(startup_validator, owner=owner, field_name="startup_validators")
+            try:
+                validator()
+            except Exception as exc:
+                raise ValueError(f"{owner} startup validator failed: {startup_validator}") from exc
         missing_errors = _missing(set(definition.error_codes), known_errors)
         if missing_errors:
             raise ValueError(f"{owner} references unknown errors: {missing_errors}")

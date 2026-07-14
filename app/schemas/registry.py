@@ -5,8 +5,10 @@ from pydantic import BaseModel
 from app.schemas.billing import BillingEnvelope, JobBillingResponseData, ScopeBillingResponseData
 from app.schemas.jobs import (
     AudioStemSeparationDurationMs,
+    AudioDecodeNormalizeRequest,
+    AudioDecodeNormalizeSpec,
+    AudioInputPlanSnapshot,
     AudioStemSeparationInputObject,
-    AudioWavInputPlanSnapshot,
     CanonicalObjectRefSnapshot,
     MediaFetchSpec,
     PreparedAudioInputMetadata,
@@ -99,7 +101,9 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
         AudioStemSeparationInputObject,
         CanonicalObjectRefSnapshot,
         MediaFetchSpec,
-        AudioWavInputPlanSnapshot,
+        AudioDecodeNormalizeSpec,
+        AudioDecodeNormalizeRequest,
+        AudioInputPlanSnapshot,
         PreparedAudioInputMetadata,
         AudioStemSeparationParams,
         AudioStemSeparationRuntimeFields,

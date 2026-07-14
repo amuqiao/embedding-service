@@ -22,6 +22,7 @@ SUPPORTED_JOB_TYPES = (DEFAULT_JOB_TYPE, TRITON_JOB_TYPE)
 DEFAULT_INPUT_KEY_PREFIX = "real-flow/audio-stem-separation/input"
 DEFAULT_OUTPUT_DIR = ".data/real-flow/audio-stem-separation"
 AUDIO_WAV_CONTENT_TYPE = "audio/wav"
+AUDIO_INPUT_CONTENT_TYPES = frozenset({"audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3"})
 STEMS = ("drums", "bass", "other", "vocals")
 
 
@@ -64,12 +65,15 @@ def _input_ref_from_mapping(ref: dict[str, Any], *, label: str) -> dict[str, str
     if missing:
         raise FlowError(f"{label} missing required field(s): {', '.join(missing)}", exit_code=2)
     content_type = ref.get("content_type", AUDIO_WAV_CONTENT_TYPE)
-    if content_type != AUDIO_WAV_CONTENT_TYPE:
-        raise FlowError(f"{label} content_type must be {AUDIO_WAV_CONTENT_TYPE}", exit_code=2)
+    if content_type not in AUDIO_INPUT_CONTENT_TYPES:
+        raise FlowError(
+            f"{label} content_type must be one of: {', '.join(sorted(AUDIO_INPUT_CONTENT_TYPES))}",
+            exit_code=2,
+        )
     return {
         "public_url": _required_mapping_str(ref, "public_url", label=label),
         "internal_url": _required_mapping_str(ref, "internal_url", label=label),
-        "content_type": AUDIO_WAV_CONTENT_TYPE,
+        "content_type": content_type,
         "sha256": _required_mapping_str(ref, "sha256", label=label).removeprefix("sha256:"),
     }
 

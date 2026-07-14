@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 import yaml
 
-from app.capabilities.media.audio_input import AUDIO_WAV_CONTENT_TYPE
+from app.capabilities.media.audio_input import AUDIO_INPUT_CONTENT_TYPES
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.jobs.payload_adapters.oss_url_ref import canonical_ref_from_oss_url_ref
@@ -18,8 +18,9 @@ from app.jobs.types.audio_stem_separation.errors import (
     AUDIO_STEM_OUTPUT_INVALID,
 )
 from app.schemas.jobs import (
+    AudioDecodeNormalizeSpec,
+    AudioInputPlanSnapshot,
     AudioStemSeparationInputObject,
-    AudioWavInputPlanSnapshot,
     CanonicalObjectRefSnapshot,
     MediaFetchSpec,
 )
@@ -29,7 +30,7 @@ SOURCES = ("drums", "bass", "other", "vocals")
 DEFAULT_TIMEOUT_SECONDS = 2400
 
 
-def build_audio_wav_input_plan(
+def build_audio_input_plan(
     input_audio: AudioStemSeparationInputObject,
     *,
     max_duration_seconds: float | None,
@@ -37,16 +38,17 @@ def build_audio_wav_input_plan(
     ref = _canonical_input_ref(input_audio)
     if ref.content_hash is None:
         raise AppError(AUDIO_STEM_INPUT_INVALID, "audio stem input content_hash is required")
-    plan = AudioWavInputPlanSnapshot(
+    plan = AudioInputPlanSnapshot(
         source=CanonicalObjectRefSnapshot(
             provider=ref.provider,
             bucket=ref.bucket,
             region=ref.region,
             key=ref.key,
-            content_type=AUDIO_WAV_CONTENT_TYPE,
+            content_type=ref.content_type,
             content_hash=ref.content_hash,
         ),
         fetch=MediaFetchSpec(max_bytes=settings.job.oss_input_max_bytes),
+        decode=AudioDecodeNormalizeSpec(source_content_type=ref.content_type),
         max_duration_seconds=max_duration_seconds,
     )
     return plan.model_dump(exclude_none=True)
@@ -58,7 +60,7 @@ def _canonical_input_ref(input_audio: AudioStemSeparationInputObject):
             input_audio.model_dump(),
             allowed_buckets=settings.job.audio_stem_separation_allowed_oss_buckets,
             allowed_regions=settings.job.audio_stem_separation_allowed_oss_regions,
-            allowed_content_types={AUDIO_WAV_CONTENT_TYPE},
+            allowed_content_types=AUDIO_INPUT_CONTENT_TYPES,
             public_endpoint=settings.storage.oss_public_endpoint or None,
             public_endpoint_bucket=getattr(settings.storage, "oss_bucket", "") or None,
             public_endpoint_region=getattr(settings.storage, "oss_region", "") or None,

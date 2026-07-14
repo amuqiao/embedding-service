@@ -6,19 +6,23 @@ def register_all_capabilities() -> None:
     from app.capabilities.definitions import CapabilityDefinition
     from app.capabilities.media.error_codes import (
         AUDIO_STEM_DURATION_EXCEEDS_LIMIT,
-        AUDIO_STEM_INFERENCE_FAILED,
         AUDIO_STEM_INPUT_INVALID,
+        AUDIO_STEM_RUNTIME_UNAVAILABLE,
     )
-    from app.capabilities.media.audio_input import MEDIA_AUDIO_INPUT_CAPABILITY_REF, OBJECT_STORAGE_READ_TOOL_REF
+    from app.capabilities.media.audio_input import (
+        AUDIO_DECODE_NORMALIZE_TOOL_REF,
+        MEDIA_AUDIO_INPUT_CAPABILITY_REF,
+        OBJECT_STORAGE_READ_TOOL_REF,
+    )
     from app.capabilities.registry import register
 
     register(
         CapabilityDefinition(
             capability_ref=MEDIA_AUDIO_INPUT_CAPABILITY_REF,
-            plan_schema="AudioWavInputPlanSnapshot",
+            plan_schema="AudioInputPlanSnapshot",
             result_schema="PreparedAudioInputMetadata",
-            service_entrypoint="app.capabilities.media.audio_input:prepare_audio_wav_input",
-            allowed_tool_refs=frozenset({OBJECT_STORAGE_READ_TOOL_REF}),
+            service_entrypoint="app.capabilities.media.audio_input:prepare_audio_input",
+            allowed_tool_refs=frozenset({OBJECT_STORAGE_READ_TOOL_REF, AUDIO_DECODE_NORMALIZE_TOOL_REF}),
             error_codes=frozenset(
                 {
                     "INPUT_HASH_MISMATCH",
@@ -28,8 +32,8 @@ def register_all_capabilities() -> None:
                     "OSS_OBJECT_NOT_FOUND",
                     "OSS_REGION_NOT_CONFIGURED",
                     AUDIO_STEM_DURATION_EXCEEDS_LIMIT,
-                    AUDIO_STEM_INFERENCE_FAILED,
                     AUDIO_STEM_INPUT_INVALID,
+                    AUDIO_STEM_RUNTIME_UNAVAILABLE,
                 }
             ),
         )

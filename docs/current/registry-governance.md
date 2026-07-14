@@ -30,6 +30,17 @@ Job Type
 
 API startup 和 worker startup 都执行同一组注册和校验。`app/jobs/types/register.py` 仍是当前 composition root：它显式调用 tool、capability、error、job type 和 workflow 注册入口。注册完成后 API/worker 会 freeze error、tool 和 capability registry；freeze 后相同 definition 可幂等重复注册，变更 definition 会失败。
 
+开发者查看当前注册清单使用只读命令：
+
+```bash
+./scripts/tools.sh registry
+./scripts/tools.sh registry --json
+```
+
+该命令会经过 registry composition root，可能读取应用配置；输出只包含代码注册图，不执行完整 registry consistency 校验。完整校验仍由 `./scripts/verify.sh check` 和 `scripts/verify/registry_check.py` 负责。
+
+Tool `startup_validators` 只用于 API/worker 进程级必需依赖。可选能力、demo job 或特定模型运行时依赖不能放入全局 startup validator；这类依赖应在对应 capability/job 执行路径或专项 verify/real-flow 中 fail-fast。
+
 ## 当前 Graph 校验
 
 当前 `validate_all_registries()` 会 fail-fast 校验：
@@ -53,36 +64,36 @@ API startup 和 worker startup 都执行同一组注册和校验。`app/jobs/typ
 
 ## 当前 Capability / Tool
 
-当前首个已注册 capability 是 `media.audio_input:1`：
+当前已注册媒体输入 capability 是 `media.audio_input:2`：
 
 | 字段 | 当前值 |
 |---|---|
-| `capability_ref` | `media.audio_input:1` |
-| plan schema | `AudioWavInputPlanSnapshot` |
+| `capability_ref` | `media.audio_input:2` |
+| plan schema | `AudioInputPlanSnapshot` |
 | result schema | `PreparedAudioInputMetadata` |
-| service entrypoint | `app.capabilities.media.audio_input:prepare_audio_wav_input` |
-| allowed tools | `object_storage_read:1` |
+| service entrypoint | `app.capabilities.media.audio_input:prepare_audio_input` |
+| allowed tools | `object_storage_read:1`、`audio_decode_normalize:1` |
 
-当前首个已注册 tool 是 `object_storage_read:1`：
+当前已注册 media input 相关 tools：
 
-| 字段 | 当前值 |
-|---|---|
-| `tool_ref` | `object_storage_read:1` |
-| kind | `object_storage` |
-| entrypoint | `app.tools.object_storage:read_object_bytes` |
-| request schema | `CanonicalObjectRefSnapshot` |
-| required settings | `storage.backend`、`job.oss_input_max_bytes` |
+| `tool_ref` | kind | entrypoint | request schema | result schema |
+|---|---|---|---|---|
+| `object_storage_read:1` | `object_storage` | `app.tools.object_storage:read_object_bytes` | `CanonicalObjectRefSnapshot` | - |
+| `audio_decode_normalize:1` | `media_transform` | `app.tools.media_audio:decode_normalize_audio` | `AudioDecodeNormalizeRequest` | - |
 
-`audio_stem_separation` 和 `audio_stem_separation_triton` 都声明 `allowed_capability_refs={"media.audio_input:1"}`。两个 job type 在创建 Job 的 `runtime_fields` 时由 job shared builder 冻结 `media_input_plan`，执行期 capability 只读取 frozen plan，不按最新配置重新推导输入读取策略，也不直接解析调用方 payload。
+`audio_stem_separation` 和 `audio_stem_separation_triton` 都声明 `allowed_capability_refs={"media.audio_input:2"}`。两个 job type 在创建 Job 的 `runtime_fields` 时由 job shared builder 冻结 `media_input_plan`，执行期 capability 只读取 frozen plan，不按最新配置重新推导输入读取策略，也不直接解析调用方 payload。
 
-当前 frozen plan 只支持 WAV 输入，且只冻结对象身份和读取策略：
+`audio_decode_normalize:1` 是进程内 media transform tool：request schema 包含原始对象字节和 decode policy；执行结果是本地内存中的 canonical audio，不登记为可序列化 result schema。
+
+当前 frozen plan 支持对象存储中的 WAV / MP3 输入，并冻结对象身份、读取策略和规范化目标：
 
 ```text
-AudioWavInputPlanSnapshot
-  capability_ref = media.audio_input:1
-  tool_refs = [object_storage_read:1]
+AudioInputPlanSnapshot
+  capability_ref = media.audio_input:2
+  tool_refs = [object_storage_read:1, audio_decode_normalize:1]
   source = provider / bucket / region / key / content_type / content_hash
   fetch = object_storage / canonical_object_ref / max_bytes / forbid redirects
+  decode = source_content_type / target_sample_rate=44100 / target_channels=2
   max_duration_seconds = request policy snapshot
 ```
 

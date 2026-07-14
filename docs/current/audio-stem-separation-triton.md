@@ -28,9 +28,10 @@ Model repository
 ```text
 POST /jobs audio_stem_separation_triton
   -> schema validate
-  -> media.audio_input capability
-  -> fetch WAV input from OSS
-  -> decode and segment audio
+  -> media.audio_input:2 capability
+  -> object_storage_read:1 fetch audio input from OSS
+  -> audio_decode_normalize:1 canonicalize to 44.1kHz stereo
+  -> segment canonical audio
   -> TritonAudioStemClient infer
   -> validate stems
   -> write WAV stems to OSS
@@ -54,7 +55,7 @@ POST /jobs audio_stem_separation_triton
 当前输入边界：
 
 - 输入音频来自 OSS 引用。
-- 输入必须能被规范化为当前模型支持的 WAV / 采样率 / 声道形态。
+- 当前支持 `audio/wav`、`audio/x-wav`、`audio/mpeg` 和 `audio/mp3` 输入；执行期统一规范化为当前模型需要的 44.1kHz stereo canonical audio。
 - 输入大小、时长和来源白名单由 schema、配置和 capability 校验共同约束。
 
 当前输出边界：

@@ -156,6 +156,7 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/media.sh" audio prepare --help >/dev/null
   "$ROOT_DIR/scripts/media.sh" video --help >/dev/null
   "$ROOT_DIR/scripts/tools.sh" secret --help >/dev/null
+  "$ROOT_DIR/scripts/tools.sh" registry --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" guide --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" dashboard --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" observe --help >/dev/null
@@ -233,7 +234,8 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/media/__init__.py" \
     "$ROOT_DIR/scripts/media/audio.py" \
     "$ROOT_DIR/scripts/media/video.py" \
-    "$ROOT_DIR/scripts/tools/env_url.py"
+    "$ROOT_DIR/scripts/tools/env_url.py" \
+    "$ROOT_DIR/scripts/tools/registry.py"
   event "OK" "dev/check_ports.py" "py_compile"
   event "OK" "verify/*.py" "py_compile"
   event "OK" "load/*.py" "py_compile"
