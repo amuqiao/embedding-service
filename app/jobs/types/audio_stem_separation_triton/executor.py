@@ -222,7 +222,7 @@ class AudioStemSeparationTritonJob(JobExecutor):
             triton_model_version=settings.job.audio_stem_triton_model_version,
             segment_seconds=float(runtime["segment_seconds"]),
             overlap_ratio=float(runtime["overlap_ratio"]),
-        ).model_dump()
+        ).model_dump(exclude_none=True)
 
     async def _execute(self, job: Job, db) -> dict[str, Any] | None:
         return await asyncio.to_thread(self._execute_sync, job)

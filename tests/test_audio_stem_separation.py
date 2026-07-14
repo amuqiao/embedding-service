@@ -272,7 +272,6 @@ def test_audio_stem_separation_runtime_fields_reflect_model_asset(monkeypatch):
         "execution_provider": "auto",
         "segment_seconds": 7.8,
         "overlap_ratio": 0.25,
-        "system": None,
     }
     assert fields["media_input_plan"]["capability_ref"] == "media.audio_input:2"
     assert fields["media_input_plan"]["source"]["content_hash"] == f"sha256:{ref['sha256']}"
