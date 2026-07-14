@@ -94,11 +94,12 @@ Triton 加载 4 个 ONNX 模型并提供 HTTP/gRPC 推理接口
         v
 FastAPI Job API
   创建 audio_stem_separation_triton Job
+  在 runtime_fields.media_input_plan 冻结 canonical object ref、content_hash、fetch spec
         |
         v
 Taskiq worker
-  校验 URL Ref、content_type、bucket/region 白名单
-  通过 input_audio.public_url 读取 WAV bytes
+  读取 frozen media_input_plan
+  通过 media.audio_input:1 capability 读取 WAV bytes
   校验 sha256
   读取 WAV，要求 44100Hz stereo
   转成 float32 ndarray
@@ -206,7 +207,9 @@ triton_model_version: 来自 AUDIO_STEM_TRITON_MODEL_VERSION
 
 | 模块 | 职责 |
 |---|---|
-| `app/jobs/types/audio_stem_separation_triton/executor.py` | Job executor，负责下载音频、切 segment、调用 Triton、合成输出、写 OSS |
+| `app/capabilities/media/audio_input.py` | `media.audio_input:1` capability，负责冻结/消费 WAV 输入 plan、读取对象存储、校验 hash、解码 44.1kHz stereo WAV |
+| `app/tools/object_storage.py` | `object_storage_read:1` tool，负责按 frozen canonical object ref 读取对象 bytes |
+| `app/jobs/types/audio_stem_separation_triton/executor.py` | Job executor，负责读取 frozen media plan、切 segment、调用 Triton、合成输出、写 OSS |
 | `app/integrations/triton_audio_stem.py` | Triton HTTP client 封装，负责构造 `mix` input、请求 `stems` output |
 | `app/schemas/jobs.py` | `AudioStemSeparationTritonParams`、runtime fields 和 result schema |
 | `scripts/real_flow/flows/audio_stem_separation.py` | `real-flow` 同时支持旧 job_type 和 Triton job_type |

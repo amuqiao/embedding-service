@@ -1,6 +1,6 @@
 # Job Capability 与 Tool Registry 架构地基计划
 
-本文定义 Job 能力层如何使用统一注册治理体系落地 `Job Type -> Capability -> Tool -> Integration Adapter`。注册机制的通用标准以 [`registry-governance-architecture.md`](registry-governance-architecture.md) 为准；本文只写 Job capability、tool 使用边界、Source/Snapshot 合同和首个落地能力。
+本文定义 Job 能力层后续演进计划。`Job Type -> Capability -> Tool -> Integration Adapter` 的最小注册骨架、Source/Snapshot 合同和首个音频 media capability 已落地；当前事实以 [`../current/registry-governance.md`](../current/registry-governance.md) 为准。本文只保留尚未完成的能力层治理事项。
 
 ## 定位
 
@@ -65,7 +65,7 @@ Capability 不是工具，Tool 不是 Job。需要独立可靠性的步骤应升
 
 ## Current Baseline
 
-当前事实源仍以代码和 `docs/current/` 为准。本计划只记录待落地架构。
+当前事实源仍以代码和 `docs/current/` 为准。本计划只记录后续待硬化事项和新增能力准入规则。
 
 已实现的 Job 数据面：
 
@@ -87,13 +87,19 @@ Capability 不是工具，Tool 不是 Job。需要独立可靠性的步骤应升
 - `app/core/registry_checks.py` 已经提供 `validate_all_registries()`，覆盖 error、operation、job_type、schema、prompt、log event 和 route operation 校验。
 - `app/workflows/registry.py`、`app/schemas/registry.py`、`app/integrations/ai_adapters/registry.py` 已经存在分散 registry。
 
-当前 capability/tool 相关缺口：
+已落地的 capability/tool 事实：
 
-- `CapabilityDefinition` 和 `ToolDefinition` 还未落地。
-- `job_type` executor 仍可能直接复制媒体、模型输入或工具调用流水线。
-- 新增底层工具没有统一准入流程，后续开发可以绕过配置校验、错误码声明和边界测试。
-- `CanonicalObjectRef` 更像对象身份，不是完整读取合同；source、fetch、policy、adapter plan 还没有统一 snapshot 形态。
-- `audio_stem_separation_triton` 仍复用 `audio_stem_separation.executor` 私有输入函数，公共能力边界还没有稳定。
+- `CapabilityDefinition` 和 `ToolDefinition` 已落地。
+- `media.audio_input:1` 已作为首个 capability 注册。
+- `object_storage_read:1` 已作为首个 tool 注册。
+- `AudioWavInputPlanSnapshot` 已在创建 Job 时冻结到 audio job runtime fields。
+- `audio_stem_separation` 和 `audio_stem_separation_triton` 已共同使用 `media.audio_input:1`，不再跨 import 对方 executor 私有输入函数。
+
+当前剩余缺口：
+
+- Capability / Tool 的错误投影和日志白名单还需要继续硬化。
+- 需要独立调度、恢复或取消的能力步骤仍需按 child Job 决策规则单独评审。
+- 未来新增 Image / Document / Archive capability 时，需要复用当前注册准入，而不是复制音频私有实现。
 
 ## 架构边界
 
@@ -229,36 +235,6 @@ capability
 
 ## Planned Work
 
-### Phase 0：对齐统一治理计划
-
-- 以 [`registry-governance-architecture.md`](registry-governance-architecture.md) 作为 registry 通用规范。
-- 按治理规范把 `capability_ref`、`tool_ref` 和 error reason projection 接入能力层设计。
-- 基于现有 `validate_all_registries()` 增加 capability/tool 引用校验。
-
-### Phase 1：定义 capability/tool 最小合同
-
-- 新增 `CapabilityDefinition` 和 `ToolDefinition`。
-- `CapabilityDefinition` 不包含 retry、lease、visibility、callback、queue、dispatch、recovery 等 Job 语义。
-- `ToolDefinition` 不包含 Job 状态、public result、callback 或调度语义。
-- 所有 definition 接入统一 registry graph 校验。
-
-### Phase 2：Source / Snapshot 合同
-
-- 定义 `SourceContract`、`CanonicalObjectRefSnapshot`、`ResolvedSource`、`FetchSpec`。
-- 定义首个 capability plan snapshot 模型。
-- 让 job executor 在创建 Job 时冻结 snapshot。
-- 执行期只读取 snapshot，不重新推导策略。
-
-### Phase 3：首个能力落地
-
-首个 capability 仍建议落在音频输入准备，因为它解决当前真实问题：
-
-- `audio_stem_separation` 与 `audio_stem_separation_triton` 不应再跨 import 私有 executor 函数。
-- capability 只支持当前外部合同允许触达的 WAV 输入。
-- 不在本阶段悄悄放宽 MP3/M4A/FLAC/视频输入。
-- 不改变 `job_params`、Job result、Callback 或 `/models`。
-- prepared media 只落 per-attempt 临时目录，不写对象存储，不进入 public result。
-
 ### Phase 4：错误投影和日志
 
 - Capability 内部错误必须有稳定枚举。
@@ -329,21 +305,25 @@ capability
 - 不把 Triton model repository、ffmpeg 二进制安装、模型下载和业务 Job 合同混成一个目录或一个配置面。
 - 不在旧 WAV-only 外部合同下隐式接受 MP3/M4A/FLAC 或视频输入。
 
-## Acceptance
+## 已满足的基础验收
 
-- 文档和后续代码都明确：本服务服务对象是 Job / child Job，不是通用后端平台。
+- 文档和当前代码都明确：本服务服务对象是 Job / child Job，不是通用后端平台。
 - `Job Type -> Capability -> Tool -> Integration Adapter` 分层在代码中有对应目录、注册入口和测试。
 - Capability / Tool 注册接入统一 registry graph，不各自为战。
 - 所有新增 capability 必须注册；未注册 capability 不能被 job type 引用。
-- 所有新增 tool 必须注册；未注册 tool 不能被 capability 或 job executor 使用。
-- 启动期校验能发现缺失 capability、缺失 tool、缺失 required settings、重复 ref、不可导入 entrypoint 和错误码归属不一致。
-- 测试能发现 `job_type` 绕过 capability 直接 import 底层 adapter 的行为。
+- 所有新增 tool 必须注册；未注册 tool 不能被 capability 使用。
+- 启动期校验能发现缺失 capability、缺失 tool、缺失 required settings、重复 ref、不可导入 entrypoint 和未注册错误码。
 - Capability 不拥有 queue、lease、heartbeat、retry、dispatch、callback 或 Job 状态迁移。
 - 需要独立可靠性的步骤优先建模为 internal child Job / workflow node。
-- 第一阶段不新增数据库表。
+- 当前地基不新增数据库表。
 - capability execution metadata 不回写或覆盖 plan snapshot。
 - runtime snapshot 不冻结敏感明文、完整 URL token、临时 URL 或易失外部状态。
 - content type、source 事实、probe 事实和 hash 校验不一致时 fail-fast，不做 silent fallback。
 - 当前 WAV-only 外部合同不被隐式放宽。
 - 首个音频 capability 落地后，`audio_stem_separation` 和 `audio_stem_separation_triton` 不再跨 import 对方私有 executor 函数。
-- 对外合同变更必须同步 `docs/api/`、schema、route、测试和 Callback 兼容策略。
+
+## 后续验收
+
+- 结构性测试能发现 `job_type` 或 capability 绕过注册边界直接 import / 调用底层 adapter / tool 的行为。
+- 错误投影校验能发现 capability/tool internal error 被误放入 public API 或 Callback 合同。
+- 后续对外合同变更必须同步 `docs/api/`、schema、route、测试和 Callback 兼容策略。

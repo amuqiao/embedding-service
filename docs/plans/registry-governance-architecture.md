@@ -1,6 +1,6 @@
 # 统一注册治理架构计划
 
-本文定义本项目代码注册机制的统一治理方式。第一阶段只服务新增的 `Job Type -> Capability -> Tool -> Error` 能力链路；已有 operation、schema、prompt、workflow、model、pricing 和 adapter registry 作为基线与参照，不在本计划中重做。
+本文定义本项目代码注册机制的统一治理后续计划。`Job Type -> Capability -> Tool -> Error` 的基础 ref、definition、graph validation 和首个 media capability 已落地；当前事实以 [`../current/registry-governance.md`](../current/registry-governance.md) 为准。本文只保留尚未完成的治理硬化工作。
 
 ## 定位
 
@@ -23,7 +23,7 @@ Registry 在本项目中不是插件系统，也不是数据库 catalog。它是
 - 不替代 Job kernel 的调度、retry、lease、heartbeat、callback 和 recovery。
 - 不替代 `docs/api/` 对外合同。
 
-## 当前基线
+## Current Baseline
 
 当前已有多处 registry 或白名单机制：
 
@@ -39,15 +39,24 @@ Registry 在本项目中不是插件系统，也不是数据库 catalog。它是
 | Pricing Registry | `app/core/pricing_registry.py` | 校验 pricing ref 和成本配置 |
 | AI Adapter Registry | `app/integrations/ai_adapters/registry.py` | 注册 provider adapter |
 | Log Event 白名单 | `app/core/logging.py` | 限制结构化业务日志事件 |
+| Capability Registry | `app/capabilities/registry.py`、`app/capabilities/register.py` | 注册 `CapabilityDefinition`，支持 freeze 和 graph validation |
+| Tool Registry | `app/tools/registry.py`、`app/tools/register.py` | 注册 `ToolDefinition`，支持 freeze 和 graph validation |
 | Registry Checks | `app/core/registry_checks.py` | 当前统一校验入口 |
 
-当前问题不是没有 registry，而是 registry governance 还不完整：
+已落地事实：
 
-- registry 分散存在，但缺少统一 ref / graph / owner / projection 语言。
-- `validate_all_registries()` 已经存在，但还不是显式 registry graph。
-- 计划中的 capability/tool registry 如果各自实现校验，会形成新的分裂。
-- error reason 已经有 owner/scope/retryable，但还缺 visibility 和 projection rule 的统一表达。
-- 工具、能力、模型 adapter、外部 CLI 的边界还没有统一准入规则。
+- `app/core/registries/refs.py` 已实现 `capability_ref` / `tool_ref` parser。
+- `JobTypeSpec.allowed_capability_refs` 已接入 job type metadata。
+- `CapabilityDefinition` / `ToolDefinition` 已落地并接入 `validate_all_registries()`。
+- API 和 worker startup 都会 freeze 并校验 tool / capability registry。
+- 首个能力 `media.audio_input:1` 和工具 `object_storage_read:1` 已注册。
+
+## Remaining Gaps
+
+- `ErrorSpec.visibility` 和 `projection_targets` 已有字段，但 public/internal error projection 还没有形成完整强约束。
+- 当前 graph validation 校验 entrypoint、schema、settings 和引用存在性；还没有通用 import direction 边界测试。
+- `app/core/registry_checks.py` 已承担统一校验，但 registry graph 还没有独立快照对象；当前规模下仍可接受。
+- operation/model/prompt/pricing 等既有 registry 仍按原有规则校验，暂不纳入统一 graph 重构。
 
 ## 核心原则
 
@@ -96,7 +105,7 @@ app/core/registry_checks.py
   validate_all_registries()
 ```
 
-第一阶段可以不立即创建 `app/core/registries/` 目录；如果改动太大，可先在 `app/core/registry_checks.py` 内演进。但目标必须是一个统一治理入口，而不是每层 registry 自己维护闭环。
+当前已经创建 `app/core/registries/refs.py`，并继续以 `app/core/registry_checks.py` 作为统一校验入口。只有当校验逻辑继续膨胀到难以维护时，才按 Phase 6 提取 `graph.py` / `checks.py`；不能因为追求形式完整而提前引入额外抽象。
 
 逻辑图：
 
@@ -123,13 +132,13 @@ RegistryGraph
   validates all references, owners, visibility, entrypoints and settings
 ```
 
-第一阶段的 registry graph 范围只覆盖新增能力链路：
+当前新增 registry graph 范围覆盖能力链路：
 
 ```text
 Job Type -> Capability -> Tool -> Error
 ```
 
-Operation、schema、prompt、model、pricing、adapter 等既有 registry 继续由现有校验维护，只作为统一治理的参照样例；不要在第一阶段重做这些 registry。
+Operation、schema、prompt、model、pricing、adapter 等既有 registry 继续由现有校验维护，只作为统一治理的参照样例；不要为了统一治理重做这些 registry。
 
 ## Ref 规范
 
@@ -138,8 +147,8 @@ Operation、schema、prompt、model、pricing、adapter 等既有 registry 继�
 | 类型 | 格式 | 示例 | 说明 |
 |---|---|---|---|
 | `job_type` | `<job_type>` | `audio_stem_separation_triton` | 当前沿用现有 key，不强制版本化 |
-| `capability_ref` | `<capability_key>:<version>` | `media_preprocessor:1` | 新增 capability 从 day-1 版本化 |
-| `tool_ref` | `<tool_key>:<version>` | `ffmpeg:1` | 新增 tool 从 day-1 版本化 |
+| `capability_ref` | `<capability_key>:<version>` | `media.audio_input:1` | 新增 capability 从 day-1 版本化 |
+| `tool_ref` | `<tool_key>:<version>` | `object_storage_read:1` | 新增 tool 从 day-1 版本化 |
 | `prompt_ref` | `<job_type>.<step>` 或现有格式 | `poster_title_image.style_probe` | 沿用当前 prompt registry |
 | `pricing_ref` | `<provider>:<model>@<version>` | `openai:gpt-image-2@2026-06-24` | 沿用当前 pricing registry |
 | `schema_ref` | Pydantic class name | `PosterTitleImageParams` | 沿用当前 schema registry |
@@ -304,7 +313,7 @@ app/registrations.py
     register_operations()
 ```
 
-这不是第一阶段目标。第一阶段优先复用现有 API / worker bootstrap 和 `app/jobs/types/register.py`，但必须保持一个清晰的 composition root 原则：
+当前优先复用现有 API / worker bootstrap 和 `app/jobs/types/register.py`，但必须保持一个清晰的 composition root 原则：
 
 - 新 definition 必须有显式注册入口。
 - 测试和 app startup 使用同一套注册入口。
@@ -333,28 +342,21 @@ Tool / Adapter error
 
 ## Planned Work
 
-### Phase 1：Governance skeleton
+### Phase 4：Error projection hardening
 
-- 实现 `capability_ref`、`tool_ref` parser 和测试。
-- 扩展或新增 `CapabilityDefinition`、`ToolDefinition`。
-- 在现有 `JobTypeSpec` 上补 `allowed_capability_refs`。
-- 在 `ErrorSpec` 上评估增加 `visibility` 和 `projection`。
+- 明确 `visibility="internal"` 的 error reason 不能被 operation public error 列表引用。
+- 明确 tool / capability error 到 job business error 的投影测试位置。
+- 增加 public `code` 与 internal `reason` 的冲突和重复校验。
 
-### Phase 2：Graph validation
+### Phase 5：Import direction guard
 
-- 在现有 `validate_all_registries()` 上扩展 `Job Type -> Capability -> Tool -> Error` 引用图校验。
-- 不重做 model / prompt / pricing / operation registry。
-- 增加 graph 校验测试。
-- 测试未知 capability/tool ref 会 fail-fast。
-- 测试 missing settings / missing entrypoint 会 fail-fast。
-- 测试 internal error 不能进入 operation public error 列表。
-- 测试 `app/jobs/types/*` 不能直接 import 底层 integration adapter。
+- 增加结构性测试，禁止 `app/tools` 依赖 `app/jobs`，禁止 `app/integrations` 依赖 `app/tools` / `app/capabilities` / `app/jobs`。
+- 保留少量显式豁免时必须在测试中写明原因。
 
-### Phase 3：First vertical slice
+### Phase 6：Graph extraction threshold
 
-- 为 media preparation 定义首个 `CapabilityDefinition`。
-- 为 ffmpeg 或等价执行边界定义首个 `ToolDefinition`。
-- 将 audio job 输入准备迁移到 registered capability/tool 链路。
+- 只有当 `validate_all_registries()` 继续膨胀到难以维护时，才把 graph snapshot 提取到 `app/core/registries/graph.py`。
+- 提取时不能引入动态发现、统一基类、内部 DSL 或 DI 容器。
 
 ## Non-goals
 
@@ -371,13 +373,17 @@ Tool / Adapter error
 - 不为 registry 治理新增 public API。
 - 不让 registry 承担调度、租约、重试、恢复、回调、计费或状态存储。
 
-## Acceptance
+## 已满足的基础验收
 
 - 新增跨层 registry 共享一套 ref 语言和 graph 校验入口。
 - `validate_all_registries()` 能在现有校验基础上接入 `Job Type -> Capability -> Tool -> Error` 引用图。
 - 新增 capability/tool 必须通过统一 graph 校验，不允许各自为战。
 - registry 仍是代码事实源，不引入数据库表或插件 manifest。
 - unknown ref、duplicate ref、missing schema、missing error、missing setting、missing entrypoint 都会 fail-fast。
-- Tool / Capability internal error 不会直接进入 public API 或 Callback。
 - runtime snapshot 只冻结 ref 和 stable snapshot，不冻结实现路径或 provider raw config。
 - 文档和测试都能说明 registry governance 是启动期合同校验系统，不是运行时插件系统。
+
+## 后续验收
+
+- 后续完成后，Tool / Capability internal error 不会直接进入 public API 或 Callback。
+- 后续完成后，import direction guard 能阻止 tools / integrations 反向依赖 Job 层。
