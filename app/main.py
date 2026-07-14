@@ -270,8 +270,13 @@ def _request_id(request: Request) -> str:
 
 
 def bootstrap_runtime() -> None:
+    from app.capabilities.registry import freeze as freeze_capability_registry
     register_all_job_types()
+    from app.tools.registry import freeze as freeze_tool_registry
+
     freeze_error_registry()
+    freeze_tool_registry()
+    freeze_capability_registry()
     from app.core.model_registry import validate_model_catalog
 
     validate_model_catalog()

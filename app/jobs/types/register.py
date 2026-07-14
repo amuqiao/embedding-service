@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 def register_all_job_types() -> None:
+    from app.capabilities.register import register_all_capabilities
     from app.jobs.registry import register
     from app.jobs.types.audio_stem_separation import AudioStemSeparationJob
     from app.jobs.types.audio_stem_separation.errors import register_audio_stem_separation_errors
@@ -24,7 +25,10 @@ def register_all_job_types() -> None:
         PosterTitleImageStyleProbeJob,
         register_poster_title_image_workflow,
     )
+    from app.tools.register import register_all_tools
 
+    register_all_tools()
+    register_all_capabilities()
     register_audio_stem_separation_errors()
     register_poster_title_image_errors()
     for executor_cls in (

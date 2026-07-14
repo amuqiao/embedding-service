@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import importlib
+
 from fastapi.routing import APIRoute
 
+from app.capabilities import registry as capability_registry
 from app.api.operations import all_operation_specs
 from app.core import prompt_templates
+from app.core.config import APPLICATION_ENV_FIELD_MAP
 from app.core.config import settings
 from app.core.error_registry import all_error_reasons, all_error_specs
 from app.core.logging import all_log_events
-from app.core.registries.refs import require_capability_ref
+from app.core.registries.refs import require_capability_ref, require_tool_ref
 from app.jobs.base import (
     ATTEMPT_PURPOSES,
     EXECUTION_MODES,
@@ -19,6 +23,7 @@ from app.jobs.base import (
 )
 from app.jobs import registry as job_registry
 from app.schemas.registry import all_schema_names
+from app.tools import registry as tool_registry
 
 
 def _missing(values: set[str], allowed: set[str]) -> list[str]:
@@ -29,6 +34,34 @@ def _required_metadata_str(value: object, *, field_name: str, owner: str) -> str
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{owner} requires non-empty string field: {field_name}")
     return value.strip()
+
+
+def _resolve_entrypoint(path: str, *, owner: str, field_name: str):
+    value = _required_metadata_str(path, field_name=field_name, owner=owner)
+    module_name, separator, attr_path = value.partition(":")
+    if not separator or not module_name or not attr_path:
+        raise ValueError(f"{owner} {field_name} must use module:attribute")
+    try:
+        target = importlib.import_module(module_name)
+    except Exception as exc:
+        raise ValueError(f"{owner} {field_name} module is not importable: {module_name}") from exc
+    for attr in attr_path.split("."):
+        if not attr:
+            raise ValueError(f"{owner} {field_name} contains empty attribute path")
+        try:
+            target = getattr(target, attr)
+        except AttributeError as exc:
+            raise ValueError(f"{owner} {field_name} attribute is not importable: {attr_path}") from exc
+    return target
+
+
+def _settings_path_exists(path: str) -> bool:
+    target = settings
+    for part in path.split("."):
+        if not part or not hasattr(target, part):
+            return False
+        target = getattr(target, part)
+    return True
 
 
 def _validate_retry_policy_snapshot(job_type: str, retry_policy: object) -> None:
@@ -213,6 +246,75 @@ def validate_job_type_registry() -> None:
                 )
 
 
+def validate_capability_tool_registry() -> None:
+    error_specs = all_error_specs()
+    known_errors = set(error_specs)
+    known_events = all_log_events()
+    known_schemas = all_schema_names()
+    known_capability_refs = capability_registry.all_capability_refs()
+    known_tool_refs = tool_registry.all_tool_refs()
+    known_setting_paths = {
+        f"{section}.{field_name}"
+        for section, field_name in APPLICATION_ENV_FIELD_MAP.values()
+    }
+
+    for job_type, spec in job_registry.all_job_type_specs().items():
+        for capability_ref in spec.allowed_capability_refs:
+            normalized_ref = require_capability_ref(capability_ref)
+            if normalized_ref not in known_capability_refs:
+                raise ValueError(f"job_type {job_type} references unknown capability_ref: {normalized_ref}")
+
+    for capability_ref, definition in capability_registry.all_capability_definitions().items():
+        owner = f"capability {capability_ref}"
+        if capability_ref != definition.capability_ref:
+            raise ValueError(f"capability registry key mismatch: {capability_ref} != {definition.capability_ref}")
+        require_capability_ref(definition.capability_ref)
+        missing_schemas = _missing({definition.plan_schema, definition.result_schema}, known_schemas)
+        if missing_schemas:
+            raise ValueError(f"{owner} references unknown schemas: {missing_schemas}")
+        _resolve_entrypoint(definition.service_entrypoint, owner=owner, field_name="service_entrypoint")
+        missing_tools = _missing({require_tool_ref(ref) for ref in definition.allowed_tool_refs}, known_tool_refs)
+        if missing_tools:
+            raise ValueError(f"{owner} references unknown tool_refs: {missing_tools}")
+        missing_errors = _missing(set(definition.error_codes), known_errors)
+        if missing_errors:
+            raise ValueError(f"{owner} references unknown errors: {missing_errors}")
+        missing_events = _missing(set(definition.log_events), known_events)
+        if missing_events:
+            raise ValueError(f"{owner} references unknown log events: {missing_events}")
+
+    for tool_ref, definition in tool_registry.all_tool_definitions().items():
+        owner = f"tool {tool_ref}"
+        if tool_ref != definition.tool_ref:
+            raise ValueError(f"tool registry key mismatch: {tool_ref} != {definition.tool_ref}")
+        require_tool_ref(definition.tool_ref)
+        _required_metadata_str(definition.kind, field_name="kind", owner=owner)
+        _resolve_entrypoint(definition.entrypoint_path, owner=owner, field_name="entrypoint_path")
+        referenced_schemas = {
+            schema
+            for schema in (definition.request_schema, definition.result_schema)
+            if schema is not None
+        }
+        missing_schemas = _missing(referenced_schemas, known_schemas)
+        if missing_schemas:
+            raise ValueError(f"{owner} references unknown schemas: {missing_schemas}")
+        unknown_settings = sorted(
+            setting_path
+            for setting_path in definition.required_settings
+            if setting_path not in known_setting_paths or not _settings_path_exists(setting_path)
+        )
+        if unknown_settings:
+            raise ValueError(f"{owner} references unknown settings: {unknown_settings}")
+        for startup_validator in definition.startup_validators:
+            _resolve_entrypoint(startup_validator, owner=owner, field_name="startup_validators")
+        missing_errors = _missing(set(definition.error_codes), known_errors)
+        if missing_errors:
+            raise ValueError(f"{owner} references unknown errors: {missing_errors}")
+        missing_events = _missing(set(definition.log_events), known_events)
+        if missing_events:
+            raise ValueError(f"{owner} references unknown log events: {missing_events}")
+
+
 def _operation_route_map(app) -> dict[str, APIRoute]:
     routes: dict[str, APIRoute] = {}
     for route in app.routes:
@@ -284,5 +386,6 @@ def validate_all_registries(app=None) -> None:
     validate_error_registry()
     validate_operation_registry()
     validate_job_type_registry()
+    validate_capability_tool_registry()
     if app is not None:
         validate_app_route_operations(app)

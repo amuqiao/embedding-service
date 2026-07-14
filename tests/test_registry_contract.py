@@ -16,7 +16,7 @@ from app.core.error_registry import (
 from app.core.logging import LogEvent
 from app.core import prompt_templates
 from app.core.registries.refs import parse_versioned_ref, require_capability_ref, require_tool_ref
-from app.core.registry_checks import validate_all_registries, validate_job_type_registry, validate_operation_registry
+from app.core.registry_checks import validate_all_registries, validate_capability_tool_registry, validate_job_type_registry, validate_operation_registry
 from app.main import app
 from app.jobs.base import JobExecutor, JobTypeSpec, PromptSpec
 from app.jobs.types.register import register_all_job_types
@@ -572,6 +572,17 @@ def test_validate_job_type_registry_rejects_invalid_capability_ref(monkeypatch):
         validate_job_type_registry()
 
 
+def test_validate_capability_tool_registry_rejects_unknown_capability_ref(monkeypatch):
+    monkeypatch.setattr(
+        job_registry,
+        "all_job_type_specs",
+        lambda: {"example_pair": _job_type_spec(allowed_capability_refs=frozenset({"media.input:1"}))},
+    )
+
+    with pytest.raises(ValueError, match="unknown capability_ref"):
+        validate_capability_tool_registry()
+
+
 def _prompt_config(prompt_ref: str = "prompt.ref", output_schema_ref: str = "ExamplePairResult") -> dict:
     return {
         "version": "test",
@@ -789,7 +800,7 @@ def test_worker_registration_validates_job_type_registry(monkeypatch):
     monkeypatch.setattr("app.core.database.init_db_engine", lambda: calls.setdefault("db", True))
     monkeypatch.setattr("app.jobs.types.register.register_all_job_types", lambda: calls.setdefault("jobs", True))
     monkeypatch.setattr("app.core.error_registry.freeze_error_registry", lambda: calls.setdefault("errors", True))
-    monkeypatch.setattr("app.core.registry_checks.validate_job_type_registry", lambda: calls.setdefault("registry", True))
+    monkeypatch.setattr("app.core.registry_checks.validate_all_registries", lambda: calls.setdefault("registry", True))
     monkeypatch.setattr("app.core.model_registry.validate_model_catalog", lambda: calls.setdefault("models", True))
 
     task_jobs._ensure_workflows_registered()
