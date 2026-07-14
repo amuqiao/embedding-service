@@ -53,10 +53,10 @@ Registry 在本项目中不是插件系统，也不是数据库 catalog。它是
 - `ErrorSpec.visibility` / `projection_targets` 已接入校验，public operation 不能引用 internal error。
 - 已有结构性测试保护 `jobs -> capabilities -> tools -> integrations` 依赖方向。
 
-## Remaining Gaps
+## Deferred Thresholds
 
-- `app/core/registry_checks.py` 已承担统一校验，但 registry graph 还没有独立快照对象；当前规模下仍可接受。
-- operation/model/prompt/pricing 等既有 registry 仍按原有规则校验，暂不纳入统一 graph 重构。
+- `app/core/registry_checks.py` 已承担统一校验；当前规模下不提取独立 registry graph 快照对象。
+- operation/model/prompt/pricing 等既有 registry 仍按原有规则校验；当前不做统一 graph 重构。
 
 ## 核心原则
 
@@ -105,7 +105,7 @@ app/core/registry_checks.py
   validate_all_registries()
 ```
 
-当前已经创建 `app/core/registries/refs.py`，并继续以 `app/core/registry_checks.py` 作为统一校验入口。只有当校验逻辑继续膨胀到难以维护时，才按 Phase 6 提取 `graph.py` / `checks.py`；不能因为追求形式完整而提前引入额外抽象。
+当前已经创建 `app/core/registries/refs.py`，并继续以 `app/core/registry_checks.py` 作为统一校验入口。只有当校验逻辑继续膨胀到难以维护时，才按延后触发条件提取 `graph.py` / `checks.py`；不能因为追求形式完整而提前引入额外抽象。
 
 逻辑图：
 
@@ -340,9 +340,7 @@ Tool / Adapter error
 - Retry policy 只能引用已注册且 retryable 语义明确的 error reason。
 - 同一个 public code 不能绑定多个 reason。
 
-## Planned Work
-
-### Phase 6：Graph extraction threshold
+## Deferred Extraction Trigger
 
 - 只有当 `validate_all_registries()` 继续膨胀到难以维护时，才把 graph snapshot 提取到 `app/core/registries/graph.py`。
 - 提取时不能引入动态发现、统一基类、内部 DSL 或 DI 容器。
