@@ -10,6 +10,7 @@ import pytest
 from app.capabilities.media import audio_input
 from app.core.exceptions import AppError
 from app.integrations.object_storage import bare_sha256, sha256_digest
+from app.jobs.types import audio_stem_shared
 from app.schemas.jobs import AudioStemSeparationInputObject
 
 
@@ -41,10 +42,10 @@ class FakeSettings:
 
 
 def test_audio_wav_input_plan_freezes_canonical_source_not_public_url(monkeypatch):
-    monkeypatch.setattr(audio_input, "settings", FakeSettings())
+    monkeypatch.setattr(audio_stem_shared, "settings", FakeSettings())
     ref = AudioStemSeparationInputObject.model_validate(_url_ref("input.wav", b"audio"))
 
-    plan = audio_input.build_audio_wav_input_plan(ref, max_duration_seconds=10)
+    plan = audio_stem_shared.build_audio_wav_input_plan(ref, max_duration_seconds=10)
 
     assert plan == {
         "capability_ref": "media.audio_input:1",
@@ -70,7 +71,7 @@ def test_audio_wav_input_plan_freezes_canonical_source_not_public_url(monkeypatc
 
 
 def test_audio_wav_input_plan_rejects_disallowed_bucket(monkeypatch):
-    monkeypatch.setattr(audio_input, "settings", FakeSettings())
+    monkeypatch.setattr(audio_stem_shared, "settings", FakeSettings())
     blocked = _url_ref("input.wav", b"audio") | {
         "public_url": "https://other-bucket.oss-local.aliyuncs.com/input.wav",
         "internal_url": "https://other-bucket.oss-local-internal.aliyuncs.com/input.wav",
@@ -78,7 +79,7 @@ def test_audio_wav_input_plan_rejects_disallowed_bucket(monkeypatch):
     ref = AudioStemSeparationInputObject.model_validate(blocked)
 
     with pytest.raises(AppError) as exc_info:
-        audio_input.build_audio_wav_input_plan(ref, max_duration_seconds=None)
+        audio_stem_shared.build_audio_wav_input_plan(ref, max_duration_seconds=None)
 
     assert exc_info.value.code == "AUDIO_STEM_INPUT_INVALID"
 
@@ -154,14 +155,39 @@ def test_prepare_audio_wav_input_rejects_hash_mismatch(monkeypatch):
     assert exc_info.value.code == "INPUT_HASH_MISMATCH"
 
 
-def test_triton_audio_job_does_not_import_audio_executor_private_helpers():
-    path = ROOT / "app/jobs/types/audio_stem_separation_triton/executor.py"
+def _imported_modules(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module is not None:
+            imported.add(node.module)
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+    return imported
 
-    imported_modules = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
-    }
+
+def test_audio_job_does_not_import_other_audio_executor_private_helpers():
+    imported_modules = _imported_modules(ROOT / "app/jobs/types/audio_stem_separation_triton/executor.py")
 
     assert "app.jobs.types.audio_stem_separation.executor" not in imported_modules
+
+
+def test_registry_layers_do_not_depend_on_callers():
+    violations: list[str] = []
+    rules = {
+        ROOT / "app/capabilities": ("app.jobs", "app.integrations"),
+        ROOT / "app/tools": ("app.jobs", "app.capabilities"),
+        ROOT / "app/integrations": ("app.jobs", "app.capabilities", "app.tools"),
+    }
+    for directory, forbidden_prefixes in rules.items():
+        for path in directory.rglob("*.py"):
+            module_refs = _imported_modules(path)
+            forbidden = sorted(
+                ref
+                for ref in module_refs
+                if any(ref == prefix or ref.startswith(f"{prefix}.") for prefix in forbidden_prefixes)
+            )
+            if forbidden:
+                violations.append(f"{path.relative_to(ROOT)} imports {forbidden}")
+
+    assert violations == []

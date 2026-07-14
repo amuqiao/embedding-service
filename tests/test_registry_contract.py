@@ -16,7 +16,13 @@ from app.core.error_registry import (
 from app.core.logging import LogEvent
 from app.core import prompt_templates
 from app.core.registries.refs import parse_versioned_ref, require_capability_ref, require_tool_ref
-from app.core.registry_checks import validate_all_registries, validate_capability_tool_registry, validate_job_type_registry, validate_operation_registry
+from app.core.registry_checks import (
+    validate_all_registries,
+    validate_capability_tool_registry,
+    validate_error_registry,
+    validate_job_type_registry,
+    validate_operation_registry,
+)
 from app.main import app
 from app.jobs.base import JobExecutor, JobTypeSpec, PromptSpec
 from app.jobs.types.register import register_all_job_types
@@ -102,6 +108,120 @@ def test_validate_operation_registry_rejects_unknown_log_event(monkeypatch):
 
     with pytest.raises(ValueError, match="unknown log events"):
         validate_operation_registry()
+
+
+def test_validate_operation_registry_rejects_internal_errors(monkeypatch):
+    spec = OperationSpec(
+        operation_id="test_operation",
+        channel="http",
+        method="GET",
+        path="/test",
+        auth_boundary="test",
+        request_schema=None,
+        response_data_schema="JobResponseData",
+        error_codes=frozenset({"TEST_INTERNAL_ERROR"}),
+        idempotency_key=None,
+        side_effects=(),
+        log_events=(),
+    )
+    monkeypatch.setattr(
+        "app.core.registry_checks.all_error_specs",
+        lambda: {
+            "TEST_INTERNAL_ERROR": ErrorSpec(
+                "199998",
+                "TEST_INTERNAL_ERROR",
+                "test internal error",
+                500,
+                visibility="internal",
+            )
+        },
+    )
+    monkeypatch.setattr("app.core.registry_checks.all_operation_specs", lambda: {"test_operation": spec})
+
+    with pytest.raises(ValueError, match="internal errors"):
+        validate_operation_registry()
+
+
+def test_validate_operation_registry_allows_internal_service_errors(monkeypatch):
+    spec = OperationSpec(
+        operation_id="test_internal_operation",
+        channel="internal_service",
+        method="POST",
+        path="/internal/test",
+        auth_boundary="internal",
+        request_schema=None,
+        response_data_schema="JobResponseData",
+        error_codes=frozenset({"TEST_INTERNAL_ERROR"}),
+        idempotency_key=None,
+        side_effects=(),
+        log_events=(),
+    )
+    monkeypatch.setattr(
+        "app.core.registry_checks.all_error_specs",
+        lambda: {
+            "TEST_INTERNAL_ERROR": ErrorSpec(
+                "199998",
+                "TEST_INTERNAL_ERROR",
+                "test internal error",
+                500,
+                visibility="internal",
+            )
+        },
+    )
+    monkeypatch.setattr("app.core.registry_checks.all_operation_specs", lambda: {"test_internal_operation": spec})
+
+    validate_operation_registry()
+
+
+def test_validate_error_registry_rejects_invalid_projection_targets(monkeypatch):
+    monkeypatch.setattr(
+        "app.core.registry_checks.all_error_specs",
+        lambda: {
+            "TEST_PUBLIC_ERROR": ErrorSpec(
+                "199997",
+                "TEST_PUBLIC_ERROR",
+                "test public error",
+                400,
+            ),
+            "TEST_INTERNAL_ERROR": ErrorSpec(
+                "199998",
+                "TEST_INTERNAL_ERROR",
+                "test internal error",
+                500,
+                visibility="internal",
+                projection_targets=frozenset({"TEST_MISSING_ERROR"}),
+            ),
+        },
+    )
+
+    with pytest.raises(ValueError, match="unknown projection targets"):
+        validate_error_registry()
+
+
+def test_validate_error_registry_rejects_internal_projection_targets(monkeypatch):
+    monkeypatch.setattr(
+        "app.core.registry_checks.all_error_specs",
+        lambda: {
+            "TEST_INTERNAL_TARGET": ErrorSpec(
+                "199997",
+                "TEST_INTERNAL_TARGET",
+                "test internal target",
+                500,
+                visibility="internal",
+            ),
+            "TEST_INTERNAL_ERROR": ErrorSpec(
+                "199998",
+                "TEST_INTERNAL_ERROR",
+                "test internal error",
+                500,
+                visibility="internal",
+                projection_targets=frozenset({"TEST_INTERNAL_TARGET"}),
+            ),
+        },
+    )
+
+    with pytest.raises(ValueError, match="projection targets must be public"):
+        validate_error_registry()
 
 
 def test_error_registry_supports_frozen_idempotent_business_registration():
@@ -559,6 +679,30 @@ def test_validate_job_type_registry_rejects_unknown_log_event(monkeypatch):
     monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
 
     with pytest.raises(ValueError, match="unknown log events"):
+        validate_job_type_registry()
+
+
+def test_validate_job_type_registry_rejects_internal_errors(monkeypatch):
+    monkeypatch.setattr(
+        "app.core.registry_checks.all_error_specs",
+        lambda: {
+            "TEST_INTERNAL_ERROR": ErrorSpec(
+                "199998",
+                "TEST_INTERNAL_ERROR",
+                "test internal error",
+                500,
+                visibility="internal",
+            )
+        },
+    )
+    monkeypatch.setattr(
+        job_registry,
+        "all_job_type_specs",
+        lambda: {"example_pair": _job_type_spec(error_codes=frozenset({"TEST_INTERNAL_ERROR"}))},
+    )
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
+
+    with pytest.raises(ValueError, match="internal errors"):
         validate_job_type_registry()
 
 

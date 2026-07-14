@@ -350,7 +350,11 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
     assert exc.value.code == error_code
     assert marked["attempt_id"] == attempt_id
     assert marked["lease_token"] == lease_token
-    assert marked["error"]["code"] == error_code
+    assert marked["error"] == {
+        "code": "JOB_EXECUTION_FAILED",
+        "message": "job execution failed",
+        "details": {"internal_reason": error_code},
+    }
     assert marked["retryable"] is expected_retryable
 
 
@@ -2005,6 +2009,45 @@ async def test_fail_job_marks_job_failed_and_delivers_callback(monkeypatch):
     assert marked == {
         "job_id": job.id,
         "error": error,
+        "callback_job_id": job.id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_fail_job_projects_unlisted_runtime_error_before_public_exposure(monkeypatch):
+    register_all_job_types()
+    job = _running_add_job()
+    job.active_attempt_id = None
+    error = {"code": "MODEL_CALL_FAILED", "message": "provider failed", "details": {"provider": "x"}}
+    marked = {}
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_mark_failed(_db, job_id, received_error):
+        marked["job_id"] = job_id
+        marked["error"] = received_error
+        job.status = "failed"
+        return True
+
+    async def fake_deliver_callback_for_job(job_id):
+        marked["callback_job_id"] = job_id
+        return False
+
+    db = _FakeDB()
+    monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.jobs.runner.JobRepo.mark_failed", fake_mark_failed)
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback_for_job)
+
+    await fail_job(db, job_id=job.id, error=error)
+
+    assert marked == {
+        "job_id": job.id,
+        "error": {
+            "code": "JOB_EXECUTION_FAILED",
+            "message": "job execution failed",
+            "details": {"internal_reason": "MODEL_CALL_FAILED"},
+        },
         "callback_job_id": job.id,
     }
 

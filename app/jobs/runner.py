@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import AppError
+from app.jobs.error_projection import project_public_job_error
 from app.jobs.factory import get_job_executor
 from app.models.job import Job
 from app.repositories.job_repo import JobRepo
@@ -238,7 +239,7 @@ async def execute_job(
             await JobRepo.mark_failed(
                 db,
                 job_id,
-                _job_error_from_exception(exc),
+                project_public_job_error(job.job_type, _job_error_from_exception(exc)),
                 attempt_id=attempt_id,
                 lease_token=lease_token,
             )
@@ -300,7 +301,7 @@ async def fail_job(
             "fail_job cannot bypass an active attempt",
             details={"job_id": str(job.id), "active_attempt_id": str(job.active_attempt_id)},
         )
-    await JobRepo.mark_failed(db, job_id, error)
+    await JobRepo.mark_failed(db, job_id, project_public_job_error(job.job_type, error))
     await db.commit()
     from app.tasks.jobs import deliver_callback_for_job
 

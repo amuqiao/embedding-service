@@ -4,12 +4,12 @@ import importlib
 
 from fastapi.routing import APIRoute
 
-from app.capabilities import registry as capability_registry
 from app.api.operations import all_operation_specs
+from app.capabilities import registry as capability_registry
 from app.core import prompt_templates
 from app.core.config import APPLICATION_ENV_FIELD_MAP
 from app.core.config import settings
-from app.core.error_registry import all_error_reasons, all_error_specs
+from app.core.error_registry import all_error_specs
 from app.core.logging import all_log_events
 from app.core.registries.refs import require_capability_ref, require_tool_ref
 from app.jobs.base import (
@@ -24,6 +24,9 @@ from app.jobs.base import (
 from app.jobs import registry as job_registry
 from app.schemas.registry import all_schema_names
 from app.tools import registry as tool_registry
+
+_ERROR_VISIBILITIES = {"public", "internal"}
+_PUBLIC_OPERATION_CHANNELS = {"http", "callback", "external_write"}
 
 
 def _missing(values: set[str], allowed: set[str]) -> list[str]:
@@ -93,13 +96,30 @@ def _validate_retry_policy_snapshot(job_type: str, retry_policy: object) -> None
 
 def validate_error_registry() -> None:
     seen_codes: dict[str, str] = {}
-    for reason, spec in all_error_specs().items():
+    specs = all_error_specs()
+    for reason, spec in specs.items():
         if reason != spec.reason:
             raise ValueError(f"error registry key mismatch: {reason} != {spec.reason}")
         if not spec.code:
             raise ValueError(f"error {reason} requires non-empty code")
         if not spec.msg:
             raise ValueError(f"error {reason} requires non-empty msg")
+        if spec.visibility not in _ERROR_VISIBILITIES:
+            raise ValueError(f"error {reason} declares invalid visibility: {spec.visibility}")
+        if spec.visibility != "internal" and spec.projection_targets:
+            raise ValueError(f"public error {reason} must not declare projection_targets")
+        missing_projection_targets = _missing(set(spec.projection_targets), set(specs))
+        if missing_projection_targets:
+            raise ValueError(f"error {reason} references unknown projection targets: {missing_projection_targets}")
+        internal_projection_targets = sorted(
+            target
+            for target in spec.projection_targets
+            if specs[target].visibility != "public"
+        )
+        if internal_projection_targets:
+            raise ValueError(
+                f"error {reason} projection targets must be public errors: {internal_projection_targets}"
+            )
         previous = seen_codes.get(spec.code)
         if previous is not None:
             raise ValueError(f"duplicate error code {spec.code}: {previous}, {reason}")
@@ -107,13 +127,22 @@ def validate_error_registry() -> None:
 
 
 def validate_operation_registry() -> None:
-    known_errors = all_error_reasons()
+    error_specs = all_error_specs()
+    known_errors = set(error_specs)
     known_events = all_log_events()
     known_schemas = all_schema_names()
     for spec in all_operation_specs().values():
         missing_errors = _missing(set(spec.error_codes), known_errors)
         if missing_errors:
             raise ValueError(f"operation {spec.operation_id} references unknown errors: {missing_errors}")
+        if spec.channel in _PUBLIC_OPERATION_CHANNELS:
+            internal_errors = sorted(
+                reason
+                for reason in spec.error_codes
+                if error_specs[reason].visibility != "public"
+            )
+            if internal_errors:
+                raise ValueError(f"operation {spec.operation_id} references internal errors: {internal_errors}")
         missing_events = _missing(set(spec.log_events), known_events)
         if missing_events:
             raise ValueError(f"operation {spec.operation_id} references unknown log events: {missing_events}")
@@ -154,6 +183,13 @@ def validate_job_type_registry() -> None:
         missing_errors = _missing(set(spec.error_codes), known_errors)
         if missing_errors:
             raise ValueError(f"job_type {spec.job_type} references unknown errors: {missing_errors}")
+        internal_errors = sorted(
+            reason
+            for reason in spec.error_codes
+            if error_specs[reason].visibility != "public"
+        )
+        if internal_errors:
+            raise ValueError(f"job_type {spec.job_type} references internal errors: {internal_errors}")
         unknown_error_owners = sorted(
             f"{reason}:{error_specs[reason].owner}"
             for reason in spec.error_codes

@@ -50,11 +50,11 @@ Registry 在本项目中不是插件系统，也不是数据库 catalog。它是
 - `CapabilityDefinition` / `ToolDefinition` 已落地并接入 `validate_all_registries()`。
 - API 和 worker startup 都会 freeze 并校验 tool / capability registry。
 - 首个能力 `media.audio_input:1` 和工具 `object_storage_read:1` 已注册。
+- `ErrorSpec.visibility` / `projection_targets` 已接入校验，public operation 不能引用 internal error。
+- 已有结构性测试保护 `jobs -> capabilities -> tools -> integrations` 依赖方向。
 
 ## Remaining Gaps
 
-- `ErrorSpec.visibility` 和 `projection_targets` 已有字段，但 public/internal error projection 还没有形成完整强约束。
-- 当前 graph validation 校验 entrypoint、schema、settings 和引用存在性；还没有通用 import direction 边界测试。
 - `app/core/registry_checks.py` 已承担统一校验，但 registry graph 还没有独立快照对象；当前规模下仍可接受。
 - operation/model/prompt/pricing 等既有 registry 仍按原有规则校验，暂不纳入统一 graph 重构。
 
@@ -342,17 +342,6 @@ Tool / Adapter error
 
 ## Planned Work
 
-### Phase 4：Error projection hardening
-
-- 明确 `visibility="internal"` 的 error reason 不能被 operation public error 列表引用。
-- 明确 tool / capability error 到 job business error 的投影测试位置。
-- 增加 public `code` 与 internal `reason` 的冲突和重复校验。
-
-### Phase 5：Import direction guard
-
-- 增加结构性测试，禁止 `app/tools` 依赖 `app/jobs`，禁止 `app/integrations` 依赖 `app/tools` / `app/capabilities` / `app/jobs`。
-- 保留少量显式豁免时必须在测试中写明原因。
-
 ### Phase 6：Graph extraction threshold
 
 - 只有当 `validate_all_registries()` 继续膨胀到难以维护时，才把 graph snapshot 提取到 `app/core/registries/graph.py`。
@@ -382,8 +371,6 @@ Tool / Adapter error
 - unknown ref、duplicate ref、missing schema、missing error、missing setting、missing entrypoint 都会 fail-fast。
 - runtime snapshot 只冻结 ref 和 stable snapshot，不冻结实现路径或 provider raw config。
 - 文档和测试都能说明 registry governance 是启动期合同校验系统，不是运行时插件系统。
-
-## 后续验收
-
-- 后续完成后，Tool / Capability internal error 不会直接进入 public API 或 Callback。
-- 后续完成后，import direction guard 能阻止 tools / integrations 反向依赖 Job 层。
+- Tool / Capability internal error 不会直接进入 public API 或 Callback。
+- import direction guard 能阻止 tools / integrations 反向依赖 Job 层。
+- Job 失败落库前会执行 public error 投影，未声明或 internal reason 不会原样进入 `GET /jobs` / Callback。

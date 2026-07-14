@@ -1,25 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import io
 from dataclasses import dataclass
 
 import numpy as np
 
-from app.core.config import settings
-from app.core.exceptions import AppError
-from app.integrations.object_storage import sha256_digest
-from app.jobs.payload_adapters.oss_url_ref import canonical_ref_from_oss_url_ref
-from app.jobs.types.audio_stem_separation.errors import (
+from app.capabilities.media.error_codes import (
     AUDIO_STEM_DURATION_EXCEEDS_LIMIT,
     AUDIO_STEM_INFERENCE_FAILED,
     AUDIO_STEM_INPUT_INVALID,
 )
-from app.schemas.jobs import (
-    AudioStemSeparationInputObject,
-    AudioWavInputPlanSnapshot,
-    CanonicalObjectRefSnapshot,
-    MediaFetchSpec,
-)
+from app.core.exceptions import AppError
+from app.schemas.jobs import AudioWavInputPlanSnapshot
 from app.tools.object_storage import read_object_bytes
 
 AUDIO_WAV_CONTENT_TYPE = "audio/wav"
@@ -34,27 +27,8 @@ class PreparedAudioInput:
     duration_seconds: float
 
 
-def build_audio_wav_input_plan(
-    input_audio: AudioStemSeparationInputObject,
-    *,
-    max_duration_seconds: float | None,
-) -> dict:
-    ref = _canonical_input_ref(input_audio)
-    if ref.content_hash is None:
-        raise AppError(AUDIO_STEM_INPUT_INVALID, "audio stem input content_hash is required")
-    plan = AudioWavInputPlanSnapshot(
-        source=CanonicalObjectRefSnapshot(
-            provider=ref.provider,
-            bucket=ref.bucket,
-            region=ref.region,
-            key=ref.key,
-            content_type=AUDIO_WAV_CONTENT_TYPE,
-            content_hash=ref.content_hash,
-        ),
-        fetch=MediaFetchSpec(max_bytes=settings.job.oss_input_max_bytes),
-        max_duration_seconds=max_duration_seconds,
-    )
-    return plan.model_dump(exclude_none=True)
+def _sha256_digest(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def prepare_audio_wav_input(plan: AudioWavInputPlanSnapshot | dict) -> PreparedAudioInput:
@@ -66,7 +40,7 @@ def prepare_audio_wav_input(plan: AudioWavInputPlanSnapshot | dict) -> PreparedA
         key=source.key,
         max_bytes=snapshot.fetch.max_bytes,
     )
-    if sha256_digest(data) != source.content_hash:
+    if _sha256_digest(data) != source.content_hash:
         raise AppError("INPUT_HASH_MISMATCH", "audio stem input sha256 mismatch")
     try:
         import soundfile as sf
@@ -100,22 +74,3 @@ def prepare_audio_wav_input(plan: AudioWavInputPlanSnapshot | dict) -> PreparedA
             details={"actual": duration_seconds, "max_duration_seconds": snapshot.max_duration_seconds},
         )
     return PreparedAudioInput(data=audio.T.astype(np.float32), sample_rate=int(sample_rate), duration_seconds=duration_seconds)
-
-
-def _canonical_input_ref(input_audio: AudioStemSeparationInputObject):
-    try:
-        return canonical_ref_from_oss_url_ref(
-            input_audio.model_dump(),
-            allowed_buckets=settings.job.audio_stem_separation_allowed_oss_buckets,
-            allowed_regions=settings.job.audio_stem_separation_allowed_oss_regions,
-            allowed_content_types={AUDIO_WAV_CONTENT_TYPE},
-            public_endpoint=settings.storage.oss_public_endpoint or None,
-            public_endpoint_bucket=getattr(settings.storage, "oss_bucket", "") or None,
-            public_endpoint_region=getattr(settings.storage, "oss_region", "") or None,
-        )
-    except AppError as exc:
-        raise AppError(
-            AUDIO_STEM_INPUT_INVALID,
-            "audio stem input_audio is invalid",
-            details={"source_reason": exc.code, **(exc.details or {})},
-        ) from exc

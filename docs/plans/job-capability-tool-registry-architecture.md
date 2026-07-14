@@ -94,10 +94,11 @@ Capability 不是工具，Tool 不是 Job。需要独立可靠性的步骤应升
 - `object_storage_read:1` 已作为首个 tool 注册。
 - `AudioWavInputPlanSnapshot` 已在创建 Job 时冻结到 audio job runtime fields。
 - `audio_stem_separation` 和 `audio_stem_separation_triton` 已共同使用 `media.audio_input:1`，不再跨 import 对方 executor 私有输入函数。
+- capability 执行期只消费 frozen snapshot，不直接解析调用方 payload。
+- error projection 和 import direction guard 已接入 registry / 结构性测试。
 
 当前剩余缺口：
 
-- Capability / Tool 的错误投影和日志白名单还需要继续硬化。
 - 需要独立调度、恢复或取消的能力步骤仍需按 child Job 决策规则单独评审。
 - 未来新增 Image / Document / Archive capability 时，需要复用当前注册准入，而不是复制音频私有实现。
 
@@ -233,17 +234,9 @@ capability
 - prepared media metadata 默认作为进程内结果传给当前 Job Flow 后续步骤，并通过结构化日志记录。
 - 如果执行事实需要独立恢复、重试或查询，优先建模为 child Job attempt，而不是新增 capability 表。
 
-## Planned Work
+## 后续准入规则
 
-### Phase 4：错误投影和日志
-
-- Capability 内部错误必须有稳定枚举。
-- Job business error 由 `job_type` 显式投影。
-- Tool / adapter error reason 不直接透传为 public error。
-- provider raw error、adapter request 字段、临时文件路径、child id、workflow node key 不进入 public schema。
-- 日志只记录白名单字段，例如 `capability_ref`、`stage`、`job_id`、`attempt_id`、`request_id`、hash、size、duration、error_code。
-
-### Phase 5：child Job 决策规则
+### child Job 决策规则
 
 默认决策顺序：
 
@@ -253,7 +246,7 @@ capability
 | internal child Job / workflow node | 需要独立调度、重试、恢复、取消或并行编排 | 只是为了复用工具合同 | 现有 Job / Attempt / workflow / recovery 机制 |
 | 新持久化表 | Job / Attempt / child Job 明确无法表达，并经过单独方案评审 | 只有中间态、临时结果或局部排障需求 | 单独设计，不在本计划预设 |
 
-### Phase 6：持久化门槛
+### 持久化门槛
 
 默认不新增 capability/model/media processing 数据表。
 
@@ -321,9 +314,7 @@ capability
 - content type、source 事实、probe 事实和 hash 校验不一致时 fail-fast，不做 silent fallback。
 - 当前 WAV-only 外部合同不被隐式放宽。
 - 首个音频 capability 落地后，`audio_stem_separation` 和 `audio_stem_separation_triton` 不再跨 import 对方私有 executor 函数。
-
-## 后续验收
-
 - 结构性测试能发现 `job_type` 或 capability 绕过注册边界直接 import / 调用底层 adapter / tool 的行为。
 - 错误投影校验能发现 capability/tool internal error 被误放入 public API 或 Callback 合同。
+- Job 失败落库前会执行 public error 投影，未声明或 internal reason 不会原样进入 `GET /jobs` / Callback。
 - 后续对外合同变更必须同步 `docs/api/`、schema、route、测试和 Callback 兼容策略。

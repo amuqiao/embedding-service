@@ -26,7 +26,7 @@ Job Type
 | Tool registry | `app/tools/registry.py`、`app/tools/register.py` | 注册 `ToolDefinition`，支持 freeze 和测试清理 |
 | Job Type registry | `app/jobs/registry.py`、`app/jobs/base.py` | `JobTypeSpec.allowed_capability_refs` 声明 job type 可用 capability |
 | Error registry | `app/core/error_registry.py` | `ErrorSpec` 包含 `visibility` 和 `projection_targets` 元数据 |
-| Registry check | `app/core/registry_checks.py` | 校验 error、operation、job type、capability、tool、schema、log event、entrypoint、settings 和 route operation |
+| Registry check | `app/core/registry_checks.py` | 校验 error、operation、job type、capability、tool、schema、log event、entrypoint、settings、error projection、import direction 和 route operation |
 
 API startup 和 worker startup 都执行同一组注册和校验。`app/jobs/types/register.py` 仍是当前 composition root：它显式调用 tool、capability、error、job type 和 workflow 注册入口。注册完成后 API/worker 会 freeze error、tool 和 capability registry；freeze 后相同 definition 可幂等重复注册，变更 definition 会失败。
 
@@ -42,6 +42,11 @@ API startup 和 worker startup 都执行同一组注册和校验。`app/jobs/typ
 - capability / tool 引用的 log event 存在于日志事件白名单。
 - capability service entrypoint、tool entrypoint 和 startup validator 可导入。
 - tool required settings 是当前配置面可识别的 `section.field`。
+- error `visibility` 只能是 `public` / `internal`。
+- internal error 的 `projection_targets` 必须指向已注册 public error。
+- public HTTP operation 不能引用 internal error。
+- job type public error contract 不能声明 internal error。
+- `app/capabilities` 不依赖 `app/jobs`，也不跳过 tool 直接依赖 `app/integrations`；`app/tools` 不反向依赖 `app/jobs` / `app/capabilities`；`app/integrations` 不反向依赖 `app/jobs` / `app/capabilities` / `app/tools`。
 - operation registry、job type registry、prompt config、route operation 和 error code 唯一性仍按既有规则校验。
 
 校验失败会中止启动或测试，不做自动跳过、silent fallback 或动态降级。
@@ -68,7 +73,7 @@ API startup 和 worker startup 都执行同一组注册和校验。`app/jobs/typ
 | request schema | `CanonicalObjectRefSnapshot` |
 | required settings | `storage.backend`、`job.oss_input_max_bytes` |
 
-`audio_stem_separation` 和 `audio_stem_separation_triton` 都声明 `allowed_capability_refs={"media.audio_input:1"}`。两个 job type 在创建 Job 的 `runtime_fields` 时冻结 `media_input_plan`，执行期只读取 frozen plan，不按最新配置重新推导输入读取策略。
+`audio_stem_separation` 和 `audio_stem_separation_triton` 都声明 `allowed_capability_refs={"media.audio_input:1"}`。两个 job type 在创建 Job 的 `runtime_fields` 时由 job shared builder 冻结 `media_input_plan`，执行期 capability 只读取 frozen plan，不按最新配置重新推导输入读取策略，也不直接解析调用方 payload。
 
 当前 frozen plan 只支持 WAV 输入，且只冻结对象身份和读取策略：
 
@@ -86,6 +91,10 @@ AudioWavInputPlanSnapshot
 ## 当前边界
 
 Capability 不拥有 Job 状态、attempt、lease、heartbeat、retry、dispatch、callback 或 billing。Tool 不写 Job 状态，不投影 public result，不决定 retry。需要独立调度、恢复、取消或查询的步骤仍应建模为 internal child Job / workflow node。
+
+当前依赖方向是 `jobs -> capabilities -> tools -> integrations`。Job 层可以构造 capability plan snapshot 并消费 capability 结果；capability 层只消费 frozen snapshot 并调用已注册 tool；tool 层只封装底层执行边界并触达 integration adapter。
+
+运行时 Job 失败落库前会执行 public error 投影。若 executor 误抛未被当前 job type 声明的 reason，或 future internal reason，持久化 Job error 会被投影为 public `JOB_EXECUTION_FAILED`，并只在 details 中保留 `internal_reason`，避免 internal reason 进入 `GET /jobs` 或 Callback 合同。
 
 当前没有新增 capability 运行表、tool catalog 表、插件 manifest、动态发现机制或 capability 查询 API。
 

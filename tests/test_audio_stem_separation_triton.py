@@ -11,6 +11,7 @@ from app.core.exceptions import AppError
 from app.integrations.object_storage import bare_sha256, sha256_digest
 from app.integrations.triton_audio_stem import TritonAudioStemConfig, TritonAudioStemClient, TritonAudioStemInferenceError
 from app.jobs import registry as job_registry
+from app.jobs.types import audio_stem_shared
 from app.jobs.types import audio_stem_separation_triton as triton_pkg
 from app.jobs.types.audio_stem_separation import executor as audio_executor
 from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
@@ -303,7 +304,7 @@ def test_audio_stem_separation_triton_normalizes_and_rejects_disallowed_input_re
     fake_settings = FakeSettings()
     monkeypatch.setattr(audio_executor, "settings", fake_settings)
     monkeypatch.setattr(triton_executor, "settings", fake_settings)
-    monkeypatch.setattr(media_audio_input, "settings", fake_settings)
+    monkeypatch.setattr(audio_stem_shared, "settings", fake_settings)
     handler = _handler()
     ref = _url_ref("input.wav", b"audio")
 
@@ -323,7 +324,7 @@ def test_audio_stem_separation_triton_normalizes_and_rejects_disallowed_input_re
 
 def test_audio_stem_separation_triton_runtime_fields_reflect_model_asset(monkeypatch):
     monkeypatch.setattr(triton_executor, "settings", FakeSettings())
-    monkeypatch.setattr(media_audio_input, "settings", FakeSettings())
+    monkeypatch.setattr(audio_stem_shared, "settings", FakeSettings())
     handler = _handler()
     ref = _url_ref("input.wav", b"audio")
     fields = handler.runtime_job_fields({"input_audio": ref})

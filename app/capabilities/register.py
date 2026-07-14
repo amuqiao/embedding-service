@@ -4,13 +4,13 @@ from __future__ import annotations
 def register_all_capabilities() -> None:
     """Register all capability definitions."""
     from app.capabilities.definitions import CapabilityDefinition
-    from app.capabilities.media.audio_input import MEDIA_AUDIO_INPUT_CAPABILITY_REF, OBJECT_STORAGE_READ_TOOL_REF
-    from app.capabilities.registry import register
-    from app.jobs.types.audio_stem_separation.errors import (
+    from app.capabilities.media.error_codes import (
         AUDIO_STEM_DURATION_EXCEEDS_LIMIT,
         AUDIO_STEM_INFERENCE_FAILED,
         AUDIO_STEM_INPUT_INVALID,
     )
+    from app.capabilities.media.audio_input import MEDIA_AUDIO_INPUT_CAPABILITY_REF, OBJECT_STORAGE_READ_TOOL_REF
+    from app.capabilities.registry import register
 
     register(
         CapabilityDefinition(

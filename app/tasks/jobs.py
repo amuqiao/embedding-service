@@ -13,6 +13,7 @@ from sqlalchemy.pool import NullPool
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.logging import set_request_id
+from app.jobs.error_projection import project_public_job_error
 from app.models.job import JobAttempt
 from app.repositories.job_repo import JobRepo
 from app.services.callbacks import deliver_callback
@@ -237,7 +238,10 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
     except Exception as exc:
         logger.exception("taskiq_attempt_failed attempt_id=%s", attempt_id)
         if lease_token is not None:
-            error = _job_error_from_exception(exc)
+            raw_error = _job_error_from_exception(exc)
+            error = raw_error
+            if job is not None:
+                error = project_public_job_error(job.job_type, raw_error)
 
             async def mark_failed(db):
                 marked = await JobRepo.mark_attempt_failed(
@@ -245,7 +249,7 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
                     attempt_uuid,
                     lease_token=lease_token,
                     error=error,
-                    retryable=claimed_attempt is not None and _should_retry_attempt(claimed_attempt, error),
+                    retryable=claimed_attempt is not None and _should_retry_attempt(claimed_attempt, raw_error),
                 )
                 workflow_advance = None
                 if marked and job_id is not None and job is not None and job.root_job_id is not None:
