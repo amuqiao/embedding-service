@@ -15,6 +15,7 @@ from app.core.error_registry import (
 )
 from app.core.logging import LogEvent
 from app.core import prompt_templates
+from app.core.registries.refs import parse_versioned_ref, require_capability_ref, require_tool_ref
 from app.core.registry_checks import validate_all_registries, validate_job_type_registry, validate_operation_registry
 from app.main import app
 from app.jobs.base import JobExecutor, JobTypeSpec, PromptSpec
@@ -109,6 +110,8 @@ def test_error_registry_supports_frozen_idempotent_business_registration():
 
     assert poster_spec.code == "110001"
     assert poster_spec.owner == "poster_title_image"
+    assert poster_spec.visibility == "public"
+    assert poster_spec.projection_targets == frozenset()
     assert error_registry_is_frozen() is True
 
     register_error_specs({POSTER_TITLE_IMAGE_REFERENCE_INVALID: poster_spec})
@@ -127,6 +130,37 @@ def test_error_registry_supports_frozen_idempotent_business_registration():
 
 def test_error_registry_covers_produced_error_reasons():
     assert _literal_error_reasons() <= all_error_reasons()
+
+
+def test_registry_ref_parser_accepts_versioned_capability_and_tool_refs():
+    capability_ref = parse_versioned_ref("media.audio_input:1", kind="capability_ref")
+    tool_ref = parse_versioned_ref("ffmpeg:12", kind="tool_ref")
+
+    assert capability_ref.key == "media.audio_input"
+    assert capability_ref.version == "1"
+    assert capability_ref.value == "media.audio_input:1"
+    assert require_capability_ref("media.audio_input:1") == "media.audio_input:1"
+    assert tool_ref.key == "ffmpeg"
+    assert tool_ref.version == "12"
+    assert tool_ref.value == "ffmpeg:12"
+    assert require_tool_ref("ffmpeg:12") == "ffmpeg:12"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "MediaInput:1",
+        "media-input:1",
+        "media_input",
+        "media_input:0",
+        "media_input:v1",
+        "media_input:1:extra",
+    ],
+)
+def test_registry_ref_parser_rejects_invalid_refs(value):
+    with pytest.raises(ValueError):
+        require_capability_ref(value)
 
 
 def _assert_default_retry_policy(retry_policy: dict):
@@ -437,6 +471,7 @@ def _job_type_spec(**overrides) -> JobTypeSpec:
         "error_codes": frozenset({"INVALID_INPUT"}),
         "log_events": (),
         "timeout_seconds": 60,
+        "allowed_capability_refs": frozenset(),
         "prompt_template_required_blocks": frozenset(),
     }
     values.update(overrides)
@@ -522,6 +557,18 @@ def test_validate_job_type_registry_rejects_unknown_log_event(monkeypatch):
     monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
 
     with pytest.raises(ValueError, match="unknown log events"):
+        validate_job_type_registry()
+
+
+def test_validate_job_type_registry_rejects_invalid_capability_ref(monkeypatch):
+    monkeypatch.setattr(
+        job_registry,
+        "all_job_type_specs",
+        lambda: {"example_pair": _job_type_spec(allowed_capability_refs=frozenset({"media_input"}))},
+    )
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
+
+    with pytest.raises(ValueError, match="capability_ref"):
         validate_job_type_registry()
 
 

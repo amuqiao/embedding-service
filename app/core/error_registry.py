@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 ErrorScope = Literal["global", "http", "job", "callback", "runtime", "integration"]
+ErrorVisibility = Literal["public", "internal"]
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,8 @@ class ErrorSpec:
     scope: ErrorScope = "global"
     owner: str = "core"
     details_schema: str | None = None
+    visibility: ErrorVisibility = "public"
+    projection_targets: frozenset[str] = frozenset()
 
 
 _CORE_ERROR_SPECS: dict[str, ErrorSpec] = {

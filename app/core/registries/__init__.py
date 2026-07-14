@@ -1,0 +1,2 @@
+"""Shared registry governance helpers."""
+

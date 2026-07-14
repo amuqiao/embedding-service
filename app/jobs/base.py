@@ -50,6 +50,7 @@ class JobTypeSpec:
     error_codes: frozenset[str]
     log_events: tuple[str, ...]
     timeout_seconds: int
+    allowed_capability_refs: frozenset[str] = frozenset()
     prompt_specs: tuple[PromptSpec, ...] = ()
     prompt_template_required_blocks: frozenset[str] = frozenset()
 
@@ -150,6 +151,7 @@ class JobExecutor(ABC):
     prompt_specs: tuple[PromptSpec, ...] = ()
     prompt_template_required_blocks: frozenset[str] = frozenset()
     requires_text_generation_model: bool = False
+    allowed_capability_refs: frozenset[str] = frozenset()
 
     @property
     def job_type(self) -> str:
@@ -278,6 +280,7 @@ class JobExecutor(ABC):
             error_codes=self.allowed_error_codes,
             log_events=self.log_events,
             timeout_seconds=self.timeout_seconds,
+            allowed_capability_refs=self.allowed_capability_refs,
             prompt_specs=self.prompt_specs,
             prompt_template_required_blocks=self.prompt_template_required_blocks,
         )

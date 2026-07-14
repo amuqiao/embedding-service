@@ -7,6 +7,7 @@ from app.core import prompt_templates
 from app.core.config import settings
 from app.core.error_registry import all_error_reasons, all_error_specs
 from app.core.logging import all_log_events
+from app.core.registries.refs import require_capability_ref
 from app.jobs.base import (
     ATTEMPT_PURPOSES,
     EXECUTION_MODES,
@@ -130,6 +131,8 @@ def validate_job_type_registry() -> None:
         missing_events = _missing(set(spec.log_events), known_events)
         if missing_events:
             raise ValueError(f"job_type {spec.job_type} references unknown log events: {missing_events}")
+        for capability_ref in spec.allowed_capability_refs:
+            require_capability_ref(capability_ref)
         referenced_schemas = {
             spec.params_schema,
             spec.runtime_fields_schema,
