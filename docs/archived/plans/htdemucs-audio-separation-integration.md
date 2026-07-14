@@ -1,5 +1,7 @@
 # HTDemucs-FT 音乐源分离接入计划
 
+> Archived: 本文是 `audio_stem_separation` 历史接入计划，不再作为活动计划维护。当前音频链路事实与操作入口以 [`../../current/audio-stem-separation-triton.md`](../../current/audio-stem-separation-triton.md) 和 [`../../runbooks/audio/`](../../runbooks/audio/) 为准。
+
 本文只记录 `audio_stem_separation` job_type（htdemucs-ft ONNX 音乐源分离模型）接入后的剩余工作。当前 job_type、schema、executor、错误码、模型资产描述和单元测试已落地；模型背景资料见 `docs/notes/htdemucs-ft-onnx-指南.html`；新增 job_type 的标准流程见 [`../api/extension-guide.md`](../api/extension-guide.md)。
 
 本阶段范围只覆盖**本地 macOS CPU 闭环**：数据准备 → 发起 job 请求 → 输入到输出。GPU 迁移、生产部署、镜像拆分是后续阶段，本文只在 Remaining Gaps 点出，不展开设计。
@@ -11,7 +13,7 @@
 - `app/jobs/base.py` 的 `JobExecutor.timeout_seconds`（默认 300）会被 `app/services/jobs.py` 读出，并经 `JobRepo.create_initial_attempt` 写入 `JobAttempt.timeout_seconds` 列（`app/models/job.py`，`NOT NULL`）。
 - `JobRepo.claim_attempt_for_execution()` 和 `JobRepo.heartbeat_attempt()` 设置 `lease_expires_at` 时，使用 `max(settings.job_stale_running_seconds, attempt.timeout_seconds)`：job_type 声明的较长 `timeout_seconds` 可以拉长 attempt lease，但不能缩短全局保护窗口。
 - `settings.job_stale_running_seconds` 仍从 LLM 语义的 `MODEL_CALL_TIMEOUT_SECONDS` 派生（`app/core/config.py`：`worker_soft_time_limit = model_call_timeout_seconds + 300`，`worker_hard_time_limit = soft + 60`，`job_stale_running_seconds = hard + 600`），作为全服务共享的 attempt lease floor。
-- 这个修复只让 per-attempt timeout 参与 claim / heartbeat 的 lease 计算；`run_job_attempt` 仍只在执行前 heartbeat 一次，long-running `_execute()` 期间没有周期续约。`docs/plans/job-kernel-reliability-review.md` 对应 P1 风险只能标记为部分缓解，不能标记为完全解决。
+- 这个修复只让 per-attempt timeout 参与 claim / heartbeat 的 lease 计算；`run_job_attempt` 仍只在执行前 heartbeat 一次，long-running `_execute()` 期间没有周期续约。当前活动硬化计划见 `docs/plans/job-kernel-hardening.md`。
 - `scripts/models.sh` 已提供本地模型资产入口，当前已知 `htdemucs-ft` 会下载到 `.data/models/htdemucs-ft` 并检查 4 个专家 ONNX 文件、`bag_infer.py` 和 `requirements.txt`；`inspect htdemucs-ft` 可探测 4 个 ONNX 专家文件的 I/O 签名和 sha256。
 - 本地 `htdemucs-ft` required 模型文件已下载完成；`./scripts/models.sh inspect htdemucs-ft --providers CPUExecutionProvider` 已实测 4 个专家 ONNX 都是输入 `mix tensor(float) [1, 2, 343980]`、输出 `stems tensor(float) [1, 4, 2, 343980]`，并已记录 sha256。
 - `pyproject.toml` 已有 `[project.optional-dependencies] audio-separation`，当前固定 `onnxruntime==1.27.0` 和 `soundfile==0.14.0`；本机 macOS 已验证两个包可 import。Dockerfile 尚未安装 `libsndfile1`，compose-full / GPU 阶段需要时再补。
@@ -75,7 +77,7 @@
 - 非法输入会 fail-fast，不做静默转码或截断：非白名单 ref / content type 在创建参数规范化阶段拒绝；错误采样率、错误声道数、不可解码 WAV 或超限时长在执行期读取输入后拒绝，并返回对应的 `AUDIO_STEM_*` 错误码。
 - 模型权重缺失或 sha256 不匹配时，job 执行 fail-fast 报 `AUDIO_STEM_MODEL_ASSET_MISSING`，不产生部分成功或伪造结果。
 - `./scripts/verify.sh check` 通过；`./scripts/dev.sh start` + `./scripts/verify.sh workflow-smoke` 通过，证明新增 job_type 未破坏现有 job_type 行为。
-- `docs/plans/job-kernel-reliability-review.md` 对应 P1 条目保持"部分缓解"口径，不把 per-attempt lease 窗口生效误写成周期性续约已完成。
+- `docs/plans/job-kernel-hardening.md` 对应 P1 条目保持"部分缓解"口径，不把 per-attempt lease 窗口生效误写成周期性续约已完成。
 
 ## Non-goals
 

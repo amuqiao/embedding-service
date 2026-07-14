@@ -109,7 +109,7 @@ footer a{color:var(--muted)}
 <header><div class="wrap">
   <div class="eyebrow">fastapi-best-ai-architecture · 本地 macOS CPU 闭环</div>
   <h1>把 htdemucs-ft ONNX <span>接进 Job Kernel</span> 的分阶段实施手册</h1>
-  <p class="lede">本文档是 <code>docs/plans/htdemucs-audio-separation-integration.md</code> 计划文档的可执行版本：按阶段拆解每一步要做什么、需要提前装好什么依赖、期望的数据格式长什么样，并附带可以直接跑起来验证模型本身是否可用的 POC 脚本骨架——建议先跑通 POC 脚本证明模型能用，再回头把逻辑搬进正式的 <code>JobExecutor</code>。</p>
+  <p class="lede">本文档是 <code>docs/archived/plans/htdemucs-audio-separation-integration.md</code> 历史计划文档的可执行版本：按阶段拆解每一步要做什么、需要提前装好什么依赖、期望的数据格式长什么样，并附带可以直接跑起来验证模型本身是否可用的 POC 脚本骨架——建议先跑通 POC 脚本证明模型能用，再回头把逻辑搬进正式的 <code>JobExecutor</code>。</p>
   <div class="chips">
     <span class="chip">job_type <b>audio_stem_separation</b></span>
     <span class="chip">范围 <b>本地 macOS · 纯 CPU</b></span>
@@ -574,11 +574,11 @@ STEMS = [<span class="st">"drums"</span>, <span class="st">"bass"</span>, <span 
     <li><code>./scripts/dev.sh start</code> 已启动 api + worker</li>
   </ul>
 
-  <div class="note teal">本文档只覆盖本地 macOS CPU 闭环。GPU 开发服务器迁移、镜像拆分、<code>visibility</code> 从 <code>demo</code> 升级到 <code>public</code>，都在 <code>docs/plans/htdemucs-audio-separation-integration.md</code> 的 Non-goals / Remaining Gaps 里，不在本文档展开。</div>
+  <div class="note teal">本文档只覆盖本地 macOS CPU 闭环。GPU 开发服务器迁移、镜像拆分、<code>visibility</code> 从 <code>demo</code> 升级到 <code>public</code>，都在 <code>docs/archived/plans/htdemucs-audio-separation-integration.md</code> 的 Non-goals / Remaining Gaps 里，不在本文档展开。</div>
 </div></section>
 
 <footer><div class="wrap">
-  对应计划文档：<code>docs/plans/htdemucs-audio-separation-integration.md</code> · 模型背景资料：<code>docs/notes/htdemucs-ft-onnx-指南.html</code> · 新增 job_type 标准流程：<code>docs/api/extension-guide.md</code><br>
+  对应历史计划文档：<code>docs/archived/plans/htdemucs-audio-separation-integration.md</code> · 模型背景资料：<code>docs/notes/htdemucs-ft-onnx-指南.html</code> · 新增 job_type 标准流程：<code>docs/api/extension-guide.md</code><br>
   本文档是实施参考，不是当前事实文档；job_type 尚未实现，具体字段/耗时以实际编码和实测结果为准。
 </div></footer>
 

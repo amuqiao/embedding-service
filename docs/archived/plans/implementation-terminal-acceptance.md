@@ -1,5 +1,7 @@
 # 模板阶段剩余验收计划
 
+> Archived: 本文是模板阶段历史验收计划，不再作为活动计划维护。当前模板就绪边界以 [`../../current/template-readiness.md`](../../current/template-readiness.md) 为准。
+
 本文只记录进入正式业务模板阶段前仍需要人工确认或后续业务接入补齐的验收项。当前实现事实见 `docs/current/`，公开合同见 `docs/api/`。
 
 ## Current Baseline

@@ -2,7 +2,7 @@
 
 本文说明如何在本仓库本地准备 `htdemucs-ft` ONNX 模型文件和可用于后续 `audio_stem_separation` 接入验证的音频输入。推荐心智模型是：先准备模型资产，再准备 44.1kHz 双声道 WAV，最后分别用 `models.sh` 和 `media.sh` 做可重复校验。
 
-本文只覆盖**本地资产和本地素材准备**。它不负责提交 `audio_stem_separation` Job，不执行模型推理，不上传对象存储，也不覆盖 GPU / 生产部署。`audio_stem_separation` 的当前接入和后续计划见 [`../../plans/htdemucs-audio-separation-integration.md`](../../plans/htdemucs-audio-separation-integration.md)。
+本文只覆盖**本地资产和本地素材准备**。它不负责提交 `audio_stem_separation` Job，不执行模型推理，不上传对象存储，也不覆盖 GPU / 生产部署。当前音频 Job 事实和真实流程验证入口见 [`../../current/audio-stem-separation-triton.md`](../../current/audio-stem-separation-triton.md) 与 [`audio-stem-separation-triton-real-flow-benchmark.md`](audio-stem-separation-triton-real-flow-benchmark.md)。
 
 ## 先理解这件事
 
@@ -338,11 +338,11 @@ INPUT=/path/to/input.mp3
 
 ### 已经准备好后下一步是什么
 
-当前仓库还没有可执行的 `audio_stem_separation` Job。准备完成后，能确认的是：
+准备完成后，能确认的是：
 
 ```text
 模型 required 文件齐全
 音频满足 WAV / 44100Hz / 双声道要求
 ```
 
-后续实现细节统一维护在 [`../../plans/htdemucs-audio-separation-integration.md`](../../plans/htdemucs-audio-separation-integration.md)，不要把计划步骤复制到本文。
+提交真实 Job、查看对象存储产物和对比 baseline 的步骤统一维护在 [`audio-stem-separation-triton-real-flow-benchmark.md`](audio-stem-separation-triton-real-flow-benchmark.md)，不要把真实流程步骤复制到本文。

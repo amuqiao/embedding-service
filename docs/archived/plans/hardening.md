@@ -1,5 +1,7 @@
 # Operational Hardening Backlog
 
+> Archived: 本文是历史运维硬化 backlog，不再作为活动计划维护。Job kernel 可靠性硬化见 [`../../plans/job-kernel-hardening.md`](../../plans/job-kernel-hardening.md)，dashboard 后续优化见 [`../../plans/ops-dashboard-post-mvp.md`](../../plans/ops-dashboard-post-mvp.md)。
+
 本文只记录开发主干之外的运维硬化 backlog。它不是 workflow、AI capability 或 cost boundary 的同级架构计划；当前事实仍以 `docs/current/` 和 `docs/api/` 为准。
 
 核心架构前置合同和终态验收以 [`implementation-terminal-acceptance.md`](implementation-terminal-acceptance.md) 为准。已经被 workflow、AI capability 或 cost boundary 计划吸收的事项，不在本文重复维护。

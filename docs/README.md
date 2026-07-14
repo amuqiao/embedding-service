@@ -36,14 +36,10 @@
 | [`api/extension-guide.md`](api/extension-guide.md) | 新增 `job_type`、HTTP 接口、模型、Prompt 和对象存储产物的接入入口 |
 | [`api/业务语种规范.md`](api/业务语种规范.md) | CPP / AI / RS 三方共享语种代码、`in` 例外和 AI 服务语种目录接口规范 |
 | [`api/poster-title-image-delivery-api.md`](api/poster-title-image-delivery-api.md) | AI 标题图生成对接的当前交付接口合同、任务创建、查询、费用和 Callback 说明 |
-| [`plans/hardening.md`](plans/hardening.md) | 不阻塞主干开发的运维硬化 backlog |
+| [`plans/job-kernel-hardening.md`](plans/job-kernel-hardening.md) | 当前 Job kernel 可靠性、一致性和公开信息边界的短期硬化计划；完成后应归档 |
 | [`plans/ops-dashboard-post-mvp.md`](plans/ops-dashboard-post-mvp.md) | `ops_dashboard` MVP 后的表格可用性、长窗口分析、Job Trace 可视化、环境诊断和安全边界后续优化计划 |
-| [`plans/job-kernel-reliability-review.md`](plans/job-kernel-reliability-review.md) | Job 机制生产可靠性、一致性、安全性和测试覆盖审查结论 |
-| [`plans/htdemucs-audio-separation-integration.md`](plans/htdemucs-audio-separation-integration.md) | 接入 `audio_stem_separation`（htdemucs-ft ONNX 音乐源分离）job_type 的本地 CPU 闭环接入计划，含 lease 窗口修复 |
-| [`plans/ai-capability-enhancement.md`](plans/ai-capability-enhancement.md) | 多模态 provider、正式业务 `job_type`、node/child attribution 和业务 e2e 后续计划 |
-| [`plans/ai-capability-cost-boundary-design.md`](plans/ai-capability-cost-boundary-design.md) | `job_cost_summary`、node/child cost attribution、多模态成本路径和持久化 usage 扩展后续计划 |
-| [`plans/workflow-kernel-design.md`](plans/workflow-kernel-design.md) | workflow 从模板能力走向正式业务编排前的剩余缺口 |
-| [`plans/implementation-terminal-acceptance.md`](plans/implementation-terminal-acceptance.md) | 模板阶段剩余验收门禁和业务接入前置条件 |
+| [`plans/ai-capability-long-term.md`](plans/ai-capability-long-term.md) | AI provider、正式业务 `job_type`、usage normalizer、cost attribution 和 billing read model 的 trigger-based 长期计划 |
+| [`plans/workflow-kernel-long-term.md`](plans/workflow-kernel-long-term.md) | Job 内部 workflow kernel 从模板能力走向正式业务 `job_type` 前的 trigger-based 长期计划 |
 
 ## Runbook 职责边界
 
@@ -66,7 +62,7 @@
 
 - `docs/current/` 只写当前代码已经落地的事实。
 - `docs/api/` 只写外部调用方和业务扩展方需要遵守的合同。
-- `docs/plans/` 只写未来计划、待办和目标方向；可保留简短 current baseline 作为上下文，但当前事实真源仍在 `docs/current/`。
+- `docs/plans/` 只保留短期可执行计划和长期 trigger-based 演进计划；可保留简短 current baseline 作为上下文，但当前事实真源仍在 `docs/current/`。短期计划完成后必须归档或沉淀为 current/API/runbook 事实。
 - `docs/runbooks/` 只写可重复执行的操作、排障和心智模型手册，不重复维护代码事实、API 合同或计划 backlog。
 - `docs/archived/` 只保存历史设计和旧计划，归档文档不能作为当前事实源。
 
