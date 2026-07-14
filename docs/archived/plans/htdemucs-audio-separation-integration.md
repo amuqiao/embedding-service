@@ -2,7 +2,7 @@
 
 > Archived: 本文是 `audio_stem_separation` 历史接入计划，不再作为活动计划维护。当前音频链路事实与操作入口以 [`../../current/audio-stem-separation-triton.md`](../../current/audio-stem-separation-triton.md) 和 [`../../runbooks/audio/`](../../runbooks/audio/) 为准。
 
-本文只记录 `audio_stem_separation` job_type（htdemucs-ft ONNX 音乐源分离模型）接入后的剩余工作。当前 job_type、schema、executor、错误码、模型资产描述和单元测试已落地；模型背景资料见 `docs/notes/htdemucs-ft-onnx-指南.html`；新增 job_type 的标准流程见 [`../api/extension-guide.md`](../api/extension-guide.md)。
+本文只记录 `audio_stem_separation` job_type（htdemucs-ft ONNX 音乐源分离模型）接入后的剩余工作。当前 job_type、schema、executor、错误码、模型资产描述和单元测试已落地；模型背景资料见 `docs/notes/htdemucs-ft-onnx-指南.html`；新增 job_type 的标准流程见 [`../../api/extension-guide.md`](../../api/extension-guide.md)。
 
 本阶段范围只覆盖**本地 macOS CPU 闭环**：数据准备 → 发起 job 请求 → 输入到输出。GPU 迁移、生产部署、镜像拆分是后续阶段，本文只在 Remaining Gaps 点出，不展开设计。
 

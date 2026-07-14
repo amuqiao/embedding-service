@@ -94,7 +94,7 @@ Capability 不拥有 Job 状态、attempt、lease、heartbeat、retry、dispatch
 
 当前依赖方向是 `jobs -> capabilities -> tools -> integrations`。Job 层可以构造 capability plan snapshot 并消费 capability 结果；capability 层只消费 frozen snapshot 并调用已注册 tool；tool 层只封装底层执行边界并触达 integration adapter。
 
-运行时 Job 失败落库前会执行 public error 投影。若 executor 误抛未被当前 job type 声明的 reason，或 future internal reason，持久化 Job error 会被投影为 public `JOB_EXECUTION_FAILED`，并只在 details 中保留 `internal_reason`，避免 internal reason 进入 `GET /jobs` 或 Callback 合同。
+运行时 Job 失败落库前会执行 public error 投影。若 executor 抛出未被当前 `job_type` 声明的 internal reason，持久化 Job error 会被投影为 public `JOB_EXECUTION_FAILED`，并只在 details 中保留 `internal_reason`。外部返回和 Callback 合同仍以 [`../api/service-contract.md`](../api/service-contract.md) 为准。
 
 当前没有新增 capability 运行表、tool catalog 表、插件 manifest、动态发现机制或 capability 查询 API。
 

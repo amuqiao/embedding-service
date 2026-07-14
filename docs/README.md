@@ -7,16 +7,16 @@
 | 文档 | 用途 |
 |---|---|
 | [`current/architecture.md`](current/architecture.md) | 当前服务边界、模块职责、运行形态、AI gateway/billing 边界和验证基线 |
-| [`current/ai-capability.md`](current/ai-capability.md) | 当前 AI 调用入口、model/prompt/pricing registry、AI kernel 组件和文本 provider path |
+| [`current/ai-capability.md`](current/ai-capability.md) | 当前 AI 调用入口、model/prompt/pricing registry、AI kernel 组件和文本/图片 provider path |
 | [`current/ai-billing.md`](current/ai-billing.md) | 当前 AI call ledger、usage/cost 事实源、Job billing 聚合和非资金账本边界 |
 | [`current/job-kernel.md`](current/job-kernel.md) | 当前 Job、幂等键、Attempt、Dispatch outbox、Callback outbox、root/child lineage 和表设计边界 |
 | [`current/registry-governance.md`](current/registry-governance.md) | 当前 registry governance、capability/tool 注册、graph 校验和首个 `media.audio_input:1` 能力事实 |
-| [`current/audio-stem-separation-triton.md`](current/audio-stem-separation-triton.md) | `audio_stem_separation_triton` 当前调用链、FastAPI/Triton/model repository 职责边界、固定 tensor I/O、配置、schema/result 和 real-flow 验证入口；不替代外部 Triton 部署手册 |
+| [`current/audio-stem-separation-triton.md`](current/audio-stem-separation-triton.md) | `audio_stem_separation_triton` 当前 Job、Triton endpoint 依赖、tensor I/O、配置和实现边界；不替代外部 Triton 部署手册 |
 | [`runbooks/job/job-kernel-explained.md`](runbooks/job/job-kernel-explained.md) | 跟一个请求走完整条 Job 链路的心智模型讲解，配套 `job-kernel.md` 的事实清单，不是独立事实源 |
 | [`current/workflow-kernel.md`](current/workflow-kernel.md) | 当前 DAG-lite root/child workflow、child Job 执行、root 汇总和 billing scope 行为 |
 | [`current/observability.md`](current/observability.md) | 当前日志出口、request_id、业务事件白名单、本地 `logs/` 边界和新增日志代码规范 |
-| [`current/template-readiness.md`](current/template-readiness.md) | 当前仓库作为 AI Job 微服务模板复制给新业务前的就绪边界、必改项和最小验收 |
-| [`current/template-project-config.md`](current/template-project-config.md) | 复制模板成为真实业务项目时，项目身份、数据库名、compose 命名空间和对象存储命名空间的替换清单 |
+| [`current/template-readiness.md`](current/template-readiness.md) | 当前仓库作为 AI Job 微服务模板的就绪边界、可复用能力和不承诺事项 |
+| [`runbooks/template-adoption-runbook.md`](runbooks/template-adoption-runbook.md) | 复制模板成为真实业务项目时，项目身份、数据库名、compose 命名空间、对象存储命名空间和最小验收操作清单 |
 | [`current/script-entrypoint-contract.md`](current/script-entrypoint-contract.md) | 当前脚本入口 `-h`、子命令 help、输出、副作用、示例和验证的 envelope 合同 |
 | [`current/ops-dashboard.md`](current/ops-dashboard.md) | 当前只读 `ops_dashboard` 路由、data source / widget / layout / renderer 注册层和 Job 运维展示边界 |
 | [`current/job-load-testing.md`](current/job-load-testing.md) | 当前 Job 压测入口、case/profile、manifest、产物、安全确认和指标语义事实 |

@@ -133,6 +133,8 @@ Recovery 只根据数据库里已经落下的事实补偿缺口。
 
 `MAX_ACTIVE_JOBS` 是提交阶段的接单上限。检查对象是当前 active Job 数：`queued` Job 加上仍持有 active attempt 的 `running` Job。这个计数不按 caller、`job_type` 或 root/child 分组；active internal child 也会计入。
 
+当前容量检查能在串行和常规并发下限制接单，但计数与 Job 创建尚未完全收敛到同一个原子闸门内；严格并发原子化属于 [`../plans/job-kernel-hardening.md`](../plans/job-kernel-hardening.md) 的 P1 硬化项。
+
 ```text
 active_jobs < MAX_ACTIVE_JOBS
   -> 允许创建 Job
@@ -316,12 +318,13 @@ job_execution_attempts = 某条 Job 的一次执行尝试
 
 因此直接提交 `root_or_leaf` job_type 时，它是 public root Job；被 workflow 创建时，它是 internal child Job。`root_or_leaf` 不表示“只有一个 Job”，也不表示自动创建 root + leaf。
 
-当前内置 `job_type` 标记：
+当前内置 `job_type` 标记如下；完整准入、schema、capability 和错误码事实以 registry 运行时输出为准。
 
 | job_type | visibility | role |
 |---|---|---|
 | `poster_title_image` | `public` | `root` |
 | `audio_stem_separation` | `demo` | `root` |
+| `audio_stem_separation_triton` | `demo` | `root` |
 | `arithmetic` | `demo` | `root` |
 | `example_workflow` | `demo` | `root` |
 | `example_sleep` | `demo` | `root_or_leaf` |
@@ -337,7 +340,7 @@ job_execution_attempts = 某条 Job 的一次执行尝试
 
 `example_*` 是模板内置示例 family，作为低副作用 Job 合同参考和默认压测目标。它们统一标记为 `visibility="demo"`，`allow_callback=False`，不调用 LLM、不访问对象存储、不发起外部 HTTP，也不写真实业务副作用。正式业务可以参考它们的 schema、executor、registry 和 workflow definition 组织方式，但不继承它们的 `job_type`、结果 schema 或压测参数。
 
-`audio_stem_separation` 当前也标记为 `visibility="demo"`，用于本地和开发环境验证 htdemucs-ft ONNX 音乐源分离闭环；它不是模板 smoke 示例。该 job_type 会读取 OSS WAV 输入、加载本地 ONNX 权重并写出四条音频 stem，因此使用前必须先配置输入来源白名单和本地模型目录。
+`audio_stem_separation` 和 `audio_stem_separation_triton` 当前都标记为 `visibility="demo"`，用于本地和开发环境验证音乐源分离真实模型链路；它们不是模板 smoke 示例。前者加载本地 ONNX 权重，后者调用 Triton HTTP endpoint，二者都会读取 OSS WAV 输入并写出四条音频 stem，因此使用前必须配置输入来源白名单和对应模型运行环境。
 
 ### Workflow Lineage
 
@@ -372,22 +375,7 @@ index(root_job_id, status)
 
 其中 `unique(root_job_id, workflow_node_key)` 是 child node 幂等约束，不只是查询优化。它保证重复 root orchestration、重复 reconciler 或并发进程不会为同一个 root node 创建多个 child Job。
 
-常见排查查询：
-
-```sql
-select
-  id,
-  workflow_node_key,
-  status,
-  progress_percent,
-  error,
-  created_at,
-  started_at,
-  finished_at
-from job_aggregates
-where root_job_id = :root_job_id
-order by workflow_node_key;
-```
+常见排查查询不在本文维护，统一使用 [`../runbooks/job/jobs使用与排障手册.md`](../runbooks/job/jobs使用与排障手册.md) 和 `./scripts/jobs.sh`。
 
 ## 重试模型
 
@@ -473,8 +461,8 @@ workflow Job
 
 | job_type | business_execution policy | 当前实际含义 |
 |---|---|---|
-| `poster_title_image_style_probe` | `max_attempts=2`，`retry_delay_seconds=15`，`backoff_kind=fixed`，`retryable_error_codes={MODEL_CALL_TIMEOUT, OSS_FETCH_FAILED, OSS_WRITE_FAILED}` | 对风格探测中的模型超时和引用图读取/写入类瞬时失败允许 1 次重试 |
-| `poster_title_image_generate_item` | `max_attempts=2`，`retry_delay_seconds=15`，`backoff_kind=fixed`，`retryable_error_codes={MODEL_CALL_TIMEOUT, OSS_FETCH_FAILED, OSS_WRITE_FAILED}` | 对单个标题图生成中的模型超时、引用图读取和结果写入类瞬时失败允许 1 次重试 |
+| `poster_title_image_style_probe` | `max_attempts=3`，`retry_delay_seconds=15`，`backoff_kind=fixed`，`retryable_error_codes={AI_PROVIDER_FAILED, MODEL_CALL_TIMEOUT, OSS_FETCH_FAILED, OSS_WRITE_FAILED, JOB_TIMEOUT}` | 对风格探测中的 provider、模型超时、Job 超时和引用图读写类瞬时失败允许最多 2 次重试 |
+| `poster_title_image_generate_item` | `max_attempts=3`，`retry_delay_seconds=15`，`backoff_kind=fixed`，`retryable_error_codes={AI_PROVIDER_FAILED, MODEL_CALL_TIMEOUT, OSS_FETCH_FAILED, OSS_WRITE_FAILED, JOB_TIMEOUT}` | 对单个标题图生成中的 provider、模型超时、Job 超时、引用图读取和结果写入类瞬时失败允许最多 2 次重试 |
 
 按运行形态展开：
 
@@ -545,16 +533,7 @@ published but worker long time not claim
 
 这些 retry 不消耗 execution attempt retry budget。也就是说，同一个 attempt 可能经历多次 dispatch publish retry，但仍然只是一条 execution attempt。
 
-dispatch `dead_letter` 是 publish retry budget 耗尽，不是 worker 执行业务失败。当前 recovery 会扫描 `queued` + active pending attempt + `dispatch_outbox.status=dead_letter` 的记录，并把 Job 终态收敛为 `failed`，避免永久 `queued` 占用 active capacity。
-
-人工 replay 入口是确认式写操作：
-
-```bash
-./scripts/job-ops.sh replay-dispatch <job_id>
-./scripts/job-ops.sh replay-dispatch <job_id> --confirm
-```
-
-该命令只重放尚未被 recovery 终态收敛的 `queued` + active pending attempt + `dispatch_outbox.status=dead_letter`。它不会重开已经 `failed` 的 Job，也不会撤销已经 delivered 的 callback。
+dispatch `dead_letter` 是 publish retry budget 耗尽，不是 worker 执行业务失败。当前 recovery 会扫描 `queued` + active pending attempt + `dispatch_outbox.status=dead_letter` 的记录，并把 Job 终态收敛为 `failed`，避免永久 `queued` 占用 active capacity。人工 replay 属于确认式写操作，入口和使用边界由 `./scripts/job-ops.sh replay-dispatch -h` 维护。
 
 ### Callback Delivery Retry
 
@@ -702,15 +681,7 @@ callback 未配置，或终态 callback 已 delivered / skipped / dead_letter
 child jobs 没有 active 或非终态记录
 ```
 
-不满足这些条件时，cleanup 不会把 Job family 软删除。被软删除的 Job 不参与 API 普通查询、worker/recovery 推进、`jobs.sh list/show/summary/stuck/gate` 等正常排障视图。内部只读审计使用专门入口：
-
-```bash
-./scripts/jobs.sh deleted-summary
-./scripts/jobs.sh deleted-list
-./scripts/jobs.sh deleted-job <job_id>
-./scripts/job-ops.sh delete-family <root_job_id> --reason <reason> --confirm
-./scripts/job-ops.sh restore-family <root_job_id> --confirm
-```
+不满足这些条件时，cleanup 不会把 Job family 软删除。被软删除的 Job 不参与 API 普通查询、worker/recovery 推进、`jobs.sh list/show/summary/stuck/gate` 等正常排障视图。内部只读审计和确认式 delete/restore 操作由 `./scripts/jobs.sh deleted-*` 与 `./scripts/job-ops.sh` help 维护。
 
 Restore 也是 root-family 级内部机制：只能从 root job id 恢复整组 root + child，并同时恢复 root submission key。恢复前会检查 family 是否处于完整软删除状态、deleted submission key 是否存在，以及同一 `caller_id + client_request_id` 是否已被新的 active key 占用；冲突时 fail-fast，不静默覆盖。
 
@@ -755,7 +726,7 @@ job_audit_events         排障时间线，不参与状态推进
 
 已经移出 `job_aggregates` 的旧字段包括：`max_attempts`、`attempt_count`、`execution_attempts`、`execution_token`、`execution_generation`、`last_execution_at`、`last_heartbeat_at`、`timeout_seconds`、`callback_*` delivery 摘要、`parent_job_id`、`is_internal`、`job_params`、`result_ref` 和 `canonical_result_ref`。
 
-## 配置和修改入口
+## 配置边界
 
 ### 可通过 flat env 配置的主控项
 
@@ -810,14 +781,4 @@ job_audit_events         排障时间线，不参与状态推进
 | `CALLBACK_MAX_DELIVERY_ATTEMPTS` / `CALLBACK_RETRY_DELAY_SECONDS` | callback delivery retry 是可靠性内部策略，落到 outbox policy snapshot，不进入通用 env 模板 |
 | `JOB_RECOVERY_INTERVAL_SECONDS` / `JOB_RECOVERY_BATCH_SIZE` / `JOB_RECOVERY_CALLBACK_BATCH_SIZE` | recovery 扫描节奏和批大小是代码默认内部参数，不进入通用 env 模板 |
 
-### 修改入口速查
-
-| 想改什么 | 当前入口 | 注意事项 |
-|---|---|---|
-| 默认 execution retry policy | `app/jobs/base.py` 的 `JobRetryPolicy` | 只影响后续新建 attempt；已有 attempt 的 snapshot 不会自动更新 |
-| 某个 job_type 的 execution retry | 对应 `JobExecutor` class 声明 `retry_policy` | 优先用于有明确幂等和成本边界的业务 job_type |
-| dispatch publish retry 次数 | `app/core/config.py` 的 `JobSettings.dispatch_max_publish_attempts` | 创建 dispatch outbox 时固化；flat env 当前不暴露 |
-| dispatch orphan 窗口 | `app/core/config.py` 的 `JobSettings.orphan_timeout_seconds` | 同时影响 dispatch lease / orphan 判断；flat env 当前不暴露 |
-| callback 单次 HTTP timeout | `CALLBACK_TIMEOUT_SECONDS` / `CallbackSettings.timeout_seconds` | 会派生 callback claim window 并校验小于 retry interval |
-| callback delivery retry 次数和间隔 | `CallbackSettings.max_delivery_attempts` / `retry_delay_seconds` | 创建 callback outbox 时固化；flat env 当前不暴露 |
-| AI 调用 timeout | `MODEL_CALL_TIMEOUT_SECONDS` | 同时影响派生 worker timeout 链和 stale running 阈值 |
+修改入口细节以代码和脚本 help 为准。Job 内核机制变化必须同步本文；新增 `job_type`、schema、模型、Prompt 和对象存储产物的接入入口见 [`../api/extension-guide.md`](../api/extension-guide.md)。

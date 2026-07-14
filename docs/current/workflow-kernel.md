@@ -87,7 +87,7 @@ child terminal failed -> root terminal failed
   -> 不触发整单 workflow retry，也不自动重跑全部 child
 ```
 
-当前没有“整单 workflow 自动重试”机制。需要整单重试时，应作为显式能力单独设计，例如新建 root、只重试 failed children 或重跑全部节点；不能把这类语义混入当前 attempt retry。
+当前没有“整单 workflow 自动重试”机制。如需整单重试、新建 root、只重试 failed children 或重跑全部节点，应先进入 [`../plans/workflow-kernel-long-term.md`](../plans/workflow-kernel-long-term.md) 做合同设计，不能把这类语义混入当前 attempt retry。
 
 ## 当前边界
 
@@ -96,7 +96,7 @@ child terminal failed -> root terminal failed
 - public `GET /jobs/{job_id}` 不把 internal child Job 作为调用方合同资源。
 - 当前没有独立 `workflow_instances`、`workflow_nodes`、`workflow_events` 或 `workflow_wakeup_outbox` 表。
 - 当前没有 node / child 级公开 billing 查询；公开 billing 入口仍是 root Job scope。
-- 普通 non-workflow Job 当前仍由 public root Job 直接执行；“所有 Job 都统一成 `root + child`”是后续计划。
+- 普通 non-workflow Job 当前仍由 public root Job 直接执行；本文不把“所有 Job 都统一成 `root + child`”描述为当前事实。
 
 ## 验证
 

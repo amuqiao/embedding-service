@@ -3,7 +3,7 @@
 > Archived: 本文是 Job kernel 历史可靠性审查，不再作为活动计划维护。当前硬化计划见 [`../../plans/job-kernel-hardening.md`](../../plans/job-kernel-hardening.md)。
 
 本文从生产事故入口审查当前 Job 机制。当前实现事实仍以
-[`../current/job-kernel.md`](../current/job-kernel.md) 和代码为准；本文只把当前事实作为风险证据，记录
+[`../../current/job-kernel.md`](../../current/job-kernel.md) 和代码为准；本文只把当前事实作为风险证据，记录
 可靠性、一致性、安全性和测试覆盖的硬化计划与验收清单，不替代 current 或 api 合同文档。
 
 ## 心智模型

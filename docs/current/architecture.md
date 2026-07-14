@@ -101,7 +101,7 @@ Callback 是服务主动向调用方发送的终态事件，不套 HTTP response
 
 ## AI Gateway 与 Billing
 
-AI 调用当前事实见 [`ai-capability.md`](ai-capability.md)。当前稳定入口是 `app/services/ai_gateway_facade.py` 的 `generate_text_with_ledger()`，真实 provider path 覆盖文本生成；多模态 provider path 和 workflow node 级成本归因不是当前事实。
+AI 调用当前事实见 [`ai-capability.md`](ai-capability.md)。当前稳定入口是 `app/services/ai_gateway_facade.py`，已覆盖文本生成、带参考图文本生成和 `poster_title_image` 使用的图片生成；audio / video provider path 和 workflow node 级成本归因不是当前事实。
 
 AI billing 当前事实见 [`ai-billing.md`](ai-billing.md)。`GET /jobs/{job_id}/billing` 从 `ai_call_ledger_entries` 聚合 Job scope billing；workflow child AI 调用使用 root Job scope 聚合到 root billing。`ai_call_ledger_entries` 是 AI provider call usage / cost estimate 事实源，不是资金账本。
 

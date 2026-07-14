@@ -73,41 +73,11 @@ billing 模块只消费标准化后的 `usage_units` 和已经冻结的 `cost_am
 
 已完成且可计费的 ledger 行使用 pending row 创建时记录的 `pricing_ref` / `pricing_version`，以及 terminal update 写入的 `cost_amount` / `currency`；billing projection 只聚合这些 ledger 事实，不会用当前 `pricing.yaml` 对历史成本重新查价或重算。没有 ledger 行或没有 billable 行时，0 成本 billing 的展示币种仍来自当前默认币种配置。
 
-```text
-BillingEnvelope
-  schema_version
-  scope_type
-  scope_id
-  status
-  kind
-  currency
-  total_cost_amount
-  usage_units
-  pricing_refs
-  ai_call_count
-  billable_call_count
-  unbillable_call_count
-  failed_call_count
-  diagnostic_reason
-  finalized_at
-```
-
-`status` 当前允许：
-
-| status | 含义 |
-|---|---|
-| `estimated` | 已有可计费调用且成本聚合成功 |
-| `not_billable` | 没有 AI 调用，或没有 billable 调用 |
-| `incomplete` | 存在 `pending`、`unknown` 或未收敛 AI 调用 |
-| `failed` | 成本计算失败、币种冲突、billable 行缺少币种或成本 |
+`BillingEnvelope` 字段和 `status` 含义属于外部合同，以 [`../api/service-contract.md`](../api/service-contract.md) 为准；本文只维护内部聚合事实。
 
 ## Public Contract
 
-外部合同以 [`docs/api/service-contract.md`](../api/service-contract.md) 为准：
-
-- `GET /api/v1/ai-jobs/jobs/{job_id}/billing`
-- `HttpEnvelope[JobBillingResponseData]`
-- `data.billing -> BillingEnvelope`
+外部合同以 [`../api/service-contract.md`](../api/service-contract.md) 为准。当前公开入口是 `GET /api/v1/ai-jobs/jobs/{job_id}/billing`。
 
 `GET /models` 可以按配置公开 `billing_enabled` 和 `cost_estimate_available` 摘要，但不暴露 `pricing_ref`、价格矩阵、provider raw usage schema 或内部成本明细。
 

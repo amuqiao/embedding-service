@@ -20,7 +20,7 @@
 
 ## Planned Work
 
-1. 模板复制前，按 [`../current/template-readiness.md`](../current/template-readiness.md) 完成身份替换、安全配置和 smoke。
+1. 模板复制前，按 [`../../current/template-readiness.md`](../../current/template-readiness.md) 完成身份替换、安全配置和 smoke。
 2. 接入正式业务时，新增业务自己的 `job_type`、schema、executor、workflow definition、prompt refs、model/pricing 配置和业务 e2e。
 3. 只有真实业务或调用方合同要求时，才升级 running result、node 查询、取消语义或细粒度 cost attribution。
 

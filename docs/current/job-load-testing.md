@@ -23,7 +23,7 @@ GET  /api/v1/ai-jobs/jobs/{job_id}
 
 `case` 表达压哪条链路，`profile` 表达用哪个 `job_type` 和默认 `job_params`。新增业务 Job 时，优先新增 profile，不修改 Locust runner。
 
-当前 case 由 `scripts/load/cases.py` 注册，并可通过 `./scripts/load.sh cases --json` 机器读取：
+当前 case 由 `scripts/load/cases.py` 注册，并可通过 `./scripts/load.sh cases --json` 机器读取；命令输出是 case 清单事实源，本文只保留分类摘要：
 
 | case | 默认 job_type | 作用 |
 |---|---|---|
@@ -33,7 +33,7 @@ GET  /api/v1/ai-jobs/jobs/{job_id}
 | `workflow-flow` | `example_workflow` | 创建 workflow demo Job 并轮询到终态，观察 root/child/finalize 链路 |
 | `api-health` | 无 | 压 `/health` 基础 HTTP 路径 |
 
-当前内置 profile 由 `scripts/load/profiles.py` 注册，并可通过 `./scripts/load.sh profiles --json` 机器读取：
+当前内置 profile 由 `scripts/load/profiles.py` 注册，并可通过 `./scripts/load.sh profiles --json` 机器读取；命令输出是 profile 清单事实源，本文只保留当前内置 profile 摘要：
 
 | profile | job_type | case | 作用 |
 |---|---|---|---|
@@ -160,21 +160,11 @@ Locust 页面和 CSV 中的 `RPS` 表示每秒 HTTP 请求数。Job 服务是异
 
 压测结论不能只看 HTTP 指标。有效判断至少需要同时看 HTTP 错误率、HTTP p95/p99、Job 终态成功率、`JOB flow terminal latency` 和压测停止后的 queued/running/stuck 是否恢复。
 
-## Dashboard 观测事实
+## Dashboard 观测边界
 
-`ops_dashboard` 路由固定为 `/internal/jobs-dashboard`，默认关闭，由 `OPS_DASHBOARD_ENABLED` 控制。
+压测期间可以用 `ops_dashboard` 的 `run_id` 全局过滤观察本轮压测 Job。Dashboard 的 data source、过滤和 Job Trace 展示边界以 [`ops-dashboard.md`](ops-dashboard.md) 为准；本文不重复维护 dashboard data source 清单。
 
-压测期间常用 data source：
-
-| data source | 作用 |
-|---|---|
-| `overview` | 当前健康、趋势、延迟、成功率、stuck 样本 |
-| `recent_jobs` | 最近 root Job 列表和单 Job Trace 入口 |
-| `flow_capacity` | 吞吐、drain、容量、延迟、job_type 热点 |
-| `failures_callbacks` | 失败聚合、失败样本、callback summary |
-| `job_trace` | 单 Job 证据链 |
-
-dashboard 的 Job Trace 页面会展示当前接口返回的完整 Payload/Result/Job Callback JSON；Redis broker、Pod runtime 和对象存储内容仍由 `scripts/jobs.sh` 的只读命令承担。
+Redis broker、Pod runtime 和对象存储内容仍由 `scripts/jobs.sh` 的只读命令承担。
 
 ## 验证
 

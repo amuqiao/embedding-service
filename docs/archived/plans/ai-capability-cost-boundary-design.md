@@ -2,7 +2,7 @@
 
 > Archived: 本文已合并进 [`../../plans/ai-capability-long-term.md`](../../plans/ai-capability-long-term.md)，不再作为独立活动计划维护。
 
-本文只记录 AI cost boundary 仍未完成的计划。已经落地的当前事实见 [`../current/ai-billing.md`](../current/ai-billing.md)。
+本文只记录 AI cost boundary 仍未完成的计划。已经落地的当前事实见 [`../../current/ai-billing.md`](../../current/ai-billing.md)。
 
 ## Remaining Gaps
 

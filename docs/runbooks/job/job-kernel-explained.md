@@ -166,7 +166,7 @@ business_execution（真正跑业务逻辑的那次 attempt）
   也就是说：默认情况下，业务失败一次就是最终失败，不会自动重跑
 ```
 
-只有某个 `job_type` 自己在 executor 里声明了更宽松的 `retry_policy`，`business_execution` 才会有额外重试。比如 `poster_title_image_style_probe` 和 `poster_title_image_generate_item` 声明了 `max_attempts=2`，只对 `MODEL_CALL_TIMEOUT` / `OSS_FETCH_FAILED` / `OSS_WRITE_FAILED` 这三类瞬时错误放宽一次。这是**按 job_type 主动选择的例外**，不是全局规则。
+只有某个 `job_type` 自己在 executor 里声明了更宽松的 `retry_policy`，`business_execution` 才会有额外重试。比如 `poster_title_image_style_probe` 和 `poster_title_image_generate_item` 声明了 `max_attempts=3`，对 `AI_PROVIDER_FAILED` / `MODEL_CALL_TIMEOUT` / `OSS_FETCH_FAILED` / `OSS_WRITE_FAILED` / `JOB_TIMEOUT` 这几类瞬时错误最多放宽两次。这是**按 job_type 主动选择的例外**，不是全局规则。
 
 这套设计背后的取舍是：业务重试涉及"这次模型调用/OSS 写入到底有没有副作用、重跑会不会产生重复计费或重复产物"，这个判断只有 `job_type` 自己知道，所以不能有一个全局的"失败重跑 N 次"开关——这也是为什么 `.env` 里明确拒绝 `JOB_MAX_EXECUTION_ATTEMPTS` 这种全局配置。
 

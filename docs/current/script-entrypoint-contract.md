@@ -23,7 +23,6 @@
 | 纯 shell 手写 help | `dev.sh`、`verify.sh`、`deploy.sh`、`k8s.sh`、`tools.sh` | 可以手写 `用法`、`命令`、`选项` 和说明区块。 |
 | shell wrapper + Typer CLI | `jobs.sh`、`job-ops.sh`、`real-flow.sh`、`load.sh` | Typer 自动生成的 `Usage`、`Options`、`Commands` 是命令和参数事实源；手写 epilog 不能再重复一份完整命令目录。 |
 | shell wrapper + 普通 Python / argparse | `tools.sh env-url` 这类下沉实现 | 参数事实源以实际执行层为准；wrapper 只在需要统一入口体验时手写薄 help。 |
-| release helper | `deploy/release-test.sh`、`deploy/release-master.sh` | 不属于 `scripts/`，但复用本合同的 envelope 结构。 |
 
 如果 CLI 框架已经生成 `Commands`，手写区不要再出现“命令说明”“命令列表”“子命令索引”等全量目录。需要帮助选择命令时，写“常用示例”“默认行为”或“排障路径”，不要按命令名逐个复述。
 
