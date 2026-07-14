@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import uuid
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -25,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 _CLAIM_RETRY_ATTEMPTS = 3
 _CLAIM_RETRY_DELAY_SECONDS = 0.2
+_MAX_ATTEMPT_HEARTBEAT_INTERVAL_SECONDS = 60.0
+_attempt_heartbeat_sleep = asyncio.sleep
 
 
 class TaskiqPublishDeferredError(RuntimeError):
@@ -90,6 +93,67 @@ def _callback_delivery_payload(payload: dict[str, Any], outbox, *, next_retry_at
 def _should_retry_attempt(attempt: JobAttempt, error: dict[str, Any]) -> bool:
     retryable_error_codes = attempt.policy_retryable_error_codes or []
     return str(error.get("code") or "") in retryable_error_codes
+
+
+def _attempt_heartbeat_interval_seconds() -> float:
+    return max(1.0, min(_MAX_ATTEMPT_HEARTBEAT_INTERVAL_SECONDS, settings.job_stale_running_seconds / 3))
+
+
+async def _extend_attempt_lease(attempt_id: uuid.UUID, lease_token: uuid.UUID, *, phase: str) -> None:
+    async def extend(db):
+        extended = await JobRepo.heartbeat_attempt(
+            db,
+            attempt_id,
+            lease_token=lease_token,
+            lease_seconds=settings.job_stale_running_seconds,
+        )
+        await db.commit()
+        return extended
+
+    if not await _with_db(extend):
+        raise AppError(
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "attempt lease could not be extended",
+            details={"attempt_id": str(attempt_id), "phase": phase},
+        )
+
+
+async def _attempt_heartbeat_loop(attempt_id: uuid.UUID, lease_token: uuid.UUID) -> None:
+    while True:
+        await _attempt_heartbeat_sleep(_attempt_heartbeat_interval_seconds())
+        await _extend_attempt_lease(attempt_id, lease_token, phase="periodic:execute")
+
+
+async def _run_with_attempt_heartbeat(operation, *, attempt_id: uuid.UUID, lease_token: uuid.UUID):
+    operation_task = asyncio.create_task(operation())
+    heartbeat_task = asyncio.create_task(_attempt_heartbeat_loop(attempt_id, lease_token))
+    try:
+        done, _pending = await asyncio.wait(
+            {operation_task, heartbeat_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if operation_task in done:
+            return await operation_task
+        if heartbeat_task in done:
+            heartbeat_exc = heartbeat_task.exception()
+            if heartbeat_exc is not None:
+                operation_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await operation_task
+                raise heartbeat_exc
+        return await operation_task
+    finally:
+        if not operation_task.done():
+            operation_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await operation_task
+        if heartbeat_task.done():
+            with suppress(asyncio.CancelledError):
+                heartbeat_task.exception()
+        else:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
 
 
 async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
@@ -202,28 +266,9 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
         job, claimed_attempt, lease_token = claimed
         job_id = job.id
 
-        async def heartbeat(phase: str) -> None:
-            async def extend(db):
-                extended = await JobRepo.heartbeat_attempt(
-                    db,
-                    attempt_uuid,
-                    lease_token=lease_token,
-                    lease_seconds=settings.job_stale_running_seconds,
-                )
-                await db.commit()
-                return extended
-
-            if not await _with_db(extend):
-                raise AppError(
-                    "JOB_STATE_TRANSITION_CONFLICT",
-                    "attempt lease could not be extended",
-                    details={"attempt_id": attempt_id, "phase": phase},
-                )
-
         async def execute(db):
             from app.jobs.runner import execute_job
 
-            await heartbeat("before:execute")
             return await execute_job(
                 db,
                 job.id,
@@ -231,7 +276,12 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
                 lease_token=lease_token,
             )
 
-        result = await _with_db(execute)
+        await _extend_attempt_lease(attempt_uuid, lease_token, phase="before:execute")
+        result = await _run_with_attempt_heartbeat(
+            lambda: _with_db(execute),
+            attempt_id=attempt_uuid,
+            lease_token=lease_token,
+        )
         if result.get("status") != "succeeded":
             raise AppError("JOB_EXECUTION_FAILED", "job attempt finished without success", details=result)
         return {"attempt_id": attempt_id, "job_id": str(job_id), "status": "succeeded", "result": result}

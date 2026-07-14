@@ -29,7 +29,7 @@ route 函数只返回内层 data schema；外层 envelope 由应用统一包装�
 Authorization: Bearer <service-key>
 ```
 
-`X-AI-Service-Caller-ID` 是可选调用方标识；不传时使用 `default` caller，传入非法格式会返回未授权错误。
+`X-AI-Service-Caller-ID` 是可选调用方标识；不传时使用 `default` caller，传入非法格式会返回未授权错误。当前合同假设本服务只接收一个可信上游，`X-AI-Service-Caller-ID` 不是多租户安全边界；如果未来同一服务密钥下接入多个互不信任 caller，`caller_id` 必须改为由服务端校验后的凭证派生。
 
 本地可以通过 `DISABLE_HTTP_AUTH_HEADER=true` 关闭 Bearer 校验；可以通过 `DISABLE_CALLER_ID_HEADER=true` 忽略 `X-AI-Service-Caller-ID` 并统一使用 `default` caller。`Settings` 会要求 DB/Redis 指向 loopback；本地 `dev.sh` / `start-api.sh` 启动入口还会要求 `API_HOST` 是 loopback。绕过这些启动入口时，调用方必须自行保证 API 不绑定公开地址。
 
@@ -104,6 +104,8 @@ HttpEnvelope[JobResponseData]
 | `failed` | 默认必须为 `null`；只有 `failed` 属于具体 `job_type` 的 `result_snapshot_statuses` 时才允许非空 | 必须非空 | 可返回 Job 级费用快照 | 可返回 Job 级用量摘要 |
 
 `result_snapshot_statuses` 是 `job_type` 的能力声明，默认是空集合；当前只允许声明 `running` 和 `failed`。支持运行中或失败结果快照的 `job_type` 必须复用同一个公开 `job_result` schema，不暴露 internal child Job、workflow node、attempt 或 worker 细节。快照只表示当前已经可公开展示的业务结果；调用方仍必须以 `job_status` 判断 Job 是否终态。
+
+`job_error` 是公开错误投影。workflow root 由 internal child 失败投影为 `WORKFLOW_CHILD_FAILED` 时，不暴露 child job id、workflow node key、provider 原始错误、adapter 内部错误或堆栈细节；这些内部诊断只属于 child Job、运维查询、日志或审计事件。
 
 `job_progress.percent` 是当前唯一保证返回的进度字段，取值为 `0` 到 `100`。服务当前可能同时返回 `stage` 和 `message`，但调用方不能依赖这两个字段一定存在，也不能用它们判断 Job 是否成功或失败。
 

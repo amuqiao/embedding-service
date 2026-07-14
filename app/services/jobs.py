@@ -33,10 +33,37 @@ from app.workflows.registry import compile_registered_workflow, has_workflow
 
 logger = logging.getLogger(__name__)
 _JOB_RESULT_UNSET = object()
+_MAX_ACTIVE_JOBS_GATE_LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtext('max_active_jobs_gate'))")
 
 
 def _status_url(job_id: uuid.UUID) -> str:
     return f"{settings.service.api_prefix}/jobs/{job_id}"
+
+
+async def _active_job_capacity_available(
+    db: AsyncSession,
+    *,
+    exclude_job_id: uuid.UUID | None = None,
+) -> tuple[bool, int | None]:
+    if settings.job.max_active_jobs <= 0:
+        return True, None
+    await db.execute(_MAX_ACTIVE_JOBS_GATE_LOCK_SQL)
+    if exclude_job_id is None:
+        active = await JobRepo.count_active_jobs(db)
+    else:
+        active = await JobRepo.count_active_jobs(db, exclude_job_id=exclude_job_id)
+    return active < settings.job.max_active_jobs, active
+
+
+async def _ensure_active_job_capacity(db: AsyncSession) -> None:
+    available, active = await _active_job_capacity_available(db)
+    if available:
+        return
+    raise AppError(
+        "QUEUE_FULL",
+        "服务当前繁忙，请稍后重试",
+        details={"active_jobs": active, "limit": settings.job.max_active_jobs},
+    )
 
 
 def _configured_oss_bucket() -> str:
@@ -398,18 +425,7 @@ async def create_job(
                 {"job_type": payload.job_type},
             ) from exc
 
-    if settings.job.max_active_jobs > 0:
-        await db.execute(text("SELECT pg_advisory_lock(hashtext('max_active_jobs_gate'))"))
-        try:
-            active = await JobRepo.count_active_jobs(db)
-        finally:
-            await db.execute(text("SELECT pg_advisory_unlock(hashtext('max_active_jobs_gate'))"))
-        if active >= settings.job.max_active_jobs:
-            raise AppError(
-                "QUEUE_FULL",
-                "服务当前繁忙，请稍后重试",
-                details={"active_jobs": active, "limit": settings.job.max_active_jobs},
-            )
+    await _ensure_active_job_capacity(db)
 
     timeout_seconds = int(getattr(handler, "timeout_seconds", settings.ai_provider.model_call_timeout_seconds))
     job_id = uuid.uuid4()

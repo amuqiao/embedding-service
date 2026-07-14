@@ -133,7 +133,7 @@ Recovery 只根据数据库里已经落下的事实补偿缺口。
 
 `MAX_ACTIVE_JOBS` 是提交阶段的接单上限。检查对象是当前 active Job 数：`queued` Job 加上仍持有 active attempt 的 `running` Job。这个计数不按 caller、`job_type` 或 root/child 分组；active internal child 也会计入。
 
-当前容量检查能在串行和常规并发下限制接单，但计数与 Job 创建尚未完全收敛到同一个原子闸门内；严格并发原子化属于 [`../plans/job-kernel-hardening.md`](../plans/job-kernel-hardening.md) 的 P1 硬化项。
+容量检查与 public root Job 的 `job_aggregates`、`job_execution_attempts`、`dispatch_outbox` 创建处于同一个事务级 advisory lock 窗口内；事务提交前不会释放容量闸门。重复提交命中已有 `client_request_id` 且使用 `return_existing` 时直接返回已有 Job，不消耗新的容量名额。
 
 ```text
 active_jobs < MAX_ACTIVE_JOBS
@@ -146,6 +146,8 @@ active_jobs >= MAX_ACTIVE_JOBS
 ```
 
 workflow root 已完成 orchestration、正在等待 child 且 `active_attempt_id=null` 时，不计入这个门禁。`MAX_ACTIVE_JOBS=0` 表示禁用检查；它只控制接单上限，不杀掉已存在的 Job，也不改变 worker 并发。
+
+workflow child 创建也会检查同一个全局容量门禁。root orchestration 首轮 fan-out 时，容量计数会排除当前 root orchestration 自身，避免 root active attempt 平白占掉一个 child 槽位。容量不足时，本轮 orchestration / reconciliation 不创建新的 child；root Job 保持 running + `active_attempt_id=null`，等待后续 recovery / reconciliation 在容量释放后继续补齐 ready child，并写入内部 `workflow.capacity_deferred` audit event 作为排障事实。
 
 ### 普通 Job 与 Workflow Job
 
@@ -559,6 +561,8 @@ Job status 不回退
 Job result/error 不因为 callback 失败而改变
 ```
 
+调用方按 `event_id` 去重。同一个 `event_id` 已经处理过时，调用方仍应返回 `accepted=true`；服务端会把这类 duplicate ACK 视为 delivered。`accepted=false`、非 2xx、超时、非 JSON、空 body 或 ack schema 不合法都会进入 retry / dead-letter 路径。
+
 当前默认值在 `Settings.callback` 与 outbox snapshot 中：
 
 | 参数 | 当前默认 | 当前含义 |
@@ -634,7 +638,7 @@ Attempt 执行权
     -> mark attempt failed / retry / Job failed
 ```
 
-`worker_soft_time_limit`、`worker_hard_time_limit` 和 `job_stale_running_seconds` 由 `MODEL_CALL_TIMEOUT_SECONDS` 派生，用于保持配置不变量和 stale running 接管窗口单调递增。当前运行路径用 `job_stale_running_seconds` 作为全局 attempt lease floor；claim 和 heartbeat 写入 `lease_expires_at` 时会取 `max(job_stale_running_seconds, job_execution_attempts.timeout_seconds)`。因此 job_type 声明的较长 `timeout_seconds` 可以拉长 attempt lease，但不能缩短全局保护窗口。`timeout_seconds` 当前不是 runner 层统一强制终止期限；soft / hard time limit 也不是独立 flat env。
+`worker_soft_time_limit`、`worker_hard_time_limit` 和 `job_stale_running_seconds` 由 `MODEL_CALL_TIMEOUT_SECONDS` 派生，用于保持配置不变量和 stale running 接管窗口单调递增。当前运行路径用 `job_stale_running_seconds` 作为全局 attempt lease floor；claim 和 heartbeat 写入 `lease_expires_at` 时会取 `max(job_stale_running_seconds, job_execution_attempts.timeout_seconds)`。因此 job_type 声明的较长 `timeout_seconds` 可以拉长 attempt lease，但不能缩短全局保护窗口。runner 在业务 executor / model call 执行期间会用独立 DB session 周期续约 attempt lease；如果周期 heartbeat 失效，执行路径会暴露状态冲突，后续终态写入仍由 `lease_token` 拦截。`timeout_seconds` 当前不是 runner 层统一强制终止期限；soft / hard time limit 也不是独立 flat env。
 
 | 边界 | 当前作用 |
 |---|---|

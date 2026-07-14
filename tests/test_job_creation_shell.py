@@ -19,6 +19,14 @@ class _FakeDB:
         pass
 
 
+class _CapacityDB(_FakeDB):
+    def __init__(self):
+        self.executed: list[str] = []
+
+    async def execute(self, statement):
+        self.executed.append(str(statement))
+
+
 class _TestHandler:
     name = "test.echo"
     visibility = "public"
@@ -193,6 +201,121 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     assert job.runtime_ref["payload_snapshot"]["runtime_fields"] == {}
     assert job.runtime_ref["payload_snapshot"]["output_target"]["type"] == "oss_prefix"
     assert "workflow_plan" not in job.runtime_ref["payload_snapshot"]
+
+
+@pytest.mark.asyncio
+async def test_create_job_holds_capacity_gate_through_job_creation(monkeypatch):
+    captured: dict = {}
+    now = datetime.now(timezone.utc)
+    db = _CapacityDB()
+
+    async def fake_create(_db, **kwargs):
+        assert _db is db
+        assert db.executed == ["SELECT pg_advisory_xact_lock(hashtext('max_active_jobs_gate'))"]
+        captured["create_seen_lock"] = True
+        return Job(
+            id=uuid.uuid4(),
+            caller_id=kwargs["caller_id"],
+            client_request_id=kwargs["client_request_id"],
+            job_type=kwargs["job_type"],
+            status="queued",
+            progress_percent=0,
+            progress_text="已排队",
+            callback_url=kwargs["callback_url"],
+            callback_events=kwargs["callback_events"],
+            metadata_=kwargs["metadata"],
+            priority=kwargs["priority"],
+            job_params_ref=kwargs["job_params_ref"],
+            job_params_hash=kwargs["job_params_hash"],
+            runtime_ref=kwargs["runtime_ref"],
+            created_at=now,
+            updated_at=now,
+        )
+
+    async def fake_advisory_lock(*_args):
+        pass
+
+    async def fake_get_recent(*_args, **_kwargs):
+        return None
+
+    async def fake_count_active_jobs(_db):
+        assert _db is db
+        return 4
+
+    async def fake_create_submission_key(_db, **kwargs):
+        captured["submission_key"] = kwargs
+
+    async def fake_create_initial_attempt(_db, created_job, *, timeout_seconds, purpose, retry_policy):
+        captured["initial_attempt"] = (created_job.id, timeout_seconds, purpose, retry_policy)
+
+    def fake_write_runtime_json(_job, _name, payload):
+        return {"storage": "db_inline", "type": "json", "name": _name, "payload_snapshot": payload}
+
+    _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=5)
+    monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
+    monkeypatch.setattr("app.services.jobs.JobRepo.count_active_jobs", fake_count_active_jobs)
+    monkeypatch.setattr("app.services.jobs.JobRepo.create", fake_create)
+    monkeypatch.setattr("app.services.jobs.JobRepo.create_submission_key", fake_create_submission_key)
+    monkeypatch.setattr("app.services.jobs.JobRepo.create_initial_attempt", fake_create_initial_attempt)
+    monkeypatch.setattr("app.services.jobs.write_runtime_json", fake_write_runtime_json)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-capacity",
+            "job_type": "test.echo",
+            "job_params": {"value": {"hello": "world"}, "label": "Echo"},
+        }
+    )
+
+    job, created = await create_job(db, payload, "caller-1")
+
+    assert created is True
+    assert captured["create_seen_lock"] is True
+    assert captured["submission_key"]["job"] is job
+    assert captured["initial_attempt"][0] == job.id
+    assert all("pg_advisory_unlock" not in statement for statement in db.executed)
+
+
+@pytest.mark.asyncio
+async def test_create_job_rejects_when_capacity_gate_is_full(monkeypatch):
+    db = _CapacityDB()
+
+    async def fake_advisory_lock(*_args):
+        pass
+
+    async def fake_get_recent(*_args, **_kwargs):
+        return None
+
+    async def fake_count_active_jobs(_db):
+        assert _db is db
+        return 5
+
+    async def fail_create(*_args, **_kwargs):
+        raise AssertionError("full capacity must fail before job create")
+
+    _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=5)
+    monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
+    monkeypatch.setattr("app.services.jobs.JobRepo.count_active_jobs", fake_count_active_jobs)
+    monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-capacity-full",
+            "job_type": "test.echo",
+            "job_params": {"value": {"hello": "world"}, "label": "Echo"},
+        }
+    )
+
+    with pytest.raises(AppError) as exc:
+        await create_job(db, payload, "caller-1")
+
+    assert exc.value.code == "QUEUE_FULL"
+    assert exc.value.details == {"active_jobs": 5, "limit": 5}
+    assert db.executed == ["SELECT pg_advisory_xact_lock(hashtext('max_active_jobs_gate'))"]
 
 
 @pytest.mark.asyncio
@@ -469,6 +592,57 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
 
     assert job is existing
     assert created is False
+
+
+@pytest.mark.asyncio
+async def test_create_job_idempotency_return_existing_does_not_consume_capacity(monkeypatch):
+    existing = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="req-existing-capacity",
+        job_type="test.echo",
+        status="queued",
+        progress_percent=0,
+        metadata_={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    db = _CapacityDB()
+
+    async def fake_advisory_lock(*_args):
+        pass
+
+    async def fake_get_recent(*_args, **_kwargs):
+        return existing, SimpleNamespace(request_fingerprint=expected_fingerprint)
+
+    async def fail_count_active_jobs(*_args, **_kwargs):
+        raise AssertionError("idempotent return_existing must not consume capacity")
+
+    async def fail_create(*_args, **_kwargs):
+        raise AssertionError("idempotent return_existing must not create job")
+
+    _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=1)
+    monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
+    monkeypatch.setattr("app.services.jobs.JobRepo.count_active_jobs", fail_count_active_jobs)
+    monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-existing-capacity",
+            "job_type": "test.echo",
+            "job_params": {"value": {"hello": "world"}, "label": "Echo"},
+            "options": {"idempotency_mode": "return_existing"},
+        }
+    )
+    expected_fingerprint = _request_fingerprint(payload, "caller-1", {"value": {"hello": "world"}, "label": "Echo"})
+
+    job, created = await create_job(db, payload, "caller-1")
+
+    assert job is existing
+    assert created is False
+    assert db.executed == []
 
 
 @pytest.mark.asyncio

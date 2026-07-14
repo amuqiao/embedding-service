@@ -1690,17 +1690,20 @@ class JobRepo:
         )
         return list(result.scalars().all())
 
-    async def count_active_jobs(db: AsyncSession) -> int:
+    async def count_active_jobs(db: AsyncSession, *, exclude_job_id: uuid.UUID | None = None) -> int:
+        conditions = [
+            or_(
+                Job.status == "queued",
+                and_(Job.status == "running", Job.active_attempt_id.is_not(None)),
+            ),
+            Job.deleted_at.is_(None),
+        ]
+        if exclude_job_id is not None:
+            conditions.append(Job.id != exclude_job_id)
         result = await db.execute(
             select(func.count())
             .select_from(Job)
-            .where(
-                or_(
-                    Job.status == "queued",
-                    and_(Job.status == "running", Job.active_attempt_id.is_not(None)),
-                ),
-                Job.deleted_at.is_(None),
-            )
+            .where(*conditions)
         )
         return result.scalar_one()
 

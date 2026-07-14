@@ -33,7 +33,7 @@
 | `SERVICE_API_KEY` | `dev-service-key` | 用于 `Authorization: Bearer` |
 | `CALLBACK_SIGNING_SECRET` | `dev-service-key` | 请求中传 `callback.url` 时必填；dev 默认可与 `SERVICE_API_KEY` 一致 |
 | `X-Request-ID` | `dev-poster-title-image-001` | 可选 |
-| `X-AI-Service-Caller-ID` | `dev-caller` | 可选；不传时使用 `default` |
+| `X-AI-Service-Caller-ID` | `dev-caller` | 可选；不传时使用 `default`；仅单可信上游场景使用 |
 
 ### 测试
 
@@ -43,7 +43,7 @@
 | `SERVICE_API_KEY` | `test_gawgTHkWo6afEC0wAe-1FbTfYQ-_9sOm1B_WQoft7fc` | 用于 `Authorization: Bearer` |
 | `CALLBACK_SIGNING_SECRET` | `test_gawgTHkWo6afEC0wAe-1FbTfYQ-_9sOm1B_WQoft7fc` | 请求中传 `callback.url` 时必填 |
 | `X-Request-ID` |  | 可选 |
-| `X-AI-Service-Caller-ID` |  | 可选；不传时使用 `default` |
+| `X-AI-Service-Caller-ID` |  | 可选；不传时使用 `default`；仅单可信上游场景使用 |
 
 ### 生产
 
@@ -53,7 +53,7 @@
 | `SERVICE_API_KEY` | `prd_9sUubcUpISZKB3OfNP0zRdZZGhoMfm-LK5obiMADyag` | 用于 `Authorization: Bearer` |
 | `CALLBACK_SIGNING_SECRET` | `prd_9sUubcUpISZKB3OfNP0zRdZZGhoMfm-LK5obiMADyag` | 请求中传 `callback.url` 时必填 |
 | `X-Request-ID` |  | 可选 |
-| `X-AI-Service-Caller-ID` |  | 可选；不传时使用 `default` |
+| `X-AI-Service-Caller-ID` |  | 可选；不传时使用 `default`；仅单可信上游场景使用 |
 
 请求头：
 
@@ -64,7 +64,7 @@ X-AI-Service-Caller-ID: <caller-id>
 Content-Type: application/json
 ```
 
-`X-AI-Service-Caller-ID` 格式：长度 1 到 64；首字符必须是 ASCII 字母或数字；后续字符只能使用 ASCII 字母、数字、下划线 `_`、点号 `.`、冒号 `:` 或连字符 `-`。示例：`cpp-service`、`cpp.service:dev`、`caller_01`。不要包含空格、斜杠或中文字符。
+`X-AI-Service-Caller-ID` 格式：长度 1 到 64；首字符必须是 ASCII 字母或数字；后续字符只能使用 ASCII 字母、数字、下划线 `_`、点号 `.`、冒号 `:` 或连字符 `-`。示例：`cpp-service`、`cpp.service:dev`、`caller_01`。不要包含空格、斜杠或中文字符。该 header 不是多租户安全边界；认证边界以 [`service-contract.md`](service-contract.md) 为准。
 
 Callback 签名：如果创建任务时传了 `callback.url`，调用方必须使用同一个 `CALLBACK_SIGNING_SECRET` 校验 AI 服务回调请求头 `X-Callback-Signature`。当前 dev 环境可约定 `CALLBACK_SIGNING_SECRET` 与 `SERVICE_API_KEY` 使用同一个值，例如 `dev-service-key`。
 
@@ -103,7 +103,7 @@ X-AI-Service-Caller-ID: <caller-id>
 Content-Type: application/json
 ```
 
-`X-AI-Service-Caller-ID` 可选；不传时使用 `default` caller。传入时必须满足 `^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,63}$`，否则服务会按未授权请求处理。`X-Request-ID` 也是可选请求头；调用方传入合法值时，服务会在响应 envelope 和响应头中返回同一个请求追踪 ID。
+`X-AI-Service-Caller-ID` 可选；不传时使用 `default` caller。传入时必须满足 `^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,63}$`，否则服务会按未授权请求处理。该 header 只适用于单可信上游，不表示共享服务密钥下的租户隔离。`X-Request-ID` 也是可选请求头；调用方传入合法值时，服务会在响应 envelope 和响应头中返回同一个请求追踪 ID。
 
 ### Success Envelope
 

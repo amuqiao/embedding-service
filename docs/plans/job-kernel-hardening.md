@@ -5,34 +5,30 @@
 ## Current Baseline
 
 - Job / Attempt / Dispatch outbox / Callback outbox 已分离。
-- Attempt claim、heartbeat、终态写入已使用 active attempt 和 lease token 保护。
+- Attempt claim、执行期周期 heartbeat、终态写入已使用 active attempt 和 lease token 保护。
+- `MAX_ACTIVE_JOBS` 容量判断和 public root Job / Attempt / Dispatch outbox 创建处于同一事务级 advisory lock 窗口；workflow child 创建也受同一全局容量门禁约束，root orchestration fan-out 时会从计数中排除当前 root 自身，容量延后会写入 `workflow.capacity_deferred` audit event。
+- Callback duplicate `event_id` 的成功 ACK 语义已有合同测试锁住；`accepted=false` 仍表示拒收并触发 retry / dead-letter 路径。
 - root / child lineage 已由同一 Job 表表达，root 是公开查询、callback 和 billing 入口。
+- workflow root 公开错误已与 child 内部诊断分离，不向调用方暴露 child id、node key 或 provider 原始错误。
+- 当前 API 合同明确只假设单可信上游，`X-AI-Service-Caller-ID` 不是多租户安全边界。
 - 本仓库仍是 AI Job 服务模板，不承担用户系统、通用工作流平台或生产部署平台。
 
 ## Remaining Gaps
 
 | 优先级 | Gap | 收口边界 |
 |---|---|---|
-| P0 | 多 caller 场景下，`caller_id` 不能只依赖共享服务密钥后的请求头 | 如果仍是单可信上游，先在合同中写清边界；如果进入多 caller，必须由凭证派生 caller |
-| P1 | `MAX_ACTIVE_JOBS` 容量判断需要和 Job 创建保持原子性 | 不扩展成复杂配额系统，先保证全局闸门真实生效 |
-| P1 | 长模型执行期间缺少周期性 lease 续约 | 只处理长 Job 不被误判 stale 和旧 worker 副作用重复的核心路径 |
-| P1 | Callback 重复事件 ACK 语义需要测试锁住 | 重复 `event_id` 已处理时应视为 accepted，不把成功业务事件拖入 dead-letter |
-| P1 | root workflow 公开错误不应暴露 child id、node key 或 provider 原始错误 | public error projection 与 internal diagnostic 分离 |
+| P0 | 多 caller 场景下，`caller_id` 不能只依赖共享服务密钥后的请求头 | 单可信上游已写入合同；如果进入多 caller，必须由凭证派生 caller |
 | P2 | 关键跨表不变量仍有一部分依赖 repository 写路径 | 只补会影响 billing、attempt、root/child 一致性的约束或测试 |
 
 ## Planned Work
 
-1. 明确 caller 安全边界：单可信上游写入 API contract；多 caller 进入产品化前改为凭证派生 caller。
-2. 修正容量闸门：让活跃 Job 计数和 Job / Attempt / Dispatch outbox 创建处于同一锁窗口或等价事务保护。
-3. 增加长执行 heartbeat：执行期间周期性延长 lease，并集中校验 job timeout、worker timeout 和 stale running 窗口关系。
-4. 锁住 callback 幂等：补重复事件、非 2xx、`accepted=false`、lease 回收和 dead-letter 的定向测试。
-5. 收口公开错误：公开查询和 callback 只暴露业务可理解错误摘要，内部 child details 保留给管理排障。
-6. 下沉关键不变量：优先覆盖 `ai_call_ledger_entries(job_id, attempt_id)`、active submission key、root / child 形状和 retry chain 的一致性。
+1. 多 caller 产品化前，把认证结果改为服务端凭证派生 `caller_id`，并废弃生产环境对调用方自报 caller header 的信任。
+2. 下沉关键不变量：优先覆盖 `ai_call_ledger_entries(job_id, attempt_id)`、active submission key、root / child 形状和 retry chain 的一致性。
+3. 继续补边界测试：高并发容量闸门、heartbeat 失效取消执行、callback lease 回收和 workflow public error callback payload。
 
 ## Acceptance
 
-- P0/P1 项完成后，`./scripts/verify.sh check` 通过。
-- 涉及 Job 执行、Taskiq workflow、callback 或 recovery 时，额外运行 `./scripts/verify.sh workflow-smoke`。
+- 多 caller 产品化前，`caller_id` 不再由共享服务密钥后的请求头单独决定。
 - 新增 API 字段、错误语义或 callback 语义时，同步 `docs/api/service-contract.md` 和 contract tests。
 - 新增数据库约束时，配套 Alembic migration 和最小回归测试。
 - 公开响应、callback payload 和普通日志不泄露 child 内部拓扑、provider 原始错误、完整 callback URL query 或敏感 ack details。

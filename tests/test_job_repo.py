@@ -1902,6 +1902,20 @@ async def test_count_active_jobs_excludes_workflow_root_waiting_for_children():
 
 
 @pytest.mark.asyncio
+async def test_count_active_jobs_can_exclude_current_workflow_root():
+    db = _FakeDB()
+    excluded_job_id = uuid.uuid4()
+    db.results.append(_ScalarOneResult(1))
+
+    active_count = await JobRepo.count_active_jobs(db, exclude_job_id=excluded_job_id)
+
+    assert active_count == 1
+    sql = _compile(db.statements[0])
+    assert "job_aggregates.id !=" in sql
+    assert str(excluded_job_id) not in sql
+
+
+@pytest.mark.asyncio
 async def test_mark_workflow_root_succeeded_finalizes_waiting_root_and_callback():
     root = Job(
         id=uuid.uuid4(),

@@ -7,10 +7,11 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import AppError, ValidationAppError
 from app.core.prompt_templates import get_template
 from app.jobs.factory import get_job_executor
-from app.models.job import Job
+from app.models.job import Job, JobEvent
 from app.repositories.job_repo import JobRepo
 from app.services.job_runtime import (
     build_runtime_snapshot,
@@ -20,7 +21,7 @@ from app.services.job_runtime import (
     write_runtime_json,
     workflow_plan_from_job,
 )
-from app.services.jobs import _requires_text_generation_model, _validate_prompt
+from app.services.jobs import _active_job_capacity_available, _requires_text_generation_model, _validate_prompt
 from app.services.ai_capability_kernel import require_enabled_text_model
 from app.workflows.base import FAILURE_POLICIES
 
@@ -72,6 +73,10 @@ async def create_ready_child_jobs(
         if existing is not None:
             existing_keys.add(node_key)
             continue
+        capacity_available, active = await _active_job_capacity_available(db, exclude_job_id=root_job.id)
+        if not capacity_available:
+            _record_workflow_capacity_deferred(db, root_job=root_job, active_jobs=active)
+            break
         child, attempt_id = await _create_child_job(db, root_job=root_job, node=node)
         existing_keys.add(node_key)
         created_child_job_ids.append(child.id)
@@ -80,6 +85,24 @@ async def create_ready_child_jobs(
         root_job_id=root_job.id,
         created_child_job_ids=tuple(created_child_job_ids),
         created_attempt_ids=tuple(created_attempt_ids),
+    )
+
+
+def _record_workflow_capacity_deferred(
+    db: AsyncSession,
+    *,
+    root_job: Job,
+    active_jobs: int | None,
+) -> None:
+    db.add(
+        JobEvent(
+            job_id=root_job.id,
+            event_type="workflow.capacity_deferred",
+            from_status=root_job.status,
+            to_status=root_job.status,
+            reason="QUEUE_FULL",
+            payload={"active_jobs": active_jobs, "limit": settings.job.max_active_jobs},
+        )
     )
 
 
@@ -388,15 +411,10 @@ def _root_public_result(root_job: Job, canonical_result: dict[str, Any]) -> dict
 
 
 def _root_failure_error(child: Job) -> dict[str, Any]:
-    child_error = child.error if isinstance(child.error, dict) else {}
     return {
         "code": "WORKFLOW_CHILD_FAILED",
         "message": "workflow child job failed",
-        "details": {
-            "child_job_id": str(child.id),
-            "workflow_node_key": child.workflow_node_key,
-            "child_error": child_error,
-        },
+        "details": {"reason": "child_failed"},
     }
 
 

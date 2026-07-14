@@ -185,6 +185,30 @@ def test_build_callback_body_uses_public_fields():
     }
 
 
+def test_build_callback_body_for_failed_workflow_root_uses_public_error_projection():
+    job = _job()
+    job.status = "failed"
+    job.error = {
+        "code": "WORKFLOW_CHILD_FAILED",
+        "message": "workflow child job failed",
+        "details": {"reason": "child_failed"},
+    }
+
+    body = build_callback_body(job, cost=None, usage=None)
+
+    assert body["event"] == "job.failed"
+    assert body["job"]["job_error"] == {
+        "reason": "WORKFLOW_CHILD_FAILED",
+        "details": {"reason": "child_failed"},
+        "retryable": False,
+    }
+    serialized = json.dumps(body, ensure_ascii=False)
+    assert "workflow_node_key" not in serialized
+    assert "child_job_id" not in serialized
+    assert "child_error" not in serialized
+    assert "provider raw" not in serialized
+
+
 def test_build_callback_body_drops_failed_result_without_snapshot_support(monkeypatch):
     class Handler:
         result_snapshot_statuses = frozenset()
@@ -682,6 +706,44 @@ async def test_deliver_callback_records_ack_response_summary(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_deliver_callback_treats_duplicate_event_ack_as_delivered(monkeypatch):
+    class _Response:
+        status_code = 200
+        headers = _ACK_HEADERS
+        text = '{"accepted":true,"msg":"duplicate","details":{"duplicate":true}}'
+
+    class _Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, content, headers):
+            payload = json.loads(content.decode("utf-8"))
+            assert payload["event_id"]
+            return _Response()
+
+    monkeypatch.setattr("app.services.callbacks.httpx.AsyncClient", _Client)
+
+    result = await deliver_callback(_job(), payload=_callback_payload())
+
+    assert result.status == "delivered"
+    assert result.attempts == 1
+    assert result.last_error is None
+    assert result.response == {
+        "format": "ack",
+        "valid": True,
+        "accepted": True,
+        "msg": "duplicate",
+        "details": {"duplicate": True},
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status_code", "headers", "text", "expected_error"),
     [
@@ -1019,3 +1081,107 @@ async def test_deliver_callback_for_job_records_failed_delivery_without_changing
     assert recorded["result"]["last_response"] == {"format": "ack", "valid": False}
     assert recorded["result"]["lease_token"] == lease_token
     assert job.status == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_for_job_records_duplicate_ack_as_delivered(monkeypatch):
+    from app.tasks.jobs import deliver_callback_for_job
+
+    job = _job()
+    callback_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
+    outbox = type(
+        "_Outbox",
+        (),
+        {
+            "id": callback_id,
+            "lease_token": lease_token,
+            "payload": _callback_payload(job),
+            "callback_url": job.callback_url,
+            "delivery_attempts": 1,
+            "last_error": {"code": "CALLBACK_HTTP_ERROR"},
+            "next_attempt_at": None,
+        },
+    )()
+    recorded: dict = {}
+
+    class _DB:
+        async def commit(self):
+            pass
+
+    async def fake_with_db(coro):
+        return await coro(_DB())
+
+    async def fake_get_job_or_404(_db, job_id):
+        assert job_id == job.id
+        return job
+
+    async def fake_mark_callback_delivering(_db, job_id, *, now, max_attempts, next_retry_at):
+        assert job_id == job.id
+        return job, outbox
+
+    async def fake_deliver_callback(sent_job, *, payload=None, callback_url=None):
+        assert sent_job is job
+        assert payload["event_id"] == str(outbox.payload["event_id"])
+        assert payload["job"]["callback"]["status"] == "delivering"
+        assert callback_url == job.callback_url
+        return CallbackDeliveryResult(
+            status="delivered",
+            attempts=1,
+            http_status=200,
+            response={"format": "ack", "valid": True, "accepted": True, "details": {"duplicate": True}},
+        )
+
+    async def fake_mark_callback_result(
+        _db,
+        job_id,
+        *,
+        status,
+        last_error,
+        next_retry_at,
+        max_attempts,
+        delivery_attempts,
+        last_http_status,
+        last_response,
+        callback_id,
+        lease_token,
+    ):
+        recorded.update(
+            {
+                "job_id": job_id,
+                "status": status,
+                "last_error": last_error,
+                "next_retry_at": next_retry_at,
+                "max_attempts": max_attempts,
+                "delivery_attempts": delivery_attempts,
+                "last_http_status": last_http_status,
+                "last_response": last_response,
+                "callback_id": callback_id,
+                "lease_token": lease_token,
+            }
+        )
+
+    monkeypatch.setattr("app.tasks.jobs._with_db", fake_with_db)
+    monkeypatch.setattr("app.tasks.jobs.get_job_or_404", fake_get_job_or_404)
+    monkeypatch.setattr("app.tasks.jobs.JobRepo.mark_callback_delivering", fake_mark_callback_delivering)
+    monkeypatch.setattr("app.tasks.jobs.deliver_callback", fake_deliver_callback)
+    monkeypatch.setattr("app.tasks.jobs.JobRepo.mark_callback_result", fake_mark_callback_result)
+
+    result = await deliver_callback_for_job(job.id)
+
+    assert result is True
+    assert recorded["job_id"] == job.id
+    assert recorded["status"] == "delivered"
+    assert recorded["last_error"] is None
+    assert recorded["next_retry_at"] is None
+    assert recorded["max_attempts"] > 0
+    assert recorded["delivery_attempts"] == 1
+    assert recorded["last_http_status"] == 200
+    assert recorded["last_response"] == {
+        "format": "ack",
+        "valid": True,
+        "accepted": True,
+        "details": {"duplicate": True},
+    }
+    assert recorded["callback_id"] == callback_id
+    assert recorded["lease_token"] == lease_token

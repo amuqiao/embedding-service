@@ -74,7 +74,7 @@ HTTP 成功响应由统一 middleware 包装为 `HttpEnvelope[T]`。route 函数
 
 请求身份和请求追踪是两条边界：
 
-- `require_service_auth` 解析 `X-AI-Service-Caller-ID`，得到 caller 身份。
+- `require_service_auth` 校验服务密钥并解析 `X-AI-Service-Caller-ID` 得到 caller 标识；该 header 只适用于单可信上游场景，不是多 caller 安全隔离边界。
 - `RequestIDMiddleware` 解析或生成本次 HTTP 请求的 `request_id`。`X-Request-ID` 只作为可选链路追踪输入，不表示 caller 身份。
 - 对外 header 规则、错误语义和格式约束以 [`../api/service-contract.md`](../api/service-contract.md) 为准。
 

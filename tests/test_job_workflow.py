@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -22,12 +23,21 @@ class _FakeDB:
     def __init__(self):
         self.commits = 0
         self.refreshed = []
+        self.executed = []
+        self.added = []
 
     async def commit(self):
         self.commits += 1
 
     async def refresh(self, obj):
         self.refreshed.append(obj)
+
+    async def execute(self, statement):
+        self.executed.append(str(statement))
+        return SimpleNamespace(scalar_one=lambda: 0)
+
+    def add(self, obj):
+        self.added.append(obj)
 
 
 def _runtime_ref_for_job(job_type: str, params: dict[str, object], runtime_fields: dict[str, object]) -> dict[str, object]:
@@ -818,10 +828,158 @@ async def test_create_ready_child_jobs_does_not_duplicate_existing_child(monkeyp
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("existing child must not be duplicated")),
     )
 
-    result = await create_ready_child_jobs(_FakeDB(), root_job=root_job, workflow_plan=workflow_plan)
+    db = _FakeDB()
+    result = await create_ready_child_jobs(db, root_job=root_job, workflow_plan=workflow_plan)
 
     assert result.created_child_job_ids == ()
     assert result.created_attempt_ids == ()
+    assert db.added == []
+
+
+@pytest.mark.asyncio
+async def test_create_ready_child_jobs_defers_new_child_when_capacity_gate_is_full(monkeypatch):
+    root_job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="test.workflow",
+        status="running",
+        priority="normal",
+    )
+    workflow_plan = {
+        "schema_version": 1,
+        "kind": "dag_lite",
+        "workflow_type": "test.workflow",
+        "workflow_version": 1,
+        "failure_policy": "fail_fast",
+        "max_nodes": 10,
+        "node_count": 1,
+        "nodes": [
+            {
+                "key": "first",
+                "job_type": "example_sleep",
+                "job_params": {"message": "hello", "repeat": 1},
+                "depends_on": [],
+            },
+        ],
+    }
+
+    async def fake_list_internal_children(_db, *, root_job_id, statuses=None):
+        assert root_job_id == root_job.id
+        assert statuses is None
+        return []
+
+    async def fake_get_internal_child_by_node_key(_db, *, root_job_id, workflow_node_key):
+        assert root_job_id == root_job.id
+        assert workflow_node_key == "first"
+        return None
+
+    async def fake_capacity_available(_db, *, exclude_job_id=None):
+        assert exclude_job_id == root_job.id
+        return False, 100
+
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.list_internal_children", fake_list_internal_children)
+    monkeypatch.setattr(
+        "app.workflows.orchestrator.JobRepo.get_internal_child_by_node_key",
+        fake_get_internal_child_by_node_key,
+    )
+    monkeypatch.setattr("app.workflows.orchestrator._active_job_capacity_available", fake_capacity_available)
+    monkeypatch.setattr(
+        "app.workflows.orchestrator.JobRepo.create",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("capacity-full workflow must not create child")),
+    )
+
+    db = _FakeDB()
+    result = await create_ready_child_jobs(db, root_job=root_job, workflow_plan=workflow_plan)
+
+    assert result.created_child_job_ids == ()
+    assert result.created_attempt_ids == ()
+    assert len(db.added) == 1
+    event = db.added[0]
+    assert event.job_id == root_job.id
+    assert event.event_type == "workflow.capacity_deferred"
+    assert event.reason == "QUEUE_FULL"
+    assert event.payload["active_jobs"] == 100
+
+
+@pytest.mark.asyncio
+async def test_create_ready_child_jobs_excludes_current_root_from_capacity_gate(monkeypatch):
+    root_job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        job_type="test.workflow",
+        status="running",
+        priority="normal",
+        job_params_hash=payload_hash({"workflow": True}),
+        runtime_ref=_runtime_ref_for_job("test.workflow", {"workflow": True}, {"_system": {"trigger_request_id": "req-1"}}),
+    )
+    workflow_plan = {
+        "schema_version": 1,
+        "kind": "dag_lite",
+        "workflow_type": "test.workflow",
+        "workflow_version": 1,
+        "failure_policy": "fail_fast",
+        "max_nodes": 10,
+        "node_count": 1,
+        "nodes": [
+            {
+                "key": "first",
+                "job_type": "example_sleep",
+                "job_params": {"message": "hello", "repeat": 1},
+                "depends_on": [],
+            },
+        ],
+    }
+    created_children = []
+
+    async def fake_list_internal_children(_db, *, root_job_id, statuses=None):
+        assert root_job_id == root_job.id
+        assert statuses is None
+        return []
+
+    async def fake_get_internal_child_by_node_key(_db, *, root_job_id, workflow_node_key):
+        assert root_job_id == root_job.id
+        assert workflow_node_key == "first"
+        return None
+
+    async def fake_capacity_available(_db, *, exclude_job_id=None):
+        assert exclude_job_id == root_job.id
+        return True, 0
+
+    async def fake_create(_db, **kwargs):
+        child = Job(
+            id=uuid.uuid4(),
+            caller_id=kwargs["caller_id"],
+            job_type=kwargs["job_type"],
+            status="queued",
+            root_job_id=kwargs["root_job_id"],
+            workflow_node_key=kwargs["workflow_node_key"],
+            progress_percent=0,
+            priority="normal",
+        )
+        created_children.append(child)
+        return child
+
+    async def fake_create_initial_attempt(_db, child, *, timeout_seconds, purpose=None, retry_policy=None):
+        assert child.root_job_id == root_job.id
+        assert purpose == "business_execution"
+        attempt_id = uuid.uuid4()
+        child.active_attempt_id = attempt_id
+        return SimpleNamespace(id=attempt_id)
+
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.list_internal_children", fake_list_internal_children)
+    monkeypatch.setattr(
+        "app.workflows.orchestrator.JobRepo.get_internal_child_by_node_key",
+        fake_get_internal_child_by_node_key,
+    )
+    monkeypatch.setattr("app.workflows.orchestrator._active_job_capacity_available", fake_capacity_available)
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.create", fake_create)
+    monkeypatch.setattr("app.workflows.orchestrator.JobRepo.create_initial_attempt", fake_create_initial_attempt)
+
+    result = await create_ready_child_jobs(_FakeDB(), root_job=root_job, workflow_plan=workflow_plan)
+
+    assert len(created_children) == 1
+    assert result.created_child_job_ids == (created_children[0].id,)
+    assert result.created_attempt_ids == (created_children[0].active_attempt_id,)
 
 
 @pytest.mark.asyncio
@@ -1462,7 +1620,11 @@ async def test_advance_workflow_after_required_child_failed_finalizes_root_faile
         caller_id="caller-1",
         job_type="example_sleep",
         status="failed",
-        error={"code": "MODEL_CALL_FAILED", "message": "failed", "details": {}},
+        error={
+            "code": "MODEL_CALL_FAILED",
+            "message": "provider raw failure with internal details",
+            "details": {"provider_request_id": "raw-provider-id", "secret_hint": "do-not-expose"},
+        },
         progress_percent=100,
         root_job_id=root_job.id,
         workflow_node_key="only",
@@ -1493,7 +1655,14 @@ async def test_advance_workflow_after_required_child_failed_finalizes_root_faile
     assert result.finalized_root_job_id == root_job.id
     assert result.root_status == "failed"
     assert finalized["error"]["code"] == "WORKFLOW_CHILD_FAILED"
-    assert finalized["error"]["details"]["workflow_node_key"] == "only"
+    assert finalized["error"]["details"] == {"reason": "child_failed"}
+    serialized_error = str(finalized["error"])
+    assert str(child.id) not in serialized_error
+    assert "workflow_node_key" not in serialized_error
+    assert "only" not in serialized_error
+    assert "child_error" not in serialized_error
+    assert "provider raw failure" not in serialized_error
+    assert "raw-provider-id" not in serialized_error
 
 
 @pytest.mark.asyncio
@@ -1695,7 +1864,7 @@ async def test_advance_workflow_allow_partial_finalizes_when_failed_dependency_b
 
     assert result.finalized_root_job_id == root_job.id
     assert result.root_status == "failed"
-    assert finalized["error"]["details"]["workflow_node_key"] == "optional-upstream"
+    assert finalized["error"]["details"] == {"reason": "child_failed"}
 
 
 @pytest.mark.asyncio
@@ -1976,6 +2145,117 @@ async def test_execute_job_skips_stale_attempt_lease(monkeypatch):
         "status": "skipped",
         "reason": "stale_attempt_lease",
     }
+
+
+@pytest.mark.asyncio
+async def test_attempt_heartbeat_guard_extends_lease_while_operation_runs(monkeypatch):
+    attempt_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
+    heartbeat_count = 0
+    enough_heartbeats = asyncio.Event()
+
+    async def fake_extend(received_attempt_id, received_lease_token, *, phase):
+        nonlocal heartbeat_count
+        assert received_attempt_id == attempt_id
+        assert received_lease_token == lease_token
+        assert phase == "periodic:execute"
+        heartbeat_count += 1
+        if heartbeat_count >= 2:
+            enough_heartbeats.set()
+
+    async def operation():
+        await enough_heartbeats.wait()
+        return {"status": "done"}
+
+    monkeypatch.setattr(task_jobs, "_attempt_heartbeat_interval_seconds", lambda: 0.001)
+    monkeypatch.setattr(task_jobs, "_extend_attempt_lease", fake_extend)
+
+    result = await asyncio.wait_for(
+        task_jobs._run_with_attempt_heartbeat(
+            operation,
+            attempt_id=attempt_id,
+            lease_token=lease_token,
+        ),
+        timeout=1,
+    )
+
+    assert result == {"status": "done"}
+    assert heartbeat_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_attempt_heartbeat_guard_cancels_operation_when_heartbeat_fails(monkeypatch):
+    attempt_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
+    operation_cancelled = asyncio.Event()
+
+    async def fake_extend(received_attempt_id, received_lease_token, *, phase):
+        assert received_attempt_id == attempt_id
+        assert received_lease_token == lease_token
+        assert phase == "periodic:execute"
+        raise AppError(
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "attempt lease could not be extended",
+            details={"attempt_id": str(attempt_id), "phase": phase},
+        )
+
+    async def operation():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            operation_cancelled.set()
+
+    monkeypatch.setattr(task_jobs, "_attempt_heartbeat_interval_seconds", lambda: 0.001)
+    monkeypatch.setattr(task_jobs, "_extend_attempt_lease", fake_extend)
+
+    with pytest.raises(AppError) as exc:
+        await asyncio.wait_for(
+            task_jobs._run_with_attempt_heartbeat(
+                operation,
+                attempt_id=attempt_id,
+                lease_token=lease_token,
+            ),
+            timeout=1,
+        )
+
+    assert exc.value.code == "JOB_STATE_TRANSITION_CONFLICT"
+    assert operation_cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_attempt_heartbeat_guard_prefers_completed_operation_over_simultaneous_heartbeat_error(monkeypatch):
+    attempt_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
+
+    async def fake_sleep(_delay):
+        return None
+
+    async def fake_extend(_attempt_id, _lease_token, *, phase):
+        raise AppError(
+            "JOB_STATE_TRANSITION_CONFLICT",
+            "late heartbeat failed",
+            details={"phase": phase},
+        )
+
+    async def fake_wait(tasks, *, return_when):
+        assert return_when == asyncio.FIRST_COMPLETED
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return set(tasks), set()
+
+    async def operation():
+        return {"status": "done"}
+
+    monkeypatch.setattr(task_jobs, "_attempt_heartbeat_sleep", fake_sleep)
+    monkeypatch.setattr(task_jobs, "_extend_attempt_lease", fake_extend)
+    monkeypatch.setattr(task_jobs.asyncio, "wait", fake_wait)
+
+    result = await task_jobs._run_with_attempt_heartbeat(
+        operation,
+        attempt_id=attempt_id,
+        lease_token=lease_token,
+    )
+
+    assert result == {"status": "done"}
 
 
 @pytest.mark.asyncio
