@@ -1,10 +1,10 @@
 import uuid
 from datetime import UTC, datetime
-import sys
 
 import numpy as np
 import pytest
 
+from app.capabilities.media import audio_input as media_audio_input
 from app.core.exceptions import AppError
 from app.integrations.onnx_runtime import OnnxRuntimeIntegrationError, OnnxSessionRuntime
 from app.integrations.object_storage import bare_sha256, sha256_digest
@@ -33,6 +33,29 @@ def _handler():
     return job_registry.get("audio_stem_separation")
 
 
+def _media_input_plan(params: dict) -> dict:
+    input_audio = params["input_audio"]
+    return {
+        "capability_ref": "media.audio_input:1",
+        "tool_refs": ("object_storage_read:1",),
+        "source": {
+            "provider": "aliyun_oss",
+            "bucket": "local-dev",
+            "region": "local",
+            "key": "input.wav",
+            "content_type": "audio/wav",
+            "content_hash": f"sha256:{input_audio['sha256']}",
+        },
+        "fetch": {
+            "read_mode": "object_storage",
+            "endpoint_key": "canonical_object_ref",
+            "max_bytes": 5_242_880,
+            "redirect_policy": "forbid",
+        },
+        **({"max_duration_seconds": params["max_duration_seconds"]} if params.get("max_duration_seconds") else {}),
+    }
+
+
 def _job(*, params: dict, output_prefix: str = "outputs") -> Job:
     job_id = uuid.uuid4()
     return Job(
@@ -51,6 +74,7 @@ def _job(*, params: dict, output_prefix: str = "outputs") -> Job:
                 job_params_hash=payload_hash(params),
                 runtime_fields={
                     "operation": "audio_stem_separation",
+                    "media_input_plan": _media_input_plan(params),
                     "onnx_model_version": "test-model",
                     "execution_provider": "auto",
                     "segment_seconds": 7.8,
@@ -207,6 +231,7 @@ def test_audio_stem_separation_params_contract_accepts_wav_refs_only():
 
 def test_audio_stem_separation_normalizes_and_rejects_disallowed_input_ref(monkeypatch):
     monkeypatch.setattr(audio_executor, "settings", FakeSettings())
+    monkeypatch.setattr(media_audio_input, "settings", FakeSettings())
     handler = _handler()
     ref = _url_ref("input.wav", b"audio")
 
@@ -224,18 +249,23 @@ def test_audio_stem_separation_normalizes_and_rejects_disallowed_input_ref(monke
     assert exc_info.value.code == AUDIO_STEM_INPUT_INVALID
 
 
-def test_audio_stem_separation_runtime_fields_reflect_model_asset():
+def test_audio_stem_separation_runtime_fields_reflect_model_asset(monkeypatch):
+    monkeypatch.setattr(media_audio_input, "settings", FakeSettings())
     handler = _handler()
-    fields = handler.runtime_job_fields({"input_audio": _url_ref("input.wav", b"audio")})
+    ref = _url_ref("input.wav", b"audio")
+    fields = handler.runtime_job_fields({"input_audio": ref})
 
-    assert fields == {
+    assert fields | {"media_input_plan": None} == {
         "operation": "audio_stem_separation",
+        "media_input_plan": None,
         "onnx_model_version": "htdemucs-ft-onnx-fp32",
         "execution_provider": "auto",
         "segment_seconds": 7.8,
         "overlap_ratio": 0.25,
         "system": None,
     }
+    assert fields["media_input_plan"]["capability_ref"] == "media.audio_input:1"
+    assert fields["media_input_plan"]["source"]["content_hash"] == f"sha256:{ref['sha256']}"
 
 
 def test_audio_stem_separation_runner_uses_minimal_segments_and_preserves_edges():
@@ -354,37 +384,6 @@ def test_audio_stem_separation_runner_reports_runtime_unavailable(tmp_path, monk
     assert exc_info.value.code == AUDIO_STEM_RUNTIME_UNAVAILABLE
 
 
-def test_audio_stem_separation_reads_input_from_public_url(monkeypatch):
-    monkeypatch.setattr(audio_executor, "settings", FakeSettings())
-    data = b"audio-bytes"
-    captured: dict[str, object] = {}
-    input_audio = audio_executor.AudioStemSeparationInputObject.model_validate(_url_ref("input.wav", data))
-
-    def fake_read_http_url_bytes(url: str, *, max_bytes: int | None = None, timeout_seconds: int = 20):
-        captured["url"] = url
-        captured["max_bytes"] = max_bytes
-        return data
-
-    class FakeSoundFile:
-        @staticmethod
-        def read(_buffer, *, dtype: str, always_2d: bool):
-            assert dtype == "float32"
-            assert always_2d is True
-            return np.zeros((4, 2), dtype=np.float32), 44100
-
-    monkeypatch.setattr(audio_executor, "read_http_url_bytes", fake_read_http_url_bytes)
-    monkeypatch.setitem(sys.modules, "soundfile", FakeSoundFile)
-
-    result = audio_executor._read_input_audio(input_audio, max_duration_seconds=None)
-
-    assert captured == {
-        "url": "https://local-dev.oss-local.aliyuncs.com/input.wav",
-        "max_bytes": audio_executor.settings.job.oss_input_max_bytes,
-    }
-    assert result.data.shape == (2, 4)
-    assert result.sample_rate == 44100
-
-
 @pytest.mark.asyncio
 async def test_audio_stem_separation_executes_fake_runner_and_writes_four_stems(monkeypatch):
     input_data = b"fake wav bytes"
@@ -396,8 +395,8 @@ async def test_audio_stem_separation_executes_fake_runner_and_writes_four_stems(
     monkeypatch.setattr(audio_executor, "storage", fake_storage)
     monkeypatch.setattr(
         audio_executor,
-        "_read_input_audio",
-        lambda _input_audio, *, max_duration_seconds: audio_executor.InputAudio(
+        "prepare_audio_wav_input",
+        lambda _plan: media_audio_input.PreparedAudioInput(
             data=np.zeros((2, 4), dtype=np.float32),
             sample_rate=44100,
             duration_seconds=4 / 44100,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import threading
 import time
@@ -10,8 +9,13 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
-import yaml
 
+from app.capabilities.media.audio_input import (
+    AUDIO_WAV_CONTENT_TYPE,
+    MEDIA_AUDIO_INPUT_CAPABILITY_REF,
+    build_audio_wav_input_plan,
+    prepare_audio_wav_input,
+)
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.integrations.onnx_runtime import (
@@ -19,12 +23,20 @@ from app.integrations.onnx_runtime import (
     OnnxRuntimeIntegrationError,
     create_inference_session,
 )
-from app.integrations.object_storage import bare_sha256, sha256_digest
 from app.integrations.storage import storage
-from app.jobs.payload_adapters.http_url_input import read_http_url_bytes
-from app.jobs.payload_adapters.oss_url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
+from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
 from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
+from app.jobs.types.audio_stem_shared import (
+    DEFAULT_TIMEOUT_SECONDS,
+    MODEL_ASSET_PATH,
+    SOURCES,
+    chunk_window as _chunk_window,
+    load_model_asset as _load_model_asset,
+    make_transition_window as _make_transition_window,
+    segment_ranges as _segment_ranges,
+    wav_bytes as _wav_bytes,
+)
 from app.jobs.types.audio_stem_separation.errors import (
     AUDIO_STEM_DURATION_EXCEEDS_LIMIT,
     AUDIO_STEM_INFERENCE_FAILED,
@@ -42,24 +54,12 @@ from app.schemas.jobs import (
     AudioStemSeparationRuntimeFields,
     AudioStemSeparationStemOutputs,
 )
-from app.services.job_runtime import job_params_from_job, output_target_from_job
+from app.services.job_runtime import output_target_from_job, runtime_fields_from_job
 
 logger = logging.getLogger(__name__)
 
-MODEL_ASSET_PATH = Path(__file__).with_name("model_asset.yaml")
-SOURCES = ("drums", "bass", "other", "vocals")
-AUDIO_WAV_CONTENT_TYPE = "audio/wav"
-DEFAULT_TIMEOUT_SECONDS = 2400
-
 _RUNNER_CACHE: dict[tuple[str, str, str], "HTDemucsONNXRunner"] = {}
 _RUNNER_CACHE_LOCK = threading.Lock()
-
-
-@dataclass(frozen=True)
-class InputAudio:
-    data: np.ndarray
-    sample_rate: int
-    duration_seconds: float
 
 
 @dataclass(frozen=True)
@@ -68,17 +68,6 @@ class SeparationOutput:
     segment_count: int
     execution_provider: str
     inference_ms: int
-
-
-def _load_model_asset() -> dict[str, Any]:
-    try:
-        with MODEL_ASSET_PATH.open("r", encoding="utf-8") as handle:
-            asset = yaml.safe_load(handle)
-    except OSError as exc:
-        raise AppError(AUDIO_STEM_MODEL_ASSET_MISSING, "audio stem model_asset.yaml is missing") from exc
-    if not isinstance(asset, dict):
-        raise AppError(AUDIO_STEM_MODEL_ASSET_MISSING, "audio stem model_asset.yaml is invalid")
-    return asset
 
 
 def _hash_file(path: Path) -> str:
@@ -126,16 +115,6 @@ def _validate_session_signature(session: Any, *, stem: str, asset: dict[str, Any
         or _node_shape(actual_output) != expected_output["shape"]
     ):
         raise AppError(AUDIO_STEM_MODEL_ASSET_MISSING, f"{stem} ONNX output signature does not match model_asset")
-
-
-def _segment_ranges(*, total_len: int, segment_samples: int, stride: int) -> list[tuple[int, int]]:
-    if total_len < 1:
-        raise AppError(AUDIO_STEM_INPUT_INVALID, "audio input must not be empty")
-    segment_count = 1 + max(0, (total_len - segment_samples + stride - 1) // stride)
-    return [
-        (index * stride, min(index * stride + segment_samples, total_len))
-        for index in range(segment_count)
-    ]
 
 
 class HTDemucsONNXRunner:
@@ -243,32 +222,6 @@ class HTDemucsONNXRunner:
         )
 
 
-def _make_transition_window(segment_samples: int, overlap_ratio: float) -> np.ndarray:
-    transition = int(segment_samples * overlap_ratio)
-    window = np.ones(segment_samples, dtype=np.float32)
-    fade = np.linspace(0, 1, transition, dtype=np.float32)
-    window[:transition] = fade
-    window[-transition:] = fade[::-1]
-    return window
-
-
-def _chunk_window(
-    window: np.ndarray,
-    *,
-    chunk_len: int,
-    overlap: int,
-    is_first: bool,
-    is_last: bool,
-) -> np.ndarray:
-    chunk_window = window[:chunk_len].copy()
-    edge = min(overlap, chunk_len)
-    if is_first:
-        chunk_window[:edge] = 1.0
-    if is_last:
-        chunk_window[-edge:] = 1.0
-    return chunk_window
-
-
 def _runner() -> HTDemucsONNXRunner:
     model_dir = settings.job.htdemucs_model_dir
     execution_provider_mode = cast(ExecutionProviderMode, settings.job.audio_stem_separation_execution_provider)
@@ -283,81 +236,6 @@ def _runner() -> HTDemucsONNXRunner:
             )
             _RUNNER_CACHE[cache_key] = runner
         return runner
-
-
-def _canonical_input_ref(input_audio: AudioStemSeparationInputObject):
-    try:
-        return canonical_ref_from_oss_url_ref(
-            input_audio.model_dump(),
-            allowed_buckets=settings.job.audio_stem_separation_allowed_oss_buckets,
-            allowed_regions=settings.job.audio_stem_separation_allowed_oss_regions,
-            allowed_content_types={AUDIO_WAV_CONTENT_TYPE},
-            public_endpoint=settings.storage.oss_public_endpoint or None,
-            public_endpoint_bucket=getattr(settings.storage, "oss_bucket", "") or None,
-            public_endpoint_region=getattr(settings.storage, "oss_region", "") or None,
-        )
-    except AppError as exc:
-        raise AppError(
-            AUDIO_STEM_INPUT_INVALID,
-            "audio stem input_audio is invalid",
-            details={"source_reason": exc.code, **(exc.details or {})},
-        ) from exc
-
-
-def _read_input_audio(input_audio: AudioStemSeparationInputObject, *, max_duration_seconds: float | None) -> InputAudio:
-    ref = _canonical_input_ref(input_audio)
-    payload = input_audio.model_dump()
-    data = read_http_url_bytes(str(payload["public_url"]).strip(), max_bytes=settings.job.oss_input_max_bytes)
-    if ref.content_hash and sha256_digest(data) != ref.content_hash:
-        raise AppError("INPUT_HASH_MISMATCH", "audio stem input sha256 mismatch")
-    try:
-        import soundfile as sf
-    except ModuleNotFoundError as exc:
-        raise AppError(
-            AUDIO_STEM_INFERENCE_FAILED,
-            "soundfile is not installed; run: uv sync --extra audio-separation",
-        ) from exc
-    try:
-        audio, sample_rate = sf.read(io.BytesIO(data), dtype="float32", always_2d=True)
-    except Exception as exc:
-        raise AppError(AUDIO_STEM_INPUT_INVALID, "audio stem input must be a readable WAV file") from exc
-    if sample_rate != 44100:
-        raise AppError(
-            AUDIO_STEM_INPUT_INVALID,
-            "audio stem input sample_rate must be 44100",
-            details={"actual": sample_rate, "expected": 44100},
-        )
-    if audio.ndim != 2 or audio.shape[1] != 2:
-        actual_channels = int(audio.shape[1]) if audio.ndim == 2 else None
-        raise AppError(
-            AUDIO_STEM_INPUT_INVALID,
-            "audio stem input must be stereo",
-            details={"actual": actual_channels, "expected": 2},
-        )
-    duration_seconds = float(audio.shape[0] / sample_rate)
-    if max_duration_seconds is not None and duration_seconds > max_duration_seconds:
-        raise AppError(
-            AUDIO_STEM_DURATION_EXCEEDS_LIMIT,
-            "audio stem input duration exceeds max_duration_seconds",
-            details={"actual": duration_seconds, "max_duration_seconds": max_duration_seconds},
-        )
-    return InputAudio(data=audio.T.astype(np.float32), sample_rate=int(sample_rate), duration_seconds=duration_seconds)
-
-
-def _wav_bytes(audio: np.ndarray, *, sample_rate: int) -> bytes:
-    try:
-        import soundfile as sf
-    except ModuleNotFoundError as exc:
-        raise AppError(
-            AUDIO_STEM_INFERENCE_FAILED,
-            "soundfile is not installed; run: uv sync --extra audio-separation",
-        ) from exc
-    buffer = io.BytesIO()
-    try:
-        sf.write(buffer, audio.T, sample_rate, format="WAV", subtype="PCM_16")
-    except Exception as exc:
-        raise AppError(AUDIO_STEM_OUTPUT_INVALID, "failed to encode audio stem WAV") from exc
-    return buffer.getvalue()
 
 
 def _output_key(job: Job, stem: str) -> str:
@@ -382,6 +260,7 @@ class AudioStemSeparationJob(JobExecutor):
     public_result_schema = AudioStemSeparationResult
     allow_callback = True
     timeout_seconds = DEFAULT_TIMEOUT_SECONDS
+    allowed_capability_refs = frozenset({MEDIA_AUDIO_INPUT_CAPABILITY_REF})
     allowed_error_codes = frozenset(
         {
             "INVALID_INPUT",
@@ -406,13 +285,18 @@ class AudioStemSeparationJob(JobExecutor):
 
     def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = AudioStemSeparationParams.model_validate(job_params)
-        _canonical_input_ref(params.input_audio)
+        build_audio_wav_input_plan(params.input_audio, max_duration_seconds=params.max_duration_seconds)
         return params.model_dump(exclude_none=True)
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        params = AudioStemSeparationParams.model_validate(job_params)
         asset = _load_model_asset()
         runtime = asset["runtime"]
         return AudioStemSeparationRuntimeFields(
+            media_input_plan=build_audio_wav_input_plan(
+                params.input_audio,
+                max_duration_seconds=params.max_duration_seconds,
+            ),
             onnx_model_version=str(asset["model"]["version"]),
             execution_provider=settings.job.audio_stem_separation_execution_provider,
             segment_seconds=float(runtime["segment_seconds"]),
@@ -425,8 +309,8 @@ class AudioStemSeparationJob(JobExecutor):
     def _execute_sync(self, job: Job) -> dict[str, Any]:
         total_started = time.monotonic()
         io_started = time.monotonic()
-        params = AudioStemSeparationParams.model_validate(job_params_from_job(job))
-        input_audio = _read_input_audio(params.input_audio, max_duration_seconds=params.max_duration_seconds)
+        runtime_fields = AudioStemSeparationRuntimeFields.model_validate(runtime_fields_from_job(job))
+        input_audio = prepare_audio_wav_input(runtime_fields.media_input_plan)
         io_ms = int((time.monotonic() - io_started) * 1000)
 
         runner = _runner()

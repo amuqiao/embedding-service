@@ -8,6 +8,12 @@ from typing import Any
 
 import numpy as np
 
+from app.capabilities.media.audio_input import (
+    AUDIO_WAV_CONTENT_TYPE,
+    MEDIA_AUDIO_INPUT_CAPABILITY_REF,
+    build_audio_wav_input_plan,
+    prepare_audio_wav_input,
+)
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.integrations.storage import storage
@@ -19,17 +25,15 @@ from app.integrations.triton_audio_stem import (
 )
 from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
-from app.jobs.types.audio_stem_separation.executor import (
-    AUDIO_WAV_CONTENT_TYPE,
+from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
+from app.jobs.types.audio_stem_shared import (
     DEFAULT_TIMEOUT_SECONDS,
     SOURCES,
-    InputAudio,
-    _chunk_window,
-    _load_model_asset,
-    _make_transition_window,
-    _read_input_audio,
-    _segment_ranges,
-    _wav_bytes,
+    chunk_window as _chunk_window,
+    load_model_asset as _load_model_asset,
+    make_transition_window as _make_transition_window,
+    segment_ranges as _segment_ranges,
+    wav_bytes as _wav_bytes,
 )
 from app.jobs.types.audio_stem_separation.errors import (
     AUDIO_STEM_DURATION_EXCEEDS_LIMIT,
@@ -47,7 +51,7 @@ from app.schemas.jobs import (
     AudioStemSeparationTritonResult,
     AudioStemSeparationTritonRuntimeFields,
 )
-from app.services.job_runtime import job_params_from_job, output_target_from_job
+from app.services.job_runtime import output_target_from_job, runtime_fields_from_job
 
 _RUNNER_CACHE: dict[tuple[str, str, str, float], "HTDemucsTritonRunner"] = {}
 _RUNNER_CACHE_LOCK = threading.Lock()
@@ -177,6 +181,7 @@ class AudioStemSeparationTritonJob(JobExecutor):
     public_result_schema = AudioStemSeparationTritonResult
     allow_callback = True
     timeout_seconds = DEFAULT_TIMEOUT_SECONDS
+    allowed_capability_refs = frozenset({MEDIA_AUDIO_INPUT_CAPABILITY_REF})
     allowed_error_codes = frozenset(
         {
             "INVALID_INPUT",
@@ -201,13 +206,18 @@ class AudioStemSeparationTritonJob(JobExecutor):
 
     def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = AudioStemSeparationTritonParams.model_validate(job_params)
-        _read_input_audio_canonical_check(params)
+        build_audio_wav_input_plan(params.input_audio, max_duration_seconds=params.max_duration_seconds)
         return params.model_dump(exclude_none=True)
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
+        params = AudioStemSeparationTritonParams.model_validate(job_params)
         asset = _load_model_asset()
         runtime = asset["runtime"]
         return AudioStemSeparationTritonRuntimeFields(
+            media_input_plan=build_audio_wav_input_plan(
+                params.input_audio,
+                max_duration_seconds=params.max_duration_seconds,
+            ),
             onnx_model_version=str(asset["model"]["version"]),
             triton_model_version=settings.job.audio_stem_triton_model_version,
             segment_seconds=float(runtime["segment_seconds"]),
@@ -220,8 +230,8 @@ class AudioStemSeparationTritonJob(JobExecutor):
     def _execute_sync(self, job: Job) -> dict[str, Any]:
         total_started = time.monotonic()
         io_started = time.monotonic()
-        params = AudioStemSeparationTritonParams.model_validate(job_params_from_job(job))
-        input_audio = _read_input_audio(params.input_audio, max_duration_seconds=params.max_duration_seconds)
+        runtime_fields = AudioStemSeparationTritonRuntimeFields.model_validate(runtime_fields_from_job(job))
+        input_audio = prepare_audio_wav_input(runtime_fields.media_input_plan)
         io_ms = int((time.monotonic() - io_started) * 1000)
 
         runner = _runner()
@@ -240,8 +250,6 @@ class AudioStemSeparationTritonJob(JobExecutor):
                 content_type=AUDIO_WAV_CONTENT_TYPE,
                 content_disposition=_attachment_content_disposition(job, stem),
             )
-            from app.jobs.types.audio_stem_separation.executor import oss_url_ref_from_output_object
-
             stem_objects[stem] = oss_url_ref_from_output_object(
                 bucket=str(written["oss_bucket"]),
                 region=str(written["oss_region"]),
@@ -266,12 +274,6 @@ class AudioStemSeparationTritonJob(JobExecutor):
             ),
         )
         return result.model_dump()
-
-
-def _read_input_audio_canonical_check(params: AudioStemSeparationTritonParams) -> None:
-    from app.jobs.types.audio_stem_separation.executor import _canonical_input_ref
-
-    _canonical_input_ref(params.input_audio)
 
 
 def clear_triton_runner_cache_for_tests() -> None:

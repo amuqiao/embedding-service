@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 import yaml
 
+from app.capabilities.media import audio_input as media_audio_input
 from app.core.exceptions import AppError
 from app.integrations.object_storage import bare_sha256, sha256_digest
 from app.integrations.triton_audio_stem import TritonAudioStemConfig, TritonAudioStemClient, TritonAudioStemInferenceError
@@ -35,6 +36,29 @@ def _handler():
     return job_registry.get("audio_stem_separation_triton")
 
 
+def _media_input_plan(params: dict) -> dict:
+    input_audio = params["input_audio"]
+    return {
+        "capability_ref": "media.audio_input:1",
+        "tool_refs": ("object_storage_read:1",),
+        "source": {
+            "provider": "aliyun_oss",
+            "bucket": "local-dev",
+            "region": "local",
+            "key": "input.wav",
+            "content_type": "audio/wav",
+            "content_hash": f"sha256:{input_audio['sha256']}",
+        },
+        "fetch": {
+            "read_mode": "object_storage",
+            "endpoint_key": "canonical_object_ref",
+            "max_bytes": 5_242_880,
+            "redirect_policy": "forbid",
+        },
+        **({"max_duration_seconds": params["max_duration_seconds"]} if params.get("max_duration_seconds") else {}),
+    }
+
+
 def _job(*, params: dict, output_prefix: str = "outputs") -> Job:
     job_id = uuid.uuid4()
     return Job(
@@ -53,6 +77,7 @@ def _job(*, params: dict, output_prefix: str = "outputs") -> Job:
                 job_params_hash=payload_hash(params),
                 runtime_fields={
                     "operation": "audio_stem_separation_triton",
+                    "media_input_plan": _media_input_plan(params),
                     "onnx_model_version": "test-model",
                     "model_service": "triton",
                     "triton_model_version": "1",
@@ -278,6 +303,7 @@ def test_audio_stem_separation_triton_normalizes_and_rejects_disallowed_input_re
     fake_settings = FakeSettings()
     monkeypatch.setattr(audio_executor, "settings", fake_settings)
     monkeypatch.setattr(triton_executor, "settings", fake_settings)
+    monkeypatch.setattr(media_audio_input, "settings", fake_settings)
     handler = _handler()
     ref = _url_ref("input.wav", b"audio")
 
@@ -297,11 +323,14 @@ def test_audio_stem_separation_triton_normalizes_and_rejects_disallowed_input_re
 
 def test_audio_stem_separation_triton_runtime_fields_reflect_model_asset(monkeypatch):
     monkeypatch.setattr(triton_executor, "settings", FakeSettings())
+    monkeypatch.setattr(media_audio_input, "settings", FakeSettings())
     handler = _handler()
-    fields = handler.runtime_job_fields({"input_audio": _url_ref("input.wav", b"audio")})
+    ref = _url_ref("input.wav", b"audio")
+    fields = handler.runtime_job_fields({"input_audio": ref})
 
-    assert fields == {
+    assert fields | {"media_input_plan": None} == {
         "operation": "audio_stem_separation_triton",
+        "media_input_plan": None,
         "onnx_model_version": "htdemucs-ft-onnx-fp32",
         "model_service": "triton",
         "triton_model_version": "1",
@@ -309,6 +338,8 @@ def test_audio_stem_separation_triton_runtime_fields_reflect_model_asset(monkeyp
         "overlap_ratio": 0.25,
         "system": None,
     }
+    assert fields["media_input_plan"]["capability_ref"] == "media.audio_input:1"
+    assert fields["media_input_plan"]["source"]["content_hash"] == f"sha256:{ref['sha256']}"
 
 
 def test_audio_stem_separation_triton_runner_calls_each_remote_model_and_preserves_edges():
@@ -408,8 +439,8 @@ async def test_audio_stem_separation_triton_executes_fake_runner_and_writes_four
     monkeypatch.setattr(triton_executor, "storage", fake_storage)
     monkeypatch.setattr(
         triton_executor,
-        "_read_input_audio",
-        lambda _input_audio, *, max_duration_seconds: audio_executor.InputAudio(
+        "prepare_audio_wav_input",
+        lambda _plan: media_audio_input.PreparedAudioInput(
             data=np.zeros((2, 4), dtype=np.float32),
             sample_rate=44100,
             duration_seconds=4 / 44100,

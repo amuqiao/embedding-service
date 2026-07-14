@@ -340,6 +340,7 @@ def test_job_type_registry_exposes_required_metadata():
     _assert_default_retry_policy(audio_spec.retry_policy)
     assert audio_spec.side_effect_policy == "none"
     assert audio_spec.timeout_seconds == 2400
+    assert audio_spec.allowed_capability_refs == frozenset({"media.audio_input:1"})
     assert audio_spec.error_codes <= all_error_reasons()
     assert AUDIO_STEM_INPUT_INVALID in audio_spec.error_codes
     assert AUDIO_STEM_MODEL_ASSET_MISSING in audio_spec.error_codes
@@ -358,6 +359,7 @@ def test_job_type_registry_exposes_required_metadata():
     _assert_default_retry_policy(audio_triton_spec.retry_policy)
     assert audio_triton_spec.side_effect_policy == "none"
     assert audio_triton_spec.timeout_seconds == 2400
+    assert audio_triton_spec.allowed_capability_refs == frozenset({"media.audio_input:1"})
     assert audio_triton_spec.error_codes <= all_error_reasons()
     assert AUDIO_STEM_INPUT_INVALID in audio_triton_spec.error_codes
     assert AUDIO_STEM_MODEL_ASSET_MISSING in audio_triton_spec.error_codes

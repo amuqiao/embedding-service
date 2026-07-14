@@ -84,9 +84,10 @@ def _capability(**overrides) -> CapabilityDefinition:
 
 
 @pytest.fixture(autouse=True)
-def clear_registries():
+def clear_registries(monkeypatch):
     capability_registry.clear_for_tests()
     tool_registry.clear_for_tests()
+    monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: {})
     yield
     capability_registry.clear_for_tests()
     tool_registry.clear_for_tests()

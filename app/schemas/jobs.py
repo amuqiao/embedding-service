@@ -569,6 +569,46 @@ class AudioStemSeparationInputObject(StrictBaseModel):
         return value
 
 
+class CanonicalObjectRefSnapshot(StrictBaseModel):
+    provider: Literal["aliyun_oss", "local"]
+    bucket: str = Field(min_length=1)
+    region: str = Field(min_length=1)
+    key: str = Field(min_length=1)
+    content_type: Literal["audio/wav"]
+    content_hash: str
+
+    @field_validator("content_hash")
+    @classmethod
+    def validate_content_hash(cls, value: str) -> str:
+        if not value.startswith("sha256:"):
+            raise ValueError("content_hash must use sha256: prefix")
+        raw = value.removeprefix("sha256:")
+        if not BARE_HASH_RE.fullmatch(raw):
+            raise ValueError("content_hash must be sha256-prefixed lowercase hex")
+        return value
+
+
+class MediaFetchSpec(StrictBaseModel):
+    read_mode: Literal["object_storage"] = "object_storage"
+    endpoint_key: Literal["canonical_object_ref"] = "canonical_object_ref"
+    max_bytes: int = Field(gt=0)
+    redirect_policy: Literal["forbid"] = "forbid"
+
+
+class AudioWavInputPlanSnapshot(StrictBaseModel):
+    capability_ref: Literal["media.audio_input:1"] = "media.audio_input:1"
+    tool_refs: tuple[Literal["object_storage_read:1"], ...] = ("object_storage_read:1",)
+    source: CanonicalObjectRefSnapshot
+    fetch: MediaFetchSpec
+    max_duration_seconds: float | None = Field(default=None, gt=0, le=3600)
+
+
+class PreparedAudioInputMetadata(StrictBaseModel):
+    sample_rate: Literal[44100] = 44100
+    channels: Literal[2] = 2
+    duration_seconds: float = Field(gt=0)
+
+
 class AudioStemSeparationParams(StrictBaseModel):
     input_audio: AudioStemSeparationInputObject
     max_duration_seconds: float | None = Field(default=None, gt=0, le=3600)
@@ -580,6 +620,7 @@ class AudioStemSeparationTritonParams(AudioStemSeparationParams):
 
 class AudioStemSeparationRuntimeFields(RuntimeFieldsBase):
     operation: Literal["audio_stem_separation"] = "audio_stem_separation"
+    media_input_plan: AudioWavInputPlanSnapshot
     onnx_model_version: str = Field(min_length=1, max_length=128)
     execution_provider: str = Field(min_length=1, max_length=128)
     segment_seconds: float = Field(gt=0)
@@ -588,6 +629,7 @@ class AudioStemSeparationRuntimeFields(RuntimeFieldsBase):
 
 class AudioStemSeparationTritonRuntimeFields(RuntimeFieldsBase):
     operation: Literal["audio_stem_separation_triton"] = "audio_stem_separation_triton"
+    media_input_plan: AudioWavInputPlanSnapshot
     onnx_model_version: str = Field(min_length=1, max_length=128)
     model_service: Literal["triton"] = "triton"
     triton_model_version: str = Field(min_length=1, max_length=64)
