@@ -1,53 +1,64 @@
 # Job Capability 与 Tool Registry 架构地基计划
 
-本文是 Job 能力层的 active plan：目标是在项目早期一次性定清 `Job Type -> Capability -> Tool Registry -> Integration Adapter` 的地基、边界和强制约束，避免后续新增工具和能力时绕过 Job 内核、重复造局部流水线或制造第二套事实源。
+本文定义 Job 能力层如何使用统一注册治理体系落地 `Job Type -> Capability -> Tool -> Integration Adapter`。注册机制的通用标准以 [`registry-governance-architecture.md`](registry-governance-architecture.md) 为准；本文只写 Job capability、tool 使用边界、Source/Snapshot 合同和首个落地能力。
 
 ## 定位
 
-本服务是 **AI + Job + 异步执行能力层服务**。服务对象是 `Job` 和 `child Job`，不是用户系统、项目系统、业务编排平台或通用后端。
+本服务是 **AI + Job + 异步执行能力层服务**。服务对象是 `Job` 和 `child Job`，不是用户系统、项目系统、通用 workflow 平台、插件平台或全能后端项目。
 
-本计划解决的是三件事：
+本文解决：
 
-- 把可复用 Job Flow Step 抽成稳定的 `Capability` 合同。
-- 把底层 CLI、SDK、runtime、provider adapter 统一纳入 `Tool Registry`。
-- 用代码注册、启动校验和测试约束后续开发，而不是只依赖文档约定。
+- `Job Type`、`Capability`、`Tool`、`Integration Adapter` 的责任分层。
+- capability 如何作为 Job Flow Step 的稳定合同。
+- tool 如何作为 capability 调用底层执行边界的注册对象。
+- source/fetch/spec/policy 如何在创建 Job 时冻结到 runtime snapshot。
+- 首个 media capability 如何消除 audio job 之间的私有函数复用。
 
-本计划不解决：
+本文不解决：
 
-- 不新增公开业务 API。
+- 不定义统一 registry kernel 的全部元模型；见 [`registry-governance-architecture.md`](registry-governance-architecture.md)。
 - 不新增数据库表。
+- 不新增公开业务 API。
 - 不把 capability 做成独立任务系统。
-- 不把本仓库演进成插件平台、通用工具平台或全能后端项目。
 - 不提前实现图片、文档、压缩包等未来能力。
 
 ## 心智模型
 
-四层必须分开：
+运行时调用链：
 
 ```text
-Job Type
+Job Type / Workflow
   对外 job_params / runtime snapshot / result / error / child Job 编排
         |
         v
 Capability
-  Job Flow Step 的类型化能力合同、策略、错误和结果模型
+  Job Flow Step 的类型化合同、策略、错误和结果模型
         |
         v
-Tool Registry
-  强制声明工具 tool_ref、kind、entrypoint、配置依赖和错误码
+Tool
+  已注册的底层执行边界，使用 tool_ref 冻结版本
         |
         v
 Integration Adapter
   具体 OSS、ffmpeg、Triton、ONNX Runtime、AI provider SDK 或 CLI 调用
 ```
 
+治理链路：
+
+```text
+Unified Registry Governance
+  收集 JobTypeDefinition / CapabilityDefinition / ToolDefinition / ErrorDefinition
+  构建 registry graph
+  启动期 fail-fast 校验引用、schema、error、settings、entrypoint 和依赖方向
+```
+
 关键边界：
 
+- 对外稳定资源仍然是 Job；Capability 和 Tool 默认不是对外资源，也不是默认独立查询对象。
 - `Job Type` 决定一个请求如何成为 Job、如何冻结 runtime、如何编排 child Job、如何投影 public result。
 - `Capability` 只表达某个 Job Flow Step 的稳定执行合同，不拥有调度、重试、恢复或 Job 状态迁移。
-- `Tool Registry` 是代码层面的准入机制，所有外部工具、SDK、模型 runtime、CLI 和 provider adapter 必须注册后才能被 capability 使用。
+- `Tool` 只表达 capability 可调用的底层执行边界，不拥有 Job 状态、不暴露 caller payload、不决定 retry 语义。
 - `Integration Adapter` 只封装底层技术调用，不理解调用方 payload，不写 Job 状态，不直接形成 public result。
-- 对外稳定资源仍然是 Job；Capability 和 Tool 默认不是对外资源，也不是默认独立查询对象。
 - 依赖方向只能是 `jobs/workflow -> capabilities -> tools -> integrations`，禁止反向依赖。
 
 Capability 不是工具，Tool 不是 Job。需要独立可靠性的步骤应升级为 `visibility="internal"` 的 child Job / workflow node，而不是让 capability 自己长出状态机。
@@ -68,22 +79,21 @@ Capability 不是工具，Tool 不是 Job。需要独立可靠性的步骤应升
 | Job / attempt / callback 审计事件 | `job_audit_events` |
 | AI provider 调用、usage、cost、billing 状态 | `ai_call_ledger_entries` |
 
-已实现的结构基础：
+已实现的注册基础：
 
-- `JobExecutor`、job registry 和 `app/services/jobs.py` 已经提供 `job_type` 扩展骨架。
-- 当前 `root_job_id` / `workflow_node_key` 已经支持 child Job 作为内部 workflow node。
-- `app/jobs/payload_adapters/` 当前只承担调用方 payload 形状适配。
-- `app/integrations/` 当前承载 OSS、Triton、ONNX Runtime、AI provider adapter 和媒体工具等技术边界。
-- `audio_stem_separation_triton` 复用 `audio_stem_separation.executor` 私有输入函数，证明公共能力确实存在，但边界还没有稳定。
+- `app/jobs/registry.py` 已经提供 `job_type -> JobExecutor` 显式注册。
+- `app/jobs/types/register.py` 已经是 job type、workflow 和业务 error 注册的 composition root。
+- `app/core/error_registry.py` 已经提供全局 error registry 和 freeze 机制。
+- `app/core/registry_checks.py` 已经提供 `validate_all_registries()`，覆盖 error、operation、job_type、schema、prompt、log event 和 route operation 校验。
+- `app/workflows/registry.py`、`app/schemas/registry.py`、`app/integrations/ai_adapters/registry.py` 已经存在分散 registry。
 
-## Remaining Gaps
+当前 capability/tool 相关缺口：
 
+- `CapabilityDefinition` 和 `ToolDefinition` 还未落地。
 - `job_type` executor 仍可能直接复制媒体、模型输入或工具调用流水线。
-- 新增工具没有强制注册流程，后续开发可以绕过统一错误码、配置校验和边界测试。
-- `Capability`、`Tool`、`Integration Adapter` 的术语和代码边界尚未落地。
+- 新增底层工具没有统一准入流程，后续开发可以绕过配置校验、错误码声明和边界测试。
 - `CanonicalObjectRef` 更像对象身份，不是完整读取合同；source、fetch、policy、adapter plan 还没有统一 snapshot 形态。
-- `audio_stem_separation` 与 `audio_stem_separation_triton` 的输入准备逻辑仍未通过共享 capability 固化。
-- 当前测试主要覆盖 `job_type`、schema、错误码和 workflow，缺少 `job_type -> capability -> tool -> adapter` 引用链校验。
+- `audio_stem_separation_triton` 仍复用 `audio_stem_separation.executor` 私有输入函数，公共能力边界还没有稳定。
 
 ## 架构边界
 
@@ -95,7 +105,7 @@ Capability 不是工具，Tool 不是 Job。需要独立可靠性的步骤应升
 - `runtime_ref` / runtime fields 冻结。
 - Job Flow 和 child Job 编排决策。
 - public result / Callback / business error 投影。
-- 把调用方 payload candidate 转成 capability plan snapshot。
+- 声明 `allowed_capability_refs`，并把调用方 payload candidate 转成 capability plan snapshot。
 
 `app/jobs/types/*` 不负责：
 
@@ -108,7 +118,7 @@ Capability 不是工具，Tool 不是 Job。需要独立可靠性的步骤应升
 `app/capabilities/*` 负责：
 
 - Job Flow Step 的 Spec、Policy、Plan Snapshot、Result 和 Error。
-- 调用已注册 tool。
+- 声明 `allowed_tool_refs` 并调用已注册 tool。
 - 能力级 fail-fast 校验、错误归一、结构化日志字段。
 - 进程内执行结果返回给当前 Job Flow。
 
@@ -123,24 +133,24 @@ Capability 不是工具，Tool 不是 Job。需要独立可靠性的步骤应升
 - 解析 CPP / HTTP 调用方 payload 形状。
 - 暴露 provider raw response 或内部 stage 作为 public contract。
 
-### Tool Registry
+### Tool
 
-`Tool Registry` 负责：
+`app/tools/*` 负责：
 
-- 所有工具的代码级注册。
-- 启动期完整性校验。
-- 测试期边界校验。
-- 工具配置依赖声明。
-- 工具错误码声明。
+- 所有底层执行边界的代码级注册。
 - tool entrypoint 引用路径声明。
+- 配置依赖和启动探测声明。
+- tool error family / error codes 声明。
+- 将 capability request 转给 integration adapter。
 
-`Tool Registry` 不负责：
+`app/tools/*` 不负责：
 
 - 动态插件发现。
 - 数据库存储。
 - 运行期启停工具。
 - 调度、租约、重试、恢复。
 - public API 投影。
+- Job 状态迁移。
 
 ### Integration Adapter
 
@@ -158,101 +168,24 @@ Capability 不是工具，Tool 不是 Job。需要独立可靠性的步骤应升
 - 业务错误码投影。
 - capability plan snapshot 构造。
 
-## Registry 设计
+## Registry 依赖
 
-首阶段 registry 是代码事实源，不入库。
+本文不单独定义一套 registry 规则。所有 registry 都必须接入统一治理计划：
 
-建议目录：
+| 层 | 本文关注 | 统一治理文档关注 |
+|---|---|---|
+| Job Type Registry | `allowed_capability_refs`、runtime snapshot、public error 投影 | ref 规范、definition 元模型、graph 校验、error projection 校验 |
+| Capability Registry | plan/result schema、allowed tools、capability error | ref 规范、schema 引用、tool 引用、error 可见性 |
+| Tool Registry | tool entrypoint、settings、startup validator、tool error | ref 规范、entrypoint 可导入、settings 可识别、反向依赖禁止 |
+| Error Registry | Job/capability/tool error 分层投影 | owner、scope、visibility、retryable、public projection 规则 |
 
-```text
-app/capabilities/
-  registry.py
-  definitions.py
-  <capability>/
-    specs.py
-    service.py
-    errors.py
+统一约束：
 
-app/tools/
-  registry.py
-  definitions.py
-```
-
-### Capability Registry
-
-首版 `CapabilityDefinition` 至少表达：
-
-```python
-class CapabilityDefinition(StrictBaseModel):
-    key: str
-    version: str
-    plan_schema_path: str
-    result_schema_path: str
-    service_entrypoint: str
-    allowed_tool_refs: tuple[str, ...]  # "<tool_key>:<tool_version>"
-    error_owner: str
-    error_codes: tuple[str, ...]
-```
-
-`CapabilityDefinition` 不能包含：
-
-- `retry_policy`
-- `lease`
-- `heartbeat`
-- `visibility`
-- `callback`
-- `queue`
-- `dispatch`
-- `recovery`
-
-这些都是 Job / workflow / Job kernel 语义；如果放进 capability registry，能力层会滑向独立任务平台。
-
-### Tool Registry
-
-首版 `ToolDefinition` 至少表达：
-
-```python
-class ToolDefinition(StrictBaseModel):
-    key: str
-    version: str
-    kind: str
-    entrypoint_path: str
-    request_schema_path: str | None = None
-    result_schema_path: str | None = None
-    required_settings: tuple[str, ...] = ()
-    startup_validators: tuple[str, ...] = ()
-    error_family: str
-    error_codes: tuple[str, ...]
-```
-
-普通纯函数 helper 不注册成 tool。只有跨 capability 复用、触达外部系统/SDK/命令行/模型 runtime、需要版本冻结或启动前校验的执行边界，才进入 Tool Registry。
-
-`tool_ref` 的唯一格式是 `<tool_key>:<tool_version>`，例如 `ffmpeg:1`。Capability 只引用 `tool_ref`，runtime snapshot 只冻结 `tool_ref`；`entrypoint_path` 是 registry 内部实现入口，不能进入 Job public result 或 Callback。
-
-注册规则：
-
-- 新增 tool 必须注册 `key/version/kind/entrypoint_path/required_settings/error_codes`。
-- 新增 capability 必须注册 `key/version/plan_schema/result_schema/service_entrypoint/allowed_tool_refs/error_codes`。
-- capability 只能引用已注册 tool。
-- `job_type` 只能引用已注册 capability。
-- tool key 或 capability key 的语义变化必须提升 version，不能让旧 Job snapshot 在执行期读到新语义。
-- registry 只能表达稳定工程合同，不能成为业务配置中心。
-
-启动期校验：
-
-- 所有 registered capability 的 `allowed_tool_refs` 必须存在。
-- 所有 registered tool 的 `required_settings` 必须能被当前配置面识别。
-- 所有 `job_type` 声明引用的 capability 必须存在。
-- 所有 error code 必须进入对应白名单或 registry。
-- service entrypoint、tool entrypoint 和 schema path 必须可导入，缺失时 fail-fast。
-- required binary、required env 或启动探测缺失时 fail-fast，不做 silent fallback。
-
-测试期校验：
-
-- 禁止 `app/jobs/types/*` 直接 import 底层工具 adapter，除非测试中明确列为豁免。
-- 验证 `job_type -> capability -> tool -> adapter` 引用链完整。
-- 验证 registry 中不存在重复 key/version。
-- 验证 capability error 不会直接透传为 public error。
+- `capability_ref` 和 `tool_ref` 的语法由 [`registry-governance-architecture.md`](registry-governance-architecture.md) 定义。
+- Job runtime snapshot 只冻结 `capability_ref`、`tool_ref` 和稳定 plan snapshot，不冻结 tool entrypoint 或 provider raw config。
+- 未注册 capability 不能被 job type 引用。
+- 未注册 tool 不能被 capability 使用。
+- Tool error 不能直接 public；Capability error 默认 internal；Job business error 才能进入对外合同。
 
 ## Source 与 Snapshot 合同
 
@@ -277,11 +210,11 @@ capability
 | `CanonicalObjectRefSnapshot` | provider、bucket、region、key、content type、content hash | 临时 URL、认证信息、读取超时 |
 | `ResolvedSource` | source contract、canonical ref、observed content type、observed size | 外部 payload 歧义、Job 状态、public result |
 | `FetchSpec` | read mode、endpoint key、max bytes、timeout、redirect policy | 完整 URL token、业务结果、是否 child Job |
-| `CapabilityPlanSnapshot` | capability key/version、tool ref、source/fetch/spec/policy snapshot | 执行中间态、临时文件路径、provider raw response、tool entrypoint path |
+| `CapabilityPlanSnapshot` | capability ref、tool refs、source/fetch/spec/policy snapshot | 执行中间态、临时文件路径、provider raw response、tool entrypoint path |
 
 冻结规则：
 
-- `SourceContract`、`ResolvedSource`、`FetchSpec`、capability key/version 和 tool ref 必须在创建 Job 时冻结。
+- `SourceContract`、`ResolvedSource`、`FetchSpec`、`capability_ref` 和 `tool_ref` 必须在创建 Job 时冻结。
 - 执行期只能读取 frozen snapshot，不得按最新配置重新推导策略。
 - snapshot 不得冻结敏感明文、完整 URL token、临时 URL 或易失外部状态。
 - `public_url` / `internal_url` 只是读取入口或调用方兼容字段，不能单独作为权威对象身份。
@@ -296,18 +229,18 @@ capability
 
 ## Planned Work
 
-### Phase 0：术语和边界落地
+### Phase 0：对齐统一治理计划
 
-- 在后续实现前确认 `Job Type`、`Capability`、`Tool Registry`、`Integration Adapter`、`child Job` 的代码边界。
-- 明确 registry 首阶段只作为代码事实源。
+- 以 [`registry-governance-architecture.md`](registry-governance-architecture.md) 作为 registry 通用规范。
+- 按治理规范把 `capability_ref`、`tool_ref` 和 error reason projection 接入能力层设计。
+- 基于现有 `validate_all_registries()` 增加 capability/tool 引用校验。
 
-### Phase 1：Registry 骨架
+### Phase 1：定义 capability/tool 最小合同
 
-- 新增 `ToolDefinition` 和 `CapabilityDefinition`。
-- 新增 tool registry 和 capability registry。
-- 增加启动期校验入口。
-- 增加 registry 单元测试。
-- 增加 import 边界测试，防止 `job_type` 直接调用底层 adapter。
+- 新增 `CapabilityDefinition` 和 `ToolDefinition`。
+- `CapabilityDefinition` 不包含 retry、lease、visibility、callback、queue、dispatch、recovery 等 Job 语义。
+- `ToolDefinition` 不包含 Job 状态、public result、callback 或调度语义。
+- 所有 definition 接入统一 registry graph 校验。
 
 ### Phase 2：Source / Snapshot 合同
 
@@ -330,8 +263,9 @@ capability
 
 - Capability 内部错误必须有稳定枚举。
 - Job business error 由 `job_type` 显式投影。
+- Tool / adapter error reason 不直接透传为 public error。
 - provider raw error、adapter request 字段、临时文件路径、child id、workflow node key 不进入 public schema。
-- 日志只记录白名单字段，例如 `capability_key`、`stage`、`job_id`、`attempt_id`、`request_id`、hash、size、duration、error_code。
+- 日志只记录白名单字段，例如 `capability_ref`、`stage`、`job_id`、`attempt_id`、`request_id`、hash、size、duration、error_code。
 
 ### Phase 5：child Job 决策规则
 
@@ -376,9 +310,9 @@ capability
 新增 tool 前必须回答：
 
 - 它是 CLI、SDK、模型 runtime、对象存储、provider adapter，还是本地库封装？
-- 它的 `key/version/kind` 是什么？
+- 它的 `tool_ref` 是什么？
 - 它需要哪些配置项；非法或缺失配置如何启动期 fail-fast？
-- 它可能产生哪些稳定 adapter error？
+- 它可能产生哪些稳定 tool / adapter error？
 - 哪些 capability 可以引用它？
 - 它是否会触发真实费用、外部副作用、文件系统写入或网络调用？
 - 它的日志脱敏边界是什么？
@@ -398,10 +332,11 @@ capability
 ## Acceptance
 
 - 文档和后续代码都明确：本服务服务对象是 Job / child Job，不是通用后端平台。
-- `Job Type -> Capability -> Tool Registry -> Integration Adapter` 分层在代码中有对应目录、注册入口和测试。
+- `Job Type -> Capability -> Tool -> Integration Adapter` 分层在代码中有对应目录、注册入口和测试。
+- Capability / Tool 注册接入统一 registry graph，不各自为战。
+- 所有新增 capability 必须注册；未注册 capability 不能被 job type 引用。
 - 所有新增 tool 必须注册；未注册 tool 不能被 capability 或 job executor 使用。
-- 所有新增 capability 必须注册；未注册 capability 不能被 job_type 引用。
-- 启动期校验能发现缺失 tool、缺失 capability、缺失 required settings、重复 key/version 和不可导入 tool entrypoint。
+- 启动期校验能发现缺失 capability、缺失 tool、缺失 required settings、重复 ref、不可导入 entrypoint 和错误码归属不一致。
 - 测试能发现 `job_type` 绕过 capability 直接 import 底层 adapter 的行为。
 - Capability 不拥有 queue、lease、heartbeat、retry、dispatch、callback 或 Job 状态迁移。
 - 需要独立可靠性的步骤优先建模为 internal child Job / workflow node。
