@@ -13,6 +13,7 @@
 | [`current/registry-governance.md`](current/registry-governance.md) | 当前 registry governance、capability/tool 注册、graph 校验、`./scripts/tools.sh registry` 查看入口和 `media.audio_input:2` 能力事实 |
 | [`current/audio-stem-separation-triton.md`](current/audio-stem-separation-triton.md) | `audio_stem_separation_triton` 当前 Job、Triton endpoint 依赖、tensor I/O、配置和实现边界；不替代外部 Triton 部署手册 |
 | [`runbooks/job/job-kernel-explained.md`](runbooks/job/job-kernel-explained.md) | 跟一个请求走完整条 Job 链路的心智模型讲解，配套 `job-kernel.md` 的事实清单，不是独立事实源 |
+| [`runbooks/job/job-orchestration-examples.md`](runbooks/job/job-orchestration-examples.md) | 独立讲解 Job 编排心智模型，用 `audio_stem_separation_triton` 和 `poster_title_image` 对比单 executor、root/child workflow、tool/capability 接入和新增 Job 开发 |
 | [`current/workflow-kernel.md`](current/workflow-kernel.md) | 当前 DAG-lite root/child workflow、child Job 执行、root 汇总和 billing scope 行为 |
 | [`current/observability.md`](current/observability.md) | 当前日志出口、request_id、业务事件白名单、本地 `logs/` 边界和新增日志代码规范 |
 | [`current/template-readiness.md`](current/template-readiness.md) | 当前仓库作为 AI Job 微服务模板的就绪边界、可复用能力和不承诺事项 |
@@ -48,6 +49,7 @@
 | 场景 | 默认入口 | 不放入这里的内容 |
 |---|---|---|
 | 理解 Job 内核链路 | [`runbooks/job/job-kernel-explained.md`](runbooks/job/job-kernel-explained.md) | 字段真源、表结构大表、API 合同 |
+| 讲解 Job 编排和新增 Job 落点 | [`runbooks/job/job-orchestration-examples.md`](runbooks/job/job-orchestration-examples.md) | API 字段合同、真实流程命令、数据库细节 |
 | 查 Job 运行证据 | [`runbooks/job/jobs使用与排障手册.md`](runbooks/job/jobs使用与排障手册.md) | 压测执行步骤、业务专属链路解释 |
 | 执行 Job 压测 | [`runbooks/job/job-load-testing-runbook.md`](runbooks/job/job-load-testing-runbook.md) | `load.sh` 机器合同、生产容量调优公式 |
 | 估算生产容量 | [`runbooks/job/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/job/MAX_ACTIVE_JOBS%20估算与生产调优.md) | 一次压测怎么跑、Job 明细查询命令教程 |
