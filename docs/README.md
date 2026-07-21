@@ -41,6 +41,7 @@
 | [`plans/ops-dashboard-post-mvp.md`](plans/ops-dashboard-post-mvp.md) | `ops_dashboard` MVP 后的表格可用性、长窗口分析、Job Trace 可视化、环境诊断和安全边界后续优化计划 |
 | [`plans/ai-capability-long-term.md`](plans/ai-capability-long-term.md) | AI provider、正式业务 `job_type`、usage normalizer、cost attribution 和 billing read model 的 trigger-based 长期计划 |
 | [`plans/workflow-kernel-long-term.md`](plans/workflow-kernel-long-term.md) | Job 内部 workflow kernel 从模板能力走向正式业务 `job_type` 前的 trigger-based 长期计划 |
+| [`plans/job-platform-orchestration-options.md`](plans/job-platform-orchestration-options.md) | 未来公共 Job Platform 是否支持 DAG-lite 编排的两种微服务拆分方案比较、接入示例和推荐边界 |
 
 ## Runbook 职责边界
 
