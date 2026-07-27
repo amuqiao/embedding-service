@@ -75,6 +75,12 @@ def test_tools_registry_prints_registered_graph():
     )
 
     assert result.stderr == ""
+    assert "Operations" in result.stdout
+    assert "create_ai_job" in result.stdout
+    assert "Job Types" in result.stdout
+    assert "example_workflow" in result.stdout
+    assert "Workflows" in result.stdout
+    assert "poster_title_image" in result.stdout
     assert "Tools" in result.stdout
     assert "object_storage_read:1" in result.stdout
     assert "audio_decode_normalize:1" in result.stdout
@@ -97,77 +103,117 @@ def test_tools_registry_json_prints_registered_graph():
 
     data = json.loads(result.stdout)
     assert result.stderr == ""
-    assert data == {
-        "capabilities": [
-            {
-                "allowed_tool_refs": ["audio_decode_normalize:1", "object_storage_read:1"],
-                "capability_ref": "media.audio_input:2",
-                "error_codes": [
-                    "AUDIO_STEM_DURATION_EXCEEDS_LIMIT",
-                    "AUDIO_STEM_INPUT_INVALID",
-                    "AUDIO_STEM_RUNTIME_UNAVAILABLE",
-                    "INPUT_HASH_MISMATCH",
-                    "INPUT_TOO_LARGE",
-                    "OSS_BUCKET_NOT_CONFIGURED",
-                    "OSS_FETCH_FAILED",
-                    "OSS_OBJECT_NOT_FOUND",
-                    "OSS_REGION_NOT_CONFIGURED",
-                ],
-                "log_events": [],
-                "plan_schema": "AudioInputPlanSnapshot",
-                "result_schema": "PreparedAudioInputMetadata",
-                "service_entrypoint": "app.capabilities.media.audio_input:prepare_audio_input",
-            }
-        ],
-        "job_capabilities": [
-            {
-                "allowed_capability_refs": ["media.audio_input:2"],
-                "job_type": "audio_stem_separation",
-                "role": "root",
-                "visibility": "demo",
-            },
-            {
-                "allowed_capability_refs": ["media.audio_input:2"],
-                "job_type": "audio_stem_separation_triton",
-                "role": "root",
-                "visibility": "demo",
-            },
-        ],
-        "tools": [
-            {
-                "entrypoint": "app.tools.media_audio:decode_normalize_audio",
-                "error_codes": [
-                    "AUDIO_STEM_DURATION_EXCEEDS_LIMIT",
-                    "AUDIO_STEM_INPUT_INVALID",
-                    "AUDIO_STEM_RUNTIME_UNAVAILABLE",
-                ],
-                "kind": "media_transform",
-                "log_events": [],
-                "request_schema": "AudioDecodeNormalizeRequest",
-                "required_settings": [],
-                "result_schema": None,
-                "startup_validators": [],
-                "tool_ref": "audio_decode_normalize:1",
-            },
-            {
-                "entrypoint": "app.tools.object_storage:read_object_bytes",
-                "error_codes": [
-                    "INPUT_TOO_LARGE",
-                    "OSS_BUCKET_NOT_CONFIGURED",
-                    "OSS_FETCH_FAILED",
-                    "OSS_OBJECT_NOT_FOUND",
-                    "OSS_REGION_NOT_CONFIGURED",
-                ],
-                "kind": "object_storage",
-                "log_events": [],
-                "request_schema": "CanonicalObjectRefSnapshot",
-                "required_settings": ["storage.backend", "job.oss_input_max_bytes"],
-                "result_schema": None,
-                "startup_validators": [],
-                "tool_ref": "object_storage_read:1",
-            },
-        ],
+    assert set(data) == {
+        "operations",
+        "job_types",
+        "workflows",
+        "tools",
+        "capabilities",
+        "job_capabilities",
     }
+    assert set(data["operations"][0]) == {
+        "operation_id",
+        "channel",
+        "method",
+        "path",
+        "success_status",
+        "auth_boundary",
+        "request_schema",
+        "response_data_schema",
+        "error_codes",
+        "idempotency_key",
+        "side_effects",
+        "log_events",
+        "metrics",
+        "change_policy",
+    }
+    assert set(data["job_types"][0]) == {
+        "job_type",
+        "visibility",
+        "role",
+        "execution_mode",
+        "params_schema",
+        "runtime_fields_schema",
+        "canonical_result_schema",
+        "public_result_schema",
+        "callback_envelope_schema",
+        "allow_callback",
+        "result_snapshot_statuses",
+        "large_artifact_keys",
+        "error_codes",
+        "log_events",
+        "timeout_seconds",
+        "retry_policy",
+        "side_effect_policy",
+        "allowed_capability_refs",
+        "prompt_specs",
+        "prompt_template_required_blocks",
+    }
+    assert set(data["workflows"][0]) == {
+        "workflow_type",
+        "root_job_type",
+        "workflow_version",
+        "failure_policy",
+        "max_nodes",
+        "build",
+    }
+    assert set(data["capabilities"][0]) == {
+        "capability_ref",
+        "plan_schema",
+        "result_schema",
+        "service_entrypoint",
+        "allowed_tool_refs",
+        "error_codes",
+        "log_events",
+    }
+    assert set(data["tools"][0]) == {
+        "tool_ref",
+        "kind",
+        "entrypoint",
+        "request_schema",
+        "result_schema",
+        "required_settings",
+        "startup_validators",
+        "error_codes",
+        "log_events",
+    }
+    assert set(data["job_capabilities"][0]) == {
+        "job_type",
+        "visibility",
+        "role",
+        "allowed_capability_refs",
+    }
+    operations = {item["operation_id"]: item for item in data["operations"]}
+    assert operations["create_ai_job"]["method"] == "POST"
+    assert operations["create_ai_job"]["path"] == "/jobs"
+    assert operations["create_ai_job"]["success_status"] == 200
+    assert operations["create_ai_job"]["response_data_schema"] == "JobResponseData"
+
+    job_types = {item["job_type"]: item for item in data["job_types"]}
+    assert job_types["example_workflow"]["visibility"] == "demo"
+    assert job_types["example_workflow"]["role"] == "root"
+    assert job_types["poster_title_image"]["visibility"] == "public"
+    assert job_types["poster_title_image"]["role"] == "root"
+
+    workflows = {item["workflow_type"]: item for item in data["workflows"]}
+    assert workflows["example_workflow"]["root_job_type"] == "example_workflow"
+    assert workflows["poster_title_image"]["root_job_type"] == "poster_title_image"
+    assert workflows["poster_title_image"]["failure_policy"] == "fail_fast"
+
+    capabilities = {item["capability_ref"]: item for item in data["capabilities"]}
+    assert capabilities["media.audio_input:2"]["allowed_tool_refs"] == [
+        "audio_decode_normalize:1",
+        "object_storage_read:1",
+    ]
+    tools = {item["tool_ref"]: item for item in data["tools"]}
+    assert tools["audio_decode_normalize:1"]["kind"] == "media_transform"
+    assert tools["object_storage_read:1"]["required_settings"] == [
+        "storage.backend",
+        "job.oss_input_max_bytes",
+    ]
+    job_capabilities = {item["job_type"]: item for item in data["job_capabilities"]}
+    assert job_capabilities["audio_stem_separation"]["allowed_capability_refs"] == ["media.audio_input:2"]
+    assert job_capabilities["audio_stem_separation_triton"]["allowed_capability_refs"] == ["media.audio_input:2"]
 
 
 def test_tools_registry_rejects_unknown_argument():

@@ -28,7 +28,7 @@
 
 1. 在 `app/schemas/jobs.py` 中定义 Params、Runtime fields 和 Result schema。
 2. 在 `app/jobs/types/<job_type>.py` 或 `app/jobs/types/<job_type>/` 中实现 `JobExecutor`。简单 job 可继续使用单文件；正式业务或带 prompt、errors、workflow 的复杂 job 使用包目录，至少保留 `executor.py` 和 `__init__.py`，按需增加 `errors.py`、`prompts.yaml` 等业务内聚文件。
-3. 在 executor 上使用 `@register_job_type` 标记源码准入，并声明稳定 `name`、`visibility`、`role`、`params_schema`、`runtime_fields_schema_name`、`canonical_result_schema`、`public_result_schema`、`retry_policy`、`allowed_capability_refs` 和 side-effect 元数据。
+3. 在 executor 上使用 `@register_job_type` 标记源码准入，并声明稳定 `name`、`visibility`、`role`、`params_schema`、`runtime_fields_schema_name`、`canonical_result_schema`、`public_result_schema`、`retry_policy`、`allowed_capability_refs` 和 side-effect 元数据。`JobTypeSpec` 是代码级事实源；不要只在文档里描述这些字段。
 4. 在 `app/jobs/types/register.py` 显式导入并注册。
 5. 如需模型调用，通过 `app/services/ai_gateway_facade.py` 进入，不直接调用 provider adapter。
 6. 如需大输入或大结果，使用 runtime ref、result ref 和对象存储边界，不把大 payload 直接塞进 Job response。
@@ -61,7 +61,7 @@
 1. 在 `app/schemas/jobs.py` 中定义 root `job_type` 的 Params、Runtime fields 和 Result schema。
 2. 在 `app/jobs/types/<job_type>.py` 或 `app/jobs/types/<job_type>/` 中实现 root `JobExecutor`，root executor 使用 `role="root"`，只声明 schema 和运行时字段；实际执行由 workflow orchestration 推进 internal child Jobs。正式业务 workflow 优先使用包目录，把 root、internal child executors、workflow definition、业务错误和 prompt 模板放在同一个 `job_type` 边界内。
 3. 使用 `app.workflows` 的 `task`、`chain`、`group`、`chord`、`map_items`、`starmap_items` 或 `chunks` 生成受控 `workflow_plan`。
-4. 在 `app/jobs/types/register.py` 中注册 executor 和 workflow definition。
+4. 在 `app/jobs/types/register.py` 中注册 executor 和 workflow definition。`WorkflowDefinition` 必须声明 `workflow_type`、`root_job_type`、`workflow_version`、`failure_policy` 和 `max_nodes`；当前 `workflow_type` 与 `root_job_type` 必须同名，因为外部提交使用 root `job_type` 查找 workflow。
 5. 按业务语义选择 `failure_policy`；默认 `fail_fast`，需要容忍部分 child 失败时才显式使用 `allow_partial`。
 6. 补充 compiler、orchestrator、registry、workflow smoke 或业务 e2e 测试。
 
@@ -88,7 +88,7 @@ profile manifest 是压测合同的机器可读投影。它应能说明 case、p
 ## 新增 HTTP 接口
 
 1. 在 `app/api/routes/` 中新增 route 或扩展现有 router。
-2. 在 `app/api/operations.py` 注册稳定 operation id。
+2. 在 `app/api/operations.py` 注册稳定 `OperationSpec`。`OperationSpec` 是 path、method、成功状态、request/response schema、错误码和副作用的代码级事实源；route decorator 应使用 `operation_path()` 和 `operation_route_kwargs()` 消费它，不要手写一份重复 metadata。
 3. 在 `app/schemas/` 中定义 request 和 response data schema。
 4. route 返回内层 data schema，不手工构造 `HttpEnvelope`。
 5. 错误码先在所属模块声明并注册到 `app/core/error_registry.py` 的全局 registry；service 只抛出已注册的稳定 `AppError` reason。

@@ -24,6 +24,8 @@ from app.jobs.base import (
 from app.jobs import registry as job_registry
 from app.schemas.registry import all_schema_names
 from app.tools import registry as tool_registry
+from app.workflows import registry as workflow_registry
+from app.workflows.base import FAILURE_POLICIES
 
 _ERROR_VISIBILITIES = {"public", "internal"}
 _PUBLIC_OPERATION_CHANNELS = {"http", "callback", "external_write"}
@@ -146,6 +148,10 @@ def validate_operation_registry() -> None:
         missing_events = _missing(set(spec.log_events), known_events)
         if missing_events:
             raise ValueError(f"operation {spec.operation_id} references unknown log events: {missing_events}")
+        if spec.success_status != 200:
+            raise ValueError(
+                f"operation {spec.operation_id} declares unsupported success_status: {spec.success_status}"
+            )
         referenced_schemas = {spec.response_data_schema}
         if spec.request_schema is not None:
             referenced_schemas.add(spec.request_schema)
@@ -355,6 +361,36 @@ def validate_capability_tool_registry() -> None:
             raise ValueError(f"{owner} references unknown log events: {missing_events}")
 
 
+def validate_workflow_registry() -> None:
+    job_type_specs = job_registry.all_job_type_specs()
+    for workflow_type, definition in workflow_registry.all_workflow_definitions().items():
+        if workflow_type != definition.workflow_type:
+            raise ValueError(
+                f"workflow registry key mismatch: {workflow_type} != {definition.workflow_type}"
+            )
+        if definition.root_job_type != definition.workflow_type:
+            raise ValueError(f"workflow {workflow_type} root_job_type must match workflow_type")
+        root_spec = job_type_specs.get(definition.root_job_type)
+        if root_spec is None:
+            raise ValueError(
+                f"workflow {workflow_type} references unknown root_job_type: {definition.root_job_type}"
+            )
+        if root_spec.role not in {"root", "root_or_leaf"}:
+            raise ValueError(
+                f"workflow {workflow_type} root job_type must be root-capable: {definition.root_job_type}"
+            )
+        if definition.workflow_version < 1:
+            raise ValueError(f"workflow {workflow_type} workflow_version must be >= 1")
+        if definition.failure_policy not in FAILURE_POLICIES:
+            raise ValueError(
+                f"workflow {workflow_type} declares invalid failure_policy: {definition.failure_policy}"
+            )
+        if definition.max_nodes < 1:
+            raise ValueError(f"workflow {workflow_type} max_nodes must be >= 1")
+        if not callable(definition.build):
+            raise ValueError(f"workflow {workflow_type} build must be callable")
+
+
 def _operation_route_map(app) -> dict[str, APIRoute]:
     routes: dict[str, APIRoute] = {}
     for route in app.routes:
@@ -388,6 +424,7 @@ def _schema_ref_name(schema: dict) -> str:
 def validate_app_route_operations(app) -> None:
     registered = set(all_operation_specs())
     specs = all_operation_specs()
+    error_specs = all_error_specs()
     routes = _operation_route_map(app)
     route_operation_ids = set(routes)
     missing = _missing(route_operation_ids, registered)
@@ -405,6 +442,11 @@ def validate_app_route_operations(app) -> None:
         expected_path = f"{settings.service.api_prefix}{spec.path}"
         if route.path != expected_path:
             raise ValueError(f"operation {operation_id} path mismatch: route={route.path} spec={expected_path}")
+        if route.status_code != spec.success_status:
+            raise ValueError(
+                f"operation {operation_id} success status mismatch: "
+                f"route={route.status_code} spec={spec.success_status}"
+            )
         operation = _openapi_operation(app, expected_path, spec.method)
         request_body = operation.get("requestBody")
         if spec.request_schema is None and request_body is not None:
@@ -413,13 +455,32 @@ def validate_app_route_operations(app) -> None:
             schema = request_body["content"]["application/json"]["schema"] if request_body else {}
             if _schema_ref_name(schema) != spec.request_schema:
                 raise ValueError(f"operation {operation_id} request schema mismatch")
-        success_status = "200"
+        success_status = str(spec.success_status)
         response_schema = operation["responses"][success_status]["content"]["application/json"]["schema"]
         response_ref = _schema_ref_name(response_schema)
         if not response_ref:
             response_ref = _schema_ref_name(response_schema.get("properties", {}).get("data", {}))
         if spec.response_data_schema not in response_ref:
             raise ValueError(f"operation {operation_id} response schema mismatch: {response_ref}")
+        expected_error_statuses = {
+            str(error_specs[reason].http_status)
+            for reason in spec.error_codes
+        }
+        missing_error_statuses = sorted(
+            status for status in expected_error_statuses
+            if status not in operation["responses"]
+        )
+        if missing_error_statuses:
+            raise ValueError(
+                f"operation {operation_id} missing OpenAPI error responses: {missing_error_statuses}"
+            )
+        for status in expected_error_statuses:
+            response = operation["responses"][status]
+            schema = response.get("content", {}).get("application/json", {}).get("schema", {})
+            if _schema_ref_name(schema) != "ErrorEnvelope":
+                raise ValueError(
+                    f"operation {operation_id} error response {status} must use ErrorEnvelope"
+                )
 
 
 def validate_all_registries(app=None) -> None:
@@ -427,5 +488,6 @@ def validate_all_registries(app=None) -> None:
     validate_operation_registry()
     validate_job_type_registry()
     validate_capability_tool_registry()
+    validate_workflow_registry()
     if app is not None:
         validate_app_route_operations(app)

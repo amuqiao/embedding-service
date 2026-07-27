@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 
 OperationChannel = Literal["http", "callback", "external_write", "internal_service"]
@@ -22,6 +22,7 @@ class OperationSpec:
     channel: OperationChannel
     method: str
     path: str
+    success_status: int
     auth_boundary: str
     request_schema: str | None
     response_data_schema: str
@@ -31,6 +32,7 @@ class OperationSpec:
     log_events: tuple[str, ...]
     metrics: tuple[str, ...] = ()
     change_policy: str = "current_schema_only"
+    response_model_exclude_none: bool = False
 
 
 _SERVICE_AUTH_ERRORS = frozenset({"UNAUTHORIZED", "FORBIDDEN", "INTERNAL_ERROR"})
@@ -42,6 +44,7 @@ _OPERATIONS: dict[str, OperationSpec] = {
         channel="http",
         method="GET",
         path="/models",
+        success_status=200,
         auth_boundary=_SERVICE_AUTH_BOUNDARY,
         request_schema=None,
         response_data_schema="ModelsResponse",
@@ -49,12 +52,14 @@ _OPERATIONS: dict[str, OperationSpec] = {
         idempotency_key=None,
         side_effects=(),
         log_events=("request_completed", "request_failed"),
+        response_model_exclude_none=True,
     ),
     OperationID.LIST_LANGUAGES: OperationSpec(
         operation_id=OperationID.LIST_LANGUAGES,
         channel="http",
         method="GET",
         path="/languages",
+        success_status=200,
         auth_boundary=_SERVICE_AUTH_BOUNDARY,
         request_schema=None,
         response_data_schema="LanguagesResponse",
@@ -68,6 +73,7 @@ _OPERATIONS: dict[str, OperationSpec] = {
         channel="http",
         method="GET",
         path="/prompt-templates",
+        success_status=200,
         auth_boundary=_SERVICE_AUTH_BOUNDARY,
         request_schema=None,
         response_data_schema="PromptTemplateResponseData",
@@ -81,6 +87,7 @@ _OPERATIONS: dict[str, OperationSpec] = {
         channel="http",
         method="POST",
         path="/jobs",
+        success_status=200,
         auth_boundary=_SERVICE_AUTH_BOUNDARY,
         request_schema="CreateJobRequest",
         response_data_schema="JobResponseData",
@@ -112,6 +119,7 @@ _OPERATIONS: dict[str, OperationSpec] = {
         channel="http",
         method="GET",
         path="/jobs/{job_id}",
+        success_status=200,
         auth_boundary=f"{_SERVICE_AUTH_BOUNDARY} + caller owned job",
         request_schema=None,
         response_data_schema="JobResponseData",
@@ -131,6 +139,7 @@ _OPERATIONS: dict[str, OperationSpec] = {
         channel="http",
         method="GET",
         path="/jobs/{job_id}/billing",
+        success_status=200,
         auth_boundary=f"{_SERVICE_AUTH_BOUNDARY} + caller owned job",
         request_schema=None,
         response_data_schema="JobBillingResponseData",
@@ -159,3 +168,35 @@ def all_operation_specs() -> dict[str, OperationSpec]:
 
 def all_operation_ids() -> set[str]:
     return set(_OPERATIONS)
+
+
+def operation_path(operation_id: str) -> str:
+    return get_operation_spec(operation_id).path
+
+
+def operation_responses(operation_id: str) -> dict[int, dict[str, object]]:
+    from app.core.error_registry import get_error_spec
+
+    grouped: dict[int, list[str]] = {}
+    for reason in sorted(get_operation_spec(operation_id).error_codes):
+        status = get_error_spec(reason).http_status
+        grouped.setdefault(status, []).append(reason)
+    return {
+        status: {"description": ", ".join(reasons)}
+        for status, reasons in grouped.items()
+    }
+
+
+def operation_route_kwargs(operation_id: str) -> dict[str, Any]:
+    from app.schemas.registry import get_schema
+
+    spec = get_operation_spec(operation_id)
+    kwargs: dict[str, Any] = {
+        "operation_id": spec.operation_id,
+        "response_model": get_schema(spec.response_data_schema),
+        "status_code": spec.success_status,
+        "responses": operation_responses(operation_id),
+    }
+    if spec.response_model_exclude_none:
+        kwargs["response_model_exclude_none"] = True
+    return kwargs

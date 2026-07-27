@@ -550,6 +550,7 @@ def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
         assert all(node["job_params"].get("sleep_seconds") == 3 for node in nodes.values())
     definition = WorkflowDefinition(
         workflow_type="test.workflow",
+        root_job_type="test.workflow",
         build=lambda params: chain(
             task("first", "example_sleep", {"value": params["value"]}),
             task("second", "example_sleep", {"value": "done"}),
@@ -569,6 +570,7 @@ def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
         register(
             WorkflowDefinition(
                 workflow_type="test.workflow",
+                root_job_type="test.workflow",
                 build=lambda _params: task("other", "example_sleep", {"value": "other"}),
             )
         )

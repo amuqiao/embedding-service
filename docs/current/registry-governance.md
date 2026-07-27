@@ -9,10 +9,17 @@ Registry 是代码事实源和启动期合同校验系统，不是插件系统�
 当前统一治理覆盖的新增能力链路是：
 
 ```text
+Operation
+  -> Route / OpenAPI / service contract
+
 Job Type
   -> Capability
     -> Tool
       -> Integration / adapter
+
+Workflow Definition
+  -> Root Job Type
+  -> Internal Child Jobs at runtime
 ```
 
 已有 operation、schema、prompt、workflow、model、pricing 和 AI adapter registry 仍沿用各自入口，但统一由 `app/core/registry_checks.py` 的 `validate_all_registries()` 汇总校验。
@@ -25,6 +32,8 @@ Job Type
 | Capability registry | `app/capabilities/registry.py`、`app/capabilities/register.py` | 注册 `CapabilityDefinition`，支持 freeze 和测试清理 |
 | Tool registry | `app/tools/registry.py`、`app/tools/register.py` | 注册 `ToolDefinition`，支持 freeze 和测试清理 |
 | Job Type registry | `app/jobs/registry.py`、`app/jobs/base.py` | `JobTypeSpec.allowed_capability_refs` 声明 job type 可用 capability |
+| Workflow registry | `app/workflows/registry.py` | `WorkflowDefinition` 声明 workflow type、root job type、版本、失败策略和节点上限 |
+| Operation registry | `app/api/operations.py` | `OperationSpec` 声明 HTTP operation path、method、成功状态、schema、错误码和副作用 |
 | Error registry | `app/core/error_registry.py` | `ErrorSpec` 包含 `visibility` 和 `projection_targets` 元数据 |
 | Registry check | `app/core/registry_checks.py`、`tests/test_registry_contract.py` | 校验 error、operation、job type、capability、tool、schema、log event、entrypoint、settings、error projection、注册入口、import direction 和 route operation |
 
@@ -38,6 +47,8 @@ API startup 和 worker startup 都执行同一组注册和校验。`app/jobs/typ
 ```
 
 该命令会经过 registry composition root，可能读取应用配置；输出只包含代码注册图，不执行完整 registry consistency 校验。完整校验仍由 `./scripts/verify.sh check` 和 `scripts/verify/registry_check.py` 负责。
+
+`./scripts/tools.sh registry --json` 当前输出 operation、job type、workflow、capability、tool 和 job-capability 关系。它是模板治理 manifest，不是 public API；字段可随模板治理需要演进，但新增正式能力时必须能通过测试确认分类、schema、错误码、能力引用和 workflow 元数据。
 
 Tool `startup_validators` 只用于 API/worker 进程级必需依赖。可选能力、demo job 或特定模型运行时依赖不能放入全局 startup validator；这类依赖应在对应 capability/job 执行路径或专项 verify/real-flow 中 fail-fast。
 
@@ -59,7 +70,10 @@ Tool `startup_validators` 只用于 API/worker 进程级必需依赖。可选能
 - job type public error contract 不能声明 internal error。
 - 源码中 `@register_job_type` 声明的 job type 必须全部出现在 `app/jobs/types/register.py` composition root 的注册结果中。
 - `ToolDefinition(...)` 只允许出现在 `app/tools/register.py`，`CapabilityDefinition(...)` 只允许出现在 `app/capabilities/register.py`。
-- `./scripts/tools.sh registry --json` 的当前 graph 是精确测试快照；新增 tool、capability 或 job capability 关系时必须同步测试和文档。
+- route decorator 从 `OperationSpec` 派生 path、`operation_id`、`response_model`、成功状态和错误响应描述；registry check 会校验 route/OpenAPI 与 operation metadata 对齐。
+- registered workflow 必须声明 `root_job_type`，且当前 `root_job_type` 必须与 `workflow_type` 相同，因为外部提交路径用 `job_type` 查找 workflow definition。
+- workflow root job type 必须存在且 role 为 `root` 或 `root_or_leaf`；`failure_policy`、`workflow_version`、`max_nodes` 和 `build` callable 由 registry check 校验。
+- `./scripts/tools.sh registry --json` 的当前 manifest 由测试覆盖关键结构；新增 operation、job type、workflow、tool、capability 或 job capability 关系时必须同步测试和文档。
 - import direction 由 registry contract 测试覆盖：`app/capabilities` 不依赖 `app/jobs`，也不跳过 tool 直接依赖 `app/integrations`；`app/tools` 不反向依赖 `app/jobs` / `app/capabilities`；`app/integrations` 不反向依赖 `app/jobs` / `app/capabilities` / `app/tools`。
 - operation registry、job type registry、prompt config、route operation 和 error code 唯一性仍按既有规则校验。
 

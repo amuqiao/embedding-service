@@ -453,6 +453,13 @@ async def _create_child_job(
         handler = get_job_executor(job_type)
     except KeyError as exc:
         raise ValidationAppError("INVALID_JOB_TYPE", f"不支持的 child job_type: {job_type}") from exc
+    spec = handler.job_type_spec()
+    if spec.role not in {"leaf", "root_or_leaf"}:
+        raise ValidationAppError(
+            "INVALID_JOB_TYPE",
+            f"job_type 不允许作为 workflow child: {job_type}",
+            {"job_type": job_type, "role": spec.role, "workflow_node_key": node["key"]},
+        )
     job_params = deepcopy(node["job_params"])
     try:
         job_params = handler.normalize_job_params(job_params)

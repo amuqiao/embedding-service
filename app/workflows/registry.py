@@ -12,6 +12,7 @@ from app.workflows.compiler import compile_workflow
 @dataclass(frozen=True)
 class WorkflowDefinition:
     workflow_type: str
+    root_job_type: str
     build: Callable[[dict[str, Any]], WorkflowExpr]
     workflow_version: int = 1
     failure_policy: str = "fail_fast"
@@ -33,6 +34,8 @@ _registry: dict[str, WorkflowDefinition] = {}
 def register(definition: WorkflowDefinition) -> WorkflowDefinition:
     if not definition.workflow_type:
         raise ValueError("workflow definition must declare workflow_type")
+    if not definition.root_job_type:
+        raise ValueError("workflow definition must declare root_job_type")
     existing = _registry.get(definition.workflow_type)
     if existing is not None:
         if existing == definition:
@@ -59,6 +62,10 @@ def has_workflow(workflow_type: str) -> bool:
 
 def all_workflow_types() -> list[str]:
     return list(_registry.keys())
+
+
+def all_workflow_definitions() -> dict[str, WorkflowDefinition]:
+    return dict(_registry)
 
 
 def compile_registered_workflow(workflow_type: str, job_params: dict[str, Any]) -> dict[str, Any]:

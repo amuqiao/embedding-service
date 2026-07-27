@@ -236,6 +236,7 @@ def _workflow_definition() -> WorkflowDefinition:
     if _WORKFLOW_DEFINITION is None:
         _WORKFLOW_DEFINITION = WorkflowDefinition(
             workflow_type="example_workflow",
+            root_job_type="example_workflow",
             build=_workflow_expr,
             max_nodes=10,
         )

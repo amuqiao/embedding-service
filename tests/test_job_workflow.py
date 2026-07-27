@@ -139,6 +139,9 @@ async def test_create_child_job_propagates_only_trigger_request_id_and_preserves
                 "_system": {"child_only": "keep-me"},
             }
 
+        def job_type_spec(self):
+            return SimpleNamespace(role="leaf", execution_mode="custom_executor")
+
         def effective_retry_policy(self):
             return SimpleNamespace(for_purpose=lambda _purpose: None)
 
@@ -218,7 +221,7 @@ async def test_workflow_child_validation_rejects_non_text_model_for_builtin_text
             return {"model_id": "image-model"}
 
         def job_type_spec(self):
-            return SimpleNamespace(execution_mode="builtin_llm_text_runtime")
+            return SimpleNamespace(role="leaf", execution_mode="builtin_llm_text_runtime")
 
     root_job = _running_add_job()
     monkeypatch.setattr("app.workflows.orchestrator.get_job_executor", lambda job_type: BuiltinTextHandler())
@@ -259,7 +262,7 @@ async def test_workflow_child_validation_rejects_non_text_model_for_custom_text_
             return {"model_id": "image-model"}
 
         def job_type_spec(self):
-            return SimpleNamespace(execution_mode="custom_executor")
+            return SimpleNamespace(role="leaf", execution_mode="custom_executor")
 
     root_job = _running_add_job()
     monkeypatch.setattr("app.workflows.orchestrator.get_job_executor", lambda job_type: CustomTextHandler())
@@ -281,6 +284,32 @@ async def test_workflow_child_validation_rejects_non_text_model_for_custom_text_
         )
 
     assert exc.value.code == "MODEL_NOT_AVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_workflow_child_validation_rejects_root_only_job_type(monkeypatch):
+    class RootOnlyHandler:
+        timeout_seconds = 300
+
+        def job_type_spec(self):
+            return SimpleNamespace(role="root", execution_mode="custom_executor")
+
+    root_job = _running_add_job()
+    monkeypatch.setattr("app.workflows.orchestrator.get_job_executor", lambda job_type: RootOnlyHandler())
+
+    with pytest.raises(AppError) as exc:
+        await _create_child_job(
+            _FakeDB(),
+            root_job=root_job,
+            node={"key": "child-1", "job_type": "root_only", "job_params": {"value": 1}},
+        )
+
+    assert exc.value.code == "INVALID_JOB_TYPE"
+    assert exc.value.details == {
+        "job_type": "root_only",
+        "role": "root",
+        "workflow_node_key": "child-1",
+    }
 
 
 @pytest.mark.asyncio

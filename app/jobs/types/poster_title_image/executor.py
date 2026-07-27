@@ -931,6 +931,7 @@ def _workflow_definition() -> WorkflowDefinition:
     if _WORKFLOW_DEFINITION is None:
         _WORKFLOW_DEFINITION = WorkflowDefinition(
             workflow_type=POSTER_TITLE_IMAGE_JOB_TYPE,
+            root_job_type=POSTER_TITLE_IMAGE_JOB_TYPE,
             build=_workflow_expr,
             max_nodes=_max_workflow_nodes(),
         )

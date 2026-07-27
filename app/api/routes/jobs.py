@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.operations import OperationID
+from app.api.operations import OperationID, operation_path, operation_route_kwargs
 from app.core.database import get_db
 from app.core.security import require_service_auth
 from app.schemas.billing import JobBillingResponseData
@@ -15,9 +15,8 @@ router = APIRouter(tags=["jobs"])
 
 
 @router.post(
-    "/jobs",
-    response_model=JobResponseData,
-    operation_id=OperationID.CREATE_AI_JOB,
+    operation_path(OperationID.CREATE_AI_JOB),
+    **operation_route_kwargs(OperationID.CREATE_AI_JOB),
 )
 async def create_ai_job(
     request: Request,
@@ -35,9 +34,8 @@ async def create_ai_job(
 
 
 @router.get(
-    "/jobs/{job_id}",
-    response_model=JobResponseData,
-    operation_id=OperationID.GET_AI_JOB,
+    operation_path(OperationID.GET_AI_JOB),
+    **operation_route_kwargs(OperationID.GET_AI_JOB),
 )
 async def get_ai_job(
     request: Request,
@@ -55,9 +53,8 @@ async def get_ai_job(
 
 
 @router.get(
-    "/jobs/{job_id}/billing",
-    response_model=JobBillingResponseData,
-    operation_id=OperationID.GET_JOB_BILLING,
+    operation_path(OperationID.GET_JOB_BILLING),
+    **operation_route_kwargs(OperationID.GET_JOB_BILLING),
 )
 async def get_ai_job_billing(
     request: Request,

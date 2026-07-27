@@ -22,6 +22,7 @@ from app.core.registry_checks import (
     validate_error_registry,
     validate_job_type_registry,
     validate_operation_registry,
+    validate_workflow_registry,
 )
 from app.main import app
 from app.jobs.base import JobExecutor, JobTypeSpec, PromptSpec
@@ -35,6 +36,7 @@ from app.jobs.types.audio_stem_separation.errors import (
     AUDIO_STEM_INPUT_INVALID,
     AUDIO_STEM_MODEL_ASSET_MISSING,
 )
+from app.workflows.registry import WorkflowDefinition
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -246,6 +248,7 @@ def test_validate_operation_registry_rejects_unknown_log_event(monkeypatch):
         channel="http",
         method="GET",
         path="/test",
+        success_status=200,
         auth_boundary="test",
         request_schema=None,
         response_data_schema="JobResponseData",
@@ -266,6 +269,7 @@ def test_validate_operation_registry_rejects_internal_errors(monkeypatch):
         channel="http",
         method="GET",
         path="/test",
+        success_status=200,
         auth_boundary="test",
         request_schema=None,
         response_data_schema="JobResponseData",
@@ -298,6 +302,7 @@ def test_validate_operation_registry_allows_internal_service_errors(monkeypatch)
         channel="internal_service",
         method="POST",
         path="/internal/test",
+        success_status=200,
         auth_boundary="internal",
         request_schema=None,
         response_data_schema="JobResponseData",
@@ -321,6 +326,27 @@ def test_validate_operation_registry_allows_internal_service_errors(monkeypatch)
     monkeypatch.setattr("app.core.registry_checks.all_operation_specs", lambda: {"test_internal_operation": spec})
 
     validate_operation_registry()
+
+
+def test_validate_operation_registry_rejects_unsupported_success_status(monkeypatch):
+    spec = OperationSpec(
+        operation_id="test_operation",
+        channel="http",
+        method="POST",
+        path="/test",
+        success_status=201,
+        auth_boundary="test",
+        request_schema=None,
+        response_data_schema="JobResponseData",
+        error_codes=frozenset({"INVALID_INPUT"}),
+        idempotency_key=None,
+        side_effects=(),
+        log_events=(),
+    )
+    monkeypatch.setattr("app.core.registry_checks.all_operation_specs", lambda: {"test_operation": spec})
+
+    with pytest.raises(ValueError, match="unsupported success_status"):
+        validate_operation_registry()
 
 
 def test_validate_error_registry_rejects_invalid_projection_targets(monkeypatch):
@@ -940,6 +966,84 @@ def test_validate_capability_tool_registry_rejects_unknown_capability_ref(monkey
 
     with pytest.raises(ValueError, match="unknown capability_ref"):
         validate_capability_tool_registry()
+
+
+def _workflow_definition(**overrides) -> WorkflowDefinition:
+    values = {
+        "workflow_type": "example_workflow",
+        "root_job_type": "example_workflow",
+        "build": lambda _params: None,
+        "workflow_version": 1,
+        "failure_policy": "fail_fast",
+        "max_nodes": 10,
+    }
+    values.update(overrides)
+    return WorkflowDefinition(**values)
+
+
+def test_validate_workflow_registry_accepts_registered_root_job_type(monkeypatch):
+    monkeypatch.setattr(
+        job_registry,
+        "all_job_type_specs",
+        lambda: {"example_workflow": _job_type_spec(role="root")},
+    )
+    monkeypatch.setattr(
+        "app.core.registry_checks.workflow_registry.all_workflow_definitions",
+        lambda: {"example_workflow": _workflow_definition()},
+    )
+
+    validate_workflow_registry()
+
+
+@pytest.mark.parametrize(
+    ("definition", "job_specs", "message"),
+    [
+        (
+            _workflow_definition(root_job_type="missing"),
+            {},
+            "root_job_type must match workflow_type",
+        ),
+        (
+            _workflow_definition(),
+            {},
+            "unknown root_job_type",
+        ),
+        (
+            _workflow_definition(),
+            {"example_workflow": _job_type_spec(role="leaf")},
+            "root-capable",
+        ),
+        (
+            _workflow_definition(workflow_version=0),
+            {"example_workflow": _job_type_spec(role="root")},
+            "workflow_version",
+        ),
+        (
+            _workflow_definition(failure_policy="ignore"),
+            {"example_workflow": _job_type_spec(role="root")},
+            "failure_policy",
+        ),
+        (
+            _workflow_definition(max_nodes=0),
+            {"example_workflow": _job_type_spec(role="root")},
+            "max_nodes",
+        ),
+        (
+            _workflow_definition(build=None),
+            {"example_workflow": _job_type_spec(role="root")},
+            "build",
+        ),
+    ],
+)
+def test_validate_workflow_registry_rejects_invalid_definition(monkeypatch, definition, job_specs, message):
+    monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: job_specs)
+    monkeypatch.setattr(
+        "app.core.registry_checks.workflow_registry.all_workflow_definitions",
+        lambda: {"example_workflow": definition},
+    )
+
+    with pytest.raises(ValueError, match=message):
+        validate_workflow_registry()
 
 
 def _prompt_config(prompt_ref: str = "prompt.ref", output_schema_ref: str = "ExamplePairResult") -> dict:

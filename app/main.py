@@ -138,18 +138,14 @@ def _install_envelope_openapi_contract(schema: dict) -> None:
                     media["schema"] = _http_envelope_schema(media["schema"])
             responses.pop("202", None)
             responses.pop("422", None)
-            for status_code in ("400", "401", "403", "404", "405", "409", "500", "502", "504"):
-                responses.setdefault(
-                    status_code,
-                    {
-                        "description": "ErrorEnvelope",
-                        "content": {
-                            "application/json": {
-                                "schema": {"$ref": "#/components/schemas/ErrorEnvelope"}
-                            }
-                        },
-                    },
-                )
+            for status_code in ("400", "401", "403", "404", "405", "409", "500", "502", "503", "504"):
+                response = responses.setdefault(status_code, {"description": "ErrorEnvelope"})
+                response.setdefault("description", "ErrorEnvelope")
+                response["content"] = {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ErrorEnvelope"}
+                    }
+                }
 
 
 _HEALTH_PATHS = {"/health", "/healthz"}

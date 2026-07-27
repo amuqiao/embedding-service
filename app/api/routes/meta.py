@@ -1,20 +1,17 @@
 from fastapi import APIRouter, Depends, Query
 
-from app.api.operations import OperationID
+from app.api.operations import OperationID, operation_path, operation_route_kwargs
 from app.core.security import require_service_auth
 from app.core.language_catalog import list_languages_response
 from app.core.model_registry import list_models_response
 from app.core.prompt_templates import DEFAULT_PROMPT_TEMPLATE_JOB_TYPE, list_prompt_templates
-from app.schemas.meta import LanguagesResponse, ModelsResponse, PromptTemplateResponseData
 
 router = APIRouter(tags=["meta"], dependencies=[Depends(require_service_auth)])
 
 
 @router.get(
-    "/models",
-    response_model=ModelsResponse,
-    response_model_exclude_none=True,
-    operation_id=OperationID.LIST_MODELS,
+    operation_path(OperationID.LIST_MODELS),
+    **operation_route_kwargs(OperationID.LIST_MODELS),
 )
 async def list_models(
     job_type: str | None = Query(
@@ -27,18 +24,16 @@ async def list_models(
 
 
 @router.get(
-    "/languages",
-    response_model=LanguagesResponse,
-    operation_id=OperationID.LIST_LANGUAGES,
+    operation_path(OperationID.LIST_LANGUAGES),
+    **operation_route_kwargs(OperationID.LIST_LANGUAGES),
 )
 async def list_languages():
     return list_languages_response()
 
 
 @router.get(
-    "/prompt-templates",
-    response_model=PromptTemplateResponseData,
-    operation_id=OperationID.LIST_PROMPT_TEMPLATES,
+    operation_path(OperationID.LIST_PROMPT_TEMPLATES),
+    **operation_route_kwargs(OperationID.LIST_PROMPT_TEMPLATES),
 )
 async def prompt_templates(
     job_type: str = Query(

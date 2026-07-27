@@ -377,6 +377,7 @@ async def test_create_job_writes_registered_workflow_plan_to_runtime_ref(monkeyp
     workflow_registry.register(
         WorkflowDefinition(
             workflow_type="test.workflow",
+            root_job_type="test.workflow",
             build=build_workflow,
             max_nodes=10,
         )
@@ -450,6 +451,7 @@ async def test_create_job_idempotent_existing_workflow_does_not_recompile(monkey
     workflow_registry.register(
         WorkflowDefinition(
             workflow_type="test.workflow",
+            root_job_type="test.workflow",
             build=lambda _params: (_ for _ in ()).throw(AssertionError("workflow must not compile")),
         )
     )
@@ -494,6 +496,7 @@ async def test_create_job_maps_invalid_workflow_plan_to_validation_error(monkeyp
     workflow_registry.register(
         WorkflowDefinition(
             workflow_type="test.workflow",
+            root_job_type="test.workflow",
             build=lambda params: chunks("chunk", "example_sleep", params["items"], chunk_size=0),
         )
     )

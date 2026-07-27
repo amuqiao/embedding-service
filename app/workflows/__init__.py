@@ -15,6 +15,7 @@ from app.workflows.base import (
 from app.workflows.compiler import compile_workflow
 from app.workflows.registry import (
     WorkflowDefinition,
+    all_workflow_definitions,
     all_workflow_types,
     clear_for_tests,
     compile_registered_workflow,
@@ -28,6 +29,7 @@ __all__ = [
     "FAILURE_POLICIES",
     "WorkflowDefinition",
     "WorkflowSpec",
+    "all_workflow_definitions",
     "all_workflow_primitive_specs",
     "all_workflow_types",
     "chain",

@@ -38,6 +38,7 @@
 | [`api/业务语种规范.md`](api/业务语种规范.md) | CPP / AI / RS 三方共享语种代码、`in` 例外和 AI 服务语种目录接口规范 |
 | [`api/poster-title-image-delivery-api.md`](api/poster-title-image-delivery-api.md) | AI 标题图生成对接的当前交付接口合同、任务创建、查询、费用和 Callback 说明 |
 | [`plans/job-kernel-hardening.md`](plans/job-kernel-hardening.md) | 当前 Job kernel 可靠性、一致性和公开信息边界的短期硬化计划；完成后应归档 |
+| [`plans/template-drift-checklist.md`](plans/template-drift-checklist.md) | 当前模板骨架 operation/job_type/workflow/capability/tool 合同漂移的收口计划和验收条件 |
 | [`plans/ops-dashboard-post-mvp.md`](plans/ops-dashboard-post-mvp.md) | `ops_dashboard` MVP 后的表格可用性、长窗口分析、Job Trace 可视化、环境诊断和安全边界后续优化计划 |
 | [`plans/ai-capability-long-term.md`](plans/ai-capability-long-term.md) | AI provider、正式业务 `job_type`、usage normalizer、cost attribution 和 billing read model 的 trigger-based 长期计划 |
 | [`plans/workflow-kernel-long-term.md`](plans/workflow-kernel-long-term.md) | Job 内部 workflow kernel 从模板能力走向正式业务 `job_type` 前的 trigger-based 长期计划 |
