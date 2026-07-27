@@ -17,6 +17,7 @@
 | [`current/workflow-kernel.md`](current/workflow-kernel.md) | 当前 DAG-lite root/child workflow、child Job 执行、root 汇总和 billing scope 行为 |
 | [`current/observability.md`](current/observability.md) | 当前日志出口、request_id、业务事件白名单、本地 `logs/` 边界和新增日志代码规范 |
 | [`current/template-readiness.md`](current/template-readiness.md) | 当前仓库作为 AI Job 微服务模板的就绪边界、可复用能力和不承诺事项 |
+| [`runbooks/template-development-mental-model.md`](runbooks/template-development-mental-model.md) | 轻量说明本模板怎么开发和维护、如何选择单 executor 或 root/child workflow、以及新增业务时哪些代码事实源不能绕过；不是独立事实源 |
 | [`runbooks/template-adoption-runbook.md`](runbooks/template-adoption-runbook.md) | 复制模板成为真实业务项目时，项目身份、数据库名、compose 命名空间、对象存储命名空间和最小验收操作清单 |
 | [`current/script-entrypoint-contract.md`](current/script-entrypoint-contract.md) | 当前脚本入口 `-h`、子命令 help、输出、副作用、示例和验证的 envelope 合同 |
 | [`current/ops-dashboard.md`](current/ops-dashboard.md) | 当前只读 `ops_dashboard` 路由、data source / widget / layout / renderer 注册层和 Job 运维展示边界 |
@@ -50,6 +51,7 @@
 
 | 场景 | 默认入口 | 不放入这里的内容 |
 |---|---|---|
+| 理解模板开发维护全局入口 | [`runbooks/template-development-mental-model.md`](runbooks/template-development-mental-model.md) | 字段事实、API 合同、Job 编排长示例、具体接入清单 |
 | 理解 Job 内核链路 | [`runbooks/job/job-kernel-explained.md`](runbooks/job/job-kernel-explained.md) | 字段真源、表结构大表、API 合同 |
 | 讲解 Job 编排和新增 Job 落点 | [`runbooks/job/job-orchestration-examples.md`](runbooks/job/job-orchestration-examples.md) | API 字段合同、真实流程命令、数据库细节 |
 | 查 Job 运行证据 | [`runbooks/job/jobs使用与排障手册.md`](runbooks/job/jobs使用与排障手册.md) | 压测执行步骤、业务专属链路解释 |
