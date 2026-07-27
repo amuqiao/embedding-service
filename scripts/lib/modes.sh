@@ -143,7 +143,7 @@ assert_no_local_app_running_for_compose_full() {
   summary="$(local_app_running_summary)" || return "$?"
   [[ -z "$summary" ]] && return 0
 
-  die "local app processes are running: ${summary//$'\n'/; }. Stop them before compose-full with: ./scripts/dev.sh stop" 4
+  die "local app processes are running: ${summary//$'\n'/; }. Stop them before compose-full with: ./scripts/run.sh down dev" 4
 }
 
 warn_if_local_app_running() {
@@ -202,5 +202,5 @@ warn_if_compose_full_app_running() {
   [[ -z "$services" ]] && return 0
 
   section "Mode Guard"
-  event "WARN" "compose-full" "app services running: ${services}; run ./scripts/deploy.sh down compose-full before ./scripts/dev.sh start"
+  event "WARN" "compose-full" "app services running: ${services}; run ./scripts/deploy.sh down compose-full before ./scripts/run.sh up dev"
 }

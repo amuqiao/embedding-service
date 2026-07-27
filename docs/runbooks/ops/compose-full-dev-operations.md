@@ -19,10 +19,10 @@ api / worker 容器
 
 `/app/scripts/k8s.sh` 只用于带 `KUBERNETES_SERVICE_HOST` 的 K8s Pod 内手动运维，不用于 `compose-full` 生命周期，也不要在 `compose-full` 容器里当作 compose 运维入口。
 
-`compose-full` 和 `./scripts/dev.sh start` 管理的 `local` API / worker 不能混跑。切到 `compose-full` 前先停止本地进程：
+`compose-full` 和 `./scripts/run.sh up dev` 管理的 `local` API / worker 不能混跑。切到 `compose-full` 前先停止本地开发 recipe：
 
 ```bash
-./scripts/dev.sh stop
+./scripts/run.sh down dev
 ```
 
 本文默认使用根目录 `.env`。如果显式使用其他配置文件，启动和后续 `docker compose` 命令要保持同一套 `ENV_FILE`、`COMPOSE_PROJECT_NAME` 和端口配置。

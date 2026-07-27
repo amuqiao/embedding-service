@@ -138,7 +138,7 @@ Job result 中的小结果可以直接进入 `job_result`。大结果或文件�
 修改 Job 执行链路后运行：
 
 ```bash
-./scripts/dev.sh start
+./scripts/run.sh up dev
 ./scripts/verify.sh workflow-smoke
-./scripts/dev.sh stop
+./scripts/run.sh down dev
 ```

@@ -92,8 +92,8 @@ root job
 启动本地依赖、API 和 worker。需要同时看 dashboard 时，开启 dashboard：
 
 ```bash
-OPS_DASHBOARD_ENABLED=true ./scripts/dev.sh start
-./scripts/dev.sh status
+OPS_DASHBOARD_ENABLED=true ./scripts/run.sh up dev
+./scripts/run.sh status dev
 ```
 
 `status` 会显示 API 和 dashboard URL。dashboard 默认路径：
@@ -181,7 +181,7 @@ dashboard 主要看：
 本地压测还要看：
 
 ```bash
-./scripts/dev.sh status
+./scripts/run.sh status dev
 tail -n 200 logs/api.log
 tail -n 200 logs/worker.log
 ```

@@ -126,10 +126,10 @@ K8s Secret / ConfigMap / Helm values 中的服务名和数据库连接串
 涉及 Job、Taskiq、Callback、Workflow 或 Recovery 的改动，还要跑本地服务 smoke：
 
 ```bash
-./scripts/dev.sh start
+./scripts/run.sh up dev
 ./scripts/verify.sh workflow-smoke
 ./scripts/verify.sh workflow-modes-smoke
-./scripts/dev.sh stop
+./scripts/run.sh down dev
 ```
 
 接入正式业务 `job_type` 后，新增业务 e2e。业务 e2e 应验证真实输入、真实 child Job、真实对象存储产物、Callback mock 和 billing 读模型。

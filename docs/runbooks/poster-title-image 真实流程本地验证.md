@@ -158,8 +158,8 @@ SERVICE_API_KEY='<测试环境 API token>' \
 本地验证前启动依赖、API 和 worker：
 
 ```bash
-./scripts/dev.sh restart
-./scripts/dev.sh status
+./scripts/run.sh up dev
+./scripts/run.sh status dev
 ```
 
 如果刚改过迁移、Job workflow 或对象存储逻辑，先跑：
@@ -499,7 +499,7 @@ worker 当前读取参考图使用 `public_url`。如果 Job 已创建但 worker
 另开一个终端看状态：
 
 ```bash
-./scripts/dev.sh status
+./scripts/run.sh status dev
 ./scripts/dev.sh logs worker
 ```
 

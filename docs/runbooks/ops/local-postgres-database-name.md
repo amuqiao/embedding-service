@@ -1,6 +1,6 @@
 # 本地 PostgreSQL 数据库名变更排障
 
-本文用于处理本地 `./scripts/dev.sh start` 或 `restart` 时，PostgreSQL 容器健康但 Alembic 迁移报 `database "... " does not exist` 的问题。
+本文用于处理本地 `./scripts/run.sh up dev` 时，PostgreSQL 容器健康但 Alembic 迁移报 `database "... " does not exist` 的问题。
 
 ## 先理解这件事
 
@@ -30,7 +30,7 @@ Alembic 连接新数据库失败
 执行：
 
 ```bash
-./scripts/dev.sh restart
+./scripts/run.sh up dev
 ```
 
 依赖容器启动成功，但数据库迁移阶段失败：
@@ -48,7 +48,7 @@ FATAL:  database "cms_poster_title" does not exist
 
 ```bash
 grep -E '^(DATABASE_URL|POSTGRES_DB|POSTGRES_HOST_PORT|COMPOSE_PROJECT_NAME)=' .env
-./scripts/dev.sh status
+./scripts/run.sh status dev
 ```
 
 再查看当前 PostgreSQL 容器里实际有哪些 database。以下命令需要从仓库根目录执行，并把 `VALUE` 替换成 `.env` 中的实际值：
@@ -75,10 +75,12 @@ docker compose exec -T postgres \
   createdb -U postgres DATABASE_NAME
 ```
 
-然后重新启动本地服务：
+然后执行迁移，并重启宿主机 API / worker：
 
 ```bash
+./scripts/dev.sh migrate
 ./scripts/dev.sh restart
+./scripts/dev.sh status
 ```
 
 成功标准：
@@ -97,7 +99,7 @@ health ok
 先停止服务：
 
 ```bash
-./scripts/dev.sh stop
+./scripts/run.sh down dev
 ```
 
 再使用 Docker Compose 删除对应 project 的 PostgreSQL volume。执行前先用 `docker volume ls` 确认 volume 名称，不要删除其他项目的 volume。
@@ -105,7 +107,7 @@ health ok
 重建后再次启动：
 
 ```bash
-./scripts/dev.sh start
+./scripts/run.sh up dev
 ```
 
 ## 改名时的预防规则

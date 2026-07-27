@@ -40,6 +40,7 @@ run_script_syntax() {
   # 语法检查不透传 bash -n 的成功输出；每个脚本成功后输出一行 OK。
   for script in \
     "$ROOT_DIR/scripts/dev.sh" \
+    "$ROOT_DIR/scripts/run.sh" \
     "$ROOT_DIR/scripts/verify.sh" \
     "$ROOT_DIR/scripts/lib/common.sh" \
     "$ROOT_DIR/scripts/lib/runtime.sh" \
@@ -104,6 +105,8 @@ run_cli_smoke() {
   # help smoke 只验证入口可用，不重复打印完整 help，避免 check 输出噪声。
   "$ROOT_DIR/scripts/dev.sh" --help >/dev/null
   event "OK" "dev.sh" "help"
+  "$ROOT_DIR/scripts/run.sh" --help >/dev/null
+  event "OK" "run.sh" "help"
   "$ROOT_DIR/scripts/verify.sh" --help >/dev/null
   event "OK" "verify.sh" "help"
   "$ROOT_DIR/scripts/deploy.sh" --help >/dev/null
@@ -136,6 +139,12 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/dev.sh" start --help >/dev/null
   "$ROOT_DIR/scripts/dev.sh" start api --help >/dev/null
   "$ROOT_DIR/scripts/dev.sh" migrate --help >/dev/null
+  "$ROOT_DIR/scripts/run.sh" up --help >/dev/null
+  "$ROOT_DIR/scripts/run.sh" up dev --help >/dev/null
+  "$ROOT_DIR/scripts/run.sh" status --help >/dev/null
+  "$ROOT_DIR/scripts/run.sh" status dev --help >/dev/null
+  "$ROOT_DIR/scripts/run.sh" down --help >/dev/null
+  "$ROOT_DIR/scripts/run.sh" down dev --help >/dev/null
   "$ROOT_DIR/scripts/deploy.sh" up --help >/dev/null
   "$ROOT_DIR/scripts/deploy.sh" up compose-full --help >/dev/null
   "$ROOT_DIR/scripts/k8s.sh" check --help >/dev/null

@@ -4,10 +4,11 @@
 
 ## 工作模型
 
-`scripts/` 目录提供本仓库稳定的本地操作入口。入口脚本应把“开发、验证、部署形态、真实流程、只读排障”分开，避免一个脚本承担跨领域职责。
+`scripts/` 目录提供本仓库稳定的本地操作入口。入口脚本应把“日常 recipe、宿主机进程、验证、部署形态、真实流程、只读排障”分开，避免一个脚本承担跨领域职责。
 
 ```text
-dev.sh          本地服务生命周期
+run.sh          日常快捷 recipe
+dev.sh          宿主机 API / worker 生命周期
 verify.sh       一次性验证任务
 deploy.sh       docker compose 部署形态
 k8s.sh          已部署 Pod 内手动运维
@@ -55,6 +56,10 @@ Shell 入口默认只负责：
 新增脚本读取配置时应沿用现有优先级和 helper，不要重新发明配置加载规则。真实流程脚本只能面向本地 API，不能默认指向远程生产服务。
 
 ## 运行模式边界
+
+`run.sh` 只编排日常 recipe，不直接实现进程管理、Compose 管理或迁移细节。默认本地开发路径是 `./scripts/run.sh up dev`，它按顺序调用 `deploy.sh up compose-deps`、`dev.sh migrate`、`dev.sh start api` 和 `dev.sh start worker`。
+
+`dev.sh` 只管理宿主机 API / worker 进程，不启动或停止 PostgreSQL / Redis。`deploy.sh` 只管理 `compose-deps` 和 `compose-full`。不要把 recipe 塞回 `dev.sh` 或 `deploy.sh`。
 
 `local` 与当前仓库下任何 `compose-full` 的 API / worker 不能混跑。`local` 可以复用 `compose-deps` 的 PostgreSQL / Redis，但当 `compose-full` 的 API / worker 已运行时，`dev.sh start` / `migrate` 应直接失败；当本地 API / worker 或残留本地进程仍在运行时，`deploy.sh up compose-full` 应直接失败。
 

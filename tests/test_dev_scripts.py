@@ -85,6 +85,28 @@ def _write_fake_command(bin_dir: Path, name: str, body: str) -> Path:
     return path
 
 
+def _write_run_script_fixture(tmp_path: Path, *, deploy_body: str, dev_body: str) -> Path:
+    root = tmp_path / "run-root"
+    scripts_dir = root / "scripts"
+    lib_dir = scripts_dir / "lib"
+    lib_dir.mkdir(parents=True)
+    (scripts_dir / "run.sh").write_text((ROOT_DIR / "scripts/run.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    (scripts_dir / "run.sh").chmod(0o755)
+    (lib_dir / "common.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "section() { printf '\\n== %s ==\\n' \"$1\"; }\n"
+        "event() { printf '%-9s %-10s %s\\n' \"$1\" \"$2\" \"${3:-}\"; }\n"
+        "die() { printf 'ERROR: %s\\n' \"$1\" >&2; exit \"${2:-1}\"; }\n"
+        "args_include_help() { local arg; for arg in \"$@\"; do case \"$arg\" in -h|--help) return 0 ;; esac; done; return 1; }\n",
+        encoding="utf-8",
+    )
+    (scripts_dir / "deploy.sh").write_text(deploy_body, encoding="utf-8")
+    (scripts_dir / "deploy.sh").chmod(0o755)
+    (scripts_dir / "dev.sh").write_text(dev_body, encoding="utf-8")
+    (scripts_dir / "dev.sh").chmod(0o755)
+    return root
+
+
 def test_dev_api_service_command_uses_uvicorn_reload_when_enabled():
     command = _api_service_command(DEV_API_RELOAD="true", WATCHFILES_FORCE_POLLING="true")
 
@@ -94,6 +116,72 @@ def test_dev_api_service_command_uses_uvicorn_reload_when_enabled():
     assert "--reload" in command
     assert "WATCHFILES_FORCE_POLLING=true" in command
     assert "start-api.sh" not in command
+
+
+def test_run_dev_up_invokes_compose_migrate_api_worker_in_order(tmp_path):
+    root = _write_run_script_fixture(
+        tmp_path,
+        deploy_body="#!/usr/bin/env bash\nprintf 'deploy:%s\\n' \"$*\" >> run.log\n",
+        dev_body="#!/usr/bin/env bash\nprintf 'dev:%s\\n' \"$*\" >> run.log\n",
+    )
+
+    result = subprocess.run(
+        ["./scripts/run.sh", "up", "dev"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert (root / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "deploy:up compose-deps",
+        "dev:migrate",
+        "dev:start api",
+        "dev:start worker",
+    ]
+
+
+def test_run_dev_up_stops_after_subcommand_failure(tmp_path):
+    root = _write_run_script_fixture(
+        tmp_path,
+        deploy_body="#!/usr/bin/env bash\nprintf 'deploy:%s\\n' \"$*\" >> run.log\nexit 7\n",
+        dev_body="#!/usr/bin/env bash\nprintf 'dev:%s\\n' \"$*\" >> run.log\n",
+    )
+
+    result = subprocess.run(
+        ["./scripts/run.sh", "up", "dev"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 7
+    assert (root / "run.log").read_text(encoding="utf-8").splitlines() == ["deploy:up compose-deps"]
+
+
+def test_run_dev_down_invokes_api_worker_then_compose_deps(tmp_path):
+    root = _write_run_script_fixture(
+        tmp_path,
+        deploy_body="#!/usr/bin/env bash\nprintf 'deploy:%s\\n' \"$*\" >> run.log\n",
+        dev_body="#!/usr/bin/env bash\nprintf 'dev:%s\\n' \"$*\" >> run.log\n",
+    )
+
+    result = subprocess.run(
+        ["./scripts/run.sh", "down", "dev"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert (root / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "dev:stop api",
+        "dev:stop worker",
+        "deploy:down compose-deps",
+    ]
 
 
 def test_dev_api_service_command_uses_start_api_by_default():
@@ -612,7 +700,7 @@ def test_dev_worker_service_command_injects_root_env(tmp_path):
     assert "start-worker.sh" in command
 
 
-def test_start_worker_without_recovery_loop_does_not_require_python(tmp_path):
+def test_start_worker_without_recovery_loop_uses_python_module_taskiq(tmp_path):
     script = tmp_path / "start-worker.sh"
     script.write_text((ROOT_DIR / "start-worker.sh").read_text(encoding="utf-8"), encoding="utf-8")
     script.chmod(0o755)
@@ -629,9 +717,9 @@ def test_start_worker_without_recovery_loop_does_not_require_python(tmp_path):
     )
     _write_fake_command(
         fake_bin,
-        "taskiq",
+        "python3",
         "#!/bin/sh\n"
-        "printf 'taskiq %s\\n' \"$*\"\n"
+        "printf 'python3 %s\\n' \"$*\"\n"
         "exit 0\n",
     )
     env = _clean_root_env()
@@ -655,7 +743,7 @@ def test_start_worker_without_recovery_loop_does_not_require_python(tmp_path):
     )
 
     assert result.returncode == 0
-    assert "taskiq worker app.tasks.taskiq_app:broker" in result.stdout
+    assert "python3 -m taskiq worker app.tasks.taskiq_app:broker" in result.stdout
     assert "python not found" not in result.stderr
 
 
@@ -1175,7 +1263,7 @@ def test_compose_full_rejects_local_worker_residual_log_writer(tmp_path):
 
     assert result.returncode == 4
     assert "local app processes are running: worker pid=12345" in result.stderr
-    assert "./scripts/dev.sh stop" in result.stderr
+    assert "./scripts/run.sh down dev" in result.stderr
 
 
 def test_compose_full_residual_detection_requires_lsof_when_logs_exist(tmp_path):
@@ -3334,7 +3422,7 @@ def test_jobs_doctor_default_reports_empty_window_next_checks(monkeypatch):
     assert "扩大 --since 窗口" in result.stdout
     assert "./scripts/jobs.sh list --since 10m" in result.stdout
     assert "./scripts/jobs.sh job <job_id>" in result.stdout
-    assert "./scripts/dev.sh status" in result.stdout
+    assert "./scripts/run.sh status dev" in result.stdout
 
 
 def test_jobs_doctor_json_treats_empty_window_as_ok(monkeypatch):

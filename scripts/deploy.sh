@@ -179,6 +179,8 @@ check_deploy() {
   event "OK" "compose-project" "no working_dir conflict"
 
   section "Scripts"
+  bash -n "$ROOT_DIR/scripts/run.sh"
+  event "OK" "run.sh" "syntax"
   bash -n "$ROOT_DIR/scripts/deploy.sh"
   event "OK" "deploy.sh" "syntax"
   bash -n "$ROOT_DIR/scripts/lib/modes.sh"
@@ -194,6 +196,8 @@ up_deps() {
   assert_no_compose_project_name_conflict
   section "Compose Deps"
   compose up -d postgres redis
+  wait_for_compose_service_health postgres 90
+  wait_for_compose_service_health redis 60
 }
 
 down_deps() {
@@ -204,6 +208,32 @@ down_deps() {
 status_deps() {
   section "Compose Deps"
   compose ps postgres redis
+}
+
+wait_for_compose_service_health() {
+  local service="$1"
+  local timeout_seconds="$2"
+  local elapsed=0
+  local line
+  local health
+  local state
+
+  while true; do
+    line="$(compose ps "$service" --format '{{.State}}|{{.Health}}' 2>/dev/null || true)"
+    IFS='|' read -r state health <<< "$line"
+    if [[ "$health" == "healthy" ]]; then
+      event "READY" "$service" "healthy"
+      return 0
+    fi
+
+    if (( elapsed >= timeout_seconds )); then
+      compose ps "$service" >&2 || true
+      die "$service did not become healthy within ${timeout_seconds}s; state=${state:-unknown} health=${health:-unknown}" 4
+    fi
+
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
 }
 
 up_full() {

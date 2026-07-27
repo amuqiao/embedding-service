@@ -20,12 +20,13 @@
 
 | 形态 | 入口 | API/worker 运行位置 | PostgreSQL/Redis 来源 | 关键边界 |
 |---|---|---|---|---|
-| `local` | `./scripts/dev.sh` | 宿主机 | docker compose 依赖服务 | 本地开发默认形态；可复用 `compose-deps`，不能和 `compose-full` 的 API/worker 混跑 |
+| `dev` recipe | `./scripts/run.sh up dev` | 宿主机 | docker compose 依赖服务 | 本地开发默认路径；编排 `compose-deps`、migration 和宿主机 API/worker |
+| `local` | `./scripts/dev.sh` | 宿主机 | 外部或已启动依赖 | 只管理宿主机 API/worker 进程；可复用 `compose-deps`，不能和 `compose-full` 的 API/worker 混跑 |
 | `compose-deps` | `./scripts/deploy.sh up compose-deps` | 宿主机或外部进程 | docker compose | 只启动 PostgreSQL/Redis 依赖服务 |
 | `compose-full` | `./scripts/deploy.sh up compose-full` | docker compose | docker compose | API、worker、PostgreSQL、Redis 全部由 compose 管理 |
 | 已部署 Pod | 平台部署 + `./scripts/k8s.sh` | Pod | 平台注入的外部资源 | 本仓库不创建 K8s 资源、云平台 Secrets 或 CI/CD 流水线 |
 
-`deploy.sh check` 是只读部署入口检查，不启动服务。`deploy.sh check` 和 `deploy.sh up` 会读取 Docker Compose 容器 label，检查当前 `COMPOSE_PROJECT_NAME` 是否已经被其他 `working_dir` 占用；`deploy.sh up` 还要求 `ENV_FILE` 指向的配置文件存在，默认是 `.env`。
+`run.sh` 是日常 recipe 入口，只编排 `dev.sh` 和 `deploy.sh` 的稳定命令，不直接实现进程或 Compose 管理。`deploy.sh check` 是只读部署入口检查，不启动服务。`deploy.sh check` 和 `deploy.sh up` 会读取 Docker Compose 容器 label，检查当前 `COMPOSE_PROJECT_NAME` 是否已经被其他 `working_dir` 占用；`deploy.sh up` 还要求 `ENV_FILE` 指向的配置文件存在，默认是 `.env`。
 
 ```text
 API Pod(s)
@@ -139,8 +140,8 @@ AI billing 当前事实见 [`ai-billing.md`](ai-billing.md)。`GET /jobs/{job_id
 修改 Job 内部执行、Taskiq workflow、Attempt、Recovery、Callback 或对象存储后，还应运行：
 
 ```bash
-./scripts/dev.sh start
+./scripts/run.sh up dev
 ./scripts/verify.sh workflow-smoke
 ./scripts/verify.sh workflow-modes-smoke
-./scripts/dev.sh stop
+./scripts/run.sh down dev
 ```

@@ -13,7 +13,6 @@ source "$ROOT_DIR/scripts/lib/compose.sh"
 source "$ROOT_DIR/scripts/lib/modes.sh"
 
 APP_SERVICES=(api worker)
-DEP_SERVICES=(postgres redis)
 API_DASHBOARD_URL="${API_DASHBOARD_URL:-${API_URL}/internal/jobs-dashboard}"
 API_DASHBOARD_EXAMPLES_URL="${API_DASHBOARD_EXAMPLES_URL:-${API_DASHBOARD_URL}/examples}"
 
@@ -242,28 +241,6 @@ cleanup_service_residuals() {
   fi
 }
 
-wait_for_container_health() {
-  local service="$1"
-  local timeout_seconds="$2"
-  local elapsed=0
-
-  # 健康检查成功只输出 READY；失败时再透传 compose ps 作为相关证据。
-  while true; do
-    if compose ps "$service" 2>/dev/null | grep -qi "healthy"; then
-      event "READY" "$service" "healthy"
-      return 0
-    fi
-
-    if (( elapsed >= timeout_seconds )); then
-      compose ps "$service" >&2 || true
-      die "$service did not become healthy within ${timeout_seconds}s"
-    fi
-
-    sleep 2
-    elapsed=$((elapsed + 2))
-  done
-}
-
 extract_url_port() {
   local url="$1"
   "$PYTHON_BIN" -c 'from urllib.parse import urlparse; import sys; print(urlparse(sys.argv[1]).port or "")' "$url"
@@ -293,19 +270,6 @@ assert_local_config_consistency() {
     die "DATABASE_URL port (${database_port}) must match POSTGRES_HOST_PORT (${POSTGRES_HOST_PORT})" 2
   [[ "$redis_port" == "$REDIS_HOST_PORT" ]] ||
     die "REDIS_URL port (${redis_port}) must match REDIS_HOST_PORT (${REDIS_HOST_PORT})" 2
-}
-
-assert_compose_port_mapping() {
-  local service="$1"
-  local host_port="$2"
-  local container_port="$3"
-  local ports
-
-  ports="$(compose ps "$service" --format '{{.Ports}}' 2>/dev/null || true)"
-  case "$ports" in
-    *":${host_port}->${container_port}/tcp"*) return 0 ;;
-  esac
-  die "${service} compose port mapping must include ${host_port}->${container_port}; current ports=${ports:-none}. Recreate the service with ./scripts/dev.sh stop && docker compose up -d --force-recreate ${service}" 4
 }
 
 wait_for_api() {
@@ -344,31 +308,13 @@ bootstrap() {
   uv sync
 }
 
-start_dependencies() {
-  section "Dependencies"
-  compose up -d "${DEP_SERVICES[@]}"
-  wait_for_container_health postgres 90
-  wait_for_container_health redis 60
-  assert_compose_port_mapping postgres "$POSTGRES_HOST_PORT" "5432"
-  assert_compose_port_mapping redis "$REDIS_HOST_PORT" "6379"
-}
-
-stop_dependencies() {
-  section "Dependencies"
-  if compose ps "${DEP_SERVICES[@]}" >/dev/null 2>&1; then
-    compose stop "${DEP_SERVICES[@]}"
-  else
-    event "SKIP" "compose" "no local services found"
-  fi
-}
-
 migrate() {
   assert_no_compose_full_app_running_for_local
   guard_local_env
   assert_local_config_consistency
   section "Database"
-  require_executable "$ALEMBIC_BIN" "run: ./scripts/dev.sh bootstrap"
-  "$ALEMBIC_BIN" upgrade head
+  require_project_python
+  "$PYTHON_BIN" -m alembic upgrade head
 }
 
 start_service() {
@@ -495,8 +441,6 @@ start_all() {
   assert_no_compose_full_app_running_for_local
   guard_local_env
   assert_local_config_consistency
-  start_dependencies
-  migrate
   start_application
   status_application
 }
@@ -506,7 +450,6 @@ stop_all() {
   section "Application"
   stop_service api "$context"
   stop_service worker "$context"
-  stop_dependencies
 }
 
 status_service() {
@@ -567,34 +510,6 @@ status_service() {
     detail "concurrency" "$WORKER_CONCURRENCY"
     detail "log" "$display_log"
   fi
-}
-
-status_dependencies() {
-  local service
-  local line
-  local name
-  local state
-  local health
-  local ports
-
-  section "Dependencies"
-  if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
-    row docker "missing" "Docker Compose is unavailable"
-    return
-  fi
-
-  for service in "${DEP_SERVICES[@]}"; do
-    line="$(compose ps "$service" --format '{{.Service}}|{{.State}}|{{.Health}}|{{.Ports}}' 2>/dev/null || true)"
-    if [[ -z "$line" ]]; then
-      row "$service" "missing" "container not found"
-      continue
-    fi
-
-    IFS='|' read -r name state health ports <<< "$line"
-    [[ -n "$health" ]] || health="-"
-    ports="${ports%%, *}"
-    row "$name" "$health" "state=$state ports=${ports:-none}"
-  done
 }
 
 status_application() {
@@ -658,7 +573,6 @@ restart_target() {
 status_target() {
   local service="${1:-}"
   if [[ -z "$service" ]]; then
-    status_dependencies
     status_application
     return
   fi

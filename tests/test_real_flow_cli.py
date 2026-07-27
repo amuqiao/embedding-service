@@ -32,6 +32,7 @@ STORAGE_ENV_KEYS = [
     "OSS_PUBLIC_ENDPOINT",
     "OSS_ENDPOINT",
 ]
+API_ENV_KEYS = ["API_URL", "API_HOST", "API_PORT"]
 
 
 def _transparent_png_bytes() -> bytes:
@@ -56,6 +57,11 @@ def _jpeg_bytes() -> bytes:
 
 def clear_storage_env(monkeypatch):
     for key in STORAGE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
+def clear_api_env(monkeypatch):
+    for key in API_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
 
 
@@ -1229,7 +1235,9 @@ def test_real_flow_env_value_prefers_runtime_env(monkeypatch):
     assert value == "runtime-token"
 
 
-def test_real_flow_resolves_api_url_from_root_env():
+def test_real_flow_resolves_api_url_from_root_env(monkeypatch):
+    clear_api_env(monkeypatch)
+
     api_url = llm_job_billing.resolved_api_url(None, {"API_HOST": "127.0.0.1", "API_PORT": "18200"})
 
     assert api_url == "http://127.0.0.1:18200"
@@ -1269,6 +1277,7 @@ def test_real_flow_accepts_loopback_ip_url():
 
 
 def test_real_flow_run_uses_http_job_and_billing_flow(tmp_path, monkeypatch):
+    clear_api_env(monkeypatch)
     monkeypatch.delenv("DEFAULT_MODEL_ID", raising=False)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
@@ -1421,6 +1430,7 @@ def test_real_flow_run_uses_env_file_for_remote_api_and_service_key(tmp_path, mo
 
 
 def test_audio_stem_separation_run_uses_payload_file_api_flow(tmp_path, monkeypatch, capsys):
+    clear_api_env(monkeypatch)
     clear_storage_env(monkeypatch)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
@@ -1840,6 +1850,7 @@ def test_real_flow_run_uses_double_job_type(tmp_path, monkeypatch):
 
 
 def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, capsys):
+    clear_api_env(monkeypatch)
     clear_storage_env(monkeypatch)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)

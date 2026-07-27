@@ -109,7 +109,7 @@ drums -> bass -> other -> vocals
 本地 FastAPI 服务和 worker 应已运行，并且 `.env` 指向远程 Triton：
 
 ```bash
-./scripts/dev.sh status
+./scripts/run.sh status dev
 ```
 
 检查 real-flow 上下文：

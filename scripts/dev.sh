@@ -2,7 +2,7 @@
 # dev.sh - 本地开发服务入口
 #
 # 运行环境：Bash；本地开发需要 uv、Python venv、Docker Compose、curl，端口检查可使用 lsof。
-# 作用域：只管理当前仓库的本地 FastAPI/Taskiq 服务和 docker compose 本地依赖。
+# 作用域：只管理当前仓库的本地 FastAPI/Taskiq 宿主机进程。
 # 验证、smoke、e2e 等一次性检查不属于本入口。
 # 约束：入口脚本只做参数分发和帮助说明，具体实现下沉到 scripts/dev/ 原子脚本。
 # 输出：help 使用中文说明边界；执行结果由原子脚本按 section/event/row/detail 输出。
@@ -19,8 +19,10 @@ usage() {
   ./scripts/dev.sh -h|--help
 
 作用域：
-  当前仓库的本地服务入口。管理 FastAPI API、Taskiq worker，以及 docker compose 中的 postgres/redis 本地依赖。
+  当前仓库的本地服务入口。只管理宿主机 FastAPI API 和 Taskiq worker 进程。
   不负责部署、验证任务、生产运维、数据库重置、远程资源或其他仓库。
+  Docker 依赖和 compose-full 生命周期请使用 ./scripts/deploy.sh。
+  日常快捷 recipe 请使用 ./scripts/run.sh。
 
 运行环境：
   Requires: Bash
@@ -35,10 +37,10 @@ usage() {
 
 命令：
   bootstrap           缺少 .env 时从 .env.example 创建，并执行 uv sync。
-  start [service]     启动服务；不传 service 时启动依赖、执行迁移、启动 api 和 worker。
-  stop [service]      停止服务；不传 service 时停止 api、worker、postgres 和 redis。
-  restart [service]   重启服务；不传 service 时重启完整本地服务栈。
-  status [service]    查看状态；不传 service 时展示依赖、api、worker 和健康检查。
+  start [service]     启动服务；不传 service 时启动 api 和 worker。
+  stop [service]      停止服务；不传 service 时停止 api 和 worker。
+  restart [service]   重启服务；不传 service 时重启 api 和 worker。
+  status [service]    查看状态；不传 service 时展示 api、worker 和健康检查。
   logs <service>      跟随查看 api 或 worker 日志，Ctrl-C 退出。
   migrate             对本地开发数据库执行 Alembic 迁移。
   ports [port ...]    扫描本地可用端口，支持 --ports、端口范围和 --format json。
@@ -54,7 +56,7 @@ usage() {
   stderr: 缺少依赖、非法 service、非本地 DATABASE_URL / REDIS_URL、端口占用等错误。
 
 成功标准：
-  start 成功 = postgres/redis healthy，迁移成功，api/worker 进程存活，/health 可访问。
+  start 成功 = api/worker 进程存活，/health 可访问。
 
 运行产物：
   PID:  ${RUN_DIR}/api.pid, ${RUN_DIR}/worker.pid
@@ -64,6 +66,7 @@ usage() {
   应用配置、本地端口、compose 项目名和 worker 启动参数统一写入 .env。
   生命周期和迁移动作会拒绝非本地 DATABASE_URL / REDIS_URL。
   local 本地 api/worker 会拒绝与 compose-full 的 api/worker 混跑；切换前先执行 ./scripts/deploy.sh down compose-full。
+  start/stop/restart/status 不启动或停止 Docker PostgreSQL/Redis；常见完整本地开发环境使用 ./scripts/run.sh up dev。
   未知 service 会直接报错。
   启动 api 前会检查端口 ${API_PORT} 是否已被其他进程占用。
   bootstrap 缺文件时创建 .env，已存在则保留。
@@ -72,7 +75,9 @@ usage() {
 
 常用示例：
   ./scripts/dev.sh bootstrap
-  ./scripts/dev.sh start
+  ./scripts/run.sh up dev
+  ./scripts/run.sh status dev
+  ./scripts/run.sh down dev
   ./scripts/dev.sh status api
   ./scripts/dev.sh logs worker
 
@@ -110,24 +115,24 @@ EOF
       local config_note
       case "$name" in
         start)
-          effect="启动服务；不传 service 时启动依赖、执行迁移、启动 api 和 worker。"
-          boundary="会启动本地进程并可能执行迁移。"
+          effect="启动服务；不传 service 时启动 api 和 worker。"
+          boundary="会启动本地进程，不启动 Docker 依赖，不执行迁移。"
           config_note="会校验本地 DATABASE_URL / REDIS_URL，并拒绝和 compose-full API/worker 混跑。"
           ;;
         stop)
-          effect="停止服务；不传 service 时停止 api、worker、postgres 和 redis。"
-          boundary="会停止本地进程和本地依赖服务。"
-          config_note="读取 ENV_FILE 以定位本地依赖和运行目录。"
+          effect="停止服务；不传 service 时停止 api 和 worker。"
+          boundary="会停止本地进程，不停止 Docker 依赖。"
+          config_note="读取 ENV_FILE 以定位运行目录。"
           ;;
         restart)
-          effect="重启服务；不传 service 时重启完整本地服务栈。"
-          boundary="会先停止再启动本地进程，并可能执行迁移。"
+          effect="重启服务；不传 service 时重启 api 和 worker。"
+          boundary="会先停止再启动本地进程，不启动 Docker 依赖，不执行迁移。"
           config_note="会校验本地 DATABASE_URL / REDIS_URL，并拒绝和 compose-full API/worker 混跑。"
           ;;
         status)
-          effect="只读查看状态；不传 service 时展示依赖、api、worker 和健康检查。"
+          effect="只读查看状态；不传 service 时展示 api、worker 和健康检查。"
           boundary="只读查询状态，不修改服务状态。"
-          config_note="读取 ENV_FILE 以定位本地依赖和健康检查地址。"
+          config_note="读取 ENV_FILE 以定位健康检查地址。"
           ;;
       esac
       cat <<EOF
@@ -141,6 +146,7 @@ EOF
 配置与环境变量：
   ENV_FILE 默认 .env。
   ${config_note}
+  常见完整本地开发环境使用 ./scripts/run.sh up dev / status dev / down dev。
 
 副作用与保护边界：
   ${boundary}

@@ -20,9 +20,10 @@
 
 ## 运行与部署模式
 
-本项目区分 1 个本地运行入口和 2 个 compose 部署入口：
+本项目区分 1 个日常本地 recipe、1 个本地进程入口和 2 个 compose 部署入口：
 
-- `local`：宿主机运行 API/worker，`docker compose` 只提供 PostgreSQL/Redis；入口是 `./scripts/dev.sh`。
+- `dev` recipe：日常本地开发环境，编排 `compose-deps`、Alembic migration 和宿主机 API/worker；入口是 `./scripts/run.sh up dev`。
+- `local`：宿主机运行 API/worker；入口是 `./scripts/dev.sh`。
 - `compose-deps`：只启动 PostgreSQL/Redis 依赖服务；入口是 `./scripts/deploy.sh up compose-deps`。
 - `compose-full`：API、worker、PostgreSQL、Redis 全部由 `docker compose` 管理；入口是 `./scripts/deploy.sh up compose-full`。
 
@@ -45,16 +46,16 @@
 本项目的本地开发统一入口是：
 
 ```bash
-./scripts/dev.sh --help
+./scripts/run.sh --help
 ```
 
 常用命令：
 
 ```bash
 ./scripts/dev.sh bootstrap
-./scripts/dev.sh start
-./scripts/dev.sh status
-./scripts/dev.sh stop
+./scripts/run.sh up dev
+./scripts/run.sh status dev
+./scripts/run.sh down dev
 ./scripts/verify.sh workflow-smoke
 ./scripts/verify.sh check
 ./scripts/deploy.sh check
@@ -67,7 +68,7 @@
 ./scripts/k8s.sh --help
 ```
 
-`scripts/` 维护 12 类稳定入口，职责互不重叠：`dev.sh` 本地服务生命周期、`verify.sh` 一次性验证、`deploy.sh` compose 部署形态、`k8s.sh` 已部署 Pod 内手动运维、`load.sh` 项目级压测入口、`triton-bench.sh` Triton 推理服务直压入口、`jobs.sh` Job 只读查询与排障、`job-ops.sh` Job 写操作运维入口、`real-flow.sh` 手动真实模型/对象存储流程验证、`models.sh` 本地模型资产下载与必需文件检查、`media.sh` 本地音视频素材探测、校验和准备、`tools.sh` 无默认持久副作用的本地开发辅助工具和只读代码清单查看。完整命令以各脚本 `-h` 输出和 `scripts/README.md` 为准。
+`scripts/` 维护 13 类稳定入口，职责互不重叠：`run.sh` 日常快捷 recipe、`dev.sh` 本地宿主机进程生命周期、`verify.sh` 一次性验证、`deploy.sh` compose 部署形态、`k8s.sh` 已部署 Pod 内手动运维、`load.sh` 项目级压测入口、`triton-bench.sh` Triton 推理服务直压入口、`jobs.sh` Job 只读查询与排障、`job-ops.sh` Job 写操作运维入口、`real-flow.sh` 手动真实模型/对象存储流程验证、`models.sh` 本地模型资产下载与必需文件检查、`media.sh` 本地音视频素材探测、校验和准备、`tools.sh` 无默认持久副作用的本地开发辅助工具和只读代码清单查看。完整命令以各脚本 `-h` 输出和 `scripts/README.md` 为准。
 
 `start`、`stop`、`restart`、`status` 支持指定服务：
 
@@ -92,17 +93,17 @@
 修改服务启动、任务执行、数据库迁移、对象存储或 Job 流程后，还应运行：
 
 ```bash
-./scripts/dev.sh start
+./scripts/run.sh up dev
 ./scripts/verify.sh workflow-smoke
-./scripts/dev.sh stop
+./scripts/run.sh down dev
 ```
 
 修改 Job 内部执行、Taskiq workflow、分块或 merge 后，优先运行可重复的模板 Job workflow 验证：
 
 ```bash
-./scripts/dev.sh start
+./scripts/run.sh up dev
 ./scripts/verify.sh workflow-smoke
-./scripts/dev.sh stop
+./scripts/run.sh down dev
 ```
 
 真实模型业务 e2e 不属于当前模板核心 `scripts/` 命令面。接入正式业务 `job_type` 后，再恢复对应业务 e2e 脚本或放入 `examples/business/`。

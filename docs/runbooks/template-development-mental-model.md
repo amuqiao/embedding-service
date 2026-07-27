@@ -120,9 +120,9 @@ OperationSpec
 修改 Job 执行、Taskiq workflow、分块或 merge 后，优先运行：
 
 ```bash
-./scripts/dev.sh start
+./scripts/run.sh up dev
 ./scripts/verify.sh workflow-smoke
-./scripts/dev.sh stop
+./scripts/run.sh down dev
 ```
 
 只改说明性文档时，至少人工检查相对链接、章节职责和是否重复维护事实源。文档改变了稳定合同或当前事实时，应同步运行对应 registry、contract 或完整 check。

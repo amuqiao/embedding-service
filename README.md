@@ -8,24 +8,33 @@ FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默�
 
 ```bash
 ./scripts/dev.sh bootstrap
-./scripts/dev.sh start
-./scripts/dev.sh status
+./scripts/run.sh up dev
+./scripts/run.sh status dev
 ```
 
-`./scripts/dev.sh start` 会启动 PostgreSQL / Redis，执行 Alembic 迁移，并启动 FastAPI API 与 Taskiq worker。
+`./scripts/run.sh up dev` 会启动 PostgreSQL / Redis，执行 Alembic 迁移，并启动宿主机 FastAPI API 与 Taskiq worker。
 
 ## 运行与部署模式
 
-本项目区分 1 个本地运行入口和 2 个 compose 部署入口：
+本项目区分 1 个日常本地 recipe、1 个本地进程入口和 2 个 compose 部署入口：
 
-- `local`：宿主机运行 FastAPI API 和 Taskiq worker，`docker compose` 只提供 PostgreSQL / Redis。本地开发默认使用此模式，入口是 `./scripts/dev.sh`。
+- `dev` recipe：本地开发默认入口，编排 `compose-deps`、Alembic migration 和宿主机 API / worker，入口是 `./scripts/run.sh up dev`。
+- `local`：宿主机运行 FastAPI API 和 Taskiq worker，入口是 `./scripts/dev.sh`。
 - `compose-deps`：只启动 PostgreSQL / Redis 依赖服务，适合给宿主机上的应用进程提供依赖。
 - `compose-full`：API、worker、PostgreSQL、Redis 全部由 `docker compose` 管理，并在应用启动前执行 Alembic 迁移。
 
-`local` 可以与 `compose-deps` 组合使用，但不能与当前仓库下任何 `compose-full` 的 API / worker 混跑。切换到 `compose-full` 前先执行 `./scripts/dev.sh stop`；切回 `local` 前先执行 `./scripts/deploy.sh down compose-full`。
+`local` 可以与 `compose-deps` 组合使用，但不能与当前仓库下任何 `compose-full` 的 API / worker 混跑。切换到 `compose-full` 前先执行 `./scripts/run.sh down dev` 或 `./scripts/dev.sh stop`；切回 `dev` recipe 前先执行 `./scripts/deploy.sh down compose-full`。
 
 生产 K8s 形态不由本仓库创建或管理资源。api / worker Pod 可继续使用 `start-api.sh` 和 `start-worker.sh` 作为启动入口；Pod 内连接检查、OSS 显式检查、Alembic 状态查询和手动数据库迁移使用 `./scripts/k8s.sh`。
 运行镜像会包含 `scripts/` 目录，便于在 `compose-full` 容器或 K8s Pod 内执行 `./scripts/jobs.sh` 只读排障和 `./scripts/k8s.sh` 手动运维。`dev.sh`、`deploy.sh` 和 `verify.sh` 仍是宿主机侧开发、部署入口和质量门，不作为容器内稳定运维入口。
+
+`run.sh` 只管理日常 recipe：
+
+```bash
+./scripts/run.sh up dev
+./scripts/run.sh status dev
+./scripts/run.sh down dev
+```
 
 `deploy.sh` 只管理 compose 部署入口：
 
@@ -153,10 +162,11 @@ OSS_PUBLIC_ENDPOINT=
 
 ```bash
 ./scripts/dev.sh bootstrap
-./scripts/dev.sh start
+./scripts/run.sh up dev
+./scripts/run.sh status dev
+./scripts/run.sh down dev
 ./scripts/dev.sh start api
 ./scripts/dev.sh restart worker
-./scripts/dev.sh stop
 ./scripts/dev.sh restart
 ./scripts/dev.sh status
 ./scripts/dev.sh status api
@@ -171,14 +181,17 @@ OSS_PUBLIC_ENDPOINT=
 ./scripts/dev.sh --help
 ```
 
-`dev.sh` 是本服务的本地服务总控脚本：
+`run.sh` 是本服务的日常快捷 recipe 入口，`dev.sh` 是宿主机 API / worker 进程控制入口：
 
 - `bootstrap`：缺少 `.env` 时从 `.env.example` 生成，并执行 `uv sync`。
-- `start [api|worker]`：启动指定服务；不传服务名时启动 PostgreSQL、Redis、执行数据库迁移、启动 API 和 worker，并检查 `/health`。
+- `run.sh up dev`：启动 PostgreSQL、Redis，执行数据库迁移，启动 API 和 worker，并检查 `/health`。
+- `run.sh status dev`：展示 API、worker、PostgreSQL 和 Redis 状态。
+- `run.sh down dev`：停止 API、worker、PostgreSQL 和 Redis。
+- `dev.sh start [api|worker]`：启动指定宿主机进程；不传服务名时启动 API 和 worker，并检查 `/health`。
   本地 API 默认通过 `start-api.sh` 稳定启动；需要热更新时临时执行 `DEV_API_RELOAD=true ./scripts/dev.sh start api`，改用 `uvicorn --reload`。reload 默认使用 polling，避免 macOS 或受限目录中文件监听失败；如需使用系统文件事件，可临时执行 `WATCHFILES_FORCE_POLLING=false DEV_API_RELOAD=true ./scripts/dev.sh start api`。worker 不做自动热更新，代码变更后使用 `./scripts/dev.sh restart worker`。
-- `stop [api|worker]`：停止指定服务；不传服务名时停止 API、worker、PostgreSQL 和 Redis。
-- `restart [api|worker]`：重启指定服务；不传服务名时重启完整本地服务栈。
-- `status [api|worker]`：展示指定服务状态；不传服务名时展示依赖容器、应用进程 PID、日志路径和健康状态。
+- `dev.sh stop [api|worker]`：停止指定宿主机进程；不传服务名时停止 API 和 worker。
+- `dev.sh restart [api|worker]`：重启指定宿主机进程；不传服务名时重启 API 和 worker。
+- `dev.sh status [api|worker]`：展示指定宿主机进程状态；不传服务名时展示应用进程 PID、日志路径和健康状态。
 - `logs api|worker`：跟随查看 API 或 worker 日志。
 - `migrate`：显式执行 Alembic 迁移。
 - `ports [port ...]`：扫描本地可用端口，支持 AI 可读 JSON 输出和运行时参数，适合多个本地项目避免端口冲突。
@@ -237,13 +250,14 @@ Job 只读排障由 `jobs.sh` 承接：
 
 `jobs.sh` 只执行只读查询，不创建 Job、不取消、不重试、不补偿、不重放 callback。无参默认输出 Job overview；`guide` 解释系统态、恢复态、运输和运行时、单 Job 轨迹四层排障模型。默认输出面向人读，`--json` 输出纯 JSON，适合 AI、CI 或运维平台解析。已注册 tool、capability 和 job_type capability 关系使用 `./scripts/tools.sh registry` 查看，当前治理事实见 `docs/current/registry-governance.md`。`verify.sh check` 会校验入口 help、子命令 help、Python 语法和测试；help 校验不连接数据库。
 
-脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/dev.sh` 调度 `scripts/dev/` 中的本地服务能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/jobs.sh` 调度 `scripts/jobs/` 中的只读 Job 排障能力，`scripts/deploy.sh` 只调度 compose 部署能力，`scripts/k8s.sh` 只提供 Pod 内连接检查和 Alembic 运维入口，`scripts/models.sh` 只管理 `.data/models/` 下的本地模型资产下载、路径和必需文件检查，`scripts/media.sh` 只管理本地音视频素材探测、校验和准备，`scripts/tools.sh` 只提供无默认持久副作用的本地开发辅助工具和只读代码清单查看，`scripts/triton-bench.sh` 只直连 Triton 推理服务做保守阶梯压测。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。本地脚本变量、应用配置和 compose 编排变量统一从根目录 `.env` 或运行时环境读取；不再维护 `scripts/.env`。`dev.sh` 只面向本地开发服务，不做部署、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
+脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/run.sh` 只编排日常 recipe，`scripts/dev.sh` 调度 `scripts/dev/` 中的宿主机 API / worker 进程能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/jobs.sh` 调度 `scripts/jobs/` 中的只读 Job 排障能力，`scripts/deploy.sh` 只调度 compose 部署能力，`scripts/k8s.sh` 只提供 Pod 内连接检查和 Alembic 运维入口，`scripts/models.sh` 只管理 `.data/models/` 下的本地模型资产下载、路径和必需文件检查，`scripts/media.sh` 只管理本地音视频素材探测、校验和准备，`scripts/tools.sh` 只提供无默认持久副作用的本地开发辅助工具和只读代码清单查看，`scripts/triton-bench.sh` 只直连 Triton 推理服务做保守阶梯压测。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。本地脚本变量、应用配置和 compose 编排变量统一从根目录 `.env` 或运行时环境读取；不再维护 `scripts/.env`。`dev.sh` 只面向宿主机 API / worker 进程，不做部署、不启动或停止 Docker 依赖、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
 
 入口脚本约束：
 
 - 外层入口脚本只做参数分发、帮助说明和稳定命令面，不承载具体业务实现。
 - 具体能力下沉到职责对应的子目录原子脚本；公共 shell 能力按 `common.sh`、`runtime.sh`、`compose.sh`、`modes.sh` 分层放在 `scripts/lib/`。
-- `scripts/dev.sh` 只管理本地服务生命周期和本地开发端口探测；模板级一次性验证放在 `scripts/verify.sh`。
+- `scripts/run.sh` 只编排日常快捷 recipe，不直接实现进程或 compose 细节。
+- `scripts/dev.sh` 只管理宿主机 API / worker 生命周期和本地开发端口探测；模板级一次性验证放在 `scripts/verify.sh`。
 - 业务/供应商扩展示例放在 `examples/business/`，不进入 `scripts/` 稳定命令面。
 - `scripts/deploy.sh` 只管理 `compose-deps` 和 `compose-full`，不管理 `local` 本地服务生命周期。
 - `scripts/k8s.sh` 只在 K8s Pod 内检查 PostgreSQL / Redis 连接、单独显式检查 OSS、查询或执行 Alembic 迁移，不管理 K8s 资源，不替代发布编排。
@@ -259,9 +273,9 @@ Job 只读排障由 `jobs.sh` 承接：
 模板内置 Job workflow 验证不依赖真实模型：
 
 ```bash
-./scripts/dev.sh start
+./scripts/run.sh up dev
 ./scripts/verify.sh workflow-smoke
-./scripts/dev.sh stop
+./scripts/run.sh down dev
 ```
 
 真实模型端到端验证不属于当前模板核心 `scripts/` 命令面。接入正式业务 `job_type` 后，再恢复对应业务 e2e 脚本或放入 `examples/business/`。

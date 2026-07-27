@@ -310,9 +310,9 @@ APP_ENV 不会决定：
 如果改动影响服务启动、Job 执行、Taskiq workflow、Recovery、Callback 或对象存储，还应运行：
 
 ```bash
-./scripts/dev.sh start
+./scripts/run.sh up dev
 ./scripts/verify.sh workflow-smoke
-./scripts/dev.sh stop
+./scripts/run.sh down dev
 ```
 
 只改文档时，至少检查：

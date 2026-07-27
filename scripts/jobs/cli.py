@@ -2573,7 +2573,7 @@ def _summary_next_checks(scope: dict[str, Any], *, no_jobs_found: bool) -> list[
     ]
     if no_jobs_found:
         checks.insert(0, f"扩大 --since 窗口后重试，例如 ./scripts/jobs.sh doctor --since 1h{filter_text}")
-        checks.append("./scripts/dev.sh status")
+        checks.append("./scripts/run.sh status dev")
     return checks
 
 
@@ -3309,7 +3309,7 @@ def _pressure_payload(
             f"./scripts/jobs.sh stuck --since {since} --older-than {older_than}{filters} --limit 20",
             f"./scripts/jobs.sh latency --since {since}{filters} --group-by job_type",
             f"./scripts/jobs.sh list --status queued,running --scope family{filters} --limit 20",
-            "./scripts/dev.sh status",
+            "./scripts/run.sh status dev",
         ],
     }
 

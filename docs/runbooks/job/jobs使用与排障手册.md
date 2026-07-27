@@ -618,7 +618,7 @@ payload --json --full
 本地：
 
 ```bash
-./scripts/dev.sh status
+./scripts/run.sh status dev
 ./scripts/jobs.sh -h
 ./scripts/jobs.sh
 ```
