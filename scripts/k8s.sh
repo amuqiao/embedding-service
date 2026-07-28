@@ -198,6 +198,10 @@ require_database_url() {
   [[ -n "${DATABASE_URL:-}" ]] || die "DATABASE_URL is required" 2
 }
 
+require_redis_url() {
+  [[ -n "${REDIS_URL:-}" ]] || die "REDIS_URL is required" 2
+}
+
 resolve_python_bin() {
   if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
     printf "%s" "$ROOT_DIR/.venv/bin/python"
@@ -337,57 +341,8 @@ PY
 run_check_redis() {
   require_no_args "check redis" "$@"
   prepare_check_runtime
-  section "Redis"
-  "$PYTHON_BIN" <<'PY'
-import os
-import sys
-from urllib.parse import unquote, urlsplit
-
-from redis import Redis
-
-
-def require_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise SystemExit(f"{name} is required")
-    return value
-
-
-def print_url_detail(name: str, raw_url: str) -> None:
-    print(f"{name}={raw_url}")
-    parsed = urlsplit(raw_url)
-    print(f"{name}_scheme={parsed.scheme}")
-    print(f"{name}_username_encoded={parsed.username or '-'}")
-    print(f"{name}_username_decoded={unquote(parsed.username or '') or '-'}")
-    print(f"{name}_password_encoded={parsed.password or '-'}")
-    print(f"{name}_password_decoded={unquote(parsed.password or '') or '-'}")
-    print(f"{name}_hostname={parsed.hostname or '-'}")
-    try:
-        port = parsed.port
-    except ValueError as exc:
-        print(f"{name}_port_error={exc}")
-        sys.stdout.flush()
-        raise SystemExit(f"invalid {name}: {exc}") from exc
-    print(f"{name}_port={port if port is not None else '-'}")
-    print(f"{name}_path={unquote(parsed.path) or '-'}")
-    print(f"{name}_query={parsed.query or '-'}")
-    print(f"{name}_fragment={parsed.fragment or '-'}")
-    if not parsed.scheme or not parsed.hostname:
-        raise SystemExit(f"invalid {name}: missing scheme or host")
-
-
-raw_redis_url = require_env("REDIS_URL")
-print_url_detail("REDIS_URL", raw_redis_url)
-sys.stdout.flush()
-
-client = Redis.from_url(raw_redis_url, socket_connect_timeout=5, socket_timeout=5)
-try:
-    ping = client.ping()
-finally:
-    client.connection_pool.disconnect()
-
-print(f"OK redis ping={ping}")
-PY
+  require_redis_url
+  "$ROOT_DIR/scripts/redis.sh" check --show-url --no-broker-key --redis-url "$REDIS_URL"
 }
 
 run_check_dashboard() {

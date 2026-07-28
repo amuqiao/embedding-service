@@ -62,7 +62,15 @@ TASKIQ_BROKER_KIND=redis_stream -> broker_class=RedisStreamBroker
 TASKIQ_BROKER_KIND=redis_list   -> broker_class=ListQueueBroker
 ```
 
-再看 Redis 服务端能力：
+首选使用 Redis 排障事实源查看服务端能力：
+
+```bash
+./scripts/redis.sh check --show-url
+```
+
+这个命令会打印完整 `REDIS_URL` 和解析出的密码，只用于受控终端排障，不要把原始输出直接复制到文档或工单。已部署 Pod 内也可以通过 `./scripts/k8s.sh check redis` 编排同一套 Redis 排障能力。
+
+如果 `redis.sh` 入口自身不可用，再用下面的手工 Python 片段复现 Redis 服务端能力：
 
 ```bash
 python - <<'PY'
@@ -82,14 +90,6 @@ PY
 ```
 
 Redis 5.0.0 支持基础 Stream 命令，但不支持 `XAUTOCLAIM`。因此 Redis 5 环境不能使用 `redis_stream` broker。
-
-也可以先运行脚本入口：
-
-```bash
-./scripts/k8s.sh check redis
-```
-
-这个命令会打印完整 `REDIS_URL` 和解析出的密码，只用于 Pod 内排障，不要把原始输出直接复制到文档或工单。
 
 ## FastAPI 版本漂移
 
@@ -151,7 +151,7 @@ uv.lock 同步
 
 ### HELLO 3 报错
 
-如果 `./scripts/k8s.sh check redis` 或应用连接 Redis 时报：
+如果 `./scripts/redis.sh check`、`./scripts/k8s.sh check redis` 或应用连接 Redis 时报：
 
 ```text
 unknown command `HELLO`, with args beginning with: `3`, `AUTH`, ...

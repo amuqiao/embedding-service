@@ -14,6 +14,7 @@ from typing import Annotated, Any
 import typer
 
 from scripts.jobs import db, formatters, queries
+from scripts.redis_diag.cli import broker_payload as redis_broker_payload
 
 
 VALID_JOB_STATUSES = {"queued", "running", "succeeded", "failed"}
@@ -985,6 +986,7 @@ def _broker_columns() -> list[tuple[str, str]]:
         ("redis_key_type", "key_type"),
         ("length", "length"),
         ("pending", "pending"),
+        ("lag", "lag"),
         ("oldest_message_age_seconds", "oldest_age_s"),
         ("verdict", "verdict"),
     ]
@@ -3714,74 +3716,15 @@ def _render_dashboard_human(payload: dict[str, Any]) -> None:
         print(f"- {key}: {value}")
 
 
-def _decode_redis(value: Any) -> str:
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return str(value)
-
-
-def _stream_oldest_age_seconds(client: Any, redis_key: str) -> float | None:
-    rows = client.xrange(redis_key, count=1)
-    if not rows:
-        return None
-    raw_id = _decode_redis(rows[0][0])
-    timestamp_ms = raw_id.split("-", 1)[0]
-    try:
-        created_at = datetime.fromtimestamp(int(timestamp_ms) / 1000, tz=timezone.utc)
-    except ValueError:
-        return None
-    return max((datetime.now(timezone.utc) - created_at).total_seconds(), 0.0)
-
-
 def _broker_payload(*, redis_key: str) -> dict[str, Any]:
     redis_url = db.env_value("REDIS_URL")
     if not redis_url:
         raise RuntimeError("REDIS_URL is required")
-    from redis import Redis
-
-    client = Redis.from_url(redis_url, socket_connect_timeout=5, socket_timeout=5)
-    ping_ok = bool(client.ping())
-    key_type = _decode_redis(client.type(redis_key))
-    kind = db.env_value("TASKIQ_BROKER_KIND") or "redis_stream"
-    payload: dict[str, Any] = {
-        "broker_kind": kind,
-        "redis_key": redis_key,
-        "redis_ping": "ok" if ping_ok else "failed",
-        "redis_key_type": key_type,
-        "length": None,
-        "pending": None,
-        "consumer_groups": [],
-        "oldest_message_age_seconds": None,
-    }
-    if key_type == "list":
-        payload["length"] = int(client.llen(redis_key))
-    elif key_type == "stream":
-        payload["length"] = int(client.xlen(redis_key))
-        payload["oldest_message_age_seconds"] = _stream_oldest_age_seconds(client, redis_key)
-        groups = client.xinfo_groups(redis_key)
-        normalized_groups = [{_decode_redis(key): _decode_redis(value) for key, value in group.items()} for group in groups]
-        payload["consumer_groups"] = normalized_groups
-        payload["pending"] = sum(int(group.get("pending") or 0) for group in normalized_groups)
-    elif key_type == "none":
-        payload["length"] = 0
-
-    expected_type = {"redis_stream": "stream", "redis_list": "list"}.get(kind)
-    if expected_type and key_type not in {expected_type, "none"}:
-        verdict = "broker_key_type_mismatch"
-    elif key_type not in {"list", "stream", "none"}:
-        verdict = "broker_key_type_unsupported"
-    elif key_type == "stream" and int(payload.get("pending") or 0) > 0:
-        verdict = "broker_has_pending"
-    elif key_type == "stream" and int(payload.get("length") or 0) > 0 and not payload.get("consumer_groups"):
-        verdict = "stream_has_entries_no_group"
-    elif key_type == "stream":
-        verdict = "broker_stream_no_pending"
-    elif int(payload.get("length") or 0) > 0:
-        verdict = "broker_has_backlog"
-    else:
-        verdict = "broker_empty"
-    payload["verdict"] = verdict
-    return payload
+    return redis_broker_payload(
+        redis_url=redis_url,
+        redis_key=redis_key,
+        broker_kind=db.env_value("TASKIQ_BROKER_KIND"),
+    )
 
 
 def _render_broker_human(payload: dict[str, Any]) -> None:
@@ -3791,7 +3734,7 @@ def _render_broker_human(payload: dict[str, Any]) -> None:
     groups = payload.get("consumer_groups") or []
     if groups:
         formatters.section("Consumer Groups")
-        formatters.print_table(groups, [("name", "name"), ("consumers", "consumers"), ("pending", "pending"), ("last-delivered-id", "last_delivered_id")])
+        formatters.print_table(groups, [("name", "name"), ("consumers", "consumers"), ("pending", "pending"), ("lag", "lag"), ("last-delivered-id", "last_delivered_id")])
 
 
 def _read_text(path: Path) -> str | None:

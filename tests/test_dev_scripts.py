@@ -23,6 +23,7 @@ from scripts.jobs.cli import (
     parse_record_scope,
     parse_statuses,
 )
+from scripts.redis_diag.cli import app as redis_cli_app
 from scripts.jobs.db import normalize_database_url
 from scripts.verify.env_config_check import (
     APPLICATION_ENV_KEYS,
@@ -1700,6 +1701,16 @@ def test_k8s_default_check_stays_side_effect_free():
     assert "run_migrate" not in default_check
 
 
+def test_k8s_check_redis_delegates_to_redis_entrypoint():
+    script = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
+    redis_check = script.split("run_check_redis() {", 1)[1].split("\n}\n\nrun_check_dashboard()", 1)[0]
+
+    assert 'require_redis_url' in redis_check
+    assert '"$ROOT_DIR/scripts/redis.sh" check --show-url --no-broker-key --redis-url "$REDIS_URL"' in redis_check
+    assert "Redis.from_url" not in redis_check
+    assert "urlsplit" not in redis_check
+
+
 def test_k8s_default_check_runs_only_side_effect_free_targets(tmp_path):
     script_dir = tmp_path / "scripts"
     lib_dir = script_dir / "lib"
@@ -1709,6 +1720,13 @@ def test_k8s_default_check_runs_only_side_effect_free_targets(tmp_path):
     (tmp_path / "calls.log").write_text("", encoding="utf-8")
     (script_dir / "k8s.sh").write_text((ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8"), encoding="utf-8")
     (script_dir / "k8s.sh").chmod(0o755)
+    (script_dir / "redis.sh").write_text(
+        f"""#!/usr/bin/env bash
+printf 'redis.sh %s\\n' "$*" >> {tmp_path / "calls.log"}
+""",
+        encoding="utf-8",
+    )
+    (script_dir / "redis.sh").chmod(0o755)
     (lib_dir / "common.sh").write_text(
         (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
@@ -1751,7 +1769,7 @@ printf 'alembic %s\\n' "$*" >> {tmp_path / "calls.log"}
     calls = (tmp_path / "calls.log").read_text(encoding="utf-8").splitlines()
     assert calls == [
         "python3",
-        "python3",
+        "redis.sh check --show-url --no-broker-key --redis-url redis://:pass@redis.example:6379/0",
         "python3",
         "alembic current",
         "python3",
@@ -3738,7 +3756,274 @@ def test_jobs_broker_stream_uses_pending_not_xlen_for_backlog(monkeypatch):
 
     assert payload["length"] == 100
     assert payload["pending"] == 0
+    assert payload["lag"] is None
     assert payload["verdict"] == "broker_stream_no_pending"
+
+
+def test_redis_cli_help_is_available_without_redis():
+    result = subprocess.run(
+        ["./scripts/redis.sh", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "Redis 只读排障入口" in result.stdout
+    assert "check" in result.stdout
+    assert "broker" in result.stdout
+    assert "capability" in result.stdout
+
+
+def test_redis_broker_command_outputs_injected_payload(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.redis_diag.cli.broker_payload",
+        lambda *, redis_url, redis_key, broker_kind: {
+            "broker_kind": broker_kind or "redis_stream",
+            "redis_key": redis_key,
+            "redis_ping": "ok",
+            "redis_key_type": "stream",
+            "length": 8,
+            "pending": 0,
+            "lag": 12,
+            "consumer_groups": [],
+            "oldest_message_age_seconds": 10,
+            "verdict": "broker_has_lag",
+        },
+    )
+
+    result = RUNNER.invoke(redis_cli_app, ["broker", "--redis-key", "taskiq", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["redis_key"] == "taskiq"
+    assert payload["lag"] == 12
+    assert payload["verdict"] == "broker_has_lag"
+
+
+def test_redis_broker_invalid_kind_exits_before_connecting():
+    result = RUNNER.invoke(
+        redis_cli_app,
+        ["broker", "--redis-url", "redis://127.0.0.1:1/0", "--broker-kind", "bad", "--json"],
+    )
+
+    assert result.exit_code == 2
+    assert "TASKIQ_BROKER_KIND must be redis_stream or redis_list" in result.stderr
+
+
+def test_redis_memory_does_not_require_broker_kind_or_command_capabilities(monkeypatch):
+    class FakeConnectionPool:
+        def disconnect(self):
+            pass
+
+    class FakeRedis:
+        connection_pool = FakeConnectionPool()
+
+        @classmethod
+        def from_url(cls, *_args, **_kwargs):
+            return cls()
+
+        def ping(self):
+            return True
+
+        def info(self, section):
+            if section == "memory":
+                return {"used_memory": 10, "used_memory_human": "10B", "maxmemory": 100, "maxmemory_human": "100B", "maxmemory_policy": "noeviction"}
+            if section == "clients":
+                return {"connected_clients": 1}
+            if section in {"server", "stats", "keyspace", "errorstats"}:
+                return {}
+            raise AssertionError(section)
+
+        def execute_command(self, *_args):
+            raise AssertionError("memory should not collect command capabilities")
+
+        def dbsize(self):
+            return 0
+
+    monkeypatch.setattr("scripts.redis_diag.cli.env_value", lambda key: {"REDIS_URL": "redis://example/0", "TASKIQ_BROKER_KIND": "bad"}.get(key))
+    monkeypatch.setitem(sys.modules, "redis", type("RedisModule", (), {"Redis": FakeRedis}))
+
+    result = RUNNER.invoke(redis_cli_app, ["memory", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["health"]["memory_usage_percent"] == 10.0
+    assert payload["errors"] == []
+
+
+def test_jobs_broker_passes_jobs_config_to_redis_diag(monkeypatch):
+    captured = {}
+
+    def fake_broker_payload(*, redis_url, redis_key, broker_kind):
+        captured.update({"redis_url": redis_url, "redis_key": redis_key, "broker_kind": broker_kind})
+        return {
+            "broker_kind": broker_kind,
+            "redis_key": redis_key,
+            "redis_ping": "ok",
+            "redis_key_type": "list",
+            "length": 0,
+            "pending": None,
+            "lag": None,
+            "consumer_groups": [],
+            "oldest_message_age_seconds": None,
+            "verdict": "broker_empty",
+        }
+
+    monkeypatch.setattr("scripts.jobs.cli.db.env_value", lambda key: {"REDIS_URL": "redis://jobs.example/0", "TASKIQ_BROKER_KIND": "redis_list"}.get(key))
+    monkeypatch.setattr("scripts.jobs.cli.redis_broker_payload", fake_broker_payload)
+
+    from scripts.jobs.cli import _broker_payload
+
+    payload = _broker_payload(redis_key="taskiq")
+
+    assert payload["verdict"] == "broker_empty"
+    assert captured == {
+        "redis_url": "redis://jobs.example/0",
+        "redis_key": "taskiq",
+        "broker_kind": "redis_list",
+    }
+
+
+def test_redis_payload_reports_memory_capabilities_broker_and_top_keys(monkeypatch):
+    class FakeConnectionPool:
+        def disconnect(self):
+            pass
+
+    class FakeRedis:
+        connection_pool = FakeConnectionPool()
+
+        @classmethod
+        def from_url(cls, *_args, **_kwargs):
+            return cls()
+
+        def ping(self):
+            return True
+
+        def info(self, section):
+            if section == "memory":
+                return {
+                    "used_memory": 950,
+                    "used_memory_human": "950B",
+                    "used_memory_peak": 1000,
+                    "maxmemory": 1000,
+                    "maxmemory_human": "1000B",
+                    "maxmemory_policy": "noeviction",
+                }
+            if section == "server":
+                return {"redis_version": "7.2.0"}
+            if section == "stats":
+                return {"evicted_keys": 0, "total_error_replies": 2}
+            if section == "keyspace":
+                return {"db6": {"keys": 2, "expires": 1, "avg_ttl": 1000}}
+            if section == "errorstats":
+                return {"errorstat_OOM": "count=1"}
+            if section == "clients":
+                return {"connected_clients": 3}
+            raise AssertionError(section)
+
+        def execute_command(self, *_args):
+            return [[b"command"]]
+
+        def dbsize(self):
+            return 2
+
+        def type(self, key):
+            return {b"taskiq": b"stream", b"large": b"string", b"small": b"list"}.get(key if isinstance(key, bytes) else key.encode(), b"none")
+
+        def xlen(self, _key):
+            return 8
+
+        def xrange(self, _key, *, count):
+            return [(b"1780000000000-0", {})]
+
+        def xinfo_groups(self, _key):
+            return [{b"name": b"taskiq", b"consumers": 1, b"pending": 0, b"lag": 12, b"last-delivered-id": b"1780000000000-0"}]
+
+        def memory_usage(self, key):
+            return {"taskiq": 512, "large": 4096, "small": 128}.get(key)
+
+        def scan(self, *, cursor, count):
+            return 0, [b"taskiq", b"large", b"small"]
+
+        def ttl(self, key):
+            return {"taskiq": -1, "large": 3600, "small": -1}[key]
+
+        def strlen(self, _key):
+            return 42
+
+        def llen(self, _key):
+            return 3
+
+    monkeypatch.setattr("scripts.redis_diag.cli.env_value", lambda key: {"REDIS_URL": "redis://example/6", "TASKIQ_BROKER_KIND": "redis_stream"}.get(key))
+    monkeypatch.setitem(sys.modules, "redis", type("RedisModule", (), {"Redis": FakeRedis}))
+
+    from scripts.redis_diag.cli import redis_payload
+
+    payload = redis_payload(redis_key="taskiq", top_keys=2, scan_limit=100)
+
+    assert payload["scope"]["redis_db"] == 6
+    assert payload["health"]["redis_version"] == "7.2.0"
+    assert payload["health"]["oom_risk"] == "warning"
+    assert payload["capabilities"][3]["command"] == "XAUTOCLAIM"
+    assert payload["capabilities"][3]["supported"] is True
+    assert payload["broker_key"]["lag"] == 12
+    assert payload["broker_key"]["verdict"] == "broker_has_lag"
+    assert [row["key"] for row in payload["top_keys"]] == ["large", "taskiq"]
+    assert payload["errors"] == []
+
+
+def test_redis_payload_records_optional_info_errors(monkeypatch):
+    class FakeConnectionPool:
+        def disconnect(self):
+            pass
+
+    class FakeRedis:
+        connection_pool = FakeConnectionPool()
+
+        @classmethod
+        def from_url(cls, *_args, **_kwargs):
+            return cls()
+
+        def ping(self):
+            return True
+
+        def info(self, section):
+            if section == "memory":
+                return {
+                    "used_memory": 100,
+                    "used_memory_human": "100B",
+                    "used_memory_peak": 1000,
+                    "maxmemory": 1000,
+                    "maxmemory_human": "1000B",
+                    "maxmemory_policy": "noeviction",
+                }
+            if section in {"clients", "errorstats"}:
+                raise RuntimeError(f"{section} disabled")
+            return {}
+
+        def execute_command(self, *_args):
+            raise RuntimeError("COMMAND disabled")
+
+        def dbsize(self):
+            return 1
+
+        def type(self, _key):
+            return b"none"
+
+        def memory_usage(self, _key):
+            return None
+
+    monkeypatch.setattr("scripts.redis_diag.cli.env_value", lambda key: {"REDIS_URL": "redis://example/6", "TASKIQ_BROKER_KIND": "redis_stream"}.get(key))
+    monkeypatch.setitem(sys.modules, "redis", type("RedisModule", (), {"Redis": FakeRedis}))
+
+    from scripts.redis_diag.cli import redis_payload
+
+    payload = redis_payload(redis_key="taskiq", top_keys=0, scan_limit=100)
+
+    assert payload["health"]["oom_risk"] == "ok"
+    assert payload["health"]["connected_clients"] is None
+    assert {error["area"] for error in payload["errors"]} >= {"info:clients", "info:errorstats", "command:XAUTOCLAIM"}
 
 
 def test_jobs_runtime_command_outputs_current_pod_scope(monkeypatch):

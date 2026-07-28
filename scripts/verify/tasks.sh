@@ -49,6 +49,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/dev/services.sh" \
     "$ROOT_DIR/scripts/deploy.sh" \
     "$ROOT_DIR/scripts/k8s.sh" \
+    "$ROOT_DIR/scripts/redis.sh" \
     "$ROOT_DIR/scripts/load.sh" \
     "$ROOT_DIR/scripts/triton-bench.sh" \
     "$ROOT_DIR/scripts/jobs.sh" \
@@ -113,6 +114,9 @@ run_cli_smoke() {
   event "OK" "deploy.sh" "help"
   "$ROOT_DIR/scripts/k8s.sh" --help >/dev/null
   event "OK" "k8s.sh" "help"
+  assert_generated_commands_help "redis.sh" "$ROOT_DIR/scripts/redis.sh" \
+    check broker memory keyspace top-keys capability
+  event "OK" "redis.sh" "help"
   assert_generated_commands_help "jobs.sh" "$ROOT_DIR/scripts/jobs.sh" \
     guide dashboard overview observe broker runtime list show job inspect trace payload diagnose workflow timeline attempts ai-calls callbacks callbacks-summary stuck drain pressure summary doctor failures latency ingress capacity types
   event "OK" "jobs.sh" "help"
@@ -151,6 +155,12 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/k8s.sh" check oss --help >/dev/null
   "$ROOT_DIR/scripts/k8s.sh" check oss --confirm --help >/dev/null
   "$ROOT_DIR/scripts/k8s.sh" migrate --confirm --help >/dev/null
+  "$ROOT_DIR/scripts/redis.sh" check --help >/dev/null
+  "$ROOT_DIR/scripts/redis.sh" broker --help >/dev/null
+  "$ROOT_DIR/scripts/redis.sh" memory --help >/dev/null
+  "$ROOT_DIR/scripts/redis.sh" keyspace --help >/dev/null
+  "$ROOT_DIR/scripts/redis.sh" capability --help >/dev/null
+  "$ROOT_DIR/scripts/redis.sh" top-keys --help >/dev/null
   "$ROOT_DIR/scripts/verify.sh" migration-roundtrip --help >/dev/null
   "$ROOT_DIR/scripts/verify.sh" migration-roundtrip ignored --help >/dev/null
   "$ROOT_DIR/scripts/verify.sh" env-config --help >/dev/null
@@ -231,6 +241,8 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/jobs/db.py" \
     "$ROOT_DIR/scripts/jobs/formatters.py" \
     "$ROOT_DIR/scripts/jobs/queries.py" \
+    "$ROOT_DIR/scripts/redis_diag/__init__.py" \
+    "$ROOT_DIR/scripts/redis_diag/cli.py" \
     "$ROOT_DIR/scripts/models/__init__.py" \
     "$ROOT_DIR/scripts/models/inspect_onnx.py" \
     "$ROOT_DIR/scripts/real_flow/__init__.py" \
@@ -250,6 +262,7 @@ run_python_syntax() {
   event "OK" "load/*.py" "py_compile"
   event "OK" "triton_bench/*.py" "py_compile"
   event "OK" "jobs/*.py" "py_compile"
+  event "OK" "redis_diag/*.py" "py_compile"
   event "OK" "models/*.py" "py_compile"
   event "OK" "real_flow/*.py" "py_compile"
   event "OK" "media/*.py" "py_compile"

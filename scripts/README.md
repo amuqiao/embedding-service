@@ -12,6 +12,7 @@ dev.sh          宿主机 API / worker 生命周期
 verify.sh       一次性验证任务
 deploy.sh       docker compose 部署形态
 k8s.sh          已部署 Pod 内手动运维
+redis.sh        Redis 只读排障事实源
 load.sh         项目级压测入口
 triton-bench.sh Triton 推理服务直压入口
 jobs.sh         Job 只读查询与排障
@@ -26,6 +27,7 @@ tools.sh        无默认持久副作用的本地开发辅助工具和只读代�
 音视频素材探测、转码准备和业务输入格式校验归属 `media.sh`；它只处理本地素材文件，不下载模型、不执行推理、不提交 Job、不上传对象存储。
 Triton 直压归属 `triton-bench.sh`；它只直连推理服务，不创建 FastAPI Job，不访问 DB/Redis/OSS，不触发 callback，不替代 `load.sh` 的业务链路压测。
 已注册 tool、capability 和 job_type capability 关系归属 `tools.sh registry` 只读查看；当前治理事实见 `docs/current/registry-governance.md`。
+Redis 连接、服务端版本、命令能力、内存、keyspace、Stream 和 broker key 证据归属 `redis.sh`。`k8s.sh`、`jobs.sh` 或业务脚本需要 Redis 证据时只编排或复用该入口，不各自维护 Redis 诊断逻辑。
 
 ## 入口职责
 
