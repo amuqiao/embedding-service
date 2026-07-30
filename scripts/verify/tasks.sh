@@ -149,6 +149,8 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/run.sh" status dev --help >/dev/null
   "$ROOT_DIR/scripts/run.sh" down --help >/dev/null
   "$ROOT_DIR/scripts/run.sh" down dev --help >/dev/null
+  "$ROOT_DIR/scripts/run.sh" restart --help >/dev/null
+  "$ROOT_DIR/scripts/run.sh" restart dev --help >/dev/null
   "$ROOT_DIR/scripts/deploy.sh" up --help >/dev/null
   "$ROOT_DIR/scripts/deploy.sh" up compose-full --help >/dev/null
   "$ROOT_DIR/scripts/k8s.sh" check --help >/dev/null

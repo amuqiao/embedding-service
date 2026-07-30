@@ -185,6 +185,56 @@ def test_run_dev_down_invokes_api_worker_then_compose_deps(tmp_path):
     ]
 
 
+def test_run_dev_restart_invokes_down_then_up(tmp_path):
+    root = _write_run_script_fixture(
+        tmp_path,
+        deploy_body="#!/usr/bin/env bash\nprintf 'deploy:%s\\n' \"$*\" >> run.log\n",
+        dev_body="#!/usr/bin/env bash\nprintf 'dev:%s\\n' \"$*\" >> run.log\n",
+    )
+
+    result = subprocess.run(
+        ["./scripts/run.sh", "restart", "dev"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert (root / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "dev:stop api",
+        "dev:stop worker",
+        "deploy:down compose-deps",
+        "deploy:up compose-deps",
+        "dev:migrate",
+        "dev:start api",
+        "dev:start worker",
+    ]
+
+
+def test_run_dev_restart_stops_after_down_subcommand_failure(tmp_path):
+    root = _write_run_script_fixture(
+        tmp_path,
+        deploy_body="#!/usr/bin/env bash\nprintf 'deploy:%s\\n' \"$*\" >> run.log\n",
+        dev_body=(
+            "#!/usr/bin/env bash\n"
+            "printf 'dev:%s\\n' \"$*\" >> run.log\n"
+            "[[ \"$*\" == 'stop api' ]] && exit 7\n"
+        ),
+    )
+
+    result = subprocess.run(
+        ["./scripts/run.sh", "restart", "dev"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 7
+    assert (root / "run.log").read_text(encoding="utf-8").splitlines() == ["dev:stop api"]
+
+
 def test_dev_api_service_command_uses_start_api_by_default():
     command = _api_service_command()
 

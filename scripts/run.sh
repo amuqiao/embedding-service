@@ -30,6 +30,7 @@ usage() {
   up dev        启动常见本地开发环境：compose-deps + migration + 宿主机 API / worker。
   status dev    查看常见本地开发环境：宿主机 API / worker + compose-deps。
   down dev      停止常见本地开发环境：宿主机 API / worker + compose-deps。
+  restart dev   重启常见本地开发环境：先 down dev，再 up dev。
   help          显示帮助。
 
 副作用与保护边界：
@@ -37,12 +38,14 @@ usage() {
   up dev 依次执行 ./scripts/deploy.sh up compose-deps、./scripts/dev.sh migrate、./scripts/dev.sh start api、./scripts/dev.sh start worker。
   status dev 依次执行 ./scripts/dev.sh status、./scripts/deploy.sh status compose-deps。
   down dev 依次执行 ./scripts/dev.sh stop api、./scripts/dev.sh stop worker、./scripts/deploy.sh down compose-deps。
+  restart dev 等价于先执行 down dev，再执行 up dev。
   down dev 不等同全量停止，不会停止 compose-full。
 
 常用示例：
   ./scripts/run.sh up dev
   ./scripts/run.sh status dev
   ./scripts/run.sh down dev
+  ./scripts/run.sh restart dev
 
 Exit Codes:
   0  成功
@@ -54,7 +57,7 @@ EOF
 command_usage() {
   local name="$1"
   case "$name" in
-    up|status|down)
+    up|status|down|restart)
       cat <<EOF
 用法：
   ./scripts/run.sh ${name} <dev>
@@ -113,6 +116,11 @@ run_dev_down() {
   "$ROOT_DIR/scripts/deploy.sh" down compose-deps
 }
 
+run_dev_restart() {
+  run_dev_down
+  run_dev_up
+}
+
 command="${1:-}"
 case "$command" in
   --help|-h|help)
@@ -122,7 +130,7 @@ case "$command" in
     usage >&2
     exit 2
     ;;
-  up|down|status)
+  up|down|status|restart)
     action="$command"
     shift
     if args_include_help "$@"; then command_usage "$action"; exit $?; fi
@@ -134,6 +142,7 @@ case "$command" in
       up:dev) run_dev_up ;;
       down:dev) run_dev_down ;;
       status:dev) run_dev_status ;;
+      restart:dev) run_dev_restart ;;
       *) die "unknown run recipe for $action: $recipe" 2 ;;
     esac
     ;;
