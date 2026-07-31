@@ -127,7 +127,7 @@ export TEST_AUDIO=.data/misc/2485_0003_S6_梁萧.wav
 cd "$REMOTE_REPO"
 ```
 
-如果服务或smoke脚本运行在开发服务器宿主机，先安装项目依赖和音频分离可选依赖：
+如果服务或 smoke 脚本运行在开发服务器宿主机，先安装项目依赖和音频分离可选依赖。CPU 版 `audio_stem_separation` 所需的 `onnxruntime` 和 `soundfile` 位于 `audio-separation` extra：
 
 ```bash
 uv sync --extra audio-separation
@@ -261,7 +261,7 @@ grep -E '^(COMPOSE_PROJECT_NAME|HTDEMUCS_MODEL_DIR|AUDIO_STEM_SEPARATION_EXECUTI
 ```bash
 COMPOSE_PROJECT_NAME=audio-stem-separator
 HTDEMUCS_MODEL_DIR=.data/models/htdemucs-ft
-AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER=auto
+AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER=cpu
 ```
 
 GPU 开发服务器确认 CUDA 可用后，可以改成：
@@ -333,7 +333,7 @@ docker compose --profile app exec worker \
 | 现象 | 含义 | 处理方向 |
 |---|---|---|
 | 宿主机 `models.sh verify` 通过，容器内失败 | 模型挂载路径或 `HTDEMUCS_MODEL_DIR` 不一致 | 确认宿主机 `./.data/models` 已存在，且容器内校验路径是 `/app/.data/models/htdemucs-ft` |
-| 容器内 `import onnxruntime` 失败 | 镜像没有安装音频分离运行依赖 | 构建包含 `audio-separation` 依赖的镜像，或在运行环境显式安装 |
+| 容器内 `import onnxruntime` 失败 | 镜像没有安装音频分离运行依赖 | 构建包含 `audio-separation` extra 的镜像，或在运行环境执行 `uv sync --extra audio-separation` |
 | 设置了 `cuda` 但 provider 里没有 `CUDAExecutionProvider` | 容器没有 GPU 版 ONNX Runtime 或没有拿到 GPU | 检查 GPU 镜像、CUDA runtime、NVIDIA container runtime 和 Pod/容器 GPU 资源 |
 
 当前仓库的 `.data/` 不进入 git，也被 `.dockerignore` 排除。因此不要期待重新 build 镜像后自动带上模型文件。

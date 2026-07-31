@@ -37,7 +37,7 @@ channels       2
 
 ## 前置工具
 
-模型下载需要 `hf` CLI；本仓库脚本找不到 `hf` 时会尝试通过 `uv run hf` 执行。ONNX 签名探测需要可选依赖 `audio-separation` 中的 `onnxruntime`。音频探测和转换需要 `ffprobe` / `ffmpeg`。
+模型下载需要 `hf` CLI；本仓库脚本找不到 `hf` 时会尝试通过 `uv run hf` 执行。ONNX 签名探测需要 `audio-separation` extra 中的 `onnxruntime`。音频探测和转换需要 `ffprobe` / `ffmpeg`。
 
 如果当前虚拟环境还没安装音频分离相关可选依赖：
 

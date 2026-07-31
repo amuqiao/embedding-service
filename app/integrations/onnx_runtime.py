@@ -49,10 +49,7 @@ def resolve_execution_providers(
     if mode == "cuda":
         if CUDA_EXECUTION_PROVIDER not in available_providers:
             raise OnnxRuntimeIntegrationError(f"{CUDA_EXECUTION_PROVIDER} is not available")
-        providers = [CUDA_EXECUTION_PROVIDER]
-        if CPU_EXECUTION_PROVIDER in available_providers:
-            providers.append(CPU_EXECUTION_PROVIDER)
-        return tuple(providers)
+        return (CUDA_EXECUTION_PROVIDER,)
     if mode == "auto":
         if CUDA_EXECUTION_PROVIDER in available_providers:
             providers = [CUDA_EXECUTION_PROVIDER]

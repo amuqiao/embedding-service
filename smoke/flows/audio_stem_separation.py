@@ -524,6 +524,86 @@ def conclusion(job: dict[str, Any], artifacts: list[dict[str, Any]]) -> str:
     return f"job={job.get('job_status')} stems={len(_stem_outputs(job))} artifacts={len(artifacts)}"
 
 
+def _callback_state(job: dict[str, Any]) -> dict[str, Any] | None:
+    callback = job.get("callback")
+    return callback if isinstance(callback, dict) else None
+
+
+def _callback_status(job: dict[str, Any]) -> str:
+    callback = _callback_state(job)
+    status = callback.get("status") if callback is not None else None
+    return str(status) if status is not None else "-"
+
+
+def _callback_display(job: dict[str, Any]) -> dict[str, Any]:
+    callback = _callback_state(job)
+    if callback is None:
+        return {
+            "callback_status": "-",
+            "callback_attempt": "-",
+            "callback_next_retry_at": "-",
+            "callback_last_error_reason": "-",
+        }
+    last_error = callback.get("last_error")
+    last_error_reason = last_error.get("reason") if isinstance(last_error, dict) else None
+    return {
+        "callback_status": callback.get("status"),
+        "callback_attempt": callback.get("attempt"),
+        "callback_next_retry_at": callback.get("next_retry_at"),
+        "callback_last_error_reason": last_error_reason,
+    }
+
+
+def _progress_summary(job: dict[str, Any]) -> str:
+    progress = job.get("job_progress")
+    if not isinstance(progress, dict):
+        return "stage=- percent=-"
+    stage = progress.get("stage") or "-"
+    percent = progress.get("percent")
+    if percent is None:
+        percent_text = "-"
+    else:
+        percent_text = f"{percent}%"
+    message = progress.get("message") or "-"
+    return f"stage={stage} percent={percent_text} message={formatters.compact(message, max_length=48)}"
+
+
+def _input_source_label(
+    *,
+    payload_file: str | None,
+    input_file: str | None,
+    input_url_ref_json: str | None,
+    input_public_url: str | None,
+) -> str:
+    if payload_file is not None:
+        return f"payload-file {payload_file}"
+    if input_file is not None:
+        return f"input-file {input_file}"
+    if input_url_ref_json is not None:
+        return "url-ref-json"
+    if input_public_url is not None:
+        return "url-ref-cli"
+    return "default"
+
+
+def _staged_input_summary(staged_input: dict[str, Any] | None) -> str:
+    if staged_input is None:
+        return "source=payload"
+    provider = staged_input.get("provider", "-")
+    bucket = staged_input.get("bucket")
+    key = staged_input.get("key")
+    if bucket or key:
+        return f"provider={provider} bucket={bucket or '-'} key={key or '-'}"
+    local_path = staged_input.get("local_path")
+    return f"provider={provider} local_path={local_path or '-'}"
+
+
+def _diagnostic_hint(job_id: str) -> None:
+    formatters.event("INFO", "debug", f"./scripts/jobs.sh show {job_id}")
+    formatters.event("INFO", "debug", f"./scripts/jobs.sh timeline {job_id}")
+    formatters.event("INFO", "debug", f"./scripts/jobs.sh attempts {job_id}")
+
+
 def run(
     *,
     confirm_run: bool,
@@ -553,6 +633,8 @@ def run(
     if not confirm_run:
         raise FlowError("audio stem separation smoke requires --confirm-run", exit_code=2)
     target_job_type = validate_job_type(job_type)
+    if not json_output:
+        formatters.section("Audio Stem Separation Smoke")
     context = llm_job_billing.resolve_runtime_context(
         env_file=env_file,
         api_url=api_url,
@@ -564,8 +646,20 @@ def run(
     staged_input: dict[str, Any] | None = None
     jobs_url = str(context.summary["jobs_url"])
     headers = llm_job_billing.build_headers(app_env, caller_id=caller_id, service_api_key=service_api_key)
+    if not json_output:
+        formatters.event(
+            "OK",
+            "preflight",
+            f"base_url={context.summary['api_url']} storage={context.summary['storage_backend']}",
+        )
+        formatters.event(
+            "RUN",
+            "prepare",
+            f"job_type={target_job_type} input={_input_source_label(payload_file=payload_file, input_file=input_file, input_url_ref_json=input_url_ref_json, input_public_url=input_public_url)}",
+        )
     create_attempted = False
     terminal_job: dict[str, Any] | None = None
+    job_id: str | None = None
     try:
         if payload_file is not None:
             if any([input_file, input_url_ref_json, input_public_url, input_internal_url, input_sha256]):
@@ -591,16 +685,37 @@ def run(
         if client_request_id is not None:
             payload["client_request_id"] = client_request_id
 
+        if not json_output:
+            formatters.event("OK", "prepare", _staged_input_summary(staged_input))
+            formatters.event("RUN", "submit", f"url={jobs_url}")
         create_attempted = True
         create_envelope = llm_job_billing.request_json(jobs_url, method="POST", headers=headers, payload=payload)
         created = llm_job_billing.data_object(create_envelope, "job")
         job_id = str(created["job_id"])
+        if not json_output:
+            formatters.event("OK", "submit", f"id={job_id} status={created.get('job_status')}")
+            formatters.event("RUN", "poll", f"timeout={timeout_seconds}s interval={poll_interval_seconds}s")
+
+        def progress_callback(job: dict[str, Any], elapsed_seconds: float) -> None:
+            if json_output:
+                return
+            formatters.event(
+                "WAIT",
+                "job",
+                (
+                    f"id={job_id} status={job.get('job_status')} "
+                    f"callback={_callback_status(job)} elapsed={int(elapsed_seconds)}s "
+                    f"{_progress_summary(job)}"
+                ),
+            )
+
         get_job_envelope = llm_job_billing.poll_job_envelope(
             jobs_url=jobs_url,
             job_id=job_id,
             headers=headers,
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
+            progress_callback=progress_callback,
         )
         terminal_job = llm_job_billing.data_object(get_job_envelope, "job")
     except Exception as exc:
@@ -609,23 +724,38 @@ def run(
             terminal_job=terminal_job,
         ):
             try:
+                if not json_output:
+                    formatters.event("RUN", "cleanup", _staged_input_summary(staged_input))
                 cleanup_staged_input(staged_input, app_env)
+                if not json_output:
+                    formatters.event("OK", "cleanup", "staged input removed")
             except Exception as cleanup_exc:
                 exit_code = exc.exit_code if isinstance(exc, FlowError) else 4
                 raise FlowError(cleanup_failure_message(exc, cleanup_exc), exit_code=exit_code) from exc
+        if job_id is not None and not json_output:
+            _diagnostic_hint(job_id)
         raise
     assert terminal_job is not None
+    assert job_id is not None
     job_succeeded = terminal_job.get("job_status") == "succeeded"
     if staged_input is not None:
+        if not json_output:
+            formatters.event("RUN", "cleanup", _staged_input_summary(staged_input))
         cleanup_staged_input(staged_input, app_env)
+        if not json_output:
+            formatters.event("OK", "cleanup", "staged input removed")
     artifacts = []
     if download_outputs and job_succeeded:
+        if not json_output:
+            formatters.event("RUN", "artifacts", f"download_outputs=true output_dir={output_dir}")
         artifacts = download_output_artifacts(
             job=terminal_job,
             app_env=app_env,
             output_dir=output_dir,
             signed_url_expires_seconds=signed_url_expires_seconds,
         )
+        if not json_output:
+            formatters.event("OK", "artifacts", f"downloaded={len(artifacts)}")
     summary = summarize(terminal_job, artifacts=artifacts, staged_input=staged_input)
     summary["context"] = context.summary
     if json_output:
@@ -640,14 +770,25 @@ def run(
             }
         )
     else:
-        formatters.section("Audio Stem Separation Smoke")
-        formatters.event("OK", "job", f"id={job_id} status={terminal_job.get('job_status')}")
+        formatters.event(
+            "OK" if job_succeeded else "ERROR",
+            "job",
+            f"id={job_id} status={terminal_job.get('job_status')} callback={_callback_status(terminal_job)}",
+        )
+        if job_succeeded:
+            formatters.event("OK", "assert", f"stems={summary['stems_count']}")
+        else:
+            formatters.event("ERROR", "assert", f"job_error={formatters.compact(terminal_job.get('job_error'))}")
+        display_summary = {**summary, **_callback_display(terminal_job)}
         formatters.print_table(
-            [summary],
+            [display_summary],
             [
                 ("job_id", "job_id"),
                 ("job_status", "job"),
                 ("job_type", "type"),
+                ("callback_status", "callback"),
+                ("callback_attempt", "cb_try"),
+                ("callback_last_error_reason", "cb_error"),
                 ("stems_count", "stems"),
             ],
         )
@@ -663,4 +804,6 @@ def run(
                 ],
             )
     if not job_succeeded:
+        if not json_output:
+            _diagnostic_hint(job_id)
         raise FlowError(f"job {job_id} finished with {terminal_job.get('job_status')}", exit_code=1)

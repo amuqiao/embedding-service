@@ -756,7 +756,7 @@ job_audit_events         排障时间线，不参与状态推进
 | `AUDIO_STEM_TRITON_MODEL_VERSION` | `audio_stem_separation_triton` 请求的 Triton 模型版本目录，默认 `1` |
 | `AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS` | `audio_stem_separation_triton` 单次 Triton infer HTTP 请求超时秒数 |
 
-`AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER=cuda` 只表示运行期必须选择 `CUDAExecutionProvider`；部署镜像或虚拟环境仍需安装 GPU 版 ONNX Runtime，并确保 Pod/容器能看到 NVIDIA GPU。当前项目默认依赖只包含 CPU 版 `onnxruntime`，避免本地 CPU 开发和通用验证被 GPU wheel 拉取、CUDA 运行时或镜像源问题阻塞。
+`audio_stem_separation` 的本地 ONNX Runtime 依赖位于 `audio-separation` extra。CPU 运行环境使用 `uv sync --extra audio-separation` 安装 CPU 版 `onnxruntime`；`AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER=cuda` 只表示运行期必须选择 `CUDAExecutionProvider`，部署镜像或虚拟环境仍需安装 GPU 版 ONNX Runtime，并确保 Pod/容器能看到 NVIDIA GPU。
 
 `audio_stem_separation_triton` 是独立 job_type，保留 `audio_stem_separation` 的输入/输出业务合同，但模型推理通过 Triton HTTP 服务完成；音频对象读取、decode/normalize、分段、overlap-add、结果上传和 callback 仍由本服务负责。Triton worker 镜像需额外安装 `tritonclient[http]` 并提供 `ffmpeg`，且 `AUDIO_STEM_TRITON_URL` 为空时该 job_type 首次执行会快速失败，不会回退到本地 ONNX Runtime。
 

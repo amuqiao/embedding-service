@@ -507,7 +507,7 @@ class JobSettings(ConfigSection):
     poster_title_image_allowed_oss_regions_raw: str = "local"
     audio_stem_separation_allowed_oss_buckets_raw: str = "local-dev"
     audio_stem_separation_allowed_oss_regions_raw: str = "local"
-    audio_stem_separation_execution_provider: str = "auto"
+    audio_stem_separation_execution_provider: str = "cpu"
     htdemucs_model_dir_raw: str = ".data/models/htdemucs-ft"
     audio_stem_triton_url: str = ""
     audio_stem_triton_token: SecretStr = Field(default=SecretStr(""), repr=False)

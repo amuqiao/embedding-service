@@ -96,6 +96,12 @@ def _write_broken_onnxruntime(module_dir: Path) -> Path:
     return module
 
 
+def _write_missing_onnxruntime(module_dir: Path) -> Path:
+    module = module_dir / "onnxruntime.py"
+    module.write_text("raise ModuleNotFoundError(\"No module named 'onnxruntime'\")\n", encoding="utf-8")
+    return module
+
+
 def test_models_list_json_has_htdemucs_asset():
     result = subprocess.run(
         ["./scripts/models.sh", "list", "--json"],
@@ -362,6 +368,25 @@ def test_models_inspect_reports_onnxruntime_import_failure_without_traceback(tmp
 
     assert result.returncode == 2
     assert "onnxruntime import failed: ImportError: broken ort import" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_models_inspect_reports_audio_separation_extra_when_onnxruntime_is_missing(tmp_path):
+    model_dir = tmp_path / "model"
+    _write_onnx_files(model_dir)
+    _write_missing_onnxruntime(tmp_path)
+
+    result = subprocess.run(
+        ["./scripts/models.sh", "inspect", "htdemucs-ft", "--model-dir", str(model_dir)],
+        cwd=ROOT_DIR,
+        env=_env(PYTHON_BIN=sys.executable, PYTHONPATH=str(tmp_path)),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "onnxruntime is not available; run: uv sync --extra audio-separation" in result.stderr
     assert "Traceback" not in result.stderr
 
 

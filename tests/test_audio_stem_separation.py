@@ -1,3 +1,4 @@
+import builtins
 import uuid
 from datetime import UTC, datetime
 
@@ -27,6 +28,20 @@ def _url_ref(key: str, data: bytes, *, content_type: str = "audio/wav") -> dict:
         "content_type": content_type,
         "sha256": bare_sha256(sha256_digest(data)),
     }
+
+
+def test_wav_bytes_missing_soundfile_points_to_audio_separation_extra(monkeypatch):
+    original_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):  # type: ignore[no-untyped-def]
+        if name == "soundfile":
+            raise ModuleNotFoundError("No module named 'soundfile'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(AppError, match="uv sync --extra audio-separation"):
+        audio_stem_shared.wav_bytes(np.zeros((2, 4), dtype=np.float32), sample_rate=44100)
 
 
 def _handler():
@@ -82,7 +97,7 @@ def _job(*, params: dict, output_prefix: str = "outputs") -> Job:
                     "operation": "audio_stem_separation",
                     "media_input_plan": _media_input_plan(params),
                     "onnx_model_version": "test-model",
-                    "execution_provider": "auto",
+                    "execution_provider": "cpu",
                     "segment_seconds": 7.8,
                     "overlap_ratio": 0.25,
                 },
@@ -269,7 +284,7 @@ def test_audio_stem_separation_runtime_fields_reflect_model_asset(monkeypatch):
         "operation": "audio_stem_separation",
         "media_input_plan": None,
         "onnx_model_version": "htdemucs-ft-onnx-fp32",
-        "execution_provider": "auto",
+        "execution_provider": "cpu",
         "segment_seconds": 7.8,
         "overlap_ratio": 0.25,
     }

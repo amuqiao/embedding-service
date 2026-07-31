@@ -49,7 +49,8 @@ Usage:
     --timeout 7200 \
     --poll-interval 5 \
     --confirm-run \
-    --input-file .data/audio/htdemucs-input.wav
+    --confirm-upload \
+    --input-file .data/misc/2485_0003_S6_梁萧.wav
 
 排障入口:
   ./scripts/jobs.sh show <job_id>

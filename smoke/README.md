@@ -48,7 +48,8 @@ ENV_FILE=.env ./scripts/smoke.sh poster-title-image \
 
 ENV_FILE=.env ./scripts/smoke.sh audio-stem-separation run \
   --confirm-run \
-  --input-file .data/audio/htdemucs-input.wav
+  --confirm-upload \
+  --input-file .data/misc/2485_0003_S6_梁萧.wav
 ```
 
 ## Exit Codes

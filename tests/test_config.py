@@ -204,7 +204,7 @@ def test_audio_stem_separation_config_defaults_and_overrides():
     default_settings = _build_settings()
     assert default_settings.job.audio_stem_separation_allowed_oss_buckets == ("local-dev",)
     assert default_settings.job.audio_stem_separation_allowed_oss_regions == ("local",)
-    assert default_settings.job.audio_stem_separation_execution_provider == "auto"
+    assert default_settings.job.audio_stem_separation_execution_provider == "cpu"
     assert default_settings.job.htdemucs_model_dir == config_module.ROOT_DIR / ".data/models/htdemucs-ft"
     assert default_settings.job.audio_stem_triton_url == ""
     assert default_settings.job.audio_stem_triton_token_value == ""

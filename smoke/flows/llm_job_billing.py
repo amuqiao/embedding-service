@@ -7,7 +7,7 @@ import time
 import uuid
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -273,14 +273,18 @@ def poll_job_envelope(
     headers: dict[str, str],
     timeout_seconds: int,
     poll_interval_seconds: float,
+    progress_callback: Callable[[dict[str, Any], float], None] | None = None,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
+    started = time.monotonic()
     last_envelope: dict[str, Any] | None = None
     while time.monotonic() < deadline:
         last_envelope = request_json(f"{jobs_url}/{job_id}", method="GET", headers=headers)
         last_job = data_object(last_envelope, "job")
         if last_job.get("job_status") in TERMINAL_STATUSES:
             return last_envelope
+        if progress_callback is not None:
+            progress_callback(last_job, time.monotonic() - started)
         time.sleep(poll_interval_seconds)
     raise FlowError(f"job {job_id} did not finish within {timeout_seconds}s; last={last_envelope}", exit_code=5)
 

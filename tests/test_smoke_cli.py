@@ -287,6 +287,51 @@ def test_smoke_poll_timeout_uses_standard_exit_code_5():
     assert exc_info.value.exit_code == 5
 
 
+def test_smoke_poll_progress_callback_skips_terminal_status(monkeypatch):
+    monkeypatch.setattr(
+        llm_job_billing,
+        "request_json",
+        lambda *args, **kwargs: {
+            "code": "0",
+            "data": {"job": {"job_id": "job-1", "job_status": "succeeded"}},
+        },
+    )
+    progress_calls = []
+
+    envelope = llm_job_billing.poll_job_envelope(
+        jobs_url="http://127.0.0.1:8100/jobs",
+        job_id="job-1",
+        headers={},
+        timeout_seconds=1,
+        poll_interval_seconds=0.1,
+        progress_callback=lambda job, elapsed: progress_calls.append((job, elapsed)),
+    )
+
+    assert envelope["data"]["job"]["job_status"] == "succeeded"
+    assert progress_calls == []
+
+
+def test_poll_job_returns_data_job_for_legacy_callers(monkeypatch):
+    monkeypatch.setattr(
+        llm_job_billing,
+        "request_json",
+        lambda *args, **kwargs: {
+            "code": "0",
+            "data": {"job": {"job_id": "job-1", "job_status": "succeeded"}},
+        },
+    )
+
+    job = llm_job_billing.poll_job(
+        jobs_url="http://127.0.0.1:8100/jobs",
+        job_id="job-1",
+        headers={},
+        timeout_seconds=1,
+        poll_interval_seconds=0.1,
+    )
+
+    assert job == {"job_id": "job-1", "job_status": "succeeded"}
+
+
 def test_smoke_failed_terminal_job_uses_standard_exit_code_1(monkeypatch):
     context = llm_job_billing.RuntimeContext(
         app_env={"DISABLE_HTTP_AUTH_HEADER": "true", "DISABLE_CALLER_ID_HEADER": "true"},
@@ -1577,16 +1622,29 @@ def test_audio_stem_separation_run_uses_payload_file_api_flow(tmp_path, monkeypa
         }
 
     monkeypatch.setattr(llm_job_billing, "request_json", fake_request_json)
-    monkeypatch.setattr(
-        llm_job_billing,
-        "poll_job_envelope",
-        lambda **kwargs: {
+    def fake_poll_job_envelope(**kwargs):
+        kwargs["progress_callback"](
+            {
+                "job_id": "audio-job-1",
+                "job_status": "running",
+                "job_progress": {"stage": "calling_model", "percent": 30, "message": "running"},
+                "callback": {"status": "pending", "attempt": 0},
+            },
+            3.4,
+        )
+        return {
             "code": "0",
             "data": {
                 "job": {
                     "job_id": "audio-job-1",
                     "job_status": "succeeded",
                     "job_type": "audio_stem_separation",
+                    "callback": {
+                        "status": "not_configured",
+                        "attempt": 0,
+                        "last_error": None,
+                        "next_retry_at": None,
+                    },
                     "job_result": {
                         "stems": {
                             "drums": stem_ref("drums"),
@@ -1597,8 +1655,9 @@ def test_audio_stem_separation_run_uses_payload_file_api_flow(tmp_path, monkeypa
                     },
                 }
             },
-        },
-    )
+        }
+
+    monkeypatch.setattr(llm_job_billing, "poll_job_envelope", fake_poll_job_envelope)
 
     audio_stem_separation.run(
         confirm_run=True,
@@ -1626,14 +1685,127 @@ def test_audio_stem_separation_run_uses_payload_file_api_flow(tmp_path, monkeypa
         json_output=True,
     )
 
-    result = json.loads(capsys.readouterr().out)
+    output = capsys.readouterr().out
+    assert "WAIT" not in output
+    result = json.loads(output)
     assert result["summary"]["job_id"] == "audio-job-1"
     assert result["summary"]["job_type"] == "audio_stem_separation"
     assert result["summary"]["stems_count"] == 4
+    assert result["conclusion"] == "job=succeeded stems=4 artifacts=0"
+    assert "callback_status" not in result["summary"]
+    assert "callback_attempt" not in result["summary"]
+    assert result["responses"]["get_job"]["data"]["job"]["callback"]["status"] == "not_configured"
     assert calls[0]["method"] == "POST"
     assert calls[0]["url"] == "http://127.0.0.1:18200/api/v1/ai-jobs/jobs"
     assert calls[0]["payload"]["job_type"] == "audio_stem_separation"
     assert calls[0]["payload"]["job_params"]["input_audio"] == input_audio
+
+
+def test_audio_stem_separation_run_prints_stage_poll_and_callback_status(tmp_path, monkeypatch, capsys):
+    clear_api_env(monkeypatch)
+    clear_storage_env(monkeypatch)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text(
+        "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
+        encoding="utf-8",
+    )
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
+    input_audio = {
+        "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.wav",
+        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.wav",
+        "content_type": "audio/wav",
+        "sha256": "a" * 64,
+    }
+    payload_file = tmp_path / "audio-payload.json"
+    payload_file.write_text(
+        json.dumps(
+            audio_stem_separation.build_job_payload(
+                input_audio=input_audio,
+                job_type="audio_stem_separation",
+                client_request_id="audio-client-1",
+                max_duration_seconds=60.0,
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        llm_job_billing,
+        "request_json",
+        lambda url, *, method, headers, payload=None, timeout_seconds=10: {
+            "code": "0",
+            "data": {"job": {"job_id": "audio-job-1", "job_status": "queued"}},
+        },
+    )
+
+    def fake_poll_job_envelope(**kwargs):
+        progress_callback = kwargs["progress_callback"]
+        progress_callback(
+            {
+                "job_id": "audio-job-1",
+                "job_status": "running",
+                "job_progress": {"stage": "calling_model", "percent": 25, "message": "running onnx"},
+                "callback": {"status": "pending", "attempt": 0},
+            },
+            5.2,
+        )
+        return {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "audio-job-1",
+                    "job_status": "succeeded",
+                    "job_type": "audio_stem_separation",
+                    "job_progress": {"stage": "succeeded", "percent": 100, "message": "succeeded"},
+                    "callback": {"status": "not_configured", "attempt": 0},
+                    "job_result": {"stems": {"drums": {}, "bass": {}, "other": {}, "vocals": {}}},
+                }
+            },
+        }
+
+    monkeypatch.setattr(llm_job_billing, "poll_job_envelope", fake_poll_job_envelope)
+
+    audio_stem_separation.run(
+        confirm_run=True,
+        confirm_upload=False,
+        api_url=None,
+        env_file=None,
+        allow_remote_api=False,
+        service_api_key=None,
+        caller_id="caller-1",
+        timeout_seconds=1,
+        poll_interval_seconds=0.1,
+        job_type="audio_stem_separation",
+        client_request_id=None,
+        payload_file=str(payload_file),
+        input_file=None,
+        input_url_ref_json=None,
+        input_public_url=None,
+        input_internal_url=None,
+        input_sha256=None,
+        max_duration_seconds=None,
+        key_prefix=None,
+        signed_url_expires_seconds=3600,
+        download_outputs=False,
+        output_dir=".data/audio-stems",
+        json_output=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "== Audio Stem Separation Smoke ==" in output
+    assert "OK        preflight" in output
+    assert "RUN       prepare" in output
+    assert "RUN       submit" in output
+    assert "RUN       poll" in output
+    assert "WAIT      job" in output
+    assert "status=running" in output
+    assert "callback=pending" in output
+    assert "callback=not_configured" in output
+    assert "OK        assert     stems=4" in output
 
 
 def test_audio_stem_separation_run_does_not_download_outputs_for_failed_job(tmp_path, monkeypatch, capsys):
@@ -1726,6 +1898,180 @@ def test_audio_stem_separation_run_does_not_download_outputs_for_failed_job(tmp_
     result = json.loads(capsys.readouterr().out)
     assert result["summary"]["job_status"] == "failed"
     assert result["summary"]["artifacts"] == []
+
+
+def test_audio_stem_separation_failed_job_prints_diagnostic_hints(tmp_path, monkeypatch, capsys):
+    clear_storage_env(monkeypatch)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text(
+        "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
+        encoding="utf-8",
+    )
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
+    payload_file = tmp_path / "audio-payload.json"
+    payload_file.write_text(
+        json.dumps(
+            {
+                "client_request_id": "audio-client-failed",
+                "job_type": "audio_stem_separation",
+                "job_params": {
+                    "input_audio": {
+                        "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.wav",
+                        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.wav",
+                        "content_type": "audio/wav",
+                        "sha256": "a" * 64,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        llm_job_billing,
+        "request_json",
+        lambda url, *, method, headers, payload=None, timeout_seconds=10: {
+            "code": "0",
+            "data": {"job": {"job_id": "audio-job-failed", "job_status": "queued"}},
+        },
+    )
+    monkeypatch.setattr(
+        llm_job_billing,
+        "poll_job_envelope",
+        lambda **_kwargs: {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "audio-job-failed",
+                    "job_status": "failed",
+                    "job_type": "audio_stem_separation",
+                    "job_error": {"reason": "AUDIO_STEM_INFERENCE_FAILED"},
+                    "callback": {
+                        "status": "failed",
+                        "attempt": 1,
+                        "last_error": {"reason": "CALLBACK_DELIVERY_FAILED", "retryable": False},
+                        "next_retry_at": None,
+                    },
+                }
+            },
+        },
+    )
+
+    with pytest.raises(audio_stem_separation.FlowError, match="finished with failed"):
+        audio_stem_separation.run(
+            confirm_run=True,
+            confirm_upload=False,
+            api_url=None,
+            env_file=None,
+            allow_remote_api=False,
+            service_api_key=None,
+            caller_id="caller-1",
+            timeout_seconds=1,
+            poll_interval_seconds=0.1,
+            job_type="audio_stem_separation",
+            client_request_id=None,
+            payload_file=str(payload_file),
+            input_file=None,
+            input_url_ref_json=None,
+            input_public_url=None,
+            input_internal_url=None,
+            input_sha256=None,
+            max_duration_seconds=None,
+            key_prefix=None,
+            signed_url_expires_seconds=3600,
+            download_outputs=False,
+            output_dir=".data/audio-stems",
+            json_output=False,
+        )
+
+    output = capsys.readouterr().out
+    assert "ERROR     job" in output
+    assert "ERROR     assert" in output
+    assert "callback=failed" in output
+    assert "./scripts/jobs.sh show audio-job-failed" in output
+    assert "./scripts/jobs.sh timeline audio-job-failed" in output
+    assert "./scripts/jobs.sh attempts audio-job-failed" in output
+
+
+def test_audio_stem_separation_poll_timeout_prints_diagnostic_hints(tmp_path, monkeypatch, capsys):
+    clear_storage_env(monkeypatch)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text(
+        "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
+        encoding="utf-8",
+    )
+    append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
+    payload_file = tmp_path / "audio-payload.json"
+    payload_file.write_text(
+        json.dumps(
+            {
+                "client_request_id": "audio-client-timeout",
+                "job_type": "audio_stem_separation",
+                "job_params": {
+                    "input_audio": {
+                        "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.wav",
+                        "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.wav",
+                        "content_type": "audio/wav",
+                        "sha256": "a" * 64,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        llm_job_billing,
+        "request_json",
+        lambda url, *, method, headers, payload=None, timeout_seconds=10: {
+            "code": "0",
+            "data": {"job": {"job_id": "audio-job-timeout", "job_status": "queued"}},
+        },
+    )
+
+    def timeout_poll(**_kwargs):
+        raise llm_job_billing.FlowError("job audio-job-timeout did not finish within 1s", exit_code=5)
+
+    monkeypatch.setattr(llm_job_billing, "poll_job_envelope", timeout_poll)
+
+    with pytest.raises(llm_job_billing.FlowError) as exc_info:
+        audio_stem_separation.run(
+            confirm_run=True,
+            confirm_upload=False,
+            api_url=None,
+            env_file=None,
+            allow_remote_api=False,
+            service_api_key=None,
+            caller_id="caller-1",
+            timeout_seconds=1,
+            poll_interval_seconds=0.1,
+            job_type="audio_stem_separation",
+            client_request_id=None,
+            payload_file=str(payload_file),
+            input_file=None,
+            input_url_ref_json=None,
+            input_public_url=None,
+            input_internal_url=None,
+            input_sha256=None,
+            max_duration_seconds=None,
+            key_prefix=None,
+            signed_url_expires_seconds=3600,
+            download_outputs=False,
+            output_dir=".data/audio-stems",
+            json_output=False,
+        )
+
+    assert exc_info.value.exit_code == 5
+    output = capsys.readouterr().out
+    assert "./scripts/jobs.sh show audio-job-timeout" in output
+    assert "./scripts/jobs.sh timeline audio-job-timeout" in output
+    assert "./scripts/jobs.sh attempts audio-job-timeout" in output
 
 
 def test_audio_stem_separation_run_cleans_staged_input_after_terminal_job(tmp_path, monkeypatch):
