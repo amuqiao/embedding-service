@@ -48,7 +48,7 @@ AudioStemSeparationJob executor
 }
 ```
 
-关键点：Job 不接收本地文件路径。即使你用 `real-flow.sh --input-file`，脚本也只是先把本地 WAV 上传到 OSS，然后构造这个 `input_audio`。
+关键点：Job 不接收本地文件路径。即使你用 `smoke.sh --input-file`，脚本也只是先把本地 WAV 上传到 OSS，然后构造这个 `input_audio`。
 
 **模型执行可视化**
 ```text

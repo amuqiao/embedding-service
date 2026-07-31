@@ -50,7 +50,7 @@ API startup 和 worker startup 都执行同一组注册和校验。`app/jobs/typ
 
 `./scripts/tools.sh registry --json` 当前输出 operation、job type、workflow、capability、tool 和 job-capability 关系。它是模板治理 manifest，不是 public API；字段可随模板治理需要演进，但新增正式能力时必须能通过测试确认分类、schema、错误码、能力引用和 workflow 元数据。
 
-Tool `startup_validators` 只用于 API/worker 进程级必需依赖。可选能力、demo job 或特定模型运行时依赖不能放入全局 startup validator；这类依赖应在对应 capability/job 执行路径或专项 verify/real-flow 中 fail-fast。
+Tool `startup_validators` 只用于 API/worker 进程级必需依赖。可选能力、demo job 或特定模型运行时依赖不能放入全局 startup validator；这类依赖应在对应 capability/job 执行路径或专项 verify/smoke 中 fail-fast。
 
 ## 当前 Graph 校验
 
@@ -124,7 +124,7 @@ AudioInputPlanSnapshot
 
 新增 capability 与 tool 的 schema、entrypoint、error code、log event 和 settings 引用必须能被 `validate_capability_tool_registry()` 校验。新增 job type 的 `allowed_capability_refs` 必须引用已注册 capability。
 
-`ToolDefinition.startup_validators` 只允许表达进程级必需依赖；可选模型链路、demo job 或特定业务运行时依赖必须在对应执行路径或专项 real-flow / verify 中显式失败，不能扩大为 API/worker 全局启动依赖。
+`ToolDefinition.startup_validators` 只允许表达进程级必需依赖；可选模型链路、demo job 或特定业务运行时依赖必须在对应执行路径或专项 smoke / verify 中显式失败，不能扩大为 API/worker 全局启动依赖。
 
 当前 registry 治理保持轻量：不做数据库 catalog、动态插件加载、运行时 capability 开关、管理后台或 public registry API。
 

@@ -1,6 +1,6 @@
 # audio_stem_separation 开发服务器准备与验证 Runbook
 
-本文说明如何在开发服务器准备 `audio_stem_separation` 需要的 htdemucs-ft ONNX 模型、测试音频和真实流程验证命令。核心原则是：服务部署仍交给 `./scripts/deploy.sh`，模型和测试数据作为前置资产由人按 runbook 显式准备。
+本文说明如何在开发服务器准备 `audio_stem_separation` 需要的 htdemucs-ft ONNX 模型、测试音频和 smoke 验证命令。核心原则是：服务部署仍交给 `./scripts/deploy.sh`，模型和测试数据作为前置资产由人按 runbook 显式准备。
 
 本文不负责自动部署生产环境，不把模型下载塞进 `deploy.sh`，不管理远端密钥，不修改云平台或 K8s 资源。模型下载、测试音频拷贝、音频校验和真实 Job 验证都必须由执行者明确运行命令。
 
@@ -28,7 +28,7 @@
 | 下载 htdemucs-ft ONNX 模型 | 开发服务器 | `./scripts/models.sh download htdemucs-ft` |
 | 拷贝本机测试音频到开发服务器 | 本机 | `rsync` 或 `scp` |
 | 校验测试音频格式 | 开发服务器 | `./scripts/media.sh audio verify htdemucs-input ...` |
-| 提交真实 `audio_stem_separation` Job | 开发服务器，或本机远程调 API | `./scripts/real-flow.sh audio-stem-separation ...` |
+| 提交真实 `audio_stem_separation` Job | 开发服务器，或本机远程调 API | `./scripts/smoke.sh audio-stem-separation ...` |
 
 最容易踩坑的是 worker 读取模型的位置：
 
@@ -79,7 +79,7 @@ cd "$LOCAL_REPO"
 ./scripts/media.sh audio verify htdemucs-input "$TEST_AUDIO"
 ```
 
-推荐把整个 `.data/misc/` 目录拷贝到开发服务器，保留后续图片、音频等真实流程测试素材：
+推荐把整个 `.data/misc/` 目录拷贝到开发服务器，保留后续图片、音频等smoke测试素材：
 
 ```bash
 cd "$LOCAL_REPO"
@@ -127,7 +127,7 @@ export TEST_AUDIO=.data/misc/2485_0003_S6_梁萧.wav
 cd "$REMOTE_REPO"
 ```
 
-如果服务或真实流程脚本运行在开发服务器宿主机，先安装项目依赖和音频分离可选依赖：
+如果服务或smoke脚本运行在开发服务器宿主机，先安装项目依赖和音频分离可选依赖：
 
 ```bash
 uv sync --extra audio-separation
@@ -145,7 +145,7 @@ sudo apt-get install -y ffmpeg
 ```bash
 ./scripts/models.sh --help
 ./scripts/media.sh --help
-./scripts/real-flow.sh audio-stem-separation -h
+./scripts/smoke.sh audio-stem-separation -h
 ```
 
 ## 开发服务器：下载和校验模型
@@ -246,7 +246,7 @@ mkdir -p .data/audio
 ./scripts/media.sh audio verify htdemucs-input .data/audio/htdemucs-input.wav
 ```
 
-后续真实流程把 `TEST_AUDIO` 换成 `.data/audio/htdemucs-input.wav` 即可。
+后续smoke把 `TEST_AUDIO` 换成 `.data/audio/htdemucs-input.wav` 即可。
 
 ## 开发服务器：配置环境
 
@@ -345,7 +345,7 @@ docker compose --profile app exec worker \
 ```bash
 mkdir -p .run
 
-./scripts/real-flow.sh audio-stem-separation build-payload \
+./scripts/smoke.sh audio-stem-separation build-payload \
   --env-file .env \
   --input-file "$TEST_AUDIO" \
   --output .run/audio-stem-payload.json
@@ -356,7 +356,7 @@ mkdir -p .run
 ```bash
 mkdir -p .run
 
-./scripts/real-flow.sh audio-stem-separation build-payload \
+./scripts/smoke.sh audio-stem-separation build-payload \
   --env-file .env \
   --confirm-upload \
   --input-file "$TEST_AUDIO" \
@@ -374,7 +374,7 @@ python -m json.tool .run/audio-stem-payload.json | sed -n '1,120p'
 提交真实 Job，等待终态，并下载 `drums`、`bass`、`other`、`vocals` 四条 stem：
 
 ```bash
-./scripts/real-flow.sh audio-stem-separation run \
+./scripts/smoke.sh audio-stem-separation run \
   --confirm-run \
   --env-file .env \
   --payload-file .run/audio-stem-payload.json \
@@ -385,7 +385,7 @@ python -m json.tool .run/audio-stem-payload.json | sed -n '1,120p'
 如果直接用本地音频提交，不提前生成 payload：
 
 ```bash
-./scripts/real-flow.sh audio-stem-separation run \
+./scripts/smoke.sh audio-stem-separation run \
   --confirm-run \
   --env-file .env \
   --input-file "$TEST_AUDIO" \
@@ -396,7 +396,7 @@ python -m json.tool .run/audio-stem-payload.json | sed -n '1,120p'
 `STORAGE_BACKEND=aliyun_oss` 时加 `--confirm-upload`：
 
 ```bash
-./scripts/real-flow.sh audio-stem-separation run \
+./scripts/smoke.sh audio-stem-separation run \
   --confirm-run \
   --confirm-upload \
   --env-file .env \
@@ -431,18 +431,18 @@ execution_provider = CUDAExecutionProvider
 
 ## 本机：远程调用开发服务器 API
 
-如果服务已经部署在开发服务器，本机也可以直接调用远端 API 做真实流程验证。这个模式适合本机有测试音频、但不想先登录开发服务器执行 real-flow。
+如果服务已经部署在开发服务器，本机也可以直接调用远端 API 做 smoke 验证。这个模式适合本机有测试音频、但不想先登录开发服务器执行 smoke。
 
 在本机执行：
 
 ```bash
 cd "$LOCAL_REPO"
 
-./scripts/real-flow.sh audio-stem-separation run \
+./scripts/smoke.sh audio-stem-separation run \
   --confirm-run \
   --confirm-upload \
   --allow-remote-api \
-  --api-url "http://${DEV_SERVER}:8100" \
+  --base-url "http://${DEV_SERVER}:8100" \
   --env-file .env \
   --input-file "$TEST_AUDIO" \
   --download-outputs \
@@ -486,7 +486,7 @@ docker compose --profile app exec worker \
 同一个 payload 被重复提交时，服务会按幂等键拒绝创建重复 Job。重新生成 payload，或者显式换一个 `--client-request-id`：
 
 ```bash
-./scripts/real-flow.sh audio-stem-separation build-payload \
+./scripts/smoke.sh audio-stem-separation build-payload \
   --env-file .env \
   --input-file "$TEST_AUDIO" \
   --client-request-id "audio-stem-$(date +%s)" \
@@ -495,7 +495,7 @@ docker compose --profile app exec worker \
 
 ### 远程 API 被脚本拒绝
 
-`real-flow.sh` 默认保护本机调用。访问 `47.94.108.140` 这类远端 API 时必须显式传：
+`smoke.sh` 默认保护本机调用。访问 `47.94.108.140` 这类远端 API 时必须显式传：
 
 ```bash
 --allow-remote-api

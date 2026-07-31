@@ -6,10 +6,10 @@ import pytest
 from PIL import Image
 from typer.testing import CliRunner
 
-from scripts.real_flow.cli import app
+from smoke.cli import app
 from app.integrations.aliyun_oss import AliyunOSSConfig
 from app.integrations.ai_adapters.base import ImageGenerationResult
-from scripts.real_flow.flows import (
+from smoke.flows import (
     adapter_image_probe,
     audio_stem_separation,
     llm_job_billing,
@@ -73,18 +73,18 @@ def append_root_env(root: Path, *lines: str) -> None:
     env_path.write_text(f"{prefix}\n{suffix}\n" if prefix else f"{suffix}\n", encoding="utf-8")
 
 
-def test_real_flow_cli_requires_confirm_cost():
+def test_smoke_cli_requires_confirm_cost():
     result = runner.invoke(app, ["llm-job-billing"])
 
     assert result.exit_code == 2
-    assert "real LLM flow requires --confirm-cost" in result.stderr
+    assert "real LLM smoke scenario requires --confirm-cost" in result.stderr
 
 
 def test_poster_title_image_cli_requires_confirm_cost():
     result = runner.invoke(app, ["poster-title-image"])
 
     assert result.exit_code == 2
-    assert "poster title image flow requires --confirm-cost" in result.stderr
+    assert "poster title image smoke scenario requires --confirm-cost" in result.stderr
 
 
 def test_poster_title_image_cli_requires_explicit_reference(tmp_path, monkeypatch):
@@ -155,7 +155,7 @@ def test_poster_title_image_cli_accepts_reference_url_ref_json(monkeypatch):
     assert captured["reference_image"] is None
 
 
-def test_real_flow_doctor_prints_resolved_context(tmp_path, monkeypatch):
+def test_smoke_ready_prints_resolved_context(tmp_path, monkeypatch):
     for name in [
         "API_URL",
         "SERVICE_API_KEY",
@@ -167,6 +167,7 @@ def test_real_flow_doctor_prints_resolved_context(tmp_path, monkeypatch):
     ]:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(llm_job_billing, "request_json", lambda *args, **kwargs: {"status": "ok", "db": "ok", "redis": "ok"})
     env_dir = tmp_path / "env_test"
     env_dir.mkdir()
     (env_dir / ".env").write_text(
@@ -187,11 +188,11 @@ def test_real_flow_doctor_prints_resolved_context(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "doctor",
+            "ready",
             "--env-file",
             "env_test/.env",
             "--allow-remote-api",
-            "--x-ai-service-caller-id",
+            "--caller-id",
             "default",
             "--json",
         ],
@@ -207,20 +208,121 @@ def test_real_flow_doctor_prints_resolved_context(tmp_path, monkeypatch):
     assert payload["oss_public_endpoint"] == "cdn.example.com"
     assert payload["ready"] is True
     assert payload["problems"] == []
+    assert payload["ready_response"] == {"status": "ok", "db": "ok", "redis": "ok"}
 
 
-def test_real_flow_doctor_rejects_missing_service_api_key(tmp_path, monkeypatch):
+def test_smoke_ready_rejects_missing_service_api_key(tmp_path, monkeypatch):
     for name in ["API_URL", "SERVICE_API_KEY", "DISABLE_HTTP_AUTH_HEADER"]:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text("API_URL=http://127.0.0.1:8100\n", encoding="utf-8")
 
-    result = runner.invoke(app, ["doctor", "--json"])
+    result = runner.invoke(app, ["ready", "--json"])
 
     assert result.exit_code == 2
     payload = json.loads(result.stdout)
     assert payload["ready"] is False
     assert payload["problems"] == ["SERVICE_API_KEY is required unless DISABLE_HTTP_AUTH_HEADER=true"]
+
+
+def test_smoke_list_outputs_standard_scenario_metadata():
+    result = runner.invoke(app, ["list", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    scenario_names = {scenario["name"] for scenario in payload["scenarios"]}
+    assert {"llm-job-billing", "poster-title-image", "audio-stem-separation"}.issubset(scenario_names)
+    for scenario in payload["scenarios"]:
+        assert {"name", "type", "acceptance_class", "dependencies", "destructive", "supports_resume"} <= set(scenario)
+
+
+def test_smoke_health_checks_service_health_endpoint(tmp_path, monkeypatch):
+    captured = {}
+
+    for name in ["API_URL", "API_HOST", "API_PORT"]:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text("API_URL=http://127.0.0.1:18123\n", encoding="utf-8")
+
+    def fake_request_json(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return {"status": "ok", "service": "test", "version": "1.0.0"}
+
+    monkeypatch.setattr(llm_job_billing, "request_json", fake_request_json)
+
+    result = runner.invoke(app, ["health", "--json"])
+
+    assert result.exit_code == 0
+    assert captured["url"] == "http://127.0.0.1:18123/health"
+    payload = json.loads(result.stdout)
+    assert payload["ready"] is True
+    assert payload["health"]["status"] == "ok"
+
+
+def test_smoke_health_returns_3_when_service_is_not_ok(tmp_path, monkeypatch):
+    for name in ["API_URL", "API_HOST", "API_PORT"]:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text("API_URL=http://127.0.0.1:18123\n", encoding="utf-8")
+    monkeypatch.setattr(llm_job_billing, "request_json", lambda *args, **kwargs: {"status": "degraded"})
+
+    result = runner.invoke(app, ["health", "--json"])
+
+    assert result.exit_code == 3
+    payload = json.loads(result.stdout)
+    assert payload["ready"] is False
+
+
+def test_smoke_poll_timeout_uses_standard_exit_code_5():
+    with pytest.raises(llm_job_billing.FlowError) as exc_info:
+        llm_job_billing.poll_job_envelope(
+            jobs_url="http://127.0.0.1:8100/jobs",
+            job_id="job-timeout",
+            headers={},
+            timeout_seconds=0,
+            poll_interval_seconds=0.1,
+        )
+
+    assert exc_info.value.exit_code == 5
+
+
+def test_smoke_failed_terminal_job_uses_standard_exit_code_1(monkeypatch):
+    context = llm_job_billing.RuntimeContext(
+        app_env={"DISABLE_HTTP_AUTH_HEADER": "true", "DISABLE_CALLER_ID_HEADER": "true"},
+        summary={"jobs_url": "http://127.0.0.1:8100/jobs", "ready": True},
+    )
+    responses = iter(
+        [
+            {"code": "0", "data": {"job": {"job_id": "job-failed", "job_status": "queued"}}},
+            {"code": "0", "data": {"job": {"job_id": "job-failed", "job_status": "failed", "job_type": "job_real_llm_echo"}}},
+            {"code": "0", "data": {"billing": {"status": "not_billable"}}},
+        ]
+    )
+
+    monkeypatch.setattr(llm_job_billing, "resolve_runtime_context", lambda **kwargs: context)
+    monkeypatch.setattr(llm_job_billing, "request_json", lambda *args, **kwargs: next(responses))
+
+    with pytest.raises(llm_job_billing.FlowError) as exc_info:
+        llm_job_billing.run(
+            confirm_cost=True,
+            job_type="job_real_llm_echo",
+            api_url=None,
+            model_id="gpt-test",
+            input_text="hello",
+            instruction="reply",
+            second_instruction=None,
+            caller_id="smoke-cli",
+            timeout_seconds=1,
+            poll_interval_seconds=0.1,
+            client_request_id="client-1",
+            json_output=True,
+            allow_remote_api=False,
+            service_api_key=None,
+            env_file=None,
+        )
+
+    assert exc_info.value.exit_code == 1
 
 
 def test_llm_job_billing_cli_accepts_remote_api_and_auth_options(monkeypatch):
@@ -236,13 +338,13 @@ def test_llm_job_billing_cli_accepts_remote_api_and_auth_options(monkeypatch):
         [
             "llm-job-billing",
             "--allow-remote-api",
-            "--api-url",
+            "--base-url",
             "http://test-cms-poster-title.epubgame.com",
             "--env-file",
             "env_test/.env",
             "--service-api-key",
             "test-token",
-            "--x-ai-service-caller-id",
+            "--caller-id",
             "default",
             "--confirm-cost",
         ],
@@ -269,13 +371,13 @@ def test_llm_job_double_billing_cli_accepts_remote_api_and_auth_options(monkeypa
         [
             "llm-job-double-billing",
             "--allow-remote-api",
-            "--api-url",
+            "--base-url",
             "http://test-cms-poster-title.epubgame.com",
             "--env-file",
             "env_test/.env",
             "--service-api-key",
             "test-token",
-            "--x-ai-service-caller-id",
+            "--caller-id",
             "default",
             "--confirm-cost",
         ],
@@ -302,13 +404,13 @@ def test_poster_title_image_cli_accepts_remote_api_and_auth_options(monkeypatch)
         [
             "poster-title-image",
             "--allow-remote-api",
-            "--api-url",
+            "--base-url",
             "http://test-cms-poster-title.epubgame.com",
             "--env-file",
             "env_test/.env",
             "--service-api-key",
             "test-token",
-            "--x-ai-service-caller-id",
+            "--caller-id",
             "default",
             "--confirm-cost",
             "--confirm-upload",
@@ -329,7 +431,7 @@ def test_poster_title_image_cli_accepts_remote_api_and_auth_options(monkeypatch)
     assert captured["caller_id"] == "default"
 
 
-def test_poster_title_image_cli_keeps_legacy_caller_id_option(monkeypatch):
+def test_poster_title_image_cli_accepts_caller_id_option(monkeypatch):
     captured = {}
 
     def fake_run(**kwargs):
@@ -345,12 +447,12 @@ def test_poster_title_image_cli_keeps_legacy_caller_id_option(monkeypatch):
             "--reference",
             ".data/title/标题2.png",
             "--caller-id",
-            "legacy-caller",
+            "smoke-caller",
         ],
     )
 
     assert result.exit_code == 0
-    assert captured["caller_id"] == "legacy-caller"
+    assert captured["caller_id"] == "smoke-caller"
 
 
 def test_oss_upload_image_cli_accepts_env_file(monkeypatch):
@@ -471,7 +573,7 @@ def test_audio_stem_separation_build_payload_cli_forwards_options(monkeypatch):
             "audio-client-1",
             "--confirm-upload",
             "--key-prefix",
-            "real-flow/audio/input",
+            "smoke/audio/input",
             "--signed-url-expires-seconds",
             "600",
             "--output",
@@ -491,7 +593,7 @@ def test_audio_stem_separation_build_payload_cli_forwards_options(monkeypatch):
         "max_duration_seconds": 12.5,
         "client_request_id": "audio-client-1",
         "confirm_upload": True,
-        "key_prefix": "real-flow/audio/input",
+        "key_prefix": "smoke/audio/input",
         "signed_url_expires_seconds": 600,
     }
     assert captured_write == {
@@ -515,18 +617,18 @@ def test_audio_stem_separation_run_cli_forwards_payload_file_options(monkeypatch
             "run",
             "--confirm-run",
             "--confirm-upload",
-            "--api-url",
+            "--base-url",
             "http://127.0.0.1:18200",
             "--env-file",
             "env_test/.env",
             "--allow-remote-api",
             "--service-api-key",
             "test-token",
-            "--x-ai-service-caller-id",
+            "--caller-id",
             "default",
-            "--timeout-seconds",
+            "--timeout",
             "10",
-            "--poll-interval-seconds",
+            "--poll-interval",
             "0.5",
             "--client-request-id",
             "audio-client-2",
@@ -611,7 +713,7 @@ def test_adapter_image_probe_cli_accepts_adapter_options(monkeypatch):
             "auto",
             "--output-format",
             "png",
-            "--timeout-seconds",
+            "--timeout",
             "45",
             "--json",
         ],
@@ -717,7 +819,7 @@ def test_oss_image_upload_accepts_standard_jpeg_mime_and_rejects_jpg_alias(tmp_p
         oss_image_upload.image_content_type(image_path, "image/jpg")
 
 
-def test_real_flow_builds_job_payload_for_real_llm_job():
+def test_smoke_builds_job_payload_for_real_llm_job():
     payload = llm_job_billing.build_job_payload(
         model_id="gpt-5.4-mini",
         input_text="hello",
@@ -734,7 +836,7 @@ def test_real_flow_builds_job_payload_for_real_llm_job():
     }
 
 
-def test_real_flow_builds_poster_title_image_payload():
+def test_smoke_builds_poster_title_image_payload():
     reference = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/title.png",
         "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/title.png",
@@ -775,7 +877,7 @@ def test_real_flow_builds_poster_title_image_payload():
     assert "prompt_overrides" not in item
 
 
-def test_real_flow_builds_poster_title_image_payload_with_caller_model_id():
+def test_smoke_builds_poster_title_image_payload_with_caller_model_id():
     reference = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/title.png",
         "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/title.png",
@@ -805,7 +907,7 @@ def test_real_flow_builds_poster_title_image_payload_with_caller_model_id():
     assert payload["job_params"]["items"][0]["model_id"] == "gpt-image-custom"
 
 
-def test_real_flow_builds_audio_stem_separation_payload():
+def test_smoke_builds_audio_stem_separation_payload():
     input_audio = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.wav",
         "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.wav",
@@ -828,14 +930,14 @@ def test_real_flow_builds_audio_stem_separation_payload():
             "max_duration_seconds": 30.5,
         },
         "metadata": {
-            "source": "scripts/real-flow.sh audio-stem-separation",
+            "source": "scripts/smoke.sh audio-stem-separation",
             "job_type": "audio_stem_separation",
         },
         "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
     }
 
 
-def test_real_flow_builds_audio_stem_separation_payload_with_mp3_ref():
+def test_smoke_builds_audio_stem_separation_payload_with_mp3_ref():
     input_audio = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.mp3",
         "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.mp3",
@@ -853,7 +955,7 @@ def test_real_flow_builds_audio_stem_separation_payload_with_mp3_ref():
     assert payload["job_params"]["input_audio"]["content_type"] == "audio/mpeg"
 
 
-def test_real_flow_builds_audio_stem_separation_triton_payload():
+def test_smoke_builds_audio_stem_separation_triton_payload():
     input_audio = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/audio/input.wav",
         "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/audio/input.wav",
@@ -875,7 +977,7 @@ def test_real_flow_builds_audio_stem_separation_triton_payload():
         "max_duration_seconds": 30.5,
     }
     assert payload["metadata"] == {
-        "source": "scripts/real-flow.sh audio-stem-separation",
+        "source": "scripts/smoke.sh audio-stem-separation",
         "job_type": "audio_stem_separation_triton",
     }
 
@@ -1138,7 +1240,7 @@ def test_oss_image_upload_builds_url_ref_with_fake_client(tmp_path, monkeypatch)
     }
 
 
-def test_real_flow_builds_double_job_payload():
+def test_smoke_builds_double_job_payload():
     payload = llm_job_billing.build_double_job_payload(
         model_id="gpt-5.4-mini",
         input_text="hello",
@@ -1157,7 +1259,7 @@ def test_real_flow_builds_double_job_payload():
     }
 
 
-def test_real_flow_headers_require_service_key_when_auth_enabled(monkeypatch):
+def test_smoke_headers_require_service_key_when_auth_enabled(monkeypatch):
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
 
@@ -1168,7 +1270,7 @@ def test_real_flow_headers_require_service_key_when_auth_enabled(monkeypatch):
     assert "SERVICE_API_KEY is required" in str(exc.value)
 
 
-def test_real_flow_headers_use_auth_and_caller_id(monkeypatch):
+def test_smoke_headers_use_auth_and_caller_id(monkeypatch):
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
@@ -1186,7 +1288,7 @@ def test_real_flow_headers_use_auth_and_caller_id(monkeypatch):
     assert headers["X-AI-Service-Caller-ID"] == "caller-1"
 
 
-def test_real_flow_headers_use_explicit_service_key(monkeypatch):
+def test_smoke_headers_use_explicit_service_key(monkeypatch):
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
@@ -1205,7 +1307,7 @@ def test_real_flow_headers_use_explicit_service_key(monkeypatch):
     assert headers["X-AI-Service-Caller-ID"] == "caller-1"
 
 
-def test_real_flow_load_app_env_uses_explicit_file(tmp_path, monkeypatch):
+def test_smoke_load_app_env_uses_explicit_file(tmp_path, monkeypatch):
     monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
     env_dir = tmp_path / "env_test"
     env_dir.mkdir()
@@ -1217,7 +1319,7 @@ def test_real_flow_load_app_env_uses_explicit_file(tmp_path, monkeypatch):
     assert values["SERVICE_API_KEY"] == "file-token"
 
 
-def test_real_flow_load_app_env_rejects_missing_explicit_file(tmp_path, monkeypatch):
+def test_smoke_load_app_env_rejects_missing_explicit_file(tmp_path, monkeypatch):
     monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
 
     with pytest.raises(llm_job_billing.FlowError) as exc:
@@ -1227,7 +1329,7 @@ def test_real_flow_load_app_env_rejects_missing_explicit_file(tmp_path, monkeypa
     assert "env file not found" in str(exc.value)
 
 
-def test_real_flow_env_value_prefers_runtime_env(monkeypatch):
+def test_smoke_env_value_prefers_runtime_env(monkeypatch):
     monkeypatch.setenv("SERVICE_API_KEY", "runtime-token")
 
     value = llm_job_billing.env_value("SERVICE_API_KEY", {"SERVICE_API_KEY": "file-token"})
@@ -1235,7 +1337,7 @@ def test_real_flow_env_value_prefers_runtime_env(monkeypatch):
     assert value == "runtime-token"
 
 
-def test_real_flow_resolves_api_url_from_root_env(monkeypatch):
+def test_smoke_resolves_api_url_from_root_env(monkeypatch):
     clear_api_env(monkeypatch)
 
     api_url = llm_job_billing.resolved_api_url(None, {"API_HOST": "127.0.0.1", "API_PORT": "18200"})
@@ -1243,7 +1345,7 @@ def test_real_flow_resolves_api_url_from_root_env(monkeypatch):
     assert api_url == "http://127.0.0.1:18200"
 
 
-def test_real_flow_rejects_non_local_api_url():
+def test_smoke_rejects_non_local_api_url():
     with pytest.raises(llm_job_billing.FlowError) as exc:
         llm_job_billing.resolved_api_url("https://api.example.com", {})
 
@@ -1251,7 +1353,7 @@ def test_real_flow_rejects_non_local_api_url():
     assert "only targets local API URLs" in str(exc.value)
 
 
-def test_real_flow_accepts_remote_api_url_when_explicitly_allowed():
+def test_smoke_accepts_remote_api_url_when_explicitly_allowed():
     api_url = llm_job_billing.resolved_api_url(
         "https://api.example.com",
         {},
@@ -1262,7 +1364,7 @@ def test_real_flow_accepts_remote_api_url_when_explicitly_allowed():
 
 
 @pytest.mark.parametrize("api_url", ["https://127.example.com", "https://127.0.0.1.nip.io"])
-def test_real_flow_rejects_loopback_prefix_hostnames(api_url):
+def test_smoke_rejects_loopback_prefix_hostnames(api_url):
     with pytest.raises(llm_job_billing.FlowError) as exc:
         llm_job_billing.resolved_api_url(api_url, {})
 
@@ -1270,13 +1372,13 @@ def test_real_flow_rejects_loopback_prefix_hostnames(api_url):
     assert "only targets local API URLs" in str(exc.value)
 
 
-def test_real_flow_accepts_loopback_ip_url():
+def test_smoke_accepts_loopback_ip_url():
     api_url = llm_job_billing.resolved_api_url("http://127.0.0.1:18200", {})
 
     assert api_url == "http://127.0.0.1:18200"
 
 
-def test_real_flow_run_uses_http_job_and_billing_flow(tmp_path, monkeypatch):
+def test_smoke_run_uses_http_job_and_billing_flow(tmp_path, monkeypatch):
     clear_api_env(monkeypatch)
     monkeypatch.delenv("DEFAULT_MODEL_ID", raising=False)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
@@ -1349,7 +1451,7 @@ def test_real_flow_run_uses_http_job_and_billing_flow(tmp_path, monkeypatch):
     assert calls[1]["url"] == "http://127.0.0.1:18200/api/v1/ai-jobs/jobs/job-1/billing"
 
 
-def test_real_flow_run_uses_env_file_for_remote_api_and_service_key(tmp_path, monkeypatch):
+def test_smoke_run_uses_env_file_for_remote_api_and_service_key(tmp_path, monkeypatch):
     monkeypatch.delenv("DEFAULT_MODEL_ID", raising=False)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
@@ -1787,7 +1889,7 @@ def test_audio_stem_separation_run_keeps_staged_input_when_create_response_is_un
     assert cleanup_calls == []
 
 
-def test_real_flow_run_uses_double_job_type(tmp_path, monkeypatch):
+def test_smoke_run_uses_double_job_type(tmp_path, monkeypatch):
     monkeypatch.delenv("DEFAULT_MODEL_ID", raising=False)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
@@ -1849,7 +1951,7 @@ def test_real_flow_run_uses_double_job_type(tmp_path, monkeypatch):
     assert calls[0]["payload"]["job_params"]["second_instruction"] == "second"
 
 
-def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, capsys):
+def test_smoke_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, capsys):
     clear_api_env(monkeypatch)
     clear_storage_env(monkeypatch)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
@@ -1978,7 +2080,7 @@ def test_real_flow_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, c
     assert "model_id" not in item
     assert item["reference_image"]["sha256"] == poster_title_image._bare_sha256(reference_data)
     assert calls[1]["url"] == "http://127.0.0.1:18200/api/v1/ai-jobs/jobs/poster-job-1/billing"
-    staged = list((tmp_path / "storage/objects/local-dev/real-flow/poster-title-image/reference").glob("**/英语.png"))
+    staged = list((tmp_path / "storage/objects/local-dev/smoke/poster-title-image/reference").glob("**/英语.png"))
     assert len(staged) == 1
 
 
@@ -2316,7 +2418,7 @@ def test_poster_title_image_download_rejects_non_transparent_background(tmp_path
         )
 
 
-def test_real_flow_run_uploads_poster_reference_when_aliyun_oss_enabled(tmp_path, monkeypatch, capsys):
+def test_smoke_run_uploads_poster_reference_when_aliyun_oss_enabled(tmp_path, monkeypatch, capsys):
     clear_storage_env(monkeypatch)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
@@ -2431,7 +2533,7 @@ def test_real_flow_run_uploads_poster_reference_when_aliyun_oss_enabled(tmp_path
     payload = json.loads(capsys.readouterr().out)
     assert payload["summary"]["job_id"] == "poster-job-oss"
     assert upload_calls[0]["image"] == str(reference_path)
-    assert upload_calls[0]["key_prefix"] == "real-flow/poster-title-image/reference"
+    assert upload_calls[0]["key_prefix"] == "smoke/poster-title-image/reference"
     assert http_calls[0]["payload"]["job_params"]["items"][0]["reference_image"] == uploaded_ref
     assert cleanup_calls == [{"upload_result": uploaded_image, "app_env": upload_calls[0]["app_env"]}]
 
@@ -2594,7 +2696,7 @@ def test_poster_title_image_explicit_url_ref_accepts_jpeg_content_type(monkeypat
     assert result.ref["content_type"] == "image/jpeg"
 
 
-def test_real_flow_run_ignores_env_reference_url_ref_by_default(tmp_path, monkeypatch):
+def test_smoke_run_ignores_env_reference_url_ref_by_default(tmp_path, monkeypatch):
     clear_storage_env(monkeypatch)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
@@ -2871,7 +2973,7 @@ def test_poster_title_image_rejects_undecodable_reference_image(tmp_path, monkey
         )
 
 
-def test_real_flow_json_output_is_machine_readable(tmp_path, monkeypatch, capsys):
+def test_smoke_json_output_is_machine_readable(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
@@ -2934,7 +3036,7 @@ def test_real_flow_json_output_is_machine_readable(tmp_path, monkeypatch, capsys
     assert payload["conclusion"] == "job=succeeded billing=estimated cost=0.00000100 USD ai_call_count=1"
     assert payload["summary"]["job_id"] == "job-1"
     assert payload["summary"]["billing_status"] == "estimated"
-    assert "generated by scripts/real-flow.sh" in payload["summary"]["note"]
+    assert "generated by scripts/smoke.sh" in payload["summary"]["note"]
     assert payload["responses"]["create_job"]["data"]["job"]["job_id"] == "job-1"
     assert payload["responses"]["get_job"]["data"]["job"]["job_status"] == "succeeded"
     assert payload["responses"]["get_billing"]["data"]["billing"]["status"] == "estimated"

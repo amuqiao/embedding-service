@@ -9,7 +9,7 @@ import yaml
 
 from app.integrations.ai_adapters.base import ImageGenerationRequest, ImageInput, ImageGenerationResult
 from scripts.jobs import formatters
-from scripts.real_flow.flows import llm_job_billing, oss_image_upload
+from smoke.flows import llm_job_billing, oss_image_upload
 
 FlowError = llm_job_billing.FlowError
 ROOT_DIR = llm_job_billing.ROOT_DIR

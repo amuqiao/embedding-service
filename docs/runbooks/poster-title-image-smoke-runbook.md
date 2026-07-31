@@ -1,6 +1,6 @@
-# poster-title-image 真实流程验证 Runbook
+# poster-title-image smoke 验证 Runbook
 
-本文说明如何用 `./scripts/real-flow.sh` 验证 `poster_title_image`，覆盖本地开发和远端测试环境。推荐心智模型是：先检查配置，再准备 `reference_image` URL Ref，最后创建真实 Job。
+本文说明如何用 `./scripts/smoke.sh` 验证 `poster_title_image`，覆盖本地开发和远端测试环境。推荐心智模型是：先检查配置，再准备 `reference_image` URL Ref，最后创建真实 Job。
 
 本文负责“如何创建一次真实 `poster_title_image` Job 并确认模型、OSS、billing 和输出图链路”。如果 Job 已经创建但要定位 style probe、generate item、join、Prompt 拼接或结果快照问题，看 [`标题生成链路.md`](标题生成链路.md)。完整 HTTP 字段和调用方合同以 [`../api/poster-title-image-delivery-api.md`](../api/poster-title-image-delivery-api.md) 为准。
 
@@ -39,7 +39,7 @@ POST /api/v1/ai-jobs/jobs
 
 | 目标 | 推荐路径 | 说明 |
 |---|---|---|
-| 验证远端测试环境 | `doctor` -> `oss-upload-image --json-ref-only` -> `poster-title-image --reference-url-ref-json` | 最接近调用方传 URL Ref 的真实形态，问题定位最清楚。 |
+| 验证远端测试环境 | `ready` -> `oss-upload-image --json-ref-only` -> `poster-title-image --reference-url-ref-json` | 最接近调用方传 URL Ref 的真实形态，问题定位最清楚。 |
 | 本地开发快速验证 | `poster-title-image --reference 本地图片` | 适合本地 API/worker 联调。 |
 | 复现调用方入参 | `poster-title-image --reference-url-ref-json` 或手动四字段 | 避免本地上传路径影响判断。 |
 
@@ -49,13 +49,13 @@ POST /api/v1/ai-jobs/jobs
 
 远端测试环境建议拆成三步。这样每一步失败时都能明确定位问题，不需要在一个长命令里猜是配置、上传、URL Ref 还是 Job 创建失败。
 
-### 1. 检查 real-flow 上下文
+### 1. 检查 smoke 上下文
 
 ```bash
-./scripts/real-flow.sh doctor \
+./scripts/smoke.sh ready \
   --env-file env_test/.env \
   --allow-remote-api \
-  --api-url http://test-cms-poster-title.epubgame.com \
+  --base-url http://test-cms-poster-title.epubgame.com \
   --json
 ```
 
@@ -79,14 +79,14 @@ POST /api/v1/ai-jobs/jobs
 - `ready=true` 且 `problems=[]` 才继续。
 - `service_api_key_source=env_file` 表示 `SERVICE_API_KEY` 已从 `env_test/.env` 加载，不需要在命令前再写 `SERVICE_API_KEY=...`。
 - 如果是 `service_api_key_source=runtime_env`，说明当前 shell 的环境变量覆盖了 `env_test/.env`。
-- `api_url_source=cli` 是因为命令里显式传了 `--api-url`，这是预期行为。
+- `api_url_source=cli` 是因为命令里显式传了 `--base-url`，这是预期行为。
 
 ### 2. 上传参考图并生成 URL Ref
 
 ```bash
 mkdir -p .run
 
-./scripts/real-flow.sh oss-upload-image \
+./scripts/smoke.sh oss-upload-image \
   --env-file env_test/.env \
   --confirm-upload \
   --image .data/title/True_Heiress_Never_Lies.png \
@@ -115,11 +115,11 @@ cat .run/reference-image.json
 ### 3. 使用 URL Ref 创建真实 Job
 
 ```bash
-./scripts/real-flow.sh poster-title-image \
+./scripts/smoke.sh poster-title-image \
   --allow-remote-api \
   --env-file env_test/.env \
-  --api-url http://test-cms-poster-title.epubgame.com \
-  --x-ai-service-caller-id default \
+  --base-url http://test-cms-poster-title.epubgame.com \
+  --caller-id default \
   --confirm-cost \
   --reference-url-ref-json .run/reference-image.json \
   --language es \
@@ -138,11 +138,11 @@ export SERVICE_API_KEY='<测试环境 API token>'
 
 ```bash
 SERVICE_API_KEY='<测试环境 API token>' \
-./scripts/real-flow.sh poster-title-image \
+./scripts/smoke.sh poster-title-image \
   --allow-remote-api \
   --env-file env_test/.env \
-  --api-url http://test-cms-poster-title.epubgame.com \
-  --x-ai-service-caller-id default \
+  --base-url http://test-cms-poster-title.epubgame.com \
+  --caller-id default \
   --confirm-cost \
   --reference-url-ref-json .run/reference-image.json \
   --language es \
@@ -172,13 +172,13 @@ SERVICE_API_KEY='<测试环境 API token>' \
 本地最小命令：
 
 ```bash
-./scripts/real-flow.sh poster-title-image \
+./scripts/smoke.sh poster-title-image \
   --confirm-cost \
   --confirm-upload \
   --reference .data/title/True_Heiress_Never_Lies.png \
   --language es \
   --title-text "Cuando el amor se alejo" \
-  --api-url http://127.0.0.1:18200 \
+  --base-url http://127.0.0.1:18200 \
   --caller-id default \
   --download-outputs \
   --json
@@ -191,11 +191,11 @@ SERVICE_API_KEY='<测试环境 API token>' \
 如果你只是临时验证远端测试环境，也可以在 `poster-title-image` 里直接传本地图片，让脚本先上传参考图再创建 Job：
 
 ```bash
-./scripts/real-flow.sh poster-title-image \
+./scripts/smoke.sh poster-title-image \
   --allow-remote-api \
   --env-file env_test/.env \
-  --api-url http://test-cms-poster-title.epubgame.com \
-  --x-ai-service-caller-id default \
+  --base-url http://test-cms-poster-title.epubgame.com \
+  --caller-id default \
   --confirm-cost \
   --confirm-upload \
   --reference .data/title/True_Heiress_Never_Lies.png \
@@ -309,7 +309,7 @@ JSON
 执行：
 
 ```bash
-./scripts/real-flow.sh poster-title-image \
+./scripts/smoke.sh poster-title-image \
   --confirm-cost \
   --confirm-upload \
   --items-json .data/title/poster-items.json \
@@ -377,7 +377,7 @@ URL Ref JSON 示例：
 默认下载目录：
 
 ```text
-.data/real-flow/poster-title-image/<job_id>/<item_id>-<language>/
+.data/smoke/poster-title-image/<job_id>/<item_id>-<language>/
 ```
 
 图片检测复用 `./scripts/verify.sh image-inspect` 的核心逻辑，等价于：
@@ -386,7 +386,7 @@ URL Ref JSON 示例：
 ./scripts/verify.sh image-inspect <local_path> --require-transparent-background
 ```
 
-如果图片不是透明背景，真实流程会失败，命令返回非 0。
+如果图片不是透明背景，smoke会失败，命令返回非 0。
 
 ## JSON summary 怎么看
 
@@ -410,7 +410,7 @@ URL Ref JSON 示例：
     ],
     "artifacts": [
       {
-        "local_path": ".data/real-flow/poster-title-image/<job_id>/es-es/01-title-layer.png",
+        "local_path": ".data/smoke/poster-title-image/<job_id>/es-es/01-title-layer.png",
         "sha256_verified": true
       }
     ],
@@ -439,14 +439,14 @@ URL Ref JSON 示例：
 
 ## 常见问题
 
-### doctor ready=false
+### ready ready=false
 
 先看 `problems`。常见原因：
 
 - `SERVICE_API_KEY` 未配置，且 `DISABLE_HTTP_AUTH_HEADER=false`。
 - `STORAGE_BACKEND=aliyun_oss` 时缺少 `OSS_BUCKET`、`OSS_REGION`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET` 或 `OSS_PROJECT_ROOT`。
 
-如果 `--api-url` 指向远端但没有传 `--allow-remote-api`，`doctor` 会在解析 URL 阶段直接 exit 2，而不是输出 `ready=false`。
+如果 `--base-url` 指向远端但没有传 `--allow-remote-api`，`ready` 会在解析 URL 阶段直接 exit 2，而不是输出 `ready=false`。
 
 ### poster title image reference invalid
 
@@ -521,7 +521,7 @@ worker 当前读取参考图使用 `public_url`。如果 Job 已创建但 worker
 ./scripts/jobs.sh list --job-type poster_title_image --caller-id default --since 30m --limit 10
 ```
 
-`jobs.sh` 是只读数据库查询入口，不通过 HTTP API 查询；`real-flow.sh --api-url` 只影响创建和轮询 Job 的 API 地址，不影响 `jobs.sh`。
+`jobs.sh` 是只读数据库查询入口，不通过 HTTP API 查询；`smoke.sh --base-url` 只影响创建和轮询 Job 的 API 地址，不影响 `jobs.sh`。
 
 拿到 `job_id` 后查看 workflow children：
 
@@ -539,7 +539,7 @@ worker 当前读取参考图使用 `public_url`。如果 Job 已创建但 worker
 ./scripts/dev.sh restart
 ```
 
-确认本地服务加载了支持 `scope_job_id` 的代码后再重跑真实流程。
+确认本地服务加载了支持 `scope_job_id` 的代码后再重跑smoke。
 
 ### 旧迁移报 ck_ai_call_ledger_entries_job_scope_context
 
@@ -583,13 +583,13 @@ job_id   = child_job_id
 传本地 `--reference` 且对象存储是 `aliyun_oss` 时，脚本会把参考图上传到 OSS。为了避免误上传，必须显式传：
 
 ```bash
-./scripts/real-flow.sh poster-title-image \
+./scripts/smoke.sh poster-title-image \
   --confirm-cost \
   --confirm-upload \
   --reference .data/title/True_Heiress_Never_Lies.png \
   --language es \
   --title-text "Cuando el amor se alejo" \
-  --api-url http://127.0.0.1:18200 \
+  --base-url http://127.0.0.1:18200 \
   --caller-id default \
   --download-outputs \
   --json
@@ -599,9 +599,9 @@ job_id   = child_job_id
 
 ## 维护规则
 
-修改 `poster-title-image` 真实流程后，同步检查本文：
+修改 `poster-title-image` smoke后，同步检查本文：
 
-- `doctor` 输出字段是否变化。
+- `ready` 输出字段是否变化。
 - `oss-upload-image --json-ref-only` 输出结构是否变化。
 - `poster-title-image --reference-url-ref-json` 行为是否变化。
 - 远端测试环境推荐命令是否仍能直接复制执行。

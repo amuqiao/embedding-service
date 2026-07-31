@@ -10,7 +10,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSError
-from scripts.real_flow.flows import llm_job_billing, oss_image_upload
+from smoke.flows import llm_job_billing, oss_image_upload
 
 DEFAULT_TEST_CONTENT = b"fastapi-best-ai-architecture aliyun oss connectivity check\n"
 

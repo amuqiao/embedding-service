@@ -1565,16 +1565,19 @@ def test_jobs_guide_is_available_without_db():
     assert "./scripts/jobs.sh capacity --worker-pods" in result.stdout
 
 
-def test_real_flow_cli_help_is_available_without_api():
+def test_smoke_cli_help_is_available_without_api():
     result = subprocess.run(
-        ["./scripts/real-flow.sh", "--help"],
+        ["./scripts/smoke.sh", "--help"],
         cwd=ROOT_DIR,
         capture_output=True,
         text=True,
         check=True,
     )
 
-    assert "真实业务流程验证入口" in result.stdout
+    assert "E2E smoke 薄入口" in result.stdout
+    assert "health" in result.stdout
+    assert "ready" in result.stdout
+    assert "list" in result.stdout
     assert "llm-job-billing" in result.stdout
     assert "llm-job-double-billing" in result.stdout
     assert "oss-upload-image" in result.stdout
@@ -1900,7 +1903,7 @@ def test_shell_entrypoints_require_command_without_help():
         "./scripts/deploy.sh",
         "./scripts/verify.sh",
         "./scripts/k8s.sh",
-        "./scripts/real-flow.sh",
+        "./scripts/smoke.sh",
         "./scripts/models.sh",
         "./scripts/media.sh",
         "./scripts/tools.sh",
@@ -1916,6 +1919,21 @@ def test_shell_entrypoints_require_command_without_help():
         assert result.returncode == 2
         assert result.stdout == ""
         assert "用法：" in result.stderr or "Usage:" in result.stderr
+
+
+def test_verify_sh_does_not_keep_legacy_business_smoke_commands():
+    for command in ("smoke", "mock-smoke", "e2e"):
+        result = subprocess.run(
+            ["./scripts/verify.sh", command],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 2
+        assert "业务 smoke/E2E 已迁移" not in result.stderr
+        assert "用法：" in result.stderr
 
 
 def test_jobs_types_json_is_machine_readable_without_app_log_noise():

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
+from urllib.error import HTTPError, URLError
 
 import typer
 
-from scripts.real_flow.flows import (
+from smoke.flows import (
     adapter_image_probe,
     audio_stem_separation,
     llm_job_billing,
@@ -18,7 +19,7 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
 
 \b
   # 单 item：使用本地透明 PNG 参考图，脚本自动转成 API reference_image URL Ref。
-  ./scripts/real-flow.sh poster-title-image \\
+  ./scripts/smoke.sh poster-title-image \\
     --confirm-cost \\
     --reference .data/title/英语.png \\
     --language es \\
@@ -27,7 +28,7 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
 
 \b
   # 单 item：生成后下载全部输出图，并校验 sha256 与透明背景。
-  ./scripts/real-flow.sh poster-title-image \\
+  ./scripts/smoke.sh poster-title-image \\
     --confirm-cost \\
     --reference .data/title/英语.png \\
     --language es \\
@@ -37,7 +38,7 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
 
 \b
   # 多 item：每个 item 在 JSON 中指定 language/title_text/reference。
-  ./scripts/real-flow.sh poster-title-image \\
+  ./scripts/smoke.sh poster-title-image \\
     --confirm-cost \\
     --items-json .data/title/poster-items.json \\
     --download-outputs \\
@@ -48,14 +49,14 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
   mkdir -p .run
 
 \b
-  ./scripts/real-flow.sh oss-upload-image \\
+  ./scripts/smoke.sh oss-upload-image \\
     --env-file env_test/.env \\
     --confirm-upload \\
     --image .data/title/英语.png \\
     --json-ref-only > .run/reference-image.json
 
 \b
-  ./scripts/real-flow.sh poster-title-image \\
+  ./scripts/smoke.sh poster-title-image \\
     --confirm-cost \\
     --reference-url-ref-json .run/reference-image.json \\
     --language es \\
@@ -64,7 +65,7 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
 
 \b
   # 已有 OSS URL Ref：不 stage 本地图片，也可以直接传四字段。
-  ./scripts/real-flow.sh poster-title-image \\
+  ./scripts/smoke.sh poster-title-image \\
     --confirm-cost \\
     --language es \\
     --title-text "Cuando el amor se alejo" \\
@@ -76,7 +77,7 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
 
 \b
   # STORAGE_BACKEND=aliyun_oss 且传本地参考图时，需要显式确认上传。
-  ./scripts/real-flow.sh poster-title-image \\
+  ./scripts/smoke.sh poster-title-image \\
     --confirm-cost \\
     --confirm-upload \\
     --reference .data/title/英语.png \\
@@ -87,11 +88,11 @@ POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
 
 \b
   # 远端测试环境：必须显式允许远端 API；SERVICE_API_KEY 优先从 --env-file 或运行时环境读取。
-  ./scripts/real-flow.sh poster-title-image \\
+  ./scripts/smoke.sh poster-title-image \\
     --allow-remote-api \\
     --env-file env_test/.env \\
-    --api-url http://test-cms-poster-title.epubgame.com \\
-    --x-ai-service-caller-id default \\
+    --base-url http://test-cms-poster-title.epubgame.com \\
+    --caller-id default \\
     --confirm-cost \\
     --confirm-upload \\
     --reference .data/title/英语.png \\
@@ -127,53 +128,53 @@ items-json 最小格式：
 语种与输出：
   poster_title_image 语种必须来自 docs/api/业务语种规范.md 的共享业务语种列表。
   同一 Job 内 item_id 必须唯一；language 允许重复；不传 --model-id 时使用服务端 poster_title_image 默认生图模型。
-  --download-outputs 默认保存到 .data/real-flow/poster-title-image/<job_id>/<item_id>-<language>/。
+  --download-outputs 默认保存到 .data/smoke/poster-title-image/<job_id>/<item_id>-<language>/。
 """
 
-DOCTOR_HELP_EPILOG = """\b
+READY_HELP_EPILOG = """\b
 常用示例：
-  ./scripts/real-flow.sh doctor
-  ./scripts/real-flow.sh doctor --json
+  ./scripts/smoke.sh ready
+  ./scripts/smoke.sh ready --json
 
 \b
-  ./scripts/real-flow.sh doctor \\
+  ./scripts/smoke.sh ready \\
     --env-file env_test/.env \\
     --allow-remote-api \\
-    --api-url http://test-cms-poster-title.epubgame.com \\
+    --base-url http://test-cms-poster-title.epubgame.com \\
     --json
 """
 
 LLM_JOB_BILLING_HELP_EPILOG = """\b
 常用示例：
-  ./scripts/real-flow.sh llm-job-billing --confirm-cost --model-id gpt-5.4-mini
-  ./scripts/real-flow.sh llm-job-billing --confirm-cost --input-text "用一句话回复：计费验证成功" --json
+  ./scripts/smoke.sh llm-job-billing --confirm-cost --model-id gpt-5.4-mini
+  ./scripts/smoke.sh llm-job-billing --confirm-cost --input-text "用一句话回复：计费验证成功" --json
 
 \b
-  ./scripts/real-flow.sh llm-job-billing \\
+  ./scripts/smoke.sh llm-job-billing \\
     --allow-remote-api \\
     --env-file env_test/.env \\
-    --api-url http://test-cms-poster-title.epubgame.com \\
+    --base-url http://test-cms-poster-title.epubgame.com \\
     --confirm-cost \\
     --json
 """
 
 LLM_JOB_DOUBLE_BILLING_HELP_EPILOG = """\b
 常用示例：
-  ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini
-  ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini --json
+  ./scripts/smoke.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini
+  ./scripts/smoke.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini --json
 
 \b
-  ./scripts/real-flow.sh llm-job-double-billing \\
+  ./scripts/smoke.sh llm-job-double-billing \\
     --allow-remote-api \\
     --env-file env_test/.env \\
-    --api-url http://test-cms-poster-title.epubgame.com \\
+    --base-url http://test-cms-poster-title.epubgame.com \\
     --confirm-cost \\
     --json
 """
 
 OSS_UPLOAD_IMAGE_HELP_EPILOG = """\b
 常用示例：
-  ./scripts/real-flow.sh oss-upload-image \\
+  ./scripts/smoke.sh oss-upload-image \\
     --confirm-upload \\
     --image .data/title/英语.png \\
     --signed-url-expires-seconds 3600 \\
@@ -183,24 +184,24 @@ OSS_UPLOAD_IMAGE_HELP_EPILOG = """\b
   mkdir -p .run
 
 \b
-  ./scripts/real-flow.sh oss-upload-image \\
+  ./scripts/smoke.sh oss-upload-image \\
     --confirm-upload \\
     --image .data/title/英语.png \\
     --json-ref-only > .run/reference-image.json
 
 \b
-  ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png --emit-poster-args
+  ./scripts/smoke.sh oss-upload-image --confirm-upload --image .data/title/英语.png --emit-poster-args
 """
 
 ADAPTER_IMAGE_PROBE_HELP_EPILOG = """\b
 常用示例：
-  ./scripts/real-flow.sh adapter-image-probe \\
+  ./scripts/smoke.sh adapter-image-probe \\
     --confirm-cost \\
     --models-config app/jobs/types/poster_title_image/models.yaml \\
     --json
 
 \b
-  ./scripts/real-flow.sh adapter-image-probe \\
+  ./scripts/smoke.sh adapter-image-probe \\
     --confirm-cost \\
     --models-config app/jobs/types/poster_title_image/models.yaml \\
     --prompt "Generate a simple transparent title image saying Hola" \\
@@ -209,7 +210,7 @@ ADAPTER_IMAGE_PROBE_HELP_EPILOG = """\b
     --json
 
 \b
-  ./scripts/real-flow.sh adapter-image-probe \\
+  ./scripts/smoke.sh adapter-image-probe \\
     --confirm-cost \\
     --reference .data/title/英语.png \\
     --reference-content-type image/png \\
@@ -227,13 +228,13 @@ ADAPTER_IMAGE_PROBE_HELP_EPILOG = """\b
 AUDIO_STEM_SEPARATION_HELP_EPILOG = """\b
 常用示例：
   # 构建完整 create-job payload；默认输出到 stdout。
-  ./scripts/real-flow.sh audio-stem-separation build-payload \\
+  ./scripts/smoke.sh audio-stem-separation build-payload \\
     --env-file .env \\
     --input-file .data/misc/2485_0003_S6_梁萧.wav > .run/audio-stem-payload.json
 
 \b
   # 使用已构建 payload 提交真实 Job。
-  ./scripts/real-flow.sh audio-stem-separation run \\
+  ./scripts/smoke.sh audio-stem-separation run \\
     --confirm-run \\
     --env-file .env \\
     --payload-file .run/audio-stem-payload.json \\
@@ -241,11 +242,11 @@ AUDIO_STEM_SEPARATION_HELP_EPILOG = """\b
 
 \b
   # 直接用本地 WAV 构建入参并提交；STORAGE_BACKEND=aliyun_oss 时需要 --confirm-upload。
-  ./scripts/real-flow.sh audio-stem-separation run \\
+  ./scripts/smoke.sh audio-stem-separation run \\
     --confirm-run \\
     --env-file env_test/.env \\
     --allow-remote-api \\
-    --api-url http://test-cms-poster-title.epubgame.com \\
+    --base-url http://test-cms-poster-title.epubgame.com \\
     --confirm-upload \\
     --input-file .data/misc/2485_0003_S6_梁萧.wav \\
     --download-outputs \\
@@ -256,7 +257,7 @@ AUDIO_STEM_SEPARATION_HELP_EPILOG = """\b
   input_file 必须是 htdemucs-input：WAV、44.1kHz、双声道。
   build-payload 不提交 Job；使用 --input-file 时会先 stage/upload 输入音频来生成 URL Ref。
   run 会真实提交 Job、等待终态，并可下载四条 stem。
-  --env-file 沿用 real-flow 既有配置入口；运行时环境变量仍优先于 env 文件。
+  --env-file 沿用 smoke 既有配置入口；运行时环境变量仍优先于 env 文件。
   本地文件会先 stage/upload 成 input_audio URL Ref，Job 本身仍按 public_url 读取输入，不直接接收本地文件路径。
   本地 STORAGE_BACKEND=local 只适合 public_url 已能被 API/worker 读取的环境；远端测试优先使用 STORAGE_BACKEND=aliyun_oss + --confirm-upload。
 """
@@ -264,9 +265,10 @@ AUDIO_STEM_SEPARATION_HELP_EPILOG = """\b
 
 HELP_EPILOG = f"""\b
 作用域：
-  手动验证真实业务流程。Job 类命令会调用本地 API、创建真实 Job、等待 worker 执行，并查询结果证据。
+  Smoke/E2E runtime。Job 类场景会调用已运行的服务 HTTP API、创建真实 Job、等待 worker 执行，并查询结果证据。
   adapter-image-probe 会直接调用本仓库封装的 provider adapter，不经过本地 API/worker。
   本入口允许真实 LLM 调用，可能产生费用；不会被 ./scripts/verify.sh check 默认执行。
+  服务启动、停止、迁移和排障查询分别归属 run/dev/deploy、jobs.sh 与 job-ops.sh。
 
 \b
 配置与环境变量：
@@ -275,26 +277,28 @@ HELP_EPILOG = f"""\b
 
 \b
 输出：
-  默认输出真实流程摘要和关键证据。
+  默认输出 smoke 摘要和关键证据。
   --json 输出 summary 和原始 HTTP envelope responses，stdout 只包含 JSON。
   错误原因输出到 stderr。
 
 \b
 常用示例：
-  ./scripts/real-flow.sh doctor
-  ./scripts/real-flow.sh llm-job-billing --confirm-cost --model-id gpt-5.4-mini
-  ./scripts/real-flow.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini
-  ./scripts/real-flow.sh oss-upload-image --confirm-upload --image .data/title/英语.png
-  ./scripts/real-flow.sh audio-stem-separation build-payload --input-file .data/misc/2485_0003_S6_梁萧.wav
-  ./scripts/real-flow.sh adapter-image-probe --confirm-cost --json
-  ./scripts/real-flow.sh poster-title-image --confirm-cost --reference .data/title/英语.png --language es --title-text "Cuando el amor se alejo" --json
+  ./scripts/smoke.sh list
+  ./scripts/smoke.sh health
+  ./scripts/smoke.sh ready
+  ./scripts/smoke.sh llm-job-billing --confirm-cost --model-id gpt-5.4-mini
+  ./scripts/smoke.sh llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini
+  ./scripts/smoke.sh oss-upload-image --confirm-upload --image .data/title/英语.png
+  ./scripts/smoke.sh audio-stem-separation build-payload --input-file .data/misc/2485_0003_S6_梁萧.wav
+  ./scripts/smoke.sh adapter-image-probe --confirm-cost --json
+  ./scripts/smoke.sh poster-title-image --confirm-cost --reference .data/title/英语.png --language es --title-text "Cuando el amor se alejo" --json
 
 \b
 进阶用法：
   各子命令的参数组合、确认参数、远端环境和 JSON 输出示例请查看：
-  ./scripts/real-flow.sh <command> -h
+  ./scripts/smoke.sh <command> -h
   poster-title-image 的本地参考图、多 item JSON、OSS URL Ref 和输出下载示例请查看：
-  ./scripts/real-flow.sh poster-title-image -h
+  ./scripts/smoke.sh poster-title-image -h
 
 \b
 副作用与保护边界：
@@ -303,7 +307,7 @@ HELP_EPILOG = f"""\b
   oss-upload-image 必须显式传入 --confirm-upload。
   poster-title-image 在 STORAGE_BACKEND=aliyun_oss 且使用本地参考图时也必须传入 --confirm-upload。
   audio-stem-separation 在 STORAGE_BACKEND=aliyun_oss 且使用本地音频时也必须传入 --confirm-upload。
-  非本机 --api-url 必须显式传入 --allow-remote-api。
+  非本机 --base-url 必须显式传入 --allow-remote-api。
   远端测试 OSS 配置优先通过 --env-file 指向测试环境配置文件。
   --service-api-key 会出现在 shell history 和进程参数中；共享机器或 CI 优先通过 SERVICE_API_KEY 环境变量注入。
   只通过公开 HTTP API 创建 Job、轮询状态和查询 billing，不直接改数据库，不重试历史 Job。
@@ -311,13 +315,16 @@ HELP_EPILOG = f"""\b
 \b
 Exit Codes:
   0  成功
+  1  场景失败
   2  参数或本地配置错误
-  4  真实流程失败、Job 失败或证据不可达
+  3  服务未 ready
+  4  外部依赖不可用或证据不可达
+  5  超时
 """
 
 app = typer.Typer(
-    name="real-flow.sh",
-    help="真实业务流程验证入口。",
+    name="smoke.sh",
+    help="标准 smoke/E2E 验证入口。",
     epilog=HELP_EPILOG,
     no_args_is_help=False,
     add_completion=False,
@@ -343,11 +350,90 @@ def main(ctx: typer.Context) -> None:
         raise typer.Exit(2)
 
 
-@app.command("doctor", help="只解析 real-flow 上下文，不上传、不提交 Job、不产生费用。", epilog=DOCTOR_HELP_EPILOG)
-def doctor_command(
-    api_url: Annotated[
+SCENARIOS: list[dict[str, Any]] = [
+    {
+        "name": "llm-job-billing",
+        "type": "workflow",
+        "acceptance_class": "business_e2e",
+        "dependencies": ["api", "worker", "db", "redis", "llm_provider"],
+        "destructive": False,
+        "supports_resume": False,
+    },
+    {
+        "name": "llm-job-double-billing",
+        "type": "workflow",
+        "acceptance_class": "business_e2e",
+        "dependencies": ["api", "worker", "db", "redis", "llm_provider"],
+        "destructive": False,
+        "supports_resume": False,
+    },
+    {
+        "name": "poster-title-image",
+        "type": "workflow",
+        "acceptance_class": "business_e2e",
+        "dependencies": ["api", "worker", "db", "redis", "oss", "image_provider"],
+        "destructive": False,
+        "supports_resume": False,
+    },
+    {
+        "name": "audio-stem-separation",
+        "type": "workflow",
+        "acceptance_class": "business_e2e",
+        "dependencies": ["api", "worker", "db", "redis", "oss", "ffmpeg", "model_runtime"],
+        "destructive": False,
+        "supports_resume": True,
+    },
+    {
+        "name": "adapter-image-probe",
+        "type": "provider_probe",
+        "acceptance_class": "exploratory",
+        "dependencies": ["image_provider"],
+        "destructive": False,
+        "supports_resume": False,
+    },
+    {
+        "name": "oss-upload-image",
+        "type": "provider_probe",
+        "acceptance_class": "plumbing",
+        "dependencies": ["oss"],
+        "destructive": False,
+        "supports_resume": False,
+    },
+]
+
+
+def _health_url(base_url: str) -> str:
+    return f"{base_url.rstrip('/')}/health"
+
+
+def _ready_url(base_url: str) -> str:
+    return f"{base_url.rstrip('/')}/healthz"
+
+
+@app.command("list", help="列出当前项目 smoke 场景。")
+def list_command(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="输出机器可读场景元数据。"),
+    ] = False,
+) -> None:
+    from scripts.jobs import formatters
+
+    payload = {"scenarios": SCENARIOS}
+    if json_output:
+        formatters.print_json(payload)
+        return
+    formatters.print_table(
+        SCENARIOS,
+        columns=["name", "type", "acceptance_class", "dependencies", "destructive", "supports_resume"],
+    )
+
+
+@app.command("health", help="检查服务进程级健康，不上传、不提交 Job、不产生费用。")
+def health_command(
+    base_url: Annotated[
         str | None,
-        typer.Option("--api-url", help="API 基础 URL；默认从 env 文件的 API_URL 或 API_HOST/API_PORT 推导。"),
+        typer.Option("--base-url", help="服务 HTTP base URL；默认从 env 文件的 API_URL 或 API_HOST/API_PORT 推导。"),
     ] = None,
     env_file: Annotated[
         str | None,
@@ -355,16 +441,68 @@ def doctor_command(
     ] = None,
     allow_remote_api: Annotated[
         bool,
-        typer.Option("--allow-remote-api", help="允许解析非本机 API URL；doctor 不会发 HTTP 请求。"),
+        typer.Option("--allow-remote-api", help="允许解析非本机 API URL。"),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="输出机器可读健康检查结果。"),
+    ] = False,
+) -> None:
+    from scripts.jobs import formatters
+
+    try:
+        app_env = llm_job_billing.load_app_env(env_file)
+        resolved_base_url = llm_job_billing.resolved_api_url(base_url, app_env, allow_remote_api=allow_remote_api)
+        payload = llm_job_billing.request_json(
+            _health_url(resolved_base_url),
+            method="GET",
+            headers={"Accept": "application/json"},
+            timeout_seconds=10,
+        )
+    except llm_job_billing.FlowError as exc:
+        if json_output:
+            formatters.print_json({"ready": False, "phase": "health", "error": str(exc)})
+        else:
+            typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(3 if exc.exit_code == 4 else exc.exit_code) from exc
+    except (HTTPError, URLError) as exc:
+        if json_output:
+            formatters.print_json({"ready": False, "phase": "health", "error": str(exc)})
+        else:
+            typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(3) from exc
+
+    result = {"ready": payload.get("status") == "ok", "base_url": resolved_base_url, "health": payload}
+    if json_output:
+        formatters.print_json(result)
+    else:
+        formatters.print_table([result], columns=["ready", "base_url", "health"])
+    if not result["ready"]:
+        raise typer.Exit(3)
+
+
+@app.command("ready", help="检查 smoke 运行上下文和必要配置，不上传、不提交 Job、不产生费用。", epilog=READY_HELP_EPILOG)
+def ready_command(
+    api_url: Annotated[
+        str | None,
+        typer.Option("--base-url", help="服务 HTTP base URL；默认从 env 文件的 API_URL 或 API_HOST/API_PORT 推导。"),
+    ] = None,
+    env_file: Annotated[
+        str | None,
+        typer.Option("--env-file", help="显式配置文件路径；默认读取仓库根目录 .env，运行时环境变量优先。"),
+    ] = None,
+    allow_remote_api: Annotated[
+        bool,
+        typer.Option("--allow-remote-api", help="允许解析非本机 API URL；ready 不会提交业务请求。"),
     ] = False,
     service_api_key: Annotated[
         str | None,
-        typer.Option("--service-api-key", help="仅用于判断鉴权来源；doctor 不会打印 token。"),
+        typer.Option("--service-api-key", help="仅用于判断鉴权来源；ready 不会打印 token。"),
     ] = None,
     caller_id: Annotated[
         str,
-        typer.Option("--caller-id", "--x-ai-service-caller-id", help="X-AI-Service-Caller-ID。"),
-    ] = "real-flow-cli",
+        typer.Option("--caller-id", help="X-AI-Service-Caller-ID。"),
+    ] = "smoke-cli",
     json_output: Annotated[
         bool,
         typer.Option("--json", help="输出机器可读上下文。"),
@@ -378,19 +516,30 @@ def doctor_command(
             caller_id=caller_id,
             service_api_key=service_api_key,
         )
+        ready_payload = None
+        if context.summary["ready"]:
+            ready_payload = llm_job_billing.request_json(
+                _ready_url(str(context.summary["api_url"])),
+                method="GET",
+                headers={"Accept": "application/json"},
+                timeout_seconds=10,
+            )
     except llm_job_billing.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
-        raise typer.Exit(exc.exit_code) from exc
+        raise typer.Exit(3 if exc.exit_code == 4 else exc.exit_code) from exc
     if json_output:
         from scripts.jobs import formatters
 
-        formatters.print_json(context.summary)
+        payload = {**context.summary, "ready_response": ready_payload}
+        formatters.print_json(payload)
         if not context.summary["ready"]:
             raise typer.Exit(2)
         return
-    typer.echo("Real Flow Context")
+    typer.echo("Smoke Ready")
     for key, value in context.summary.items():
         typer.echo(f"{key}={value}")
+    if ready_payload is not None:
+        typer.echo(f"ready_response={ready_payload}")
     if not context.summary["ready"]:
         raise typer.Exit(2)
 
@@ -403,7 +552,7 @@ def llm_job_billing_command(
     ] = False,
     api_url: Annotated[
         str | None,
-        typer.Option("--api-url", help="API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导，远端 URL 必须配合 --allow-remote-api。"),
+        typer.Option("--base-url", help="服务 HTTP base URL；默认从 .env 的 API_HOST/API_PORT 推导，远端 URL 必须配合 --allow-remote-api。"),
     ] = None,
     env_file: Annotated[
         str | None,
@@ -411,7 +560,7 @@ def llm_job_billing_command(
     ] = None,
     allow_remote_api: Annotated[
         bool,
-        typer.Option("--allow-remote-api", help="允许 --api-url 或 API_URL 指向非本机地址；用于显式测试远端环境。"),
+        typer.Option("--allow-remote-api", help="允许 --base-url 或 API_URL 指向非本机地址；用于显式测试远端环境。"),
     ] = False,
     service_api_key: Annotated[
         str | None,
@@ -431,15 +580,15 @@ def llm_job_billing_command(
     ] = "用一句话确认真实 LLM 计费链路可用。",
     caller_id: Annotated[
         str,
-        typer.Option("--caller-id", "--x-ai-service-caller-id", help="X-AI-Service-Caller-ID。"),
-    ] = "real-flow-cli",
+        typer.Option("--caller-id", help="X-AI-Service-Caller-ID。"),
+    ] = "smoke-cli",
     timeout_seconds: Annotated[
         int,
-        typer.Option("--timeout-seconds", min=1, help="等待 Job 到达终态的最长秒数。"),
+        typer.Option("--timeout", min=1, help="等待 Job 到达终态的最长秒数。"),
     ] = 180,
     poll_interval_seconds: Annotated[
         float,
-        typer.Option("--poll-interval-seconds", min=0.1, help="轮询 Job 状态的间隔秒数。"),
+        typer.Option("--poll-interval", min=0.1, help="轮询 Job 状态的间隔秒数。"),
     ] = 1.0,
     client_request_id: Annotated[
         str | None,
@@ -485,7 +634,7 @@ def llm_job_double_billing_command(
     ] = False,
     api_url: Annotated[
         str | None,
-        typer.Option("--api-url", help="API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导，远端 URL 必须配合 --allow-remote-api。"),
+        typer.Option("--base-url", help="服务 HTTP base URL；默认从 .env 的 API_HOST/API_PORT 推导，远端 URL 必须配合 --allow-remote-api。"),
     ] = None,
     env_file: Annotated[
         str | None,
@@ -493,7 +642,7 @@ def llm_job_double_billing_command(
     ] = None,
     allow_remote_api: Annotated[
         bool,
-        typer.Option("--allow-remote-api", help="允许 --api-url 或 API_URL 指向非本机地址；用于显式测试远端环境。"),
+        typer.Option("--allow-remote-api", help="允许 --base-url 或 API_URL 指向非本机地址；用于显式测试远端环境。"),
     ] = False,
     service_api_key: Annotated[
         str | None,
@@ -517,15 +666,15 @@ def llm_job_double_billing_command(
     ] = "第二次调用：用另一句话确认同一 Job 的多次 LLM 计费可汇总。",
     caller_id: Annotated[
         str,
-        typer.Option("--caller-id", "--x-ai-service-caller-id", help="X-AI-Service-Caller-ID。"),
-    ] = "real-flow-cli",
+        typer.Option("--caller-id", help="X-AI-Service-Caller-ID。"),
+    ] = "smoke-cli",
     timeout_seconds: Annotated[
         int,
-        typer.Option("--timeout-seconds", min=1, help="等待 Job 到达终态的最长秒数。"),
+        typer.Option("--timeout", min=1, help="等待 Job 到达终态的最长秒数。"),
     ] = 240,
     poll_interval_seconds: Annotated[
         float,
-        typer.Option("--poll-interval-seconds", min=0.1, help="轮询 Job 状态的间隔秒数。"),
+        typer.Option("--poll-interval", min=0.1, help="轮询 Job 状态的间隔秒数。"),
     ] = 1.0,
     client_request_id: Annotated[
         str | None,
@@ -717,7 +866,7 @@ def audio_stem_separation_run_command(
     ] = False,
     api_url: Annotated[
         str | None,
-        typer.Option("--api-url", help="API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导，远端 URL 必须配合 --allow-remote-api。"),
+        typer.Option("--base-url", help="服务 HTTP base URL；默认从 .env 的 API_HOST/API_PORT 推导，远端 URL 必须配合 --allow-remote-api。"),
     ] = None,
     env_file: Annotated[
         str | None,
@@ -725,7 +874,7 @@ def audio_stem_separation_run_command(
     ] = None,
     allow_remote_api: Annotated[
         bool,
-        typer.Option("--allow-remote-api", help="允许 --api-url 或 API_URL 指向非本机地址；用于显式测试远端环境。"),
+        typer.Option("--allow-remote-api", help="允许 --base-url 或 API_URL 指向非本机地址；用于显式测试远端环境。"),
     ] = False,
     service_api_key: Annotated[
         str | None,
@@ -733,15 +882,15 @@ def audio_stem_separation_run_command(
     ] = None,
     caller_id: Annotated[
         str,
-        typer.Option("--caller-id", "--x-ai-service-caller-id", help="X-AI-Service-Caller-ID。"),
-    ] = "real-flow-cli",
+        typer.Option("--caller-id", help="X-AI-Service-Caller-ID。"),
+    ] = "smoke-cli",
     timeout_seconds: Annotated[
         int,
-        typer.Option("--timeout-seconds", min=1, help="等待 Job 到达终态的最长秒数。"),
+        typer.Option("--timeout", min=1, help="等待 Job 到达终态的最长秒数。"),
     ] = 2400,
     poll_interval_seconds: Annotated[
         float,
-        typer.Option("--poll-interval-seconds", min=0.1, help="轮询 Job 状态的间隔秒数。"),
+        typer.Option("--poll-interval", min=0.1, help="轮询 Job 状态的间隔秒数。"),
     ] = 5.0,
     client_request_id: Annotated[
         str | None,
@@ -894,7 +1043,7 @@ def adapter_image_probe_command(
     ] = "png",
     timeout_seconds: Annotated[
         int | None,
-        typer.Option("--timeout-seconds", min=1, help="模型调用超时；默认读取 MODEL_CALL_TIMEOUT_SECONDS 或 300。"),
+        typer.Option("--timeout", min=1, help="模型调用超时；默认读取 MODEL_CALL_TIMEOUT_SECONDS 或 300。"),
     ] = None,
     json_output: Annotated[
         bool,
@@ -939,7 +1088,7 @@ def poster_title_image_command(
     ] = False,
     api_url: Annotated[
         str | None,
-        typer.Option("--api-url", help="API 基础 URL；默认从 .env 的 API_HOST/API_PORT 推导，远端 URL 必须配合 --allow-remote-api。"),
+        typer.Option("--base-url", help="服务 HTTP base URL；默认从 .env 的 API_HOST/API_PORT 推导，远端 URL 必须配合 --allow-remote-api。"),
     ] = None,
     env_file: Annotated[
         str | None,
@@ -947,7 +1096,7 @@ def poster_title_image_command(
     ] = None,
     allow_remote_api: Annotated[
         bool,
-        typer.Option("--allow-remote-api", help="允许 --api-url 或 API_URL 指向非本机地址；用于显式测试远端环境。"),
+        typer.Option("--allow-remote-api", help="允许 --base-url 或 API_URL 指向非本机地址；用于显式测试远端环境。"),
     ] = False,
     service_api_key: Annotated[
         str | None,
@@ -1015,15 +1164,15 @@ def poster_title_image_command(
     ] = 1,
     caller_id: Annotated[
         str,
-        typer.Option("--caller-id", "--x-ai-service-caller-id", help="X-AI-Service-Caller-ID。"),
-    ] = "real-flow-cli",
+        typer.Option("--caller-id", help="X-AI-Service-Caller-ID。"),
+    ] = "smoke-cli",
     timeout_seconds: Annotated[
         int,
-        typer.Option("--timeout-seconds", min=1, help="等待 Job 到达终态的最长秒数。"),
+        typer.Option("--timeout", min=1, help="等待 Job 到达终态的最长秒数。"),
     ] = 900,
     poll_interval_seconds: Annotated[
         float,
-        typer.Option("--poll-interval-seconds", min=0.1, help="轮询 Job 状态的间隔秒数。"),
+        typer.Option("--poll-interval", min=0.1, help="轮询 Job 状态的间隔秒数。"),
     ] = 2.0,
     client_request_id: Annotated[
         str | None,
@@ -1035,7 +1184,7 @@ def poster_title_image_command(
     ] = False,
     output_dir: Annotated[
         str,
-        typer.Option("--output-dir", help="--download-outputs 的本地保存目录；默认 .data/real-flow/poster-title-image。"),
+        typer.Option("--output-dir", help="--download-outputs 的本地保存目录；默认 .data/smoke/poster-title-image。"),
     ] = poster_title_image.DEFAULT_OUTPUT_DIR,
     signed_url_expires_seconds: Annotated[
         int,
@@ -1083,4 +1232,4 @@ def poster_title_image_command(
 
 
 if __name__ == "__main__":
-    app(prog_name="./scripts/real-flow.sh")
+    app(prog_name="./scripts/smoke.sh")

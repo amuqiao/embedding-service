@@ -12,12 +12,12 @@ from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, Aliyun
 from app.integrations.object_storage import sha256_digest
 from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
 from scripts.jobs import formatters
-from scripts.real_flow.flows import llm_job_billing
+from smoke.flows import llm_job_billing
 
 FlowError = llm_job_billing.FlowError
 ROOT_DIR = llm_job_billing.ROOT_DIR
 ALLOWED_IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
-DEFAULT_UPLOAD_PREFIX = "real-flow/uploads/images"
+DEFAULT_UPLOAD_PREFIX = "smoke/uploads/images"
 OUTPUT_MODES = {"table", "json", "url-ref-json", "poster-args"}
 
 

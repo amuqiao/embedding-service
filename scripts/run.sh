@@ -19,7 +19,7 @@ usage() {
   日常快捷 recipe 入口。只编排 dev.sh 和 deploy.sh 的稳定命令，方便本地高频启停。
 
 不负责：
-  不直接管理宿主机进程、Docker Compose、K8s、远端资源、真实流程或跨仓库服务。
+  不直接管理宿主机进程、Docker Compose、K8s、远端资源、业务 smoke/E2E 或跨仓库服务。
   宿主机 API / worker 进程请使用 ./scripts/dev.sh；Docker Compose 服务请使用 ./scripts/deploy.sh。
 
 运行环境：

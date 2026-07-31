@@ -11,7 +11,7 @@
 1. 在 `app/tools/<name>.py` 中实现单一底层执行边界；tool 不依赖 `app/jobs` 或 `app/capabilities`。
 2. 如需 request / result schema，在 `app/schemas/jobs.py` 或对应 schema 模块中定义，并加入 `app/schemas/registry.py`。
 3. 在 `app/tools/register.py` 中创建 `ToolDefinition`，声明 `tool_ref`、kind、entrypoint、schema、required settings、error codes 和 log events。
-4. 只在进程级必需依赖上使用 `startup_validators`；可选模型链路或 demo job 依赖留在执行路径或专项 real-flow / verify 中 fail-fast。
+4. 只在进程级必需依赖上使用 `startup_validators`；可选模型链路或 demo job 依赖留在执行路径或专项 smoke / verify 中 fail-fast。
 5. 补充或调整 `tests/test_registry_contract.py`、`tests/test_capability_tool_registry.py` 和 `tests/test_tools_script.py`。
 
 新增 capability：

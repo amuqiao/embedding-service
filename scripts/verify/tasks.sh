@@ -53,7 +53,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/load.sh" \
     "$ROOT_DIR/scripts/triton-bench.sh" \
     "$ROOT_DIR/scripts/jobs.sh" \
-    "$ROOT_DIR/scripts/real-flow.sh" \
+    "$ROOT_DIR/scripts/smoke.sh" \
     "$ROOT_DIR/scripts/models.sh" \
     "$ROOT_DIR/scripts/media.sh" \
     "$ROOT_DIR/scripts/tools.sh" \
@@ -120,9 +120,8 @@ run_cli_smoke() {
   assert_generated_commands_help "jobs.sh" "$ROOT_DIR/scripts/jobs.sh" \
     guide dashboard overview observe broker runtime list show job inspect trace payload diagnose workflow timeline attempts ai-calls callbacks callbacks-summary stuck drain pressure summary doctor failures latency ingress capacity types
   event "OK" "jobs.sh" "help"
-  assert_generated_commands_help "real-flow.sh" "$ROOT_DIR/scripts/real-flow.sh" \
-    doctor llm-job-billing llm-job-double-billing oss-upload-image poster-title-image
-  event "OK" "real-flow.sh" "help"
+  "$ROOT_DIR/scripts/smoke.sh" --help >/dev/null
+  event "OK" "smoke.sh" "help"
   assert_generated_commands_help "load.sh" "$ROOT_DIR/scripts/load.sh" \
     guide cases list profiles init smoke run ui report pressure drain
   event "OK" "load.sh" "help"
@@ -188,9 +187,11 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/jobs.sh" ingress --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" capacity --help >/dev/null
   "$ROOT_DIR/scripts/jobs.sh" list --help >/dev/null
-  "$ROOT_DIR/scripts/real-flow.sh" doctor --help >/dev/null
-  "$ROOT_DIR/scripts/real-flow.sh" llm-job-billing --confirm-cost --help >/dev/null
-  "$ROOT_DIR/scripts/real-flow.sh" oss-upload-image --confirm-upload --help >/dev/null
+  "$ROOT_DIR/scripts/smoke.sh" health --help >/dev/null
+  "$ROOT_DIR/scripts/smoke.sh" ready --help >/dev/null
+  "$ROOT_DIR/scripts/smoke.sh" list --help >/dev/null
+  "$ROOT_DIR/scripts/smoke.sh" llm-job-billing --confirm-cost --help >/dev/null
+  "$ROOT_DIR/scripts/smoke.sh" oss-upload-image --confirm-upload --help >/dev/null
   "$ROOT_DIR/scripts/load.sh" guide --help >/dev/null
   "$ROOT_DIR/scripts/load.sh" cases --help >/dev/null
   "$ROOT_DIR/scripts/load.sh" profiles --help >/dev/null
@@ -247,13 +248,15 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/redis_diag/cli.py" \
     "$ROOT_DIR/scripts/models/__init__.py" \
     "$ROOT_DIR/scripts/models/inspect_onnx.py" \
-    "$ROOT_DIR/scripts/real_flow/__init__.py" \
-    "$ROOT_DIR/scripts/real_flow/cli.py" \
-    "$ROOT_DIR/scripts/real_flow/flows/__init__.py" \
-    "$ROOT_DIR/scripts/real_flow/flows/audio_stem_separation.py" \
-    "$ROOT_DIR/scripts/real_flow/flows/llm_job_billing.py" \
-    "$ROOT_DIR/scripts/real_flow/flows/oss_image_upload.py" \
-    "$ROOT_DIR/scripts/real_flow/flows/poster_title_image.py" \
+    "$ROOT_DIR/smoke/__init__.py" \
+    "$ROOT_DIR/smoke/__main__.py" \
+    "$ROOT_DIR/smoke/cli.py" \
+    "$ROOT_DIR/smoke/flows/__init__.py" \
+    "$ROOT_DIR/smoke/flows/adapter_image_probe.py" \
+    "$ROOT_DIR/smoke/flows/audio_stem_separation.py" \
+    "$ROOT_DIR/smoke/flows/llm_job_billing.py" \
+    "$ROOT_DIR/smoke/flows/oss_image_upload.py" \
+    "$ROOT_DIR/smoke/flows/poster_title_image.py" \
     "$ROOT_DIR/scripts/media/__init__.py" \
     "$ROOT_DIR/scripts/media/audio.py" \
     "$ROOT_DIR/scripts/media/video.py" \
@@ -266,7 +269,7 @@ run_python_syntax() {
   event "OK" "jobs/*.py" "py_compile"
   event "OK" "redis_diag/*.py" "py_compile"
   event "OK" "models/*.py" "py_compile"
-  event "OK" "real_flow/*.py" "py_compile"
+  event "OK" "smoke/*.py" "py_compile"
   event "OK" "media/*.py" "py_compile"
   event "OK" "tools/*.py" "py_compile"
 }

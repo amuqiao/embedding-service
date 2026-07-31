@@ -1,6 +1,6 @@
 # audio_stem_separation_triton 当前模型
 
-本文只记录本仓库中 `audio_stem_separation_triton` Job 的当前实现事实。真实流程执行、开发服务器 baseline 和压测操作见 [`../runbooks/audio/audio-stem-separation-triton-real-flow-benchmark.md`](../runbooks/audio/audio-stem-separation-triton-real-flow-benchmark.md)。
+本文只记录本仓库中 `audio_stem_separation_triton` Job 的当前实现事实。smoke 执行、开发服务器 baseline 和压测操作见 [`../runbooks/audio/audio-stem-separation-triton-smoke-benchmark.md`](../runbooks/audio/audio-stem-separation-triton-smoke-benchmark.md)。
 
 ## 当前定位
 
@@ -101,11 +101,11 @@ token 不应写入 result、runtime fields 或日志。Triton endpoint 是运行
 - `audio_stem_separation_triton` 是 demo root job_type；`APP_ENV=test/prd` 不允许外部提交 demo 类型。
 - 本服务负责 Job 生命周期、输入输出、对象存储和错误投影；Triton 负责推理。
 - 本服务不维护 Triton 镜像构建、GPU 调度、PAI-EAS 发布、模型仓库同步或生产容量承诺。
-- 真实流程 baseline 只能作为当时环境的复现样本，不是稳定容量合同。
+- smoke baseline 只能作为当时环境的复现样本，不是稳定容量合同。
 
 ## 验证
 
 - `tests/test_audio_stem_separation_triton.py`
-- `tests/test_real_flow_cli.py`
+- `tests/test_smoke_cli.py`
 - `./scripts/verify.sh check`
-- 真实流程验证见 [`../runbooks/audio/audio-stem-separation-triton-real-flow-benchmark.md`](../runbooks/audio/audio-stem-separation-triton-real-flow-benchmark.md)
+- smoke 验证见 [`../runbooks/audio/audio-stem-separation-triton-smoke-benchmark.md`](../runbooks/audio/audio-stem-separation-triton-smoke-benchmark.md)

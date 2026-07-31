@@ -14,7 +14,7 @@
 
 - `docs/api/service-contract.md` 当前只做 route method/path 漂移检查；尚未解析完整错误码表、Job 字段表或每个 `job_type` 的公开 contract matrix。
 - workflow registry 不在启动期伪造参数编译动态 DAG；child `job_type` 穷尽校验仍依赖 workflow compiler 测试、业务 e2e 和运行期 `_create_child_job()` 校验。
-- 正式业务 `job_type` 的 real-flow、load profile 和业务级 e2e 仍按业务接入时补充，没有统一生成器。
+- 正式业务 `job_type` 的 smoke、load profile 和业务级 e2e 仍按业务接入时补充，没有统一生成器。
 
 ## Planned Work
 

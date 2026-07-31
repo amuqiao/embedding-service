@@ -1,4 +1,4 @@
-"""本地 Mock OpenAI 兼容服务器示例，用于业务项目恢复 mock-smoke 时复用。
+"""本地 Mock OpenAI 兼容服务器示例，用于业务项目 smoke 场景复用。
 
 不调用真实模型，返回稳定的 OpenAI 兼容 chat completion 响应。
 

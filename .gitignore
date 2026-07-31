@@ -18,3 +18,4 @@ logs/
 *.pid
 env_test/
 env_master/
+smoke/results/

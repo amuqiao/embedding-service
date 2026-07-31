@@ -1,4 +1,4 @@
-# audio_stem_separation_triton 真实流程压测与 baseline Runbook
+# audio_stem_separation_triton smoke压测与 baseline Runbook
 
 本文用于复现 `audio_stem_separation_triton` 在远程 Triton 服务上的安全压测和观测流程，并保留一份 2026-07-13 开发服务器 baseline 样本用于下次对比。目标不是把开发服务器打到极限，而是在不影响其他服务的前提下，确认真实业务链路能否跑通、显存是否接近风险线、Triton 是否出现错误或积压，并为业务并发配置提供保守依据。
 
@@ -24,7 +24,7 @@
 `audio_stem_separation_triton` 不是把音频文件直接丢给 Triton。真实链路是：
 
 ```text
-real-flow / 调用方
+smoke / 调用方
   提交 input_audio URL Ref
         |
         v
@@ -53,7 +53,7 @@ Taskiq worker
 Job succeeded / failed
 ```
 
-真实流程的推理次数按 segment 计算：
+smoke的推理次数按 segment 计算：
 
 ```text
 1 个 audio_stem_separation_triton Job
@@ -73,7 +73,7 @@ drums -> bass -> other -> vocals
 | 测试类型 | 入口 | 用途 | 不能说明什么 |
 |---|---|---|---|
 | Triton 单模型直压 | `scripts/triton-bench.sh` | 测单个 Triton endpoint / model 的 p50、p95、RPS、failure | 不能代表完整业务链路耗时 |
-| 真实 Job 流程 | `scripts/real-flow.sh audio-stem-separation build-payload/run ... --job-type audio_stem_separation_triton` | 验证下载、切块、Triton 调用、合并、OSS 上传、Job 状态 | 不适合直接追求极限并发 |
+| 真实 Job 流程 | `scripts/smoke.sh audio-stem-separation build-payload/run ... --job-type audio_stem_separation_triton` | 验证下载、切块、Triton 调用、合并、OSS 上传、Job 状态 | 不适合直接追求极限并发 |
 | Job 层压测 | `scripts/load.sh` | 测 FastAPI 接单、队列、worker、callback 等业务层容量 | 如果 Triton 单副本未确认容量，可能直接放大模型服务压力 |
 
 本 runbook 重点是第二类：**真实 Job 流程**。第一类直压只作为前置校准和参考。
@@ -102,7 +102,7 @@ drums -> bass -> other -> vocals
 | Job | 长时间停在 `calling_model` 且 Triton 无新增成功计数 |
 | 延迟 | p95 超过低并发基线 2 倍且 RPS 没有明显增长 |
 
-这轮真实流程已经把两张 23GiB GPU 推到约 `22.4GiB / 22.5GiB`，所以下次在相同服务器上不要直接跑真实并发 2。
+这轮smoke已经把两张 23GiB GPU 推到约 `22.4GiB / 22.5GiB`，所以下次在相同服务器上不要直接跑真实并发 2。
 
 ## 前置条件
 
@@ -112,10 +112,10 @@ drums -> bass -> other -> vocals
 ./scripts/run.sh status dev
 ```
 
-检查 real-flow 上下文：
+检查 smoke 上下文：
 
 ```bash
-./scripts/real-flow.sh doctor \
+./scripts/smoke.sh ready \
   --env-file .env \
   --json
 ```
@@ -131,7 +131,7 @@ STORAGE_BACKEND=aliyun_oss
 
 `AUDIO_STEM_TRITON_URL` 按 `tritonclient` HTTP 约定填写，不带 `http://` 或 `https://`。
 
-`real-flow.sh` 默认面向本地 API。只有明确验证远端测试 API 时才使用 `--allow-remote-api` 和 `--api-url`，不要把它作为默认压测路径。
+`smoke.sh` 默认面向本地 API。只有明确验证远端测试 API 时才使用 `--allow-remote-api` 和 `--base-url`，不要把它作为默认压测路径。
 
 ## 留证命名
 
@@ -147,7 +147,7 @@ mkdir -p "$RUN_DIR"
 
 ```text
 .run/audio-stem-triton/<RUN_ID>/payload.json
-.run/audio-stem-triton/<RUN_ID>/real-flow-result.json
+.run/audio-stem-triton/<RUN_ID>/smoke-result.json
 .run/audio-stem-triton/<RUN_ID>/job.json
 .run/audio-stem-triton/<RUN_ID>/triton-metrics-before.txt
 .run/audio-stem-triton/<RUN_ID>/triton-metrics-after.txt
@@ -233,7 +233,7 @@ ssh <USER@HOST> \
 ./scripts/jobs.sh list \
   --status queued,running \
   --job-type audio_stem_separation_triton \
-  --caller-id real-flow-cli \
+  --caller-id smoke-cli \
   --client-request-id "$RUN_ID" \
   --scope family \
   --limit 10 \
@@ -270,7 +270,7 @@ Job 结束后补充单 Job 证据：
 
 `drain` 和 `pressure` 是窗口级视图，不按本次 `client_request_id` 精确隔离。共享开发机上应先用单 Job 命令确认本次 `JOB_ID`，再把窗口级结果当作背景证据。
 
-## 执行真实流程
+## 执行smoke
 
 先确认测试音频。推荐先用短音频，不要直接用长音频或多个并发 Job。
 
@@ -284,7 +284,7 @@ Job 结束后补充单 Job 证据：
 声道: 2
 时长: 11.899977s
 文件大小: 约 2.0 MiB
-真实流程 segment_count: 2
+smoke segment_count: 2
 ```
 
 换音频时按下面公式估算预期 segment 数：
@@ -313,7 +313,7 @@ segment_count = 1 + ceil(max(0, total_len - segment_samples) / stride)
 先构建 payload 做预检。这个步骤会根据输入文件生成 Job payload；如果本地文件需要 stage/upload，则同样要确认上传副作用。
 
 ```bash
-./scripts/real-flow.sh audio-stem-separation build-payload \
+./scripts/smoke.sh audio-stem-separation build-payload \
   --env-file .env \
   --confirm-upload \
   --job-type audio_stem_separation_triton \
@@ -326,24 +326,24 @@ segment_count = 1 + ceil(max(0, total_len - segment_samples) / stride)
 提交真实 `audio_stem_separation_triton` Job：
 
 ```bash
-./scripts/real-flow.sh audio-stem-separation run \
+./scripts/smoke.sh audio-stem-separation run \
   --confirm-run \
   --env-file .env \
   --job-type audio_stem_separation_triton \
   --payload-file "$RUN_DIR/payload.json" \
-  --timeout-seconds 900 \
-  --poll-interval-seconds 5 \
+  --timeout 900 \
+  --poll-interval 5 \
   --client-request-id "$RUN_ID" \
-  --json > "$RUN_DIR/real-flow-result.json"
+  --json > "$RUN_DIR/smoke-result.json"
 ```
 
 注意事项：
 
 - `build-payload --confirm-upload` 会把本地测试音频上传到真实 OSS，并把生成的 URL Ref 写入 payload。
 - `run --payload-file` 会复用已构建 payload，便于保留本次入参证据。
-- `--timeout-seconds 900` 只是本地等待 Job 终态的超时，不是取消远端 Job 的开关。
+- `--timeout 900` 只是本地等待 Job 终态的超时，不是取消远端 Job 的开关。
 - 如果本地等待中断，Job 可能仍在 worker 中运行，需要用 `jobs.sh` 查状态。
-- 不要在第一轮真实流程还没结束时提交第二个 Job。
+- 不要在第一轮smoke还没结束时提交第二个 Job。
 
 ## 采样时间线
 
@@ -433,18 +433,18 @@ failure 全部 0
 pending 全部 0
 ```
 
-结论：这次真实流程符合 `2 segments * 4 models = 8` 次 Triton infer 的预期，没有 Triton failure，也没有 pending 积压。
+结论：这次smoke符合 `2 segments * 4 models = 8` 次 Triton infer 的预期，没有 Triton failure，也没有 pending 积压。
 
 ### GPU 显存变化
 
-真实流程前，Triton 已 warm：
+smoke前，Triton 已 warm：
 
 ```text
 GPU0 18319 / 23028 MiB
 GPU1 18821 / 23028 MiB
 ```
 
-真实流程后或峰值附近：
+smoke后或峰值附近：
 
 ```text
 GPU0 22415 / 23028 MiB
@@ -503,12 +503,12 @@ GPU1 14725 MiB
 GPU0 18319 MiB
 GPU1 18821 MiB
 
-真实流程后:
+smoke后:
 GPU0 22415 MiB
 GPU1 22509 MiB
 ```
 
-在这台开发服务器上，真实流程结束后每张卡只剩约 `500-600 MiB` 余量。这个余量不足以安全验证真实并发 2。
+在这台开发服务器上，smoke结束后每张卡只剩约 `500-600 MiB` 余量。这个余量不足以安全验证真实并发 2。
 
 ## 如何写压测报告
 
@@ -528,7 +528,7 @@ GPU1 22509 MiB
   expected_segment_count:
 
 执行命令:
-  real-flow command:
+  smoke command:
 
 Job 结果:
   job_id:
@@ -571,7 +571,7 @@ GPU:
 Triton failure = 0，pending = 0。
 远程 Triton 确实用到了双 GPU。
 单个 11.9s WAV 已把两张 23GiB GPU 推到约 22.4GiB / 22.5GiB。
-不建议在共享开发服务器继续真实流程加并发。
+不建议在共享开发服务器继续smoke加并发。
 ```
 
 业务上线前的保守建议：

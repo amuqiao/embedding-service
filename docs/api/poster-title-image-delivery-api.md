@@ -1019,7 +1019,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
   "data": {
     "job": {
       "job_id": "8b88ba9d-eb4b-4f6c-ab79-da28e12d0e70",
-      "client_request_id": "real-flow-poster-title-image-06dba1ec-2d25-4bd9-bd9b-fb60cf30bd8f",
+      "client_request_id": "smoke-poster-title-image-06dba1ec-2d25-4bd9-bd9b-fb60cf30bd8f",
       "job_type": "poster_title_image",
       "job_status": "succeeded",
       "job_progress": {

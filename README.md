@@ -128,7 +128,7 @@ Authorization: Bearer dev-service-key
 ./scripts/verify.sh check
 ```
 
-`check` 是模板级最小质量门，不调用真实模型，也不访问外部对象存储。内置 `workflow-smoke` 验证测试 `job_type` 的本地 Job 创建、异步执行和状态轮询流程；`workflow-modes-smoke` 验证 `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 六种 DAG-lite workflow 模式。真实模型业务链路需要在接入正式 `job_type` 后另行恢复 `smoke` / `e2e` 验证。
+`check` 是模板级最小质量门，不调用真实模型，也不访问外部对象存储。内置 `workflow-smoke` 验证测试 `job_type` 的本地 Job 创建、异步执行和状态轮询流程；`workflow-modes-smoke` 验证 `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 六种 DAG-lite workflow 模式。真实模型业务链路统一走标准 smoke/E2E 入口 `./scripts/smoke.sh`，不再挂在 `verify.sh` 下。
 
 发布到测试或生产环境前，可以在本地提前用目标配置文件执行启动配置校验。该命令不会连接数据库、Redis 或对象存储，只检查 env 键名和 `Settings` 启动规则，包括 `APP_ENV=test/prd` 的发布模式安全约束：
 
@@ -218,12 +218,14 @@ OSS_PUBLIC_ENDPOINT=
 ./scripts/verify.sh env-config --env-file .env.test --app-env test
 ./scripts/verify.sh check
 ./scripts/verify.sh --help
+./scripts/smoke.sh list
+./scripts/smoke.sh health
+./scripts/smoke.sh ready
 ```
 
 - `test`：运行本地 pytest。
 - `workflow-smoke`：使用内置 `example_sleep` 验证本地 Job 创建、异步执行和状态轮询流程，不调用真实模型或外部供应商。
 - `workflow-modes-smoke`：使用内置 `example_workflow` 验证 `chain`、`group`、`chord`、`map`、`starmap` 和 `chunks` 的 root/child Job e2e。
-- `smoke` / `mock-smoke` / `e2e`：当前未接入正式 LLM `job_type`，命令保留但不可用，新增正式模型能力后再恢复对应验证。
 - `env-config`：校验 env 文件键名；传 `--env-file` 和 `--app-env` 时，还会实例化应用 `Settings`，提前验证 test/prd 发布模式配置是否能安全启动。
 - `check`：运行脚本语法、入口 help、Python 语法、env 配置、registry consistency 和 pytest。
 
@@ -279,7 +281,7 @@ Job 只读排障由 `jobs.sh` 承接：
 ./scripts/run.sh down dev
 ```
 
-真实模型端到端验证不属于当前模板核心 `scripts/` 命令面。接入正式业务 `job_type` 后，再恢复对应业务 e2e 脚本或放入 `examples/business/`。
+真实模型端到端验证通过 `./scripts/smoke.sh` 组织。接入正式业务 `job_type` 后，新增对应 smoke scenario；一次性业务示例可以放入 `examples/business/`。
 
 ## 说明文档
 

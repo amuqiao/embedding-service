@@ -2,10 +2,10 @@
 # verify.sh - 本地验证入口
 #
 # 运行环境：Bash；需要 Python venv，check 会运行 pytest。
-# 作用域：承接测试、smoke、e2e 等模板级一次性验证任务。
+# 作用域：承接测试和模板级一次性验证任务；业务 smoke/E2E 使用 scripts/smoke.sh。
 # 本地服务生命周期不属于本入口。
 # 约束：入口脚本只做参数分发和帮助说明，具体实现下沉到 scripts/verify/ 原子脚本。
-# 输出：每个验证任务先打印稳定 section；pytest/smoke 这类用户需要看的工具结果可透传。
+# 输出：每个验证任务先打印稳定 section；pytest 和 workflow-smoke 这类用户需要看的工具结果可透传。
 
 set -euo pipefail
 
@@ -27,12 +27,9 @@ usage() {
 
 命令：
   test                运行 pytest。
-  smoke               无正式 job_type 时不可用；新增正式能力后再恢复。
-  mock-smoke          无正式 job_type 时不可用；新增正式能力后再恢复。
   workflow-smoke      使用内置 example_sleep 验证本地 Job 创建、Taskiq 执行和状态轮询流程。
   workflow-modes-smoke 使用内置 workflow 测试 job_type 验证 single/chain/group/chord/map/starmap/chunks 的真实 Job e2e。
   migration-roundtrip 使用临时本地 PostgreSQL 数据库验证 Alembic upgrade/downgrade/re-upgrade。
-  e2e                 无正式 job_type 时不可用；新增正式能力后再恢复。
   env-config          校验 env 文件键名；可用 --env-file/--app-env 提前验证启动配置安全规则。
   oss-config          校验阿里云 OSS 配置；默认只检查本地配置，--remote 才访问 OSS，--upload-image 可上传图片。
   image-inspect       检测本地路径或 http(s) URL 图片类型、尺寸、alpha 通道和透明背景。
@@ -172,35 +169,11 @@ Exit Codes:
   其他非 0 由失败阶段返回
 EOF
       ;;
-    smoke|mock-smoke|e2e)
-      cat <<EOF
-用法：
-  ./scripts/verify.sh ${name}
-  ./scripts/verify.sh ${name} -h|--help
-
-作用域：
-  正式业务 job_type 接入后的验证入口；当前模板阶段不可用。
-
-副作用与保护边界：
-  当前执行会返回 2，不创建 Job，不调用模型。
-
-常用示例：
-  新增正式能力后再恢复 ./scripts/verify.sh ${name}
-
-Exit Codes:
-  2  当前验证任务不可用
-EOF
-      ;;
     *)
       usage >&2
       return 2
       ;;
   esac
-}
-
-no_builtin_job_types() {
-  echo "当前项目只有测试示例 job_type；该验证命令需要新增正式能力后再恢复。" >&2
-  exit 2
 }
 
 command="${1:-}"
@@ -223,12 +196,6 @@ case "$command" in
   test)
     run_tests
     ;;
-  smoke)
-    no_builtin_job_types
-    ;;
-  mock-smoke)
-    no_builtin_job_types
-    ;;
   workflow-smoke)
     run_workflow_smoke
     ;;
@@ -237,9 +204,6 @@ case "$command" in
     ;;
   migration-roundtrip)
     run_migration_roundtrip
-    ;;
-  e2e)
-    no_builtin_job_types
     ;;
   env-config)
     run_env_config_check "$@"

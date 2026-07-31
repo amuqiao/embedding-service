@@ -4,7 +4,7 @@
 
 ## 工作模型
 
-`scripts/` 目录提供本仓库稳定的本地操作入口。入口脚本应把“日常 recipe、宿主机进程、验证、部署形态、真实流程、只读排障”分开，避免一个脚本承担跨领域职责。
+`scripts/` 目录提供本仓库稳定的本地操作入口。入口脚本应把“日常 recipe、宿主机进程、模板验证、部署形态、业务 smoke/E2E、只读排障”分开，避免一个脚本承担跨领域职责。
 
 ```text
 run.sh          日常快捷 recipe
@@ -17,7 +17,7 @@ load.sh         项目级压测入口
 triton-bench.sh Triton 推理服务直压入口
 jobs.sh         Job 只读查询与排障
 job-ops.sh      Job 写操作运维入口
-real-flow.sh    手动真实模型/对象存储流程验证
+smoke.sh       标准业务 smoke/E2E 验证入口
 models.sh       本地模型资产下载、路径和必需文件检查
 media.sh        本地音视频素材探测、校验和准备
 tools.sh        无默认持久副作用的本地开发辅助工具和只读代码清单查看
@@ -28,6 +28,7 @@ tools.sh        无默认持久副作用的本地开发辅助工具和只读代�
 Triton 直压归属 `triton-bench.sh`；它只直连推理服务，不创建 FastAPI Job，不访问 DB/Redis/OSS，不触发 callback，不替代 `load.sh` 的业务链路压测。
 已注册 tool、capability 和 job_type capability 关系归属 `tools.sh registry` 只读查看；当前治理事实见 `docs/current/registry-governance.md`。
 Redis 连接、服务端版本、命令能力、内存、keyspace、Stream 和 broker key 证据归属 `redis.sh`。`k8s.sh`、`jobs.sh` 或业务脚本需要 Redis 证据时只编排或复用该入口，不各自维护 Redis 诊断逻辑。
+业务 smoke/E2E 归属 `smoke.sh` 和 `python -m smoke`。它只验证已经运行的服务是否符合 HTTP 合同，负责 health/ready/list、提交场景、轮询终态、断言结果和输出证据；不启动或停止 API/worker，不执行 Alembic migration，不直接查库推进流程，也不替代 `jobs.sh` 排障查询。
 
 ## 入口职责
 
@@ -55,7 +56,7 @@ Shell 入口默认只负责：
 
 本地运行形态配置、应用业务配置、密钥、模型参数和数据库连接统一放在仓库根目录 `.env`。`.env.example` 是唯一可提交配置模板；不要再维护 `scripts/.env` 或 `scripts/.env.example`。
 
-新增脚本读取配置时应沿用现有优先级和 helper，不要重新发明配置加载规则。真实流程脚本只能面向本地 API，不能默认指向远程生产服务。
+新增脚本读取配置时应沿用现有优先级和 helper，不要重新发明配置加载规则。`smoke.sh` 默认只能面向本地 API；验证远端测试环境必须显式传 `--allow-remote-api` 和 `--base-url`。
 
 ## 运行模式边界
 
@@ -82,7 +83,7 @@ uv run python -m compileall scripts
 ./scripts/verify.sh check
 ```
 
-修改服务启动、Job workflow、对象存储或真实流程执行路径时，还应按项目根目录 `AGENTS.md` 的验证要求补充 smoke 或真实流程验证。
+修改服务启动、Job workflow、对象存储或业务 smoke/E2E 执行路径时，还应按项目根目录 `AGENTS.md` 的验证要求补充 `./scripts/smoke.sh` 对应场景验证。
 
 ## 新增脚本 Checklist
 
@@ -97,5 +98,5 @@ uv run python -m compileall scripts
 - 是否避免 silent fallback；配置错误应快速失败。
 - 是否明确 stdout / stderr / `--json` 行为。
 - 默认输出是否保持人读，且没有夹带完整 JSON 或大段 JSON 摘要。
-- 是否为费用、上传、写库或真实流程设置显式确认参数。
+- 是否为费用、上传、写库或业务 smoke/E2E 设置显式确认参数。
 - 是否完成最小验证，并在需要时运行 `./scripts/verify.sh check`。
