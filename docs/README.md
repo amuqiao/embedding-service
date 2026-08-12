@@ -36,6 +36,8 @@
 | [`runbooks/ops/remote-test-env-fastapi-redis-taskiq.md`](runbooks/ops/remote-test-env-fastapi-redis-taskiq.md) | 远端测试环境 FastAPI 依赖漂移、Redis 5 和 Taskiq broker 排障记录 |
 | [`api/service-contract.md`](api/service-contract.md) | 当前 HTTP envelope、Job、Callback、Billing、认证和公开 route 合同 |
 | [`api/extension-guide.md`](api/extension-guide.md) | 新增 `job_type`、HTTP 接口、模型、Prompt 和对象存储产物的接入入口 |
+| [`api/tagged-text-translation-api.md`](api/tagged-text-translation-api.md) | `tagged_text_translation` 批量带标签文案翻译 Job 的对接合同草案，覆盖创建、轮询、Callback、结果和错误码；不暴露 Prompt 接口 |
+| [`api/languages-api.md`](api/languages-api.md) | `GET /api/v1/ai-jobs/languages` 语种目录对接文档，说明环境配置、响应字段、当前语种列表和错误响应 |
 | [`api/业务语种规范.md`](api/业务语种规范.md) | CPP / AI / RS 三方共享语种代码、`in` 例外和 AI 服务语种目录接口规范 |
 | [`api/poster-title-image-delivery-api.md`](api/poster-title-image-delivery-api.md) | AI 标题图生成对接的当前交付接口合同、任务创建、查询、费用和 Callback 说明 |
 | [`plans/job-kernel-hardening.md`](plans/job-kernel-hardening.md) | 当前 Job kernel 可靠性、一致性和公开信息边界的短期硬化计划；完成后应归档 |
