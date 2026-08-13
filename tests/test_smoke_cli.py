@@ -201,6 +201,243 @@ def test_tagged_text_translation_cli_forwards_default_source_language_as_none(mo
     assert captured["client_request_id"] == "req-translate-1"
 
 
+def test_tagged_text_translation_help_documents_json_and_preview_modes():
+    result = runner.invoke(app, ["tagged-text-translation", "--help"])
+
+    assert result.exit_code == 0
+    assert "--json 是 smoke 全局参数，必须放在场景命令前" in result.stdout
+    assert "翻译前后 preview" in result.stdout
+    assert "完整 source_text / translated_text" in result.stdout
+
+
+def test_tagged_text_translation_rejects_trailing_json_option():
+    result = runner.invoke(app, ["tagged-text-translation", "--json", "--help"])
+
+    assert result.exit_code == 2
+    output = result.stdout + result.stderr
+    assert "No such option '--json'" in output
+
+
+def test_tagged_text_translation_human_preview_sanitizes_truncates_and_limits_items(capsys):
+    long_text = "A\r\x1b[31mB\n\tC\x07" + ("x" * 600)
+    evidence_items = [
+        {
+            "index": 1,
+            "id": "item.one",
+            "source_text": long_text,
+            "translated_text": "译文" + ("y" * 600),
+            "char_count": {"source": 604, "target": 602, "within_hint": True},
+        },
+        {"index": 2, "id": "item.two", "source_text": "two", "translated_text": "二", "char_count": {}},
+        {"index": 3, "id": "item.three", "source_text": "three", "translated_text": "三", "char_count": {}},
+        {"index": 4, "id": "item.four", "source_text": "four", "translated_text": "四", "char_count": {}},
+    ]
+
+    tagged_text_translation._print_translation_preview(
+        evidence_items=evidence_items,
+        source_language="en",
+        target_language="zh",
+    )
+
+    output = capsys.readouterr().out
+    assert "\x1b" not in output
+    assert "\r" not in output
+    assert "\x07" not in output
+    assert "\\rB\\n\\tC" in output
+    assert "<truncated>" in output
+    assert "item[1]" in output
+    assert "item[3]" in output
+    assert "item[4]" not in output
+    assert "omitted=1; use --json for complete texts" in output
+
+
+def test_tagged_text_translation_json_output_includes_complete_translation_evidence(tmp_path, monkeypatch, capsys):
+    clear_api_env(monkeypatch)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    append_root_env(
+        tmp_path,
+        "API_HOST=127.0.0.1",
+        "API_PORT=18200",
+        "DISABLE_HTTP_AUTH_HEADER=true",
+        "DISABLE_CALLER_ID_HEADER=true",
+    )
+
+    def fake_request_json(url, *, method, headers, payload=None, timeout_seconds=10):
+        if method == "POST":
+            return {"code": "0", "data": {"job": {"job_id": "translate-job-1", "job_status": "queued"}}}
+        if url.endswith("/billing"):
+            return {
+                "code": "0",
+                "data": {
+                    "billing": {
+                        "status": "estimated",
+                        "currency": "USD",
+                        "total_cost_amount": "0.00000123",
+                        "ai_call_count": 1,
+                        "billable_call_count": 1,
+                        "failed_call_count": 0,
+                    }
+                },
+            }
+        raise AssertionError(f"unexpected call: {method} {url}")
+
+    monkeypatch.setattr(llm_job_billing, "request_json", fake_request_json)
+    monkeypatch.setattr(
+        llm_job_billing,
+        "poll_job_envelope",
+        lambda **_kwargs: {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "translate-job-1",
+                    "job_status": "succeeded",
+                    "job_type": "tagged_text_translation",
+                    "job_result": {
+                        "source_language": "en",
+                        "target_language": "zh",
+                        "items": [
+                            {
+                                "id": "homepage.title",
+                                "source_text": "<span>Hello {user_name}</span>",
+                                "translated_text": "<span>你好 {user_name}</span>",
+                                "char_count": {
+                                    "source": 6,
+                                    "target": 3,
+                                    "target_limit_hint": 30,
+                                    "within_hint": True,
+                                },
+                            }
+                        ],
+                    },
+                }
+            },
+        },
+    )
+
+    tagged_text_translation.run(
+        confirm_cost=True,
+        api_url=None,
+        env_file=None,
+        allow_remote_api=False,
+        service_api_key=None,
+        caller_id="smoke-cli",
+        timeout_seconds=1,
+        poll_interval_seconds=0.1,
+        source_language="en",
+        target_language="zh",
+        item_id="homepage.title",
+        text="<span>Hello {user_name}</span>",
+        max_target_chars_hint=30,
+        items_json=None,
+        client_request_id="translate-json-1",
+        json_output=True,
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["scenario"] == "tagged-text-translation"
+    assert payload["job"] == {"id": "translate-job-1", "status": "succeeded", "type": "tagged_text_translation"}
+    assert payload["request"]["items"][0]["source_text"] == "<span>Hello {user_name}</span>"
+    assert payload["result"]["items"][0]["source_text"] == "<span>Hello {user_name}</span>"
+    assert payload["result"]["items"][0]["translated_text"] == "<span>你好 {user_name}</span>"
+    assert payload["billing"]["mode"] == "estimated"
+    assert payload["responses"]["get_job"]["data"]["job"]["job_result"]["items"][0]["translated_text"] == "<span>你好 {user_name}</span>"
+
+
+def test_tagged_text_translation_human_output_prints_translation_preview(tmp_path, monkeypatch, capsys):
+    clear_api_env(monkeypatch)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    append_root_env(
+        tmp_path,
+        "API_HOST=127.0.0.1",
+        "API_PORT=18200",
+        "DISABLE_HTTP_AUTH_HEADER=true",
+        "DISABLE_CALLER_ID_HEADER=true",
+    )
+
+    def fake_request_json(url, *, method, headers, payload=None, timeout_seconds=10):
+        if method == "POST":
+            return {"code": "0", "data": {"job": {"job_id": "translate-job-2", "job_status": "queued"}}}
+        return {
+            "code": "0",
+            "data": {
+                "billing": {
+                    "status": "estimated",
+                    "currency": "USD",
+                    "total_cost_amount": "0.00000456",
+                    "ai_call_count": 1,
+                    "billable_call_count": 1,
+                    "failed_call_count": 0,
+                }
+            },
+        }
+
+    monkeypatch.setattr(llm_job_billing, "request_json", fake_request_json)
+    monkeypatch.setattr(
+        llm_job_billing,
+        "poll_job_envelope",
+        lambda **_kwargs: {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "translate-job-2",
+                    "job_status": "succeeded",
+                    "job_type": "tagged_text_translation",
+                    "job_result": {
+                        "source_language": "en",
+                        "target_language": "zh",
+                        "items": [
+                            {
+                                "id": "homepage.title",
+                                "source_text": "<span>Hello {user_name}</span>",
+                                "translated_text": "<span>你好 {user_name}</span>",
+                                "char_count": {
+                                    "source": 6,
+                                    "target": 3,
+                                    "target_limit_hint": 30,
+                                    "within_hint": True,
+                                },
+                            }
+                        ],
+                    },
+                }
+            },
+        },
+    )
+
+    tagged_text_translation.run(
+        confirm_cost=True,
+        api_url=None,
+        env_file=None,
+        allow_remote_api=False,
+        service_api_key=None,
+        caller_id="smoke-cli",
+        timeout_seconds=1,
+        poll_interval_seconds=0.1,
+        source_language="en",
+        target_language="zh",
+        item_id="homepage.title",
+        text="<span>Hello {user_name}</span>",
+        max_target_chars_hint=30,
+        items_json=None,
+        client_request_id="translate-human-1",
+        json_output=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "== Translation ==" in output
+    assert "item[1] id=homepage.title source=en target=zh" in output
+    assert "source: <span>Hello {user_name}</span>" in output
+    assert "target: <span>你好 {user_name}</span>" in output
+    assert "OK        billing" in output
+
+
 def test_smoke_public_module_entry_accepts_global_json_before_list():
     result = subprocess.run(
         [sys.executable, "-m", "smoke", "--json", "list"],

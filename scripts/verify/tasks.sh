@@ -191,6 +191,7 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/smoke.sh" ready --help >/dev/null
   "$ROOT_DIR/scripts/smoke.sh" list --help >/dev/null
   "$ROOT_DIR/scripts/smoke.sh" llm-job-billing --confirm-cost --help >/dev/null
+  "$ROOT_DIR/scripts/smoke.sh" tagged-text-translation --confirm-cost --help >/dev/null
   "$ROOT_DIR/scripts/smoke.sh" oss-upload-image --confirm-upload --help >/dev/null
   "$ROOT_DIR/scripts/load.sh" guide --help >/dev/null
   "$ROOT_DIR/scripts/load.sh" cases --help >/dev/null

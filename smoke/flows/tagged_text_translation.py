@@ -13,7 +13,11 @@ from smoke.flows import llm_job_billing
 HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
 DOUBLE_PLACEHOLDER_RE = re.compile(r"\{\{[^{}]+\}\}")
 SINGLE_PLACEHOLDER_RE = re.compile(r"(?<!\{)\{[^{}]+\}(?!\})")
+CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 TEXT_SLOT = "<text>"
+HUMAN_PREVIEW_ITEM_LIMIT = 3
+HUMAN_PREVIEW_TEXT_MAX_LENGTH = 500
 
 FlowError = llm_job_billing.FlowError
 
@@ -54,6 +58,17 @@ def _visible_text_length(text: str) -> int:
     for pattern in (HTML_TAG_RE, DOUBLE_PLACEHOLDER_RE, SINGLE_PLACEHOLDER_RE):
         stripped = pattern.sub("", stripped)
     return len(stripped)
+
+
+def _human_preview(text: Any, *, max_length: int = HUMAN_PREVIEW_TEXT_MAX_LENGTH) -> str:
+    value = "" if text is None else str(text)
+    value = ANSI_ESCAPE_RE.sub("", value)
+    value = value.replace("\\", "\\\\")
+    value = value.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+    value = CONTROL_CHAR_RE.sub("", value)
+    if len(value) <= max_length:
+        return value
+    return f"{value[: max_length - 15]}... <truncated>"
 
 
 def _load_items(items_json: str | None, *, item_id: str, text: str, max_target_chars_hint: int | None) -> list[dict[str, Any]]:
@@ -168,6 +183,72 @@ def _assert_translation_result(
                 raise FlowError(f"result item {source_item.get('id')} within_hint mismatch", exit_code=1)
 
 
+def _translation_items_evidence(
+    payload_items: list[dict[str, Any]],
+    terminal_job: dict[str, Any],
+) -> list[dict[str, Any]]:
+    result = terminal_job.get("job_result")
+    if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+        raise FlowError("tagged_text_translation result missing items", exit_code=1)
+    evidence: list[dict[str, Any]] = []
+    for index, (source_item, result_item) in enumerate(zip(payload_items, result["items"]), start=1):
+        source_text = result_item.get("source_text")
+        if source_text is None:
+            source_text = source_item.get("text")
+        evidence.append(
+            {
+                "index": index,
+                "id": result_item.get("id") or source_item.get("id"),
+                "source_text": source_text,
+                "translated_text": result_item.get("translated_text"),
+                "max_target_chars_hint": source_item.get("max_target_chars_hint"),
+                "char_count": result_item.get("char_count"),
+            }
+        )
+    return evidence
+
+
+def _request_items_evidence(payload_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "index": index,
+            "id": item.get("id"),
+            "source_text": item.get("text"),
+            "max_target_chars_hint": item.get("max_target_chars_hint"),
+        }
+        for index, item in enumerate(payload_items, start=1)
+    ]
+
+
+def _print_translation_preview(
+    *,
+    evidence_items: list[dict[str, Any]],
+    source_language: str | None,
+    target_language: str,
+) -> None:
+    formatters.section("Translation")
+    shown_items = evidence_items[:HUMAN_PREVIEW_ITEM_LIMIT]
+    for item in shown_items:
+        print(
+            f"item[{item['index']}] id={formatters.compact(item.get('id'))} "
+            f"source={source_language or '-'} target={target_language}"
+        )
+        print(f"source: {_human_preview(item.get('source_text'))}")
+        print(f"target: {_human_preview(item.get('translated_text'))}")
+        char_count = item.get("char_count")
+        if isinstance(char_count, dict):
+            print(
+                "chars:  "
+                f"source={formatters.compact(char_count.get('source'))} "
+                f"target={formatters.compact(char_count.get('target'))} "
+                f"within_hint={formatters.compact(char_count.get('within_hint'))}"
+            )
+        print()
+    omitted = len(evidence_items) - len(shown_items)
+    if omitted > 0:
+        formatters.event("INFO", "translation", f"omitted={omitted}; use --json for complete texts")
+
+
 def run(
     *,
     confirm_cost: bool,
@@ -222,8 +303,26 @@ def run(
         source_language=source_language,
         target_language=target_language,
     )
+    result = terminal_job.get("job_result")
+    if not isinstance(result, dict):
+        raise FlowError("tagged_text_translation result missing object", exit_code=1)
+    request_items = _request_items_evidence(items)
+    result_items = _translation_items_evidence(items, terminal_job)
     billing_envelope = llm_job_billing.request_json(f"{jobs_url}/{job_id}/billing", method="GET", headers=headers)
     billing = llm_job_billing.data_object(billing_envelope, "billing")
+    job_summary = {
+        "id": job_id,
+        "status": terminal_job.get("job_status"),
+        "type": terminal_job.get("job_type"),
+    }
+    billing_summary = {
+        "mode": billing.get("status"),
+        "cost": billing.get("total_cost_amount"),
+        "currency": billing.get("currency"),
+        "ai_call_count": billing.get("ai_call_count"),
+        "billable_call_count": billing.get("billable_call_count"),
+        "failed_call_count": billing.get("failed_call_count"),
+    }
     summary = {
         "note": "summary is generated by scripts/smoke.sh; raw HTTP envelopes are under responses",
         "scenario": "tagged-text-translation",
@@ -239,7 +338,21 @@ def run(
     if json_output:
         formatters.print_json(
             {
+                "ok": True,
+                "scenario": "tagged-text-translation",
                 "conclusion": f"job={terminal_job.get('job_status')} items={len(items)} billing={billing.get('status')}",
+                "job": job_summary,
+                "request": {
+                    "source_language": source_language,
+                    "target_language": target_language,
+                    "items": request_items,
+                },
+                "result": {
+                    "source_language": result.get("source_language"),
+                    "target_language": result.get("target_language"),
+                    "items": result_items,
+                },
+                "billing": billing_summary,
                 "summary": summary,
                 "responses": {
                     "create_job": create_envelope,
@@ -252,6 +365,16 @@ def run(
     formatters.section("Smoke")
     formatters.event("OK", "job", f"id={job_id} status={terminal_job.get('job_status')}")
     formatters.event("OK", "translation", f"items={len(items)} target_language={target_language}")
+    formatters.event(
+        "OK",
+        "billing",
+        f"{billing.get('status')} cost={billing.get('total_cost_amount')} {billing.get('currency')}",
+    )
+    _print_translation_preview(
+        evidence_items=result_items,
+        source_language=result.get("source_language") or source_language,
+        target_language=str(result.get("target_language") or target_language),
+    )
     formatters.print_table(
         [summary],
         [

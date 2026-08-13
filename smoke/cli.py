@@ -255,6 +255,58 @@ AUDIO_STEM_SEPARATION_HELP_EPILOG = """\b
   本地 STORAGE_BACKEND=local 只适合 public_url 已能被 API/worker 读取的环境；远端测试优先使用 STORAGE_BACKEND=aliyun_oss + --confirm-upload。
 """
 
+TAGGED_TEXT_TRANSLATION_HELP_EPILOG = """\b
+常用示例：
+  # 人读模式：提交真实 Job，输出摘要、计费估算和翻译前后 preview。
+  ./scripts/smoke.sh \\
+    --timeout 300 \\
+    --poll-interval 2 \\
+    tagged-text-translation \\
+    --confirm-cost \\
+    --source-language en \\
+    --target-language zh \\
+    --text '<span>Hello {user_name}, welcome back!</span>'
+
+\b
+  # JSON 模式：--json 是 smoke 全局参数，必须放在场景命令前；输出完整 source_text / translated_text。
+  ./scripts/smoke.sh \\
+    --json \\
+    --timeout 300 \\
+    --poll-interval 2 \\
+    tagged-text-translation \\
+    --confirm-cost \\
+    --source-language en \\
+    --target-language zh \\
+    --text '<span>Hello {user_name}, welcome back!</span>'
+
+\b
+  # 多 item：从 JSON 文件读取 items[]，人读模式最多展示前 3 条；完整结果使用 --json。
+  ./scripts/smoke.sh --json \\
+    tagged-text-translation \\
+    --confirm-cost \\
+    --source-language en \\
+    --target-language zh \\
+    --items-json .data/translation/items.json
+
+\b
+输出模式：
+  默认人读模式输出 Job 状态、translation/billing 摘要，以及翻译前后 preview；长文本会截断，多 item 只展示前 3 条。
+  --json 输出机器可读 JSON，包含 ok/scenario/job/request/result/billing/summary/responses；request.items 保留完整 source_text，result.items 保留完整 source_text 和 translated_text。
+  不支持把 --json 放到 tagged-text-translation 后面；全局参数统一放在场景命令前。
+
+\b
+items-json 最小格式：
+  {
+    "items": [
+      {
+        "id": "homepage.title",
+        "text": "<span>Hello {user_name}, welcome back!</span>",
+        "max_target_chars_hint": 30
+      }
+    ]
+  }
+"""
+
 
 HELP_EPILOG = f"""\b
 作用域：
@@ -271,7 +323,7 @@ HELP_EPILOG = f"""\b
 \b
 输出：
   默认输出 smoke 摘要和关键证据。
-  --json 输出 summary 和原始 HTTP envelope responses，stdout 只包含 JSON。
+  --json 输出机器可读 JSON，stdout 只包含 JSON；Job 类场景保留 summary/responses，业务场景可增加结构化证据字段。
   错误原因输出到 stderr。
 
 \b
@@ -423,7 +475,7 @@ def main(
     ] = None,
     json_output: Annotated[
         bool,
-        typer.Option("--json", help="输出机器可读 summary。"),
+        typer.Option("--json", help="输出机器可读 JSON；全局参数，放在场景命令前。"),
     ] = False,
 ) -> None:
     ctx.obj = SmokeOptions(
@@ -743,7 +795,11 @@ def llm_job_double_billing_command(
         raise typer.Exit(exc.exit_code) from exc
 
 
-@app.command("tagged-text-translation", help="提交 tagged_text_translation Job，轮询终态并校验标签和占位符保留。")
+@app.command(
+    "tagged-text-translation",
+    help="提交 tagged_text_translation Job，轮询终态并校验标签和占位符保留。",
+    epilog=TAGGED_TEXT_TRANSLATION_HELP_EPILOG,
+)
 def tagged_text_translation_command(
     ctx: typer.Context,
     confirm_cost: Annotated[

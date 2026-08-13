@@ -50,8 +50,9 @@ def test_audio_stem_cpu_runtime_dependencies_are_optional_project_dependencies()
 
 
 def test_audio_stem_cpu_runtime_dependencies_are_extra_marked_in_lockfile():
+    project = tomllib.loads((ROOT_DIR / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     lock = tomllib.loads((ROOT_DIR / "uv.lock").read_text(encoding="utf-8"))
-    package = next(item for item in lock["package"] if item["name"] == "fastapi-best-ai-architecture-v2")
+    package = next(item for item in lock["package"] if item["name"] == project["name"])
     markers_by_name: dict[str, set[str]] = {}
     for item in package["metadata"]["requires-dist"]:
         marker = item.get("marker")

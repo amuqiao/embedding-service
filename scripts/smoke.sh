@@ -25,7 +25,7 @@ Usage:
   --timeout <seconds>    场景最大等待时间。
   --poll-interval <sec>  轮询间隔。
   --output-dir <path>    artifacts 或下载输出目录，默认由场景决定。
-  --json                 输出机器可读 summary。
+  --json                 输出机器可读 JSON；全局参数，放在 <command> 前。
 
 命令:
   health                  检查服务进程级健康。
@@ -33,7 +33,7 @@ Usage:
   list                    列出当前项目 smoke 场景。
   llm-job-billing         提交真实 LLM Job，轮询终态并查询 billing。
   llm-job-double-billing  提交两次 LLM 调用 Job，轮询终态并查询汇总 billing。
-  tagged-text-translation 提交 tagged_text_translation Job，校验标签和占位符保留。
+  tagged-text-translation 提交 tagged_text_translation Job，校验标签和占位符保留；人读输出翻译前后 preview。
   poster-title-image      提交 poster_title_image Job，轮询终态并校验输出。
   audio-stem-separation   提交 audio_stem_separation / audio_stem_separation_triton Job。
   adapter-image-probe     直连 image adapter 的 provider probe。
@@ -54,12 +54,26 @@ Usage:
     --text '<span>Hello {user_name}, welcome back!</span>'
 
   ENV_FILE=.env ./scripts/smoke.sh \
+    --json \
+    --timeout 300 \
+    --poll-interval 2 \
+    tagged-text-translation \
+    --confirm-cost \
+    --source-language en \
+    --target-language zh \
+    --text '<span>Hello {user_name}, welcome back!</span>'
+
+  ENV_FILE=.env ./scripts/smoke.sh \
     --timeout 7200 \
     --poll-interval 5 \
     audio-stem-separation run \
     --confirm-run \
     --confirm-upload \
     --input-file .data/misc/2485_0003_S6_梁萧.wav
+
+输出:
+  默认人读模式输出 Job 状态、计费摘要和关键证据；tagged-text-translation 会展示翻译前后 preview。
+  --json 模式 stdout 只输出 JSON，tagged-text-translation 包含完整 source_text / translated_text。
 
 排障入口:
   ./scripts/jobs.sh show <job_id>

@@ -1580,6 +1580,8 @@ def test_smoke_cli_help_is_available_without_api():
     assert "list" in result.stdout
     assert "llm-job-billing" in result.stdout
     assert "llm-job-double-billing" in result.stdout
+    assert "tagged-text-translation" in result.stdout
+    assert "完整 source_text / translated_text" in result.stdout
     assert "oss-upload-image" in result.stdout
     assert "poster-title-image" in result.stdout
 
