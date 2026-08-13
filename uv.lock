@@ -402,7 +402,7 @@ wheels = [
 ]
 
 [[package]]
-name = "fastapi-best-ai-architecture-v2"
+name = "cms-ai-translation-service"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

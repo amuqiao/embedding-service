@@ -1,7 +1,7 @@
 [project]
-name = "fastapi-best-ai-architecture-v2"
+name = "cms-ai-translation-service"
 version = "0.1.0"
-description = "FastAPI AI job execution backend template"
+description = "CMS AI translation service"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi==0.136.3",
