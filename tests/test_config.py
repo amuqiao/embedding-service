@@ -37,8 +37,7 @@ def _build_settings(**overrides) -> Settings:
     values = _settings_kwargs(**overrides)
     nested: dict[str, dict[str, object]] = {}
     for env_key, value in values.items():
-        section_name, field_name = config_module.APPLICATION_ENV_FIELD_MAP[env_key]
-        nested.setdefault(section_name, {})[field_name] = value
+        config_module._assign_nested(nested, config_module.APPLICATION_ENV_FIELD_MAP[env_key], value)
     return Settings(**nested)
 
 
@@ -147,12 +146,53 @@ def test_poster_title_image_model_config_defaults_and_overrides():
     assert default_settings.registry.prompt_config_path_raw == "app/core/prompts.yaml"
 
 
+def test_tagged_text_translation_config_defaults_and_overrides():
+    default_settings = _build_settings()
+    assert default_settings.job.tagged_text_translation.max_items == 100
+    assert default_settings.job.tagged_text_translation.max_text_length == 200
+    assert default_settings.job.tagged_text_translation.max_total_text_length == 20_000
+
+    custom_settings = _build_settings(
+        TAGGED_TEXT_TRANSLATION_MAX_ITEMS=50,
+        TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH=120,
+        TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH=6_000,
+    )
+
+    assert custom_settings.job.tagged_text_translation.max_items == 50
+    assert custom_settings.job.tagged_text_translation.max_text_length == 120
+    assert custom_settings.job.tagged_text_translation.max_total_text_length == 6_000
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("TAGGED_TEXT_TRANSLATION_MAX_ITEMS", 0),
+        ("TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH", 0),
+        ("TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH", 0),
+        ("TAGGED_TEXT_TRANSLATION_MAX_ITEMS", 101),
+        ("TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH", 10_001),
+        ("TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH", 1_000_001),
+    ],
+)
+def test_tagged_text_translation_config_rejects_invalid_values(key, value):
+    with pytest.raises(ValidationError, match=key):
+        _build_settings(**{key: value})
+
+
+def test_tagged_text_translation_total_length_must_cover_single_item_limit():
+    with pytest.raises(ValidationError, match="TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH"):
+        _build_settings(
+            TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH=200,
+            TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH=199,
+        )
+
+
 def test_poster_title_image_max_draw_count_config_defaults_and_overrides():
     default_settings = _build_settings()
-    assert default_settings.job.poster_title_image_max_draw_count == 4
+    assert default_settings.job.poster_title_image.max_draw_count == 4
 
     custom_settings = _build_settings(POSTER_TITLE_IMAGE_MAX_DRAW_COUNT=2)
-    assert custom_settings.job.poster_title_image_max_draw_count == 2
+    assert custom_settings.job.poster_title_image.max_draw_count == 2
 
     with pytest.raises(ValidationError, match="POSTER_TITLE_IMAGE_MAX_DRAW_COUNT"):
         _build_settings(POSTER_TITLE_IMAGE_MAX_DRAW_COUNT=0)
@@ -163,10 +203,10 @@ def test_poster_title_image_max_draw_count_config_defaults_and_overrides():
 
 def test_poster_title_image_max_items_config_defaults_and_overrides():
     default_settings = _build_settings()
-    assert default_settings.job.poster_title_image_max_items == 50
+    assert default_settings.job.poster_title_image.max_items == 50
 
     custom_settings = _build_settings(POSTER_TITLE_IMAGE_MAX_ITEMS=12)
-    assert custom_settings.job.poster_title_image_max_items == 12
+    assert custom_settings.job.poster_title_image.max_items == 12
 
     with pytest.raises(ValidationError, match="POSTER_TITLE_IMAGE_MAX_ITEMS"):
         _build_settings(POSTER_TITLE_IMAGE_MAX_ITEMS=0)
@@ -174,16 +214,16 @@ def test_poster_title_image_max_items_config_defaults_and_overrides():
 
 def test_poster_title_image_oss_allowlist_config_defaults_and_overrides():
     default_settings = _build_settings()
-    assert default_settings.job.poster_title_image_allowed_oss_buckets == ("local-dev",)
-    assert default_settings.job.poster_title_image_allowed_oss_regions == ("local",)
+    assert default_settings.job.poster_title_image.allowed_oss_buckets == ("local-dev",)
+    assert default_settings.job.poster_title_image.allowed_oss_regions == ("local",)
 
     custom_settings = _build_settings(
         POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS="cpp-rs-dev, cpp-rs-prod,cpp-rs-dev",
         POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS="ap-southeast-1,cn-shanghai",
     )
 
-    assert custom_settings.job.poster_title_image_allowed_oss_buckets == ("cpp-rs-dev", "cpp-rs-prod")
-    assert custom_settings.job.poster_title_image_allowed_oss_regions == ("ap-southeast-1", "cn-shanghai")
+    assert custom_settings.job.poster_title_image.allowed_oss_buckets == ("cpp-rs-dev", "cpp-rs-prod")
+    assert custom_settings.job.poster_title_image.allowed_oss_regions == ("ap-southeast-1", "cn-shanghai")
 
 
 @pytest.mark.parametrize(
@@ -202,14 +242,14 @@ def test_poster_title_image_oss_allowlist_rejects_empty_values(key, value):
 
 def test_audio_stem_separation_config_defaults_and_overrides():
     default_settings = _build_settings()
-    assert default_settings.job.audio_stem_separation_allowed_oss_buckets == ("local-dev",)
-    assert default_settings.job.audio_stem_separation_allowed_oss_regions == ("local",)
-    assert default_settings.job.audio_stem_separation_execution_provider == "cpu"
-    assert default_settings.job.htdemucs_model_dir == config_module.ROOT_DIR / ".data/models/htdemucs-ft"
-    assert default_settings.job.audio_stem_triton_url == ""
-    assert default_settings.job.audio_stem_triton_token_value == ""
-    assert default_settings.job.audio_stem_triton_model_version == "1"
-    assert default_settings.job.audio_stem_triton_request_timeout_seconds == 300
+    assert default_settings.job.audio_stem_separation.allowed_oss_buckets == ("local-dev",)
+    assert default_settings.job.audio_stem_separation.allowed_oss_regions == ("local",)
+    assert default_settings.job.audio_stem_separation.execution_provider == "cpu"
+    assert default_settings.job.audio_stem_separation.htdemucs_model_dir == config_module.ROOT_DIR / ".data/models/htdemucs-ft"
+    assert default_settings.job.audio_stem_triton.url == ""
+    assert default_settings.job.audio_stem_triton.token_value == ""
+    assert default_settings.job.audio_stem_triton.model_version == "1"
+    assert default_settings.job.audio_stem_triton.request_timeout_seconds == 300
 
     custom_settings = _build_settings(
         AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS="audio-dev, audio-prod,audio-dev",
@@ -222,14 +262,14 @@ def test_audio_stem_separation_config_defaults_and_overrides():
         AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS=120,
     )
 
-    assert custom_settings.job.audio_stem_separation_allowed_oss_buckets == ("audio-dev", "audio-prod")
-    assert custom_settings.job.audio_stem_separation_allowed_oss_regions == ("local", "cn-shanghai")
-    assert custom_settings.job.audio_stem_separation_execution_provider == "cuda"
-    assert str(custom_settings.job.htdemucs_model_dir) == "/tmp/htdemucs-ft"
-    assert custom_settings.job.audio_stem_triton_url == "service.cn-hangzhou.pai-eas.aliyuncs.com/api/predict/audio_stem_triton"
-    assert custom_settings.job.audio_stem_triton_token_value == "triton-token"
-    assert custom_settings.job.audio_stem_triton_model_version == "2"
-    assert custom_settings.job.audio_stem_triton_request_timeout_seconds == 120
+    assert custom_settings.job.audio_stem_separation.allowed_oss_buckets == ("audio-dev", "audio-prod")
+    assert custom_settings.job.audio_stem_separation.allowed_oss_regions == ("local", "cn-shanghai")
+    assert custom_settings.job.audio_stem_separation.execution_provider == "cuda"
+    assert str(custom_settings.job.audio_stem_separation.htdemucs_model_dir) == "/tmp/htdemucs-ft"
+    assert custom_settings.job.audio_stem_triton.url == "service.cn-hangzhou.pai-eas.aliyuncs.com/api/predict/audio_stem_triton"
+    assert custom_settings.job.audio_stem_triton.token_value == "triton-token"
+    assert custom_settings.job.audio_stem_triton.model_version == "2"
+    assert custom_settings.job.audio_stem_triton.request_timeout_seconds == 120
 
 
 @pytest.mark.parametrize(

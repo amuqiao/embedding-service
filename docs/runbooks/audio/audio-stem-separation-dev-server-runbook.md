@@ -304,8 +304,8 @@ docker compose --profile app exec -T worker python - <<'PY'
 from app.core.config import get_settings
 
 settings = get_settings()
-print("HTDEMUCS_MODEL_DIR =", settings.job.htdemucs_model_dir)
-print("AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER =", settings.job.audio_stem_separation_execution_provider)
+print("HTDEMUCS_MODEL_DIR =", settings.job.audio_stem_separation.htdemucs_model_dir)
+print("AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER =", settings.job.audio_stem_separation.execution_provider)
 PY
 ```
 

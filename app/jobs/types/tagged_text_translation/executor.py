@@ -33,6 +33,47 @@ SINGLE_PLACEHOLDER_RE = re.compile(r"(?<!\{)\{[^{}]+\}(?!\})")
 TEXT_SLOT = "<text>"
 
 
+def _validate_configured_input_limits(params: TaggedTextTranslationParams) -> None:
+    max_items = settings.job.tagged_text_translation.max_items
+    if len(params.items) > max_items:
+        raise ValidationAppError(
+            "INVALID_JOB_PARAMS",
+            "tagged_text_translation items exceeds configured limit",
+            {
+                "field": "job_params.items",
+                "max_items": max_items,
+                "item_count": len(params.items),
+            },
+        )
+
+    max_text_length = settings.job.tagged_text_translation.max_text_length
+    for index, item in enumerate(params.items):
+        text_length = len(item.text)
+        if text_length > max_text_length:
+            raise ValidationAppError(
+                "INVALID_JOB_PARAMS",
+                "tagged_text_translation item text exceeds configured limit",
+                {
+                    "field": f"job_params.items[{index}].text",
+                    "max_text_length": max_text_length,
+                    "text_length": text_length,
+                },
+            )
+
+    total_text_length = sum(len(item.text) for item in params.items)
+    max_total_text_length = settings.job.tagged_text_translation.max_total_text_length
+    if total_text_length > max_total_text_length:
+        raise ValidationAppError(
+            "INVALID_JOB_PARAMS",
+            "tagged_text_translation total text length exceeds configured limit",
+            {
+                "field": "job_params.items[].text",
+                "max_total_text_length": max_total_text_length,
+                "total_text_length": total_text_length,
+            },
+        )
+
+
 def _model_output_invalid(message: str, details: dict[str, Any] | None = None) -> AppError:
     return AppError("MODEL_OUTPUT_INVALID", message, details=details)
 
@@ -199,13 +240,20 @@ class TaggedTextTranslationJob(JobExecutor):
 
     def normalize_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         try:
-            return TaggedTextTranslationParams.model_validate(job_params).model_dump(exclude_none=True)
+            params = TaggedTextTranslationParams.model_validate(job_params)
         except ValidationError as exc:
             raise ValidationAppError(
                 "INVALID_JOB_PARAMS",
                 "tagged_text_translation job_params does not match schema",
                 {"errors": exc.errors(include_url=False), "job_type": self.name},
             ) from exc
+        normalized = params.model_dump(exclude_none=True)
+        self.validate_normalized_job_params(normalized)
+        return normalized
+
+    def validate_normalized_job_params(self, job_params: dict[str, Any]) -> None:
+        params = TaggedTextTranslationParams.model_validate(job_params)
+        _validate_configured_input_limits(params)
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         TaggedTextTranslationParams.model_validate(job_params)

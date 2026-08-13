@@ -219,7 +219,7 @@ def test_poster_title_image_workflow_max_nodes_follows_configured_item_count(mon
     monkeypatch.setattr(
         poster_executor,
         "settings",
-        SimpleNamespace(job=SimpleNamespace(poster_title_image_max_items=12)),
+        SimpleNamespace(job=SimpleNamespace(poster_title_image=SimpleNamespace(max_items=12))),
     )
     monkeypatch.setattr(poster_executor, "_WORKFLOW_DEFINITION", None)
     register_all_job_types()

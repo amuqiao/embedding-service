@@ -137,10 +137,10 @@ class HTDemucsTritonRunner:
 
 def _triton_config() -> TritonAudioStemConfig:
     return TritonAudioStemConfig(
-        url=settings.job.audio_stem_triton_url,
-        token=settings.job.audio_stem_triton_token_value,
-        model_version=settings.job.audio_stem_triton_model_version,
-        request_timeout_seconds=settings.job.audio_stem_triton_request_timeout_seconds,
+        url=settings.job.audio_stem_triton.url,
+        token=settings.job.audio_stem_triton.token_value,
+        model_version=settings.job.audio_stem_triton.model_version,
+        request_timeout_seconds=settings.job.audio_stem_triton.request_timeout_seconds,
     )
 
 
@@ -219,7 +219,7 @@ class AudioStemSeparationTritonJob(JobExecutor):
                 max_duration_seconds=params.max_duration_seconds,
             ),
             onnx_model_version=str(asset["model"]["version"]),
-            triton_model_version=settings.job.audio_stem_triton_model_version,
+            triton_model_version=settings.job.audio_stem_triton.model_version,
             segment_seconds=float(runtime["segment_seconds"]),
             overlap_ratio=float(runtime["overlap_ratio"]),
         ).model_dump(exclude_none=True)
@@ -266,7 +266,7 @@ class AudioStemSeparationTritonJob(JobExecutor):
             sample_rate=input_audio.sample_rate,
             channels=2,
             onnx_model_version=runner.model_version,
-            triton_model_version=settings.job.audio_stem_triton_model_version,
+            triton_model_version=settings.job.audio_stem_triton.model_version,
             duration_ms=AudioStemSeparationDurationMs(
                 io=io_ms,
                 inference=separated.inference_ms,

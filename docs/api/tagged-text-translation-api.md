@@ -133,6 +133,10 @@ POST /api/v1/ai-jobs/jobs
 规则：
 
 - `items` 必须至少包含 1 条。
+- 默认单次最多提交 100 条 `items`；部署环境可通过 `TAGGED_TEXT_TRANSLATION_MAX_ITEMS` 在服务硬上限 100 内调整。
+- 默认单条 `text` 最多 200 个 Unicode code points；部署环境可通过 `TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH` 在服务硬上限 10000 内调整。字符数按原始 `text` 字符串计算，HTML 标签、占位符、标点和空白字符都计入。
+- 默认单次请求所有 `items[].text` 原始字符数总和最多 20000 个 Unicode code points；部署环境可通过 `TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH` 调整。
+- 超出条数、单条字符数或总字符数限制时，请求以 `INVALID_JOB_PARAMS` 失败；服务不会截断、丢弃 item 或自动拆分。
 - 同一个请求内 `items[].id` 必须唯一；重复时请求应以 `INVALID_JOB_PARAMS` 失败。
 - `id` 可以是 CMS 字段路径、数据库 ID、数组序号字符串或调用方自定义字符串。
 - `id` 是调用方自带、仅用于本次批量内 item 对齐的 opaque identifier，不是服务生成的资源 ID，也不要求跨 Job 全局唯一。
@@ -467,7 +471,7 @@ timestamp + "." + raw_body
 | `JOB_NOT_FOUND` | 404 | 查询的 Job 不存在或不属于当前 caller | no |
 | `REQUEST_ID_INVALID` | 400 | `X-Request-ID` 格式非法 | no |
 | `INVALID_JOB_TYPE` | 400 | `job_type` 未注册或当前环境不允许外部提交 | no |
-| `INVALID_JOB_PARAMS` | 400 | `job_params` 缺少必填字段、字段类型错误或语种不支持 | no |
+| `INVALID_JOB_PARAMS` | 400 | `job_params` 缺少必填字段、字段类型错误、语种不支持、重复 item id 或超出翻译输入规模限制 | no |
 | `CLIENT_REQUEST_ID_CONFLICT` | 409 | 同一 caller 下重复 `client_request_id` 但请求内容不一致 | no |
 | `QUEUE_FULL` | 503 | 服务当前接单容量已满 | yes |
 | `MODEL_NOT_AVAILABLE` | 400 | 翻译 Job 配置的模型不可用 | no |

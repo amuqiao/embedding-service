@@ -188,8 +188,8 @@ def _validate_reference_ref_payload(reference_image: Any) -> None:
     try:
         canonical_ref_from_oss_url_ref(
             reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image,
-            allowed_buckets=settings.job.poster_title_image_allowed_oss_buckets,
-            allowed_regions=settings.job.poster_title_image_allowed_oss_regions,
+            allowed_buckets=settings.job.poster_title_image.allowed_oss_buckets,
+            allowed_regions=settings.job.poster_title_image.allowed_oss_regions,
             allowed_content_types=POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
             public_endpoint=settings.storage.oss_public_endpoint or None,
             public_endpoint_bucket=getattr(settings.storage, "oss_bucket", "") or None,
@@ -205,8 +205,8 @@ def _load_reference_image_from_ref(reference_image: Any) -> ImageInput:
     try:
         ref = canonical_ref_from_oss_url_ref(
             payload,
-            allowed_buckets=settings.job.poster_title_image_allowed_oss_buckets,
-            allowed_regions=settings.job.poster_title_image_allowed_oss_regions,
+            allowed_buckets=settings.job.poster_title_image.allowed_oss_buckets,
+            allowed_regions=settings.job.poster_title_image.allowed_oss_regions,
             allowed_content_types=POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
             public_endpoint=settings.storage.oss_public_endpoint or None,
             public_endpoint_bucket=getattr(settings.storage, "oss_bucket", "") or None,
@@ -269,7 +269,7 @@ def _image_adapter() -> str:
 
 
 def _max_workflow_nodes() -> int:
-    return settings.job.poster_title_image_max_items * 2 + 1
+    return settings.job.poster_title_image.max_items * 2 + 1
 
 
 def _generation_model_id_from_params(params: PosterTitleImageParams) -> str:
@@ -566,7 +566,7 @@ class PosterTitleImageJob(JobExecutor):
 
     def validate_normalized_job_params(self, job_params: dict[str, Any]) -> None:
         params = PosterTitleImageParams.model_validate(job_params)
-        max_items = settings.job.poster_title_image_max_items
+        max_items = settings.job.poster_title_image.max_items
         if len(params.items) > max_items:
             raise AppError(
                 "INVALID_INPUT",
@@ -593,12 +593,12 @@ class PosterTitleImageJob(JobExecutor):
         IMAGE_MODEL_GATE.resolve(generation_model_id, require_edit=True)
         for item in params.items:
             require_supported_language(item.language)
-            if item.model_options.draw_count > settings.job.poster_title_image_max_draw_count:
+            if item.model_options.draw_count > settings.job.poster_title_image.max_draw_count:
                 raise AppError(
                     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
                     "draw_count exceeds configured poster_title_image limit",
                     details={
-                        "max_draw_count": settings.job.poster_title_image_max_draw_count,
+                        "max_draw_count": settings.job.poster_title_image.max_draw_count,
                         "draw_count": item.model_options.draw_count,
                     },
                 )

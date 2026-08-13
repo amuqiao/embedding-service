@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -106,15 +107,16 @@ def _job(*, params: dict, output_prefix: str = "outputs") -> Job:
 class FakeSettings:
     class Job:
         oss_input_max_bytes = 5_242_880
-        audio_stem_separation_allowed_oss_buckets = ("local-dev",)
-        audio_stem_separation_allowed_oss_regions = ("local",)
-        audio_stem_triton_url = "localhost:8000"
-        audio_stem_triton_model_version = "1"
-        audio_stem_triton_request_timeout_seconds = 10
-
-        @property
-        def audio_stem_triton_token_value(self):
-            return "token"
+        audio_stem_separation = SimpleNamespace(
+            allowed_oss_buckets=("local-dev",),
+            allowed_oss_regions=("local",),
+        )
+        audio_stem_triton = SimpleNamespace(
+            url="localhost:8000",
+            token_value="token",
+            model_version="1",
+            request_timeout_seconds=10,
+        )
 
     class Storage:
         oss_public_endpoint = ""
@@ -388,7 +390,12 @@ def test_audio_stem_separation_triton_runner_maps_remote_failure():
 def test_audio_stem_separation_triton_runner_requires_configured_endpoint(monkeypatch):
     class EmptyUrlSettings(FakeSettings):
         class Job(FakeSettings.Job):
-            audio_stem_triton_url = ""
+            audio_stem_triton = SimpleNamespace(
+                url="",
+                token_value="token",
+                model_version="1",
+                request_timeout_seconds=10,
+            )
 
         job = Job()
 

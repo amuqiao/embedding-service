@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +11,8 @@ from app.jobs.types.tagged_text_translation.executor import (
     _parse_model_json,
 )
 from app.models.job import Job
-from app.schemas.jobs import TaggedTextTranslationParams
+from app.schemas.jobs import CreateJobRequest, TaggedTextTranslationParams
+from app.services.jobs import validate_create_contract
 from app.services.job_runtime import build_runtime_snapshot, payload_hash, write_runtime_json
 
 
@@ -50,6 +52,141 @@ def test_tagged_text_translation_normalizer_projects_invalid_params_to_contract_
 
     assert exc.value.code == "INVALID_JOB_PARAMS"
     assert exc.value.details["job_type"] == "tagged_text_translation"
+
+
+def test_tagged_text_translation_rejects_text_over_configured_default_limit():
+    handler = TaggedTextTranslationJob()
+
+    with pytest.raises(AppError) as exc:
+        handler.normalize_job_params(
+            {
+                "target_language": "zh",
+                "items": [{"id": "long", "text": "a" * 201}],
+            }
+        )
+
+    assert exc.value.code == "INVALID_JOB_PARAMS"
+    assert exc.value.details["field"] == "job_params.items[0].text"
+    assert exc.value.details["max_text_length"] == 200
+    assert exc.value.details["text_length"] == 201
+
+
+def test_tagged_text_translation_rejects_text_over_custom_configured_limit(monkeypatch):
+    import app.jobs.types.tagged_text_translation.executor as executor
+
+    monkeypatch.setattr(
+        executor,
+        "settings",
+        SimpleNamespace(
+            job=SimpleNamespace(
+                tagged_text_translation=SimpleNamespace(
+                    max_items=100,
+                    max_text_length=5,
+                    max_total_text_length=20_000,
+                ),
+            )
+        ),
+    )
+
+    with pytest.raises(AppError) as exc:
+        TaggedTextTranslationJob().normalize_job_params(
+            {
+                "target_language": "zh",
+                "items": [{"id": "long", "text": "123456"}],
+            }
+        )
+
+    assert exc.value.code == "INVALID_JOB_PARAMS"
+    assert exc.value.details["field"] == "job_params.items[0].text"
+    assert exc.value.details["max_text_length"] == 5
+    assert exc.value.details["text_length"] == 6
+
+
+def test_tagged_text_translation_rejects_items_over_configured_limit(monkeypatch):
+    import app.jobs.types.tagged_text_translation.executor as executor
+
+    monkeypatch.setattr(
+        executor,
+        "settings",
+        SimpleNamespace(
+            job=SimpleNamespace(
+                tagged_text_translation=SimpleNamespace(
+                    max_items=1,
+                    max_text_length=200,
+                    max_total_text_length=20_000,
+                ),
+            )
+        ),
+    )
+
+    with pytest.raises(AppError) as exc:
+        TaggedTextTranslationJob().normalize_job_params(
+            {
+                "target_language": "zh",
+                "items": [
+                    {"id": "one", "text": "one"},
+                    {"id": "two", "text": "two"},
+                ],
+            }
+        )
+
+    assert exc.value.code == "INVALID_JOB_PARAMS"
+    assert exc.value.details["field"] == "job_params.items"
+    assert exc.value.details["max_items"] == 1
+    assert exc.value.details["item_count"] == 2
+
+
+def test_tagged_text_translation_rejects_total_text_over_configured_limit(monkeypatch):
+    import app.jobs.types.tagged_text_translation.executor as executor
+
+    monkeypatch.setattr(
+        executor,
+        "settings",
+        SimpleNamespace(
+            job=SimpleNamespace(
+                tagged_text_translation=SimpleNamespace(
+                    max_items=100,
+                    max_text_length=200,
+                    max_total_text_length=10,
+                ),
+            )
+        ),
+    )
+
+    with pytest.raises(AppError) as exc:
+        TaggedTextTranslationJob().normalize_job_params(
+            {
+                "target_language": "zh",
+                "items": [
+                    {"id": "one", "text": "12345"},
+                    {"id": "two", "text": "123456"},
+                ],
+            }
+        )
+
+    assert exc.value.code == "INVALID_JOB_PARAMS"
+    assert exc.value.details["field"] == "job_params.items[].text"
+    assert exc.value.details["max_total_text_length"] == 10
+    assert exc.value.details["total_text_length"] == 11
+
+
+def test_tagged_text_translation_create_contract_preserves_config_limit_error_code():
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "translate-too-long",
+            "job_type": "tagged_text_translation",
+            "job_params": {
+                "target_language": "zh",
+                "items": [{"id": "long", "text": "a" * 201}],
+            },
+        }
+    )
+
+    with pytest.raises(AppError) as exc:
+        validate_create_contract(payload)
+
+    assert exc.value.code == "INVALID_JOB_PARAMS"
+    assert exc.value.details["field"] == "job_params.items[0].text"
 
 
 def test_tagged_text_translation_runtime_fields_omit_empty_system():

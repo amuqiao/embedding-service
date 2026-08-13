@@ -19,6 +19,11 @@ _WORKER_SOFT_TIMEOUT_BUFFER: int = 300
 _WORKER_HARD_TIMEOUT_BUFFER: int = 60
 _JOB_STALE_RUNNING_BUFFER: int = 600
 _CALLBACK_DELIVERY_CLAIM_GRACE: int = 175
+_TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_ITEMS: int = 100
+_TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TEXT_LENGTH: int = 10_000
+_TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TOTAL_TEXT_LENGTH: int = (
+    _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_ITEMS * _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TEXT_LENGTH
+)
 _RELEASE_APP_ENVS = frozenset({"test", "prd"})
 _PLACEHOLDER_SECRET_VALUES = frozenset(
     {
@@ -28,7 +33,7 @@ _PLACEHOLDER_SECRET_VALUES = frozenset(
     }
 )
 
-APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
+APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "APP_ENV": ("runtime", "app_env"),
     "TEMPLATE_NAME": ("service", "template_name"),
     "SERVICE_NAME": ("service", "name"),
@@ -71,18 +76,21 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, str]] = {
     "OPS_DASHBOARD_QUERY_TIMEOUT_SECONDS": ("ops_dashboard", "query_timeout_seconds"),
     "MAX_ACTIVE_JOBS": ("job", "max_active_jobs"),
     "OSS_INPUT_MAX_BYTES": ("job", "oss_input_max_bytes"),
-    "POSTER_TITLE_IMAGE_MAX_ITEMS": ("job", "poster_title_image_max_items"),
-    "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": ("job", "poster_title_image_max_draw_count"),
-    "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS": ("job", "poster_title_image_allowed_oss_buckets_raw"),
-    "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS": ("job", "poster_title_image_allowed_oss_regions_raw"),
-    "AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS": ("job", "audio_stem_separation_allowed_oss_buckets_raw"),
-    "AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS": ("job", "audio_stem_separation_allowed_oss_regions_raw"),
-    "AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER": ("job", "audio_stem_separation_execution_provider"),
-    "HTDEMUCS_MODEL_DIR": ("job", "htdemucs_model_dir_raw"),
-    "AUDIO_STEM_TRITON_URL": ("job", "audio_stem_triton_url"),
-    "AUDIO_STEM_TRITON_TOKEN": ("job", "audio_stem_triton_token"),
-    "AUDIO_STEM_TRITON_MODEL_VERSION": ("job", "audio_stem_triton_model_version"),
-    "AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS": ("job", "audio_stem_triton_request_timeout_seconds"),
+    "TAGGED_TEXT_TRANSLATION_MAX_ITEMS": ("job", "tagged_text_translation", "max_items"),
+    "TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH": ("job", "tagged_text_translation", "max_text_length"),
+    "TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH": ("job", "tagged_text_translation", "max_total_text_length"),
+    "POSTER_TITLE_IMAGE_MAX_ITEMS": ("job", "poster_title_image", "max_items"),
+    "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": ("job", "poster_title_image", "max_draw_count"),
+    "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS": ("job", "poster_title_image", "allowed_oss_buckets_raw"),
+    "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS": ("job", "poster_title_image", "allowed_oss_regions_raw"),
+    "AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS": ("job", "audio_stem_separation", "allowed_oss_buckets_raw"),
+    "AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS": ("job", "audio_stem_separation", "allowed_oss_regions_raw"),
+    "AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER": ("job", "audio_stem_separation", "execution_provider"),
+    "HTDEMUCS_MODEL_DIR": ("job", "audio_stem_separation", "htdemucs_model_dir_raw"),
+    "AUDIO_STEM_TRITON_URL": ("job", "audio_stem_triton", "url"),
+    "AUDIO_STEM_TRITON_TOKEN": ("job", "audio_stem_triton", "token"),
+    "AUDIO_STEM_TRITON_MODEL_VERSION": ("job", "audio_stem_triton", "model_version"),
+    "AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS": ("job", "audio_stem_triton", "request_timeout_seconds"),
     "CALLBACK_TIMEOUT_SECONDS": ("callback", "timeout_seconds"),
     "PROMPT_CONFIG_PATH": ("registry", "prompt_config_path_raw"),
     "LOG_LEVEL": ("observability", "log_level"),
@@ -156,10 +164,16 @@ def _resolve_repo_path(value: str) -> Path:
     return path
 
 
-def _assign_nested(data: dict[str, Any], path: tuple[str, str], value: str) -> None:
-    group_name, field_name = path
-    group = data.setdefault(group_name, {})
-    group[field_name] = value
+def _assign_nested(data: dict[str, Any], path: tuple[str, ...], value: str) -> None:
+    if len(path) < 2:
+        raise ValueError("settings path must contain at least section and field")
+    group = data
+    for part in path[:-1]:
+        next_group = group.setdefault(part, {})
+        if not isinstance(next_group, dict):
+            raise ValueError(f"settings path conflicts at {part}")
+        group = next_group
+    group[path[-1]] = value
 
 
 def _read_dotenv_values(path: Path) -> dict[str, str]:
@@ -444,6 +458,7 @@ class RegistrySettings(ConfigSection):
     def prompt_config_path(self) -> Path:
         return _resolve_repo_path(self.prompt_config_path_raw)
 
+
 class BillingSettings(ConfigSection):
     enabled: bool = True
     model_catalog_expose_billing_capability: bool = False
@@ -498,21 +513,159 @@ class OpsDashboardSettings(ConfigSection):
         return self
 
 
+class TaggedTextTranslationJobSettings(ConfigSection):
+    max_items: int = 100
+    max_text_length: int = 200
+    max_total_text_length: int = 20_000
+
+    @model_validator(mode="after")
+    def validate_tagged_text_translation(self) -> "TaggedTextTranslationJobSettings":
+        positive_fields = {
+            "TAGGED_TEXT_TRANSLATION_MAX_ITEMS": self.max_items,
+            "TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH": self.max_text_length,
+            "TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH": self.max_total_text_length,
+        }
+        for name, value in positive_fields.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than 0")
+        if self.max_items > _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_ITEMS:
+            raise ValueError(
+                "TAGGED_TEXT_TRANSLATION_MAX_ITEMS must be less than or equal to "
+                f"{_TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_ITEMS}"
+            )
+        if self.max_text_length > _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TEXT_LENGTH:
+            raise ValueError(
+                "TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH must be less than or equal to "
+                f"{_TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TEXT_LENGTH}"
+            )
+        if self.max_total_text_length > _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TOTAL_TEXT_LENGTH:
+            raise ValueError(
+                "TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH must be less than or equal to "
+                f"{_TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TOTAL_TEXT_LENGTH}"
+            )
+        if self.max_total_text_length < self.max_text_length:
+            raise ValueError(
+                "TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH must be greater than or equal to "
+                "TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH"
+            )
+        return self
+
+
+class PosterTitleImageJobSettings(ConfigSection):
+    max_items: int = 50
+    max_draw_count: int = 4
+    allowed_oss_buckets_raw: str = "local-dev"
+    allowed_oss_regions_raw: str = "local"
+
+    @model_validator(mode="after")
+    def validate_poster_title_image(self) -> "PosterTitleImageJobSettings":
+        positive_fields = {
+            "POSTER_TITLE_IMAGE_MAX_ITEMS": self.max_items,
+            "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": self.max_draw_count,
+        }
+        for name, value in positive_fields.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than 0")
+        if self.max_draw_count > 4:
+            raise ValueError("POSTER_TITLE_IMAGE_MAX_DRAW_COUNT must be less than or equal to 4")
+        _comma_separated_non_empty_values(
+            self.allowed_oss_buckets_raw,
+            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
+        )
+        _comma_separated_non_empty_values(
+            self.allowed_oss_regions_raw,
+            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
+        )
+        return self
+
+    @property
+    def allowed_oss_buckets(self) -> tuple[str, ...]:
+        return _comma_separated_non_empty_values(
+            self.allowed_oss_buckets_raw,
+            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
+        )
+
+    @property
+    def allowed_oss_regions(self) -> tuple[str, ...]:
+        return _comma_separated_non_empty_values(
+            self.allowed_oss_regions_raw,
+            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
+        )
+
+
+class AudioStemSeparationJobSettings(ConfigSection):
+    allowed_oss_buckets_raw: str = "local-dev"
+    allowed_oss_regions_raw: str = "local"
+    execution_provider: str = "cpu"
+    htdemucs_model_dir_raw: str = ".data/models/htdemucs-ft"
+
+    @model_validator(mode="after")
+    def validate_audio_stem_separation(self) -> "AudioStemSeparationJobSettings":
+        _comma_separated_non_empty_values(
+            self.allowed_oss_buckets_raw,
+            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
+        )
+        _comma_separated_non_empty_values(
+            self.allowed_oss_regions_raw,
+            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
+        )
+        if self.execution_provider not in {"auto", "cpu", "cuda"}:
+            raise ValueError("AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER must be auto, cpu, or cuda")
+        if not self.htdemucs_model_dir_raw.strip():
+            raise ValueError("HTDEMUCS_MODEL_DIR must not be empty")
+        return self
+
+    @property
+    def allowed_oss_buckets(self) -> tuple[str, ...]:
+        return _comma_separated_non_empty_values(
+            self.allowed_oss_buckets_raw,
+            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
+        )
+
+    @property
+    def allowed_oss_regions(self) -> tuple[str, ...]:
+        return _comma_separated_non_empty_values(
+            self.allowed_oss_regions_raw,
+            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
+        )
+
+    @property
+    def htdemucs_model_dir(self) -> Path:
+        return _resolve_repo_path(self.htdemucs_model_dir_raw)
+
+
+class AudioStemTritonJobSettings(ConfigSection):
+    url: str = ""
+    token: SecretStr = Field(default=SecretStr(""), repr=False)
+    model_version: str = "1"
+    request_timeout_seconds: float = 300
+
+    @model_validator(mode="after")
+    def validate_audio_stem_triton(self) -> "AudioStemTritonJobSettings":
+        if self.request_timeout_seconds <= 0:
+            raise ValueError("AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS must be greater than 0")
+        if self.url.strip() and "://" in self.url:
+            raise ValueError("AUDIO_STEM_TRITON_URL must not include http:// or https://")
+        if self.url != self.url.strip():
+            raise ValueError("AUDIO_STEM_TRITON_URL must not have leading or trailing whitespace")
+        if not self.model_version.strip():
+            raise ValueError("AUDIO_STEM_TRITON_MODEL_VERSION must not be empty")
+        return self
+
+    @property
+    def token_value(self) -> str:
+        return self.token.get_secret_value()
+
+
 class JobSettings(ConfigSection):
     max_active_jobs: int = 5000
     oss_input_max_bytes: int = 5_242_880
-    poster_title_image_max_items: int = 50
-    poster_title_image_max_draw_count: int = 4
-    poster_title_image_allowed_oss_buckets_raw: str = "local-dev"
-    poster_title_image_allowed_oss_regions_raw: str = "local"
-    audio_stem_separation_allowed_oss_buckets_raw: str = "local-dev"
-    audio_stem_separation_allowed_oss_regions_raw: str = "local"
-    audio_stem_separation_execution_provider: str = "cpu"
-    htdemucs_model_dir_raw: str = ".data/models/htdemucs-ft"
-    audio_stem_triton_url: str = ""
-    audio_stem_triton_token: SecretStr = Field(default=SecretStr(""), repr=False)
-    audio_stem_triton_model_version: str = "1"
-    audio_stem_triton_request_timeout_seconds: float = 300
+    tagged_text_translation: TaggedTextTranslationJobSettings = Field(
+        default_factory=TaggedTextTranslationJobSettings
+    )
+    poster_title_image: PosterTitleImageJobSettings = Field(default_factory=PosterTitleImageJobSettings)
+    audio_stem_separation: AudioStemSeparationJobSettings = Field(default_factory=AudioStemSeparationJobSettings)
+    audio_stem_triton: AudioStemTritonJobSettings = Field(default_factory=AudioStemTritonJobSettings)
     orphan_timeout_seconds: int = 300
     dispatch_max_publish_attempts: int = 12
     recovery_interval_seconds: int = 60
@@ -523,85 +676,18 @@ class JobSettings(ConfigSection):
     def validate_job(self) -> "JobSettings":
         positive_fields = {
             "OSS_INPUT_MAX_BYTES": self.oss_input_max_bytes,
-            "POSTER_TITLE_IMAGE_MAX_ITEMS": self.poster_title_image_max_items,
-            "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": self.poster_title_image_max_draw_count,
             "job.orphan_timeout_seconds": self.orphan_timeout_seconds,
             "job.dispatch_max_publish_attempts": self.dispatch_max_publish_attempts,
             "JOB_RECOVERY_INTERVAL_SECONDS": self.recovery_interval_seconds,
             "JOB_RECOVERY_BATCH_SIZE": self.recovery_batch_size,
             "JOB_RECOVERY_CALLBACK_BATCH_SIZE": self.recovery_callback_batch_size,
-            "AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS": self.audio_stem_triton_request_timeout_seconds,
         }
         for name, value in positive_fields.items():
             if value <= 0:
                 raise ValueError(f"{name} must be greater than 0")
         if self.max_active_jobs < 0:
             raise ValueError("MAX_ACTIVE_JOBS must be greater than or equal to 0")
-        if self.poster_title_image_max_draw_count > 4:
-            raise ValueError("POSTER_TITLE_IMAGE_MAX_DRAW_COUNT must be less than or equal to 4")
-        _comma_separated_non_empty_values(
-            self.poster_title_image_allowed_oss_buckets_raw,
-            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
-        )
-        _comma_separated_non_empty_values(
-            self.poster_title_image_allowed_oss_regions_raw,
-            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
-        )
-        _comma_separated_non_empty_values(
-            self.audio_stem_separation_allowed_oss_buckets_raw,
-            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
-        )
-        _comma_separated_non_empty_values(
-            self.audio_stem_separation_allowed_oss_regions_raw,
-            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
-        )
-        if self.audio_stem_separation_execution_provider not in {"auto", "cpu", "cuda"}:
-            raise ValueError("AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER must be auto, cpu, or cuda")
-        if not self.htdemucs_model_dir_raw.strip():
-            raise ValueError("HTDEMUCS_MODEL_DIR must not be empty")
-        if self.audio_stem_triton_url.strip() and "://" in self.audio_stem_triton_url:
-            raise ValueError("AUDIO_STEM_TRITON_URL must not include http:// or https://")
-        if self.audio_stem_triton_url != self.audio_stem_triton_url.strip():
-            raise ValueError("AUDIO_STEM_TRITON_URL must not have leading or trailing whitespace")
-        if not self.audio_stem_triton_model_version.strip():
-            raise ValueError("AUDIO_STEM_TRITON_MODEL_VERSION must not be empty")
         return self
-
-    @property
-    def poster_title_image_allowed_oss_buckets(self) -> tuple[str, ...]:
-        return _comma_separated_non_empty_values(
-            self.poster_title_image_allowed_oss_buckets_raw,
-            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
-        )
-
-    @property
-    def poster_title_image_allowed_oss_regions(self) -> tuple[str, ...]:
-        return _comma_separated_non_empty_values(
-            self.poster_title_image_allowed_oss_regions_raw,
-            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
-        )
-
-    @property
-    def audio_stem_separation_allowed_oss_buckets(self) -> tuple[str, ...]:
-        return _comma_separated_non_empty_values(
-            self.audio_stem_separation_allowed_oss_buckets_raw,
-            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
-        )
-
-    @property
-    def audio_stem_separation_allowed_oss_regions(self) -> tuple[str, ...]:
-        return _comma_separated_non_empty_values(
-            self.audio_stem_separation_allowed_oss_regions_raw,
-            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
-        )
-
-    @property
-    def htdemucs_model_dir(self) -> Path:
-        return _resolve_repo_path(self.htdemucs_model_dir_raw)
-
-    @property
-    def audio_stem_triton_token_value(self) -> str:
-        return self.audio_stem_triton_token.get_secret_value()
 
 
 class ObservabilitySettings(ConfigSection):

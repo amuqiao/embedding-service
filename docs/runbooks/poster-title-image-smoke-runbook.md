@@ -466,8 +466,8 @@ python - <<'PY'
 from app.core.config import settings
 
 print("OSS_PUBLIC_ENDPOINT=", repr(settings.storage.oss_public_endpoint))
-print("allowed_buckets=", settings.job.poster_title_image_allowed_oss_buckets)
-print("allowed_regions=", settings.job.poster_title_image_allowed_oss_regions)
+print("allowed_buckets=", settings.job.poster_title_image.allowed_oss_buckets)
+print("allowed_regions=", settings.job.poster_title_image.allowed_oss_regions)
 PY
 ```
 

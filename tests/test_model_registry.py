@@ -24,8 +24,7 @@ def _build_settings(**overrides) -> Settings:
     values = _settings_kwargs(**overrides)
     nested: dict[str, dict[str, object]] = {}
     for env_key, value in values.items():
-        section_name, field_name = config_module.APPLICATION_ENV_FIELD_MAP[env_key]
-        nested.setdefault(section_name, {})[field_name] = value
+        config_module._assign_nested(nested, config_module.APPLICATION_ENV_FIELD_MAP[env_key], value)
     return Settings(**nested)
 
 

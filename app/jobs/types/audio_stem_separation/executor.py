@@ -223,8 +223,8 @@ class HTDemucsONNXRunner:
 
 
 def _runner() -> HTDemucsONNXRunner:
-    model_dir = settings.job.htdemucs_model_dir
-    execution_provider_mode = cast(ExecutionProviderMode, settings.job.audio_stem_separation_execution_provider)
+    model_dir = settings.job.audio_stem_separation.htdemucs_model_dir
+    execution_provider_mode = cast(ExecutionProviderMode, settings.job.audio_stem_separation.execution_provider)
     cache_key = (str(model_dir), str(MODEL_ASSET_PATH), execution_provider_mode)
     with _RUNNER_CACHE_LOCK:
         runner = _RUNNER_CACHE.get(cache_key)
@@ -298,7 +298,7 @@ class AudioStemSeparationJob(JobExecutor):
                 max_duration_seconds=params.max_duration_seconds,
             ),
             onnx_model_version=str(asset["model"]["version"]),
-            execution_provider=settings.job.audio_stem_separation_execution_provider,
+            execution_provider=settings.job.audio_stem_separation.execution_provider,
             segment_seconds=float(runtime["segment_seconds"]),
             overlap_ratio=float(runtime["overlap_ratio"]),
         ).model_dump(exclude_none=True)

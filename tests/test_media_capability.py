@@ -26,8 +26,10 @@ def _url_ref(key: str, data: bytes, *, content_type: str = "audio/wav") -> dict:
 class FakeSettings:
     class Job:
         oss_input_max_bytes = 5_242_880
-        audio_stem_separation_allowed_oss_buckets = ("local-dev",)
-        audio_stem_separation_allowed_oss_regions = ("local",)
+        audio_stem_separation = SimpleNamespace(
+            allowed_oss_buckets=("local-dev",),
+            allowed_oss_regions=("local",),
+        )
 
     class Storage:
         oss_public_endpoint = ""

@@ -749,6 +749,7 @@ job_audit_events         排障时间线，不参与状态推进
 
 | 配置 | 当前含义 |
 |---|---|
+| `TAGGED_TEXT_TRANSLATION_MAX_ITEMS` / `TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH` / `TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH` | `tagged_text_translation` 的单 Job item 数量、单条原始 `text` 字符数和单 Job 原始文本总字符数上限；字符数按 Unicode code point 计算，缺省时使用代码默认值，并受 schema 或 schema 派生硬上限保护 |
 | `POSTER_TITLE_IMAGE_MAX_ITEMS` / `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` | `poster_title_image` 的批量数量和单 item 出图数量上限 |
 | `POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS` / `POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS` | `poster_title_image` 参考图输入 OSS 来源白名单 |
 | `AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS` / `AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS` | `audio_stem_separation` / `audio_stem_separation_triton` 输入音频 OSS 来源白名单 |

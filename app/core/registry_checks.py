@@ -295,10 +295,7 @@ def validate_capability_tool_registry() -> None:
     known_schemas = all_schema_names()
     known_capability_refs = capability_registry.all_capability_refs()
     known_tool_refs = tool_registry.all_tool_refs()
-    known_setting_paths = {
-        f"{section}.{field_name}"
-        for section, field_name in APPLICATION_ENV_FIELD_MAP.values()
-    }
+    known_setting_paths = {".".join(path) for path in APPLICATION_ENV_FIELD_MAP.values()}
 
     for job_type, spec in job_registry.all_job_type_specs().items():
         for capability_ref in spec.allowed_capability_refs:

@@ -44,6 +44,23 @@ from app.services.job_runtime import build_runtime_snapshot, payload_hash, write
 from app.services.ai_capability_kernel import ModelGate
 
 
+def _poster_job_settings(
+    *,
+    max_items: int = 50,
+    max_draw_count: int = 4,
+    allowed_oss_buckets: tuple[str, ...] = ("local-dev",),
+    allowed_oss_regions: tuple[str, ...] = ("local",),
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        poster_title_image=SimpleNamespace(
+            max_items=max_items,
+            max_draw_count=max_draw_count,
+            allowed_oss_buckets=allowed_oss_buckets,
+            allowed_oss_regions=allowed_oss_regions,
+        )
+    )
+
+
 def _png_bytes(color=(0, 255, 0, 255), accent=(255, 0, 0, 255)) -> bytes:
     image = Image.new("RGBA", (40, 40), color)
     for x in range(16, 24):
@@ -99,11 +116,11 @@ def _transparent_palette_png_bytes() -> bytes:
 
 
 def _allowed_reference_bucket() -> str:
-    return settings.job.poster_title_image_allowed_oss_buckets[0]
+    return settings.job.poster_title_image.allowed_oss_buckets[0]
 
 
 def _allowed_reference_region() -> str:
-    return settings.job.poster_title_image_allowed_oss_regions[0]
+    return settings.job.poster_title_image.allowed_oss_regions[0]
 
 
 def _url_ref(
@@ -469,12 +486,7 @@ def test_poster_title_image_rejects_items_above_config(monkeypatch):
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
-            job=SimpleNamespace(
-                poster_title_image_max_items=1,
-                poster_title_image_max_draw_count=4,
-                poster_title_image_allowed_oss_buckets=("local-dev",),
-                poster_title_image_allowed_oss_regions=("local",),
-            ),
+            job=_poster_job_settings(max_items=1),
             registry=SimpleNamespace(
                 poster_title_image_style_probe_model_id="gpt-5.5",
                 poster_title_image_generation_default_model_id="gpt-image-2",
@@ -503,12 +515,7 @@ def test_poster_title_image_rejects_draw_count_above_config(monkeypatch):
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
-            job=SimpleNamespace(
-                poster_title_image_max_items=50,
-                poster_title_image_max_draw_count=1,
-                poster_title_image_allowed_oss_buckets=("local-dev",),
-                poster_title_image_allowed_oss_regions=("local",),
-            ),
+            job=_poster_job_settings(max_draw_count=1),
             registry=SimpleNamespace(
                 poster_title_image_style_probe_model_id="gpt-5.5",
                 poster_title_image_generation_default_model_id="gpt-image-2",
@@ -534,11 +541,9 @@ def test_poster_title_image_accepts_configured_reference_oss_allowlist(monkeypat
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
-            job=SimpleNamespace(
-                poster_title_image_max_items=50,
-                poster_title_image_max_draw_count=4,
-                poster_title_image_allowed_oss_buckets=("cpp-rs-dev",),
-                poster_title_image_allowed_oss_regions=("ap-southeast-1",),
+            job=_poster_job_settings(
+                allowed_oss_buckets=("cpp-rs-dev",),
+                allowed_oss_regions=("ap-southeast-1",),
             ),
             registry=SimpleNamespace(
                 poster_title_image_style_probe_model_id="gpt-5.5",
@@ -806,12 +811,7 @@ def test_poster_title_image_create_request_rejects_unavailable_configured_genera
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
-            job=SimpleNamespace(
-                poster_title_image_max_items=50,
-                poster_title_image_max_draw_count=4,
-                poster_title_image_allowed_oss_buckets=("local-dev",),
-                poster_title_image_allowed_oss_regions=("local",),
-            ),
+            job=_poster_job_settings(),
             registry=SimpleNamespace(
                 poster_title_image_style_probe_model_id="gpt-5.5",
                 poster_title_image_generation_default_model_id="not-an-image-model",
@@ -987,9 +987,9 @@ def test_poster_title_image_reference_read_uses_public_url_not_output_storage(mo
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
-            job=SimpleNamespace(
-                poster_title_image_allowed_oss_buckets=("cpp-rs-dev",),
-                poster_title_image_allowed_oss_regions=("ap-southeast-1",),
+            job=_poster_job_settings(
+                allowed_oss_buckets=("cpp-rs-dev",),
+                allowed_oss_regions=("ap-southeast-1",),
             ),
             storage=SimpleNamespace(oss_public_endpoint=""),
         ),
@@ -1019,9 +1019,9 @@ def test_poster_title_image_reference_accepts_configured_cdn_public_url(monkeypa
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
-            job=SimpleNamespace(
-                poster_title_image_allowed_oss_buckets=("cpp-rs-dev",),
-                poster_title_image_allowed_oss_regions=("ap-southeast-1",),
+            job=_poster_job_settings(
+                allowed_oss_buckets=("cpp-rs-dev",),
+                allowed_oss_regions=("ap-southeast-1",),
             ),
             storage=SimpleNamespace(
                 oss_public_endpoint="aigc-datas.epubgame.com",

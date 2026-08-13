@@ -58,8 +58,8 @@ def _canonical_input_ref(input_audio: AudioStemSeparationInputObject):
     try:
         return canonical_ref_from_oss_url_ref(
             input_audio.model_dump(),
-            allowed_buckets=settings.job.audio_stem_separation_allowed_oss_buckets,
-            allowed_regions=settings.job.audio_stem_separation_allowed_oss_regions,
+            allowed_buckets=settings.job.audio_stem_separation.allowed_oss_buckets,
+            allowed_regions=settings.job.audio_stem_separation.allowed_oss_regions,
             allowed_content_types=AUDIO_INPUT_CONTENT_TYPES,
             public_endpoint=settings.storage.oss_public_endpoint or None,
             public_endpoint_bucket=getattr(settings.storage, "oss_bucket", "") or None,

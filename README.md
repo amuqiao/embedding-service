@@ -112,6 +112,8 @@ Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts
 
 `poster_title_image` 的调用方可选模型和内部 style probe 模型由 `app/jobs/types/poster_title_image/models.yaml` 配置。`MODEL_CONFIG_PATH` 仍是模型事实源，任务级配置只引用模型 ID；这些模型都必须存在于模型目录并满足对应能力约束。
 
+`tagged_text_translation` 的输入规模由 `TAGGED_TEXT_TRANSLATION_MAX_ITEMS`、`TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH` 和 `TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH` 配置，默认分别为 100、200 和 20000。字符数按原始 `text` 的 Unicode code point 计算，包含 HTML 标签、占位符、标点和空白；这些配置缺省时使用代码默认值，并受 schema 或 schema 派生硬上限保护。
+
 `poster_title_image` 的单 Job item 数量上限由 `POSTER_TITLE_IMAGE_MAX_ITEMS` 配置，默认 50。单 item 候选图上限由 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` 配置，默认 4；该值只能在接口硬上限 `1..4` 内收紧，不能把业务能力放大到 4 以上。
 
 除 `/health` 和 `/healthz` 外，请求必须携带：
