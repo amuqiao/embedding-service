@@ -28,17 +28,28 @@ jobs.sh / job-ops.sh
 `scripts/smoke.sh` 是 thin wrapper；业务执行最终进入：
 
 ```bash
-ENV_FILE=.env uv run python -m smoke <scenario> [args...]
+ENV_FILE=.env uv run python -m smoke [smoke options] <scenario> [args...]
 ```
+
+Smoke 全局选项统一放在场景命令前，例如 `--base-url`、`--env-file`、`--timeout`、`--poll-interval`、`--output-dir` 和 `--json`。
 
 ## 场景
 
-当前场景以 `python -m smoke list --json` 为事实源。业务 Job 场景会真实提交 Job、等待终态并查询结果证据；provider probe/helper 必须显式确认费用或上传副作用。
+当前场景以 `python -m smoke --json list` 为事实源。业务 Job 场景会真实提交 Job、等待终态并查询结果证据；provider probe/helper 必须显式确认费用或上传副作用。
 
 常用场景：
 
 ```bash
-ENV_FILE=.env ./scripts/smoke.sh llm-job-billing --confirm-cost
+ENV_FILE=.env ./scripts/smoke.sh --timeout 180 llm-job-billing --confirm-cost
+
+ENV_FILE=.env ./scripts/smoke.sh \
+  --timeout 300 \
+  --poll-interval 2 \
+  tagged-text-translation \
+  --confirm-cost \
+  --source-language en \
+  --target-language zh \
+  --text '<span>Hello {user_name}, welcome back!</span>'
 
 ENV_FILE=.env ./scripts/smoke.sh poster-title-image \
   --confirm-cost \
@@ -47,6 +58,18 @@ ENV_FILE=.env ./scripts/smoke.sh poster-title-image \
   --title-text "Cuando el amor se alejo"
 
 ENV_FILE=.env ./scripts/smoke.sh audio-stem-separation run \
+  --confirm-run \
+  --confirm-upload \
+  --input-file .data/misc/2485_0003_S6_梁萧.wav
+```
+
+带全局轮询参数的音频示例：
+
+```bash
+ENV_FILE=.env ./scripts/smoke.sh \
+  --timeout 7200 \
+  --poll-interval 5 \
+  audio-stem-separation run \
   --confirm-run \
   --confirm-upload \
   --input-file .data/misc/2485_0003_S6_梁萧.wav

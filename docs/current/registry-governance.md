@@ -100,6 +100,8 @@ Tool `startup_validators` 只用于 API/worker 进程级必需依赖。可选能
 
 `audio_stem_separation` 和 `audio_stem_separation_triton` 都声明 `allowed_capability_refs={"media.audio_input:2"}`。两个 job type 在创建 Job 的 `runtime_fields` 时由 job shared builder 冻结 `media_input_plan`，执行期 capability 只读取 frozen plan，不按最新配置重新推导输入读取策略，也不直接解析调用方 payload。
 
+`tagged_text_translation` 当前不声明 `allowed_capability_refs`，也不新增 tool。它通过 `TaggedTextTranslationParams`、`TaggedTextTranslationRuntimeFields` 和 `TaggedTextTranslationResult` 进入 schema registry，通过 `app/jobs/types/register.py` 进入 job type registry，并在 executor 内部调用文本模型 facade。
+
 `audio_decode_normalize:1` 是进程内 media transform tool：request schema 包含原始对象字节和 decode policy；执行结果是本地内存中的 canonical audio，不登记为可序列化 result schema。
 
 当前 frozen plan 支持对象存储中的 WAV / MP3 输入，并冻结对象身份、读取策略和规范化目标：
@@ -147,6 +149,7 @@ Capability 不拥有 Job 状态、attempt、lease、heartbeat、retry、dispatch
 - `tests/test_media_capability.py`
 - `tests/test_audio_stem_separation.py`
 - `tests/test_audio_stem_separation_triton.py`
+- `tests/test_tagged_text_translation.py`
 - `uv run python scripts/verify/registry_check.py`
 - `./scripts/verify.sh check`
 - `./scripts/verify.sh workflow-smoke`

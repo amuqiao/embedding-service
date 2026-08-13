@@ -1,5 +1,7 @@
 import json
 import io
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,7 @@ from smoke.flows import (
     llm_job_billing,
     oss_image_upload,
     poster_title_image,
+    tagged_text_translation,
 )
 
 
@@ -71,6 +74,13 @@ def append_root_env(root: Path, *lines: str) -> None:
     prefix = existing.rstrip("\n")
     suffix = "\n".join(lines)
     env_path.write_text(f"{prefix}\n{suffix}\n" if prefix else f"{suffix}\n", encoding="utf-8")
+
+
+def test_smoke_main_rejects_unsupported_global_option_for_scenario():
+    result = runner.invoke(app, ["--output-dir", "smoke/results", "tagged-text-translation", "--confirm-cost"])
+
+    assert result.exit_code == 2
+    assert "--output-dir is not supported by smoke scenario 'tagged-text-translation'" in result.stderr
 
 
 def test_smoke_cli_requires_confirm_cost():
@@ -155,6 +165,56 @@ def test_poster_title_image_cli_accepts_reference_url_ref_json(monkeypatch):
     assert captured["reference_image"] is None
 
 
+def test_tagged_text_translation_cli_forwards_default_source_language_as_none(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(tagged_text_translation, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "tagged-text-translation",
+            "--confirm-cost",
+            "--target-language",
+            "zh",
+            "--item-id",
+            "homepage.title",
+            "--text",
+            "<b>Hello</b> world",
+            "--max-target-chars-hint",
+            "20",
+            "--client-request-id",
+            "req-translate-1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["confirm_cost"] is True
+    assert captured["source_language"] is None
+    assert captured["target_language"] == "zh"
+    assert captured["item_id"] == "homepage.title"
+    assert captured["text"] == "<b>Hello</b> world"
+    assert captured["max_target_chars_hint"] == 20
+    assert captured["client_request_id"] == "req-translate-1"
+
+
+def test_smoke_public_module_entry_accepts_global_json_before_list():
+    result = subprocess.run(
+        [sys.executable, "-m", "smoke", "--json", "list"],
+        check=False,
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert "tagged-text-translation" in {scenario["name"] for scenario in payload["scenarios"]}
+
+
 def test_smoke_ready_prints_resolved_context(tmp_path, monkeypatch):
     for name in [
         "API_URL",
@@ -188,13 +248,13 @@ def test_smoke_ready_prints_resolved_context(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "ready",
             "--env-file",
             "env_test/.env",
             "--allow-remote-api",
             "--caller-id",
             "default",
             "--json",
+            "ready",
         ],
     )
 
@@ -217,7 +277,7 @@ def test_smoke_ready_rejects_missing_service_api_key(tmp_path, monkeypatch):
     monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text("API_URL=http://127.0.0.1:8100\n", encoding="utf-8")
 
-    result = runner.invoke(app, ["ready", "--json"])
+    result = runner.invoke(app, ["--json", "ready"])
 
     assert result.exit_code == 2
     payload = json.loads(result.stdout)
@@ -226,12 +286,14 @@ def test_smoke_ready_rejects_missing_service_api_key(tmp_path, monkeypatch):
 
 
 def test_smoke_list_outputs_standard_scenario_metadata():
-    result = runner.invoke(app, ["list", "--json"])
+    result = runner.invoke(app, ["--json", "list"])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     scenario_names = {scenario["name"] for scenario in payload["scenarios"]}
-    assert {"llm-job-billing", "poster-title-image", "audio-stem-separation"}.issubset(scenario_names)
+    assert {"llm-job-billing", "poster-title-image", "audio-stem-separation", "tagged-text-translation"}.issubset(
+        scenario_names
+    )
     for scenario in payload["scenarios"]:
         assert {"name", "type", "acceptance_class", "dependencies", "destructive", "supports_resume"} <= set(scenario)
 
@@ -251,7 +313,7 @@ def test_smoke_health_checks_service_health_endpoint(tmp_path, monkeypatch):
 
     monkeypatch.setattr(llm_job_billing, "request_json", fake_request_json)
 
-    result = runner.invoke(app, ["health", "--json"])
+    result = runner.invoke(app, ["--json", "health"])
 
     assert result.exit_code == 0
     assert captured["url"] == "http://127.0.0.1:18123/health"
@@ -267,7 +329,7 @@ def test_smoke_health_returns_3_when_service_is_not_ok(tmp_path, monkeypatch):
     (tmp_path / ".env").write_text("API_URL=http://127.0.0.1:18123\n", encoding="utf-8")
     monkeypatch.setattr(llm_job_billing, "request_json", lambda *args, **kwargs: {"status": "degraded"})
 
-    result = runner.invoke(app, ["health", "--json"])
+    result = runner.invoke(app, ["--json", "health"])
 
     assert result.exit_code == 3
     payload = json.loads(result.stdout)
@@ -381,7 +443,6 @@ def test_llm_job_billing_cli_accepts_remote_api_and_auth_options(monkeypatch):
     result = runner.invoke(
         app,
         [
-            "llm-job-billing",
             "--allow-remote-api",
             "--base-url",
             "http://test-cms-poster-title.epubgame.com",
@@ -391,6 +452,7 @@ def test_llm_job_billing_cli_accepts_remote_api_and_auth_options(monkeypatch):
             "test-token",
             "--caller-id",
             "default",
+            "llm-job-billing",
             "--confirm-cost",
         ],
     )
@@ -414,7 +476,6 @@ def test_llm_job_double_billing_cli_accepts_remote_api_and_auth_options(monkeypa
     result = runner.invoke(
         app,
         [
-            "llm-job-double-billing",
             "--allow-remote-api",
             "--base-url",
             "http://test-cms-poster-title.epubgame.com",
@@ -424,6 +485,7 @@ def test_llm_job_double_billing_cli_accepts_remote_api_and_auth_options(monkeypa
             "test-token",
             "--caller-id",
             "default",
+            "llm-job-double-billing",
             "--confirm-cost",
         ],
     )
@@ -447,7 +509,6 @@ def test_poster_title_image_cli_accepts_remote_api_and_auth_options(monkeypatch)
     result = runner.invoke(
         app,
         [
-            "poster-title-image",
             "--allow-remote-api",
             "--base-url",
             "http://test-cms-poster-title.epubgame.com",
@@ -457,6 +518,7 @@ def test_poster_title_image_cli_accepts_remote_api_and_auth_options(monkeypatch)
             "test-token",
             "--caller-id",
             "default",
+            "poster-title-image",
             "--confirm-cost",
             "--confirm-upload",
             "--reference",
@@ -487,12 +549,12 @@ def test_poster_title_image_cli_accepts_caller_id_option(monkeypatch):
     result = runner.invoke(
         app,
         [
+            "--caller-id",
+            "smoke-caller",
             "poster-title-image",
             "--confirm-cost",
             "--reference",
             ".data/title/标题2.png",
-            "--caller-id",
-            "smoke-caller",
         ],
     )
 
@@ -511,10 +573,10 @@ def test_oss_upload_image_cli_accepts_env_file(monkeypatch):
     result = runner.invoke(
         app,
         [
-            "oss-upload-image",
-            "--confirm-upload",
             "--env-file",
             "env_test/.env",
+            "oss-upload-image",
+            "--confirm-upload",
             "--image",
             ".data/title/标题2.png",
         ],
@@ -604,10 +666,10 @@ def test_audio_stem_separation_build_payload_cli_forwards_options(monkeypatch):
     result = runner.invoke(
         app,
         [
-            "audio-stem-separation",
-            "build-payload",
             "--env-file",
             "env_test/.env",
+            "audio-stem-separation",
+            "build-payload",
             "--input-file",
             ".data/misc/input.wav",
             "--job-type",
@@ -658,10 +720,6 @@ def test_audio_stem_separation_run_cli_forwards_payload_file_options(monkeypatch
     result = runner.invoke(
         app,
         [
-            "audio-stem-separation",
-            "run",
-            "--confirm-run",
-            "--confirm-upload",
             "--base-url",
             "http://127.0.0.1:18200",
             "--env-file",
@@ -675,6 +733,13 @@ def test_audio_stem_separation_run_cli_forwards_payload_file_options(monkeypatch
             "10",
             "--poll-interval",
             "0.5",
+            "--output-dir",
+            ".run/audio-stems",
+            "--json",
+            "audio-stem-separation",
+            "run",
+            "--confirm-run",
+            "--confirm-upload",
             "--client-request-id",
             "audio-client-2",
             "--job-type",
@@ -682,9 +747,6 @@ def test_audio_stem_separation_run_cli_forwards_payload_file_options(monkeypatch
             "--payload-file",
             ".run/audio-payload.json",
             "--download-outputs",
-            "--output-dir",
-            ".run/audio-stems",
-            "--json",
         ],
     )
 
@@ -734,10 +796,13 @@ def test_adapter_image_probe_cli_accepts_adapter_options(monkeypatch):
     result = runner.invoke(
         app,
         [
-            "adapter-image-probe",
-            "--confirm-cost",
             "--env-file",
             "env_test/.env",
+            "--timeout",
+            "45",
+            "--json",
+            "adapter-image-probe",
+            "--confirm-cost",
             "--models-config",
             "app/jobs/types/poster_title_image/models.yaml",
             "--prompt",
@@ -758,9 +823,6 @@ def test_adapter_image_probe_cli_accepts_adapter_options(monkeypatch):
             "auto",
             "--output-format",
             "png",
-            "--timeout",
-            "45",
-            "--json",
         ],
     )
 

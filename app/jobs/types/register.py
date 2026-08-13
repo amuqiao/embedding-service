@@ -25,6 +25,7 @@ def register_all_job_types() -> None:
         PosterTitleImageStyleProbeJob,
         register_poster_title_image_workflow,
     )
+    from app.jobs.types.tagged_text_translation import TaggedTextTranslationJob
     from app.tools.register import register_all_tools
 
     register_all_tools()
@@ -43,6 +44,7 @@ def register_all_job_types() -> None:
         PosterTitleImageStyleProbeJob,
         PosterTitleImageGenerateItemJob,
         PosterTitleImageJoinJob,
+        TaggedTextTranslationJob,
         AudioStemSeparationJob,
         AudioStemSeparationTritonJob,
     ):

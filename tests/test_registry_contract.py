@@ -507,6 +507,23 @@ def test_job_type_registry_exposes_required_metadata():
     assert arithmetic_spec.error_codes <= all_error_reasons()
     assert arithmetic_spec.prompt_specs == ()
 
+    assert "tagged_text_translation" in specs
+    tagged_spec = specs["tagged_text_translation"]
+    assert tagged_spec.params_schema == "TaggedTextTranslationParams"
+    assert tagged_spec.runtime_fields_schema == "TaggedTextTranslationRuntimeFields"
+    assert tagged_spec.canonical_result_schema == "TaggedTextTranslationResult"
+    assert tagged_spec.public_result_schema == "TaggedTextTranslationResult"
+    assert tagged_spec.visibility == "public"
+    assert tagged_spec.role == "root"
+    assert tagged_spec.allow_callback is True
+    assert tagged_spec.result_snapshot_statuses == frozenset()
+    assert tagged_spec.execution_mode == "custom_executor"
+    _assert_default_retry_policy(tagged_spec.retry_policy)
+    assert tagged_spec.side_effect_policy == "none"
+    assert tagged_spec.error_codes <= all_error_reasons()
+    assert "INVALID_JOB_PARAMS" in tagged_spec.error_codes
+    assert tagged_spec.prompt_specs == ()
+
     assert "example_sleep" in specs
     echo_spec = specs["example_sleep"]
     assert echo_spec.params_schema == "ExampleSleepParams"
@@ -681,10 +698,14 @@ def test_registered_job_type_names_are_layered_contract():
         "poster_title_image_generate_item",
         "poster_title_image_join",
         "poster_title_image_style_probe",
+        "tagged_text_translation",
     }
     assert source_job_type_names == expected_job_type_names
     assert set(specs) == source_job_type_names
-    assert {name for name, spec in specs.items() if spec.visibility == "public"} >= {"poster_title_image"}
+    assert {name for name, spec in specs.items() if spec.visibility == "public"} >= {
+        "poster_title_image",
+        "tagged_text_translation",
+    }
     assert {name for name, spec in specs.items() if spec.visibility == "internal"} >= {
         "poster_title_image_generate_item",
         "poster_title_image_join",

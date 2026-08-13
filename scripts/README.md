@@ -28,7 +28,7 @@ tools.sh        无默认持久副作用的本地开发辅助工具和只读代�
 Triton 直压归属 `triton-bench.sh`；它只直连推理服务，不创建 FastAPI Job，不访问 DB/Redis/OSS，不触发 callback，不替代 `load.sh` 的业务链路压测。
 已注册 tool、capability 和 job_type capability 关系归属 `tools.sh registry` 只读查看；当前治理事实见 `docs/current/registry-governance.md`。
 Redis 连接、服务端版本、命令能力、内存、keyspace、Stream 和 broker key 证据归属 `redis.sh`。`k8s.sh`、`jobs.sh` 或业务脚本需要 Redis 证据时只编排或复用该入口，不各自维护 Redis 诊断逻辑。
-业务 smoke/E2E 归属 `smoke.sh` 和 `python -m smoke`。它只验证已经运行的服务是否符合 HTTP 合同，负责 health/ready/list、提交场景、轮询终态、断言结果和输出证据；不启动或停止 API/worker，不执行 Alembic migration，不直接查库推进流程，也不替代 `jobs.sh` 排障查询。
+业务 smoke/E2E 归属 `smoke.sh` 和 `python -m smoke`。它只验证已经运行的服务是否符合 HTTP 合同，负责 health/ready/list、提交场景、轮询终态、断言结果和输出证据；不启动或停止 API/worker，不执行 Alembic migration，不直接查库推进流程，也不替代 `jobs.sh` 排障查询。`smoke.sh` 的公开调用格式统一为 `./scripts/smoke.sh [smoke options] <scenario> [scenario options]`；`--base-url`、`--env-file`、`--timeout`、`--poll-interval`、`--output-dir` 和 `--json` 等全局参数放在场景名前。
 
 ## 入口职责
 

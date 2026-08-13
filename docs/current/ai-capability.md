@@ -5,7 +5,7 @@
 ## 当前行为
 
 - 当前稳定 AI 调用入口是 `app/services/ai_gateway_facade.py` 的 `generate_text_with_ledger()`、`generate_text_with_images_with_ledger()` 和 `generate_image_with_ledger()`。
-- 当前真实 provider path 覆盖文本生成、带参考图文本生成，以及 `poster_title_image` 使用的图片生成；内置真实 LLM 示例 `job_real_llm_echo` 和 `job_real_llm_double_echo` 通过文本入口调用模型。
+- 当前真实 provider path 覆盖文本生成、带参考图文本生成，以及 `poster_title_image` 使用的图片生成；内置真实 LLM 示例 `job_real_llm_echo`、`job_real_llm_double_echo` 和 public `tagged_text_translation` 通过文本入口调用模型。
 - `app/services/ai_capability_kernel.py` 承载当前 AI kernel 组件：`ModelGate`、`ProviderGateway`、`UsageNormalizer`、`TypedPricingResolver` 和 `UsageLedgerWriter`。
 - `app/integrations/ai_adapters/` 承载模型调用 adapter registry；当前内置 `litellm`、`openai_responses` 和 `openai_images` adapter。
 - `app/integrations/ai_gateway.py` 是当前 LiteLLM 文本调用实现，返回 `TextGenerationResult` 和 provider usage，不写数据库、不改 Job 状态、不生成 billing 响应。
@@ -26,6 +26,21 @@ Job executor / real LLM job_type
   -> UsageNormalizer.normalize_text()
   -> TypedPricingResolver.calculate_cost()
   -> UsageLedgerWriter.mark_succeeded() / mark_failed()
+```
+
+批量带标签文案翻译：
+
+```text
+tagged_text_translation executor
+  -> build_translation_messages()
+  -> generate_text_with_ledger()
+  -> ModelGate
+  -> UsageLedgerWriter.create_pending()
+  -> ProviderGateway.generate_text()
+  -> UsageNormalizer.normalize_text()
+  -> TypedPricingResolver.calculate_cost()
+  -> executor 校验 JSON、item 对齐、标签和占位符保留
+  -> public TaggedTextTranslationResult
 ```
 
 图片生成：
@@ -58,6 +73,8 @@ poster_title_image generate item
 `poster_title_image` 的生图连接路径由 `app/jobs/types/poster_title_image/models.yaml` 中的 `generation.image_adapter` 控制，当前默认是 `openai_images`。prompt 构造、绿底后处理、draw_count、Job workflow 和 billing scope 不随 adapter 选择改变。adapter 选择会写入 Job runtime snapshot；修改 YAML 后只影响后续新建 Job，已创建 Job 和已生成的内部子任务继续使用入库时冻结的 adapter。
 
 Prompt 目录由 `PROMPT_CONFIG_PATH` 指向的基础配置和 `app/jobs/types/*/prompts.yaml` 的业务包内配置共同组成，加载逻辑在 `app/core/prompt_templates.py`。当前 Prompt registry 会进入 registry consistency 校验；正式业务 `job_type` 需要按自身 schema 引用 prompt refs，且不同配置文件之间不得重复声明同一个 prompt ref。
+
+`tagged_text_translation` 不接入公开 Prompt 查询合同。它的 Prompt 构造位于 `app/jobs/types/tagged_text_translation/prompt.py`，作为 executor 私有实现细节使用；`GET /prompt-templates?job_type=tagged_text_translation` 不作为该能力的公开配置面。
 
 价格目录由 `app/core/pricing.yaml` 和 `app/core/pricing_registry.py` 管理。`pricing_ref` 必须存在并与模型的 `model_id`、`provider`、`provider_model` 匹配。
 
@@ -95,4 +112,5 @@ Prompt 目录由 `PROMPT_CONFIG_PATH` 指向的基础配置和 `app/jobs/types/*
 - `tests/test_pricing_registry.py`
 - `tests/test_usage_records.py`
 - `tests/test_job_real_llm_echo_workflow.py`
+- `tests/test_tagged_text_translation.py`
 - `./scripts/verify.sh check`

@@ -201,7 +201,7 @@ GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
 
 语种目录来自 `app/core/language_catalog.py`，Prompt 配置来自 `PROMPT_CONFIG_PATH` 和各 `job_type` 垂直目录下的 `prompts.yaml`。这些接口只暴露当前服务允许调用方看到的元信息，不暴露 provider 密钥或内部 pricing 明细。
 
-`GET /prompt-templates` 支持可选 query 参数 `job_type`。未传时默认使用 `poster_title_image`，响应只返回该 `job_type` 的模板；传入未知 `job_type` 会返回 `INVALID_JOB_TYPE`。
+`GET /prompt-templates` 支持可选 query 参数 `job_type`。未传时默认使用 `poster_title_image`，响应只返回该 `job_type` 的模板；传入未知 `job_type` 或不公开 Prompt 模板的 `job_type` 会返回 `INVALID_JOB_TYPE`。例如 `tagged_text_translation` 是可提交 Job，但 Prompt 是服务内部实现细节，不进入该接口。
 
 `GET /prompt-templates` 成功响应：
 

@@ -44,11 +44,11 @@ Content-Type: application/json
 | 项 | 内容 |
 |---|---|
 | `job_type` | `tagged_text_translation` |
-| 文档状态 | 待实现对接合同 |
+| 文档状态 | 当前对接合同 |
 | 接口形态 | 复用统一 Job 创建、查询和 Callback 合同 |
 | Prompt 暴露 | 不暴露 Prompt 查询接口；Prompt 是服务内部实现细节 |
 
-本文定义的是拟新增翻译 Job 的调用方合同。当前代码尚未注册 `tagged_text_translation`；上线前必须以实现、schema、registry 和合同测试为准完成校验。未上线环境直接按本文创建任务会返回 `INVALID_JOB_TYPE`。
+本文定义的是已注册翻译 Job 的调用方合同。调用方通过统一 Job 接口提交 `tagged_text_translation`；服务端 Prompt、模型消息组织和模型输出解析是内部实现细节，不通过 Prompt 查询接口暴露。
 
 ## 整体模型
 
@@ -69,7 +69,7 @@ Content-Type: application/json
 
 ## 创建翻译 Job
 
-本节是 `tagged_text_translation` 上线后的请求合同。当前未注册该 `job_type` 的环境不能直接用于联调创建任务。
+本节是 `tagged_text_translation` 的请求合同。
 
 ### Method / Path
 
@@ -207,7 +207,7 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/jobs/018f9a7f-2b7d-7
 | `succeeded` | 翻译成功 | 返回完整翻译结果 |
 | `failed` | 翻译失败 | 默认 `null`；失败详情见 `job_error` |
 
-调用方只能用 `job_status` 判断 Job 状态。`job_progress.percent` 只用于展示，不能作为成功或失败依据。
+调用方只能用 `job_status` 判断 Job 状态。`job_progress.percent` 只用于展示，不能作为成功或失败依据。示例中的 `job_progress.stage` 和 `job_progress.message` 是当前服务可能返回的展示字段，调用方不能依赖它们一定存在，也不能用它们做程序分支。
 
 第一版对接合同不承诺 `running` 状态返回部分 `job_result`。调用方应在 `succeeded` 终态读取完整结果。
 
@@ -299,7 +299,7 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/jobs/018f9a7f-2b7d-7
 | `id` | string | 原请求 item 的批量条目标识 |
 | `source_text` | string | 原请求文本 |
 | `translated_text` | string | 翻译后的文本；应保留原标签和占位符 |
-| `char_count.source` | integer | 源文本字符数 |
+| `char_count.source` | integer | 源文本可见文本字符数，不包含保留的 HTML 标签和固定占位符 |
 | `char_count.target` | integer | 译文可见文本字符数，不包含保留的 HTML 标签和固定占位符 |
 | `char_count.target_limit_hint` | integer 或 null | 原请求字符数建议 |
 | `char_count.within_hint` | boolean 或 null | 是否满足字符数建议；未传建议时为 `null` |
@@ -464,7 +464,7 @@ timestamp + "." + raw_body
 | Reason | HTTP | 场景 | Retryable |
 |---|---:|---|---:|
 | `UNAUTHORIZED` | 401 | 缺少或错误的 Bearer token | no |
-| `FORBIDDEN` | 403 | caller 无权访问该 Job | no |
+| `JOB_NOT_FOUND` | 404 | 查询的 Job 不存在或不属于当前 caller | no |
 | `REQUEST_ID_INVALID` | 400 | `X-Request-ID` 格式非法 | no |
 | `INVALID_JOB_TYPE` | 400 | `job_type` 未注册或当前环境不允许外部提交 | no |
 | `INVALID_JOB_PARAMS` | 400 | `job_params` 缺少必填字段、字段类型错误或语种不支持 | no |
@@ -476,13 +476,11 @@ timestamp + "." + raw_body
 | `MODEL_OUTPUT_INVALID` | 502 | 模型输出不符合翻译结果合同，例如破坏占位符或 JSON 结构 | no |
 | `JOB_TIMEOUT` | 504 | Job 执行超时 | yes |
 | `JOB_EXECUTION_FAILED` | 500 | 未归类的 Job 执行失败 | no |
-| `JOB_NOT_FOUND` | 404 | 查询的 Job 不存在或不属于当前 caller | no |
-
 错误响应中的 `code` 是数字错误码，`msg` 是错误消息；表中的 Reason 是服务内部和 Job error 中使用的稳定错误原因。调用方做业务分支时优先根据 HTTP status、`job_status` 和 `job_error.reason` 处理。
 
 ## Curl 示例
 
-以下示例用于说明上线后的调用方式。当前未注册 `tagged_text_translation` 的环境不能直接用于联调创建任务。
+以下示例用于说明当前调用方式。
 
 ### 创建任务
 

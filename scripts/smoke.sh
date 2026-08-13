@@ -8,7 +8,7 @@ source "$ROOT_DIR/scripts/lib/runtime.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/smoke.sh <command> [smoke options] [args...]
+  ./scripts/smoke.sh [smoke options] <command> [args...]
   ./scripts/smoke.sh -h|--help
 
 职责:
@@ -20,12 +20,11 @@ Usage:
   不直接查库推进流程或替代 jobs.sh / job-ops.sh 排障查询。
 
 通用参数:
-  这些参数由各场景命令接收，放在 command 之后。
-
   --base-url <url>        显式覆盖服务 HTTP base URL；不传时由 API_URL / API_HOST:API_PORT 推导。
   --env-file <path>      显式加载 env 文件；也可通过 ENV_FILE 指定。
   --timeout <seconds>    场景最大等待时间。
   --poll-interval <sec>  轮询间隔。
+  --output-dir <path>    artifacts 或下载输出目录，默认由场景决定。
   --json                 输出机器可读 summary。
 
 命令:
@@ -34,6 +33,7 @@ Usage:
   list                    列出当前项目 smoke 场景。
   llm-job-billing         提交真实 LLM Job，轮询终态并查询 billing。
   llm-job-double-billing  提交两次 LLM 调用 Job，轮询终态并查询汇总 billing。
+  tagged-text-translation 提交 tagged_text_translation Job，校验标签和占位符保留。
   poster-title-image      提交 poster_title_image Job，轮询终态并校验输出。
   audio-stem-separation   提交 audio_stem_separation / audio_stem_separation_triton Job。
   adapter-image-probe     直连 image adapter 的 provider probe。
@@ -42,12 +42,21 @@ Usage:
 常用示例:
   ./scripts/run.sh up dev
 
-  ENV_FILE=.env ./scripts/smoke.sh list
+  ENV_FILE=.env ./scripts/smoke.sh --json list
 
   ENV_FILE=.env ./scripts/smoke.sh \
-    audio-stem-separation run \
+    --timeout 300 \
+    --poll-interval 2 \
+    tagged-text-translation \
+    --confirm-cost \
+    --source-language en \
+    --target-language zh \
+    --text '<span>Hello {user_name}, welcome back!</span>'
+
+  ENV_FILE=.env ./scripts/smoke.sh \
     --timeout 7200 \
     --poll-interval 5 \
+    audio-stem-separation run \
     --confirm-run \
     --confirm-upload \
     --input-file .data/misc/2485_0003_S6_梁萧.wav

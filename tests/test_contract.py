@@ -909,6 +909,19 @@ def test_prompt_templates_route_rejects_unknown_job_type(monkeypatch):
     assert body["data"] is None
 
 
+def test_prompt_templates_route_rejects_job_type_without_public_template(monkeypatch):
+    from starlette.testclient import TestClient
+
+    _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(f"{API_PREFIX}/prompt-templates", params={"job_type": "tagged_text_translation"})
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["code"] == "100011"
+    assert body["data"] is None
+
+
 def test_models_route_exposes_public_model_selection_metadata(monkeypatch):
     from starlette.testclient import TestClient
     from app.api.routes import meta as meta_routes
