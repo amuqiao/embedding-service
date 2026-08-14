@@ -13,7 +13,7 @@ source "$ROOT_DIR/scripts/lib/runtime.sh"
 run_tests() {
   section "Test"
   require_project_python
-  "$PYTHON_BIN" -m pytest -q
+  ENABLED_JOB_TYPES= "$PYTHON_BIN" -m pytest -q
 }
 
 run_workflow_smoke() {
@@ -338,7 +338,8 @@ run_image_inspect() {
   "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/image_inspect.py" "$@"
 }
 
-run_check() {
+run_check() (
+  export ENABLED_JOB_TYPES=
   run_script_syntax
   run_cli_smoke
   run_release_flow_smoke
@@ -347,4 +348,4 @@ run_check() {
   run_alembic_revision_check
   run_registry_check
   run_tests
-}
+)

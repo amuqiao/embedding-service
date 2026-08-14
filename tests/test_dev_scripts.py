@@ -5621,6 +5621,9 @@ def test_env_config_check_allows_launcher_keys_inside_env_example(tmp_path):
 
 
 def test_verify_check_uses_default_env_config_scan():
+    env = os.environ.copy()
+    env["ENABLED_JOB_TYPES"] = "tagged_text_translation"
+
     result = subprocess.run(
         [
             "bash",
@@ -5631,8 +5634,8 @@ def test_verify_check_uses_default_env_config_scan():
             run_cli_smoke() { :; }
             run_python_syntax() { :; }
             run_alembic_revision_check() { printf 'alembic-revision-check\\n'; }
-            run_registry_check() { :; }
-            run_tests() { :; }
+            run_registry_check() { printf 'registry-enabled-job-types=%s\\n' "${ENABLED_JOB_TYPES-unset}"; }
+            run_tests() { printf 'test-enabled-job-types=%s\\n' "${ENABLED_JOB_TYPES-unset}"; }
             run_env_config_check() {
               printf 'env-config-argc=%s\\n' "$#"
               for arg in "$@"; do
@@ -5643,6 +5646,7 @@ def test_verify_check_uses_default_env_config_scan():
             """,
         ],
         cwd=ROOT_DIR,
+        env=env,
         capture_output=True,
         text=True,
         check=True,
@@ -5651,6 +5655,43 @@ def test_verify_check_uses_default_env_config_scan():
     assert "env-config-argc=0" in result.stdout
     assert "env-config-arg=" not in result.stdout
     assert "alembic-revision-check" in result.stdout
+    assert "registry-enabled-job-types=\n" in result.stdout
+    assert "test-enabled-job-types=\n" in result.stdout
+
+
+def test_verify_run_tests_clears_enabled_job_types(tmp_path):
+    fake_python = tmp_path / "python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'enabled-job-types=%s\\n' \"${ENABLED_JOB_TYPES-unset}\"\n"
+        "printf 'args=%s\\n' \"$*\"\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "ENABLED_JOB_TYPES": "tagged_text_translation",
+            "PYTHON_BIN": str(fake_python),
+        }
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            "source scripts/verify/tasks.sh >/dev/null && run_tests",
+        ],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "enabled-job-types=\n" in result.stdout
+    assert "args=-m pytest -q" in result.stdout
 
 
 def _release_env_file_content(*, storage_backend: str = "aliyun_oss") -> str:

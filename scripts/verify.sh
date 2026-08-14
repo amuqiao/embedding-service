@@ -39,6 +39,7 @@ usage() {
 配置与环境变量：
   API_HOST / API_PORT        可选，workflow-smoke 使用的本地 API 地址来源。
   ENV_FILE                   可选，覆盖配置文件路径，默认 .env。
+  ENABLED_JOB_TYPES          test/check 会忽略该值，按全部静态注册 job type 执行本地验证。
 
 输出：
   stdout: 阶段化验证结果；pytest 和 workflow-smoke 输出可透传。
@@ -81,6 +82,7 @@ command_usage() {
 
 作用域：
   运行当前仓库 pytest。
+  pytest 默认验证全部静态注册 job type，不继承当前服务实例的 ENABLED_JOB_TYPES 启用子集。
 
 输出：
   stdout/stderr: pytest 输出。
@@ -182,6 +184,7 @@ EOF
 
 作用域：
   执行脚本语法、入口 help、Python 语法、env 配置、Alembic revision、registry consistency 和 pytest。
+  registry consistency 和 pytest 阶段默认验证全部静态注册 job type，不继承当前服务实例的 ENABLED_JOB_TYPES 启用子集。
 
 输出：
   stdout: 阶段化验证结果；pytest 输出透传。

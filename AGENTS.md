@@ -146,6 +146,7 @@
 - 有联动关系的值必须由代码派生，并在启动时做 fail-fast 校验。
 - 新增或暴露配置项前，必须确认真实生效、默认值合理、非法值会报错、安全边界不会被 silent fallback 绕过。
 - 修改配置项时必须同步检查 `app/core/config.py`、`.env.example`、部署文档和相关测试。
+- Job type 治理遵循：代码注册全集，运行时启用子集，pytest 默认验证全集，smoke 验证当前启用子集。`ENABLED_JOB_TYPES` 只表示当前服务实例允许运行和外部创建的 job type，不用于裁剪代码注册事实。
 
 ## 代码修改规则
 
