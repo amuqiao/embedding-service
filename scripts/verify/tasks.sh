@@ -50,6 +50,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/deploy.sh" \
     "$ROOT_DIR/scripts/k8s.sh" \
     "$ROOT_DIR/scripts/redis.sh" \
+    "$ROOT_DIR/scripts/oss.sh" \
     "$ROOT_DIR/scripts/load.sh" \
     "$ROOT_DIR/scripts/triton-bench.sh" \
     "$ROOT_DIR/scripts/jobs.sh" \
@@ -68,24 +69,27 @@ run_script_syntax() {
   done
 }
 
-assert_generated_commands_help() {
+assert_generated_entrypoint_contract() {
   local name="$1"
   local entry="$2"
   shift 2
   local command
   local duplicate_count=0
+  local forbidden_title
   local manual_section
   local output
 
   output="$("$entry" --help)"
   if [[ "$output" != *"Commands:"* ]]; then
-    echo "ERROR: $name help must include generated Commands." >&2
+    echo "ERROR: $name help must expose the generated Commands section required by the current script contract." >&2
     return 1
   fi
-  if [[ "$output" == *"命令说明："* ]]; then
-    echo "ERROR: $name help must not duplicate generated Commands with 手写命令说明。" >&2
-    return 1
-  fi
+  for forbidden_title in "命令说明：" "命令列表：" "子命令索引："; do
+    if [[ "$output" == *"$forbidden_title"* ]]; then
+      echo "ERROR: $name help must not keep a manual command catalog titled $forbidden_title; use generated Commands plus examples." >&2
+      return 1
+    fi
+  done
   manual_section="$(printf '%s\n' "$output" | awk '
     /^  (作用域|默认行为|环境变量|配置与环境变量|输出|关键概念|常用示例|进阶用法|保护边界|副作用与保护边界)：/ || /^  Exit Codes:/ { in_manual = 1 }
     in_manual { print }
@@ -96,7 +100,7 @@ assert_generated_commands_help() {
     fi
   done
   if (( duplicate_count >= 2 )); then
-    echo "ERROR: $name help must not repeat generated command catalog in manual sections." >&2
+    echo "ERROR: $name help must not repeat the generated command catalog in manual sections." >&2
     return 1
   fi
 }
@@ -114,18 +118,20 @@ run_cli_smoke() {
   event "OK" "deploy.sh" "help"
   "$ROOT_DIR/scripts/k8s.sh" --help >/dev/null
   event "OK" "k8s.sh" "help"
-  assert_generated_commands_help "redis.sh" "$ROOT_DIR/scripts/redis.sh" \
+  assert_generated_entrypoint_contract "redis.sh" "$ROOT_DIR/scripts/redis.sh" \
     check broker memory keyspace top-keys capability
   event "OK" "redis.sh" "help"
-  assert_generated_commands_help "jobs.sh" "$ROOT_DIR/scripts/jobs.sh" \
+  "$ROOT_DIR/scripts/oss.sh" --help >/dev/null
+  event "OK" "oss.sh" "help"
+  assert_generated_entrypoint_contract "jobs.sh" "$ROOT_DIR/scripts/jobs.sh" \
     guide dashboard overview observe broker runtime list show job inspect trace payload diagnose workflow timeline attempts ai-calls callbacks callbacks-summary stuck drain pressure summary doctor failures latency ingress capacity types
   event "OK" "jobs.sh" "help"
   "$ROOT_DIR/scripts/smoke.sh" --help >/dev/null
   event "OK" "smoke.sh" "help"
-  assert_generated_commands_help "load.sh" "$ROOT_DIR/scripts/load.sh" \
+  assert_generated_entrypoint_contract "load.sh" "$ROOT_DIR/scripts/load.sh" \
     guide cases list profiles init smoke run ui report pressure drain
   event "OK" "load.sh" "help"
-  assert_generated_commands_help "triton-bench.sh" "$ROOT_DIR/scripts/triton-bench.sh" \
+  assert_generated_entrypoint_contract "triton-bench.sh" "$ROOT_DIR/scripts/triton-bench.sh" \
     doctor run
   event "OK" "triton-bench.sh" "help"
   "$ROOT_DIR/scripts/models.sh" --help >/dev/null
@@ -162,9 +168,17 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/redis.sh" keyspace --help >/dev/null
   "$ROOT_DIR/scripts/redis.sh" capability --help >/dev/null
   "$ROOT_DIR/scripts/redis.sh" top-keys --help >/dev/null
+  "$ROOT_DIR/scripts/oss.sh" check --help >/dev/null
+  "$ROOT_DIR/scripts/oss.sh" upload-image --help >/dev/null
+  "$ROOT_DIR/scripts/verify.sh" test --help >/dev/null
+  "$ROOT_DIR/scripts/verify.sh" check --help >/dev/null
+  "$ROOT_DIR/scripts/verify.sh" workflow-smoke --help >/dev/null
+  "$ROOT_DIR/scripts/verify.sh" workflow-modes-smoke --help >/dev/null
   "$ROOT_DIR/scripts/verify.sh" migration-roundtrip --help >/dev/null
   "$ROOT_DIR/scripts/verify.sh" migration-roundtrip ignored --help >/dev/null
   "$ROOT_DIR/scripts/verify.sh" env-config --help >/dev/null
+  "$ROOT_DIR/scripts/verify.sh" oss-config --help >/dev/null
+  "$ROOT_DIR/scripts/verify.sh" image-inspect --help >/dev/null
   "$ROOT_DIR/scripts/models.sh" list --help >/dev/null
   "$ROOT_DIR/scripts/models.sh" status --help >/dev/null
   "$ROOT_DIR/scripts/models.sh" verify --help >/dev/null
@@ -229,9 +243,10 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" \
     "$ROOT_DIR/scripts/verify/image_inspect.py" \
     "$ROOT_DIR/scripts/verify/migration_roundtrip.py" \
-    "$ROOT_DIR/scripts/verify/oss_config_check.py" \
     "$ROOT_DIR/scripts/verify/registry_check.py" \
     "$ROOT_DIR/scripts/verify/workflow_modes_smoke.py" \
+    "$ROOT_DIR/scripts/oss/__init__.py" \
+    "$ROOT_DIR/scripts/oss/cli.py" \
     "$ROOT_DIR/scripts/load/__init__.py" \
     "$ROOT_DIR/scripts/load/cli.py" \
     "$ROOT_DIR/scripts/load/cases.py" \
@@ -265,6 +280,7 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/tools/registry.py"
   event "OK" "dev/check_ports.py" "py_compile"
   event "OK" "verify/*.py" "py_compile"
+  event "OK" "oss/*.py" "py_compile"
   event "OK" "load/*.py" "py_compile"
   event "OK" "triton_bench/*.py" "py_compile"
   event "OK" "jobs/*.py" "py_compile"
@@ -294,9 +310,17 @@ run_env_config_check() {
 }
 
 run_oss_config_check() {
-  section "OSS Config"
-  require_project_python
-  "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/oss_config_check.py" "$@"
+  local arg
+  local json_output=false
+  for arg in "$@"; do
+    if [[ "$arg" == "--json" ]]; then
+      json_output=true
+    fi
+  done
+  if [[ "$json_output" != "true" ]]; then
+    section "OSS Config"
+  fi
+  "$ROOT_DIR/scripts/oss.sh" check "$@"
 }
 
 run_image_inspect() {

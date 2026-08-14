@@ -57,28 +57,10 @@ Exit Codes:
 EOF
 }
 
-resolve_python_bin() {
-  if [[ -n "${PYTHON_BIN:-}" ]]; then
-    require_command "$PYTHON_BIN" "install Python 3 or set PYTHON_BIN"
-    printf "%s" "$PYTHON_BIN"
-  elif [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
-    printf "%s" "$ROOT_DIR/.venv/bin/python"
-  elif command -v python3 >/dev/null 2>&1; then
-    command -v python3
-  elif command -v python >/dev/null 2>&1; then
-    command -v python
-  else
-    die "python is not available; run: ./scripts/dev.sh bootstrap" 2
-  fi
-}
-
 run_python_module() {
   local module="$1"
   shift
-  local python_bin
-  python_bin="$(resolve_python_bin)"
-  PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" PYTHONUNBUFFERED=1 \
-    exec "$python_bin" -m "$module" "$@"
+  exec_project_python_module "$module" "$@"
 }
 
 domain="${1:-}"

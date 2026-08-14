@@ -63,13 +63,14 @@
 ./scripts/models.sh --help
 ./scripts/media.sh --help
 ./scripts/redis.sh --help
+./scripts/oss.sh --help
 ./scripts/tools.sh registry
 ./scripts/jobs.sh --help
 ./scripts/job-ops.sh --help
 ./scripts/k8s.sh --help
 ```
 
-`scripts/` 维护 14 类稳定入口，职责互不重叠：`run.sh` 日常快捷 recipe、`dev.sh` 本地宿主机进程生命周期、`verify.sh` 一次性验证、`deploy.sh` compose 部署形态、`k8s.sh` 已部署 Pod 内手动运维、`redis.sh` Redis 只读排障事实源、`load.sh` 项目级压测入口、`triton-bench.sh` Triton 推理服务直压入口、`jobs.sh` Job 只读查询与排障、`job-ops.sh` Job 写操作运维入口、`smoke.sh` 标准业务 smoke/E2E 验证入口、`models.sh` 本地模型资产下载与必需文件检查、`media.sh` 本地音视频素材探测、校验和准备、`tools.sh` 无默认持久副作用的本地开发辅助工具和只读代码清单查看。完整命令以各脚本 `-h` 输出和 `scripts/README.md` 为准。
+`scripts/` 维护 15 类稳定入口，职责互不重叠：`run.sh` 日常快捷 recipe、`dev.sh` 本地宿主机进程生命周期、`verify.sh` 一次性验证、`deploy.sh` compose 部署形态、`k8s.sh` 已部署 Pod 内手动运维、`redis.sh` Redis 只读排障事实源、`oss.sh` OSS 配置、URL Ref、连通性和显式上传检查事实源、`load.sh` 项目级压测入口、`triton-bench.sh` Triton 推理服务直压入口、`jobs.sh` Job 只读查询与排障、`job-ops.sh` Job 写操作运维入口、`smoke.sh` 标准业务 smoke/E2E 验证入口、`models.sh` 本地模型资产下载与必需文件检查、`media.sh` 本地音视频素材探测、校验和准备、`tools.sh` 无默认持久副作用的本地开发辅助工具和只读代码清单查看。完整命令以各脚本 `-h` 输出和 `scripts/README.md` 为准。
 
 `start`、`stop`、`restart`、`status` 支持指定服务：
 
@@ -81,7 +82,7 @@
 
 不要绕过 `scripts/dev.sh` 直接拼散本地服务命令，除非是在排查脚本本身。一次性验证任务使用 `scripts/verify.sh`。
 
-修改或新增 `scripts/` 入口时，先阅读 `scripts/README.md`。脚本维护规则以该文件为准；具体命令参数以各脚本 `-h` 输出为准。多子命令入口的 help 应保持“顶层基础用法、子命令进阶用法”的分层，避免把复杂示例堆到顶层 help。
+修改或新增 `scripts/` 入口时，先阅读 `scripts/README.md` 和 `docs/current/script-entrypoint-contract.md`。脚本维护规则以这两处为准；具体命令参数以各脚本 `-h` 输出为准。多子命令入口的 help 应保持“顶层基础用法、子命令进阶用法”的分层，避免把复杂示例堆到顶层 help。脚本 help 只维护当前合同，不保留旧格式兼容检查；旧测试或旧说明与当前合同冲突时，按当前合同更新或删除旧要求。
 
 ## 验证要求
 

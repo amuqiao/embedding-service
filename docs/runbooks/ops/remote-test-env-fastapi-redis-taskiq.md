@@ -334,13 +334,16 @@ taskiq type= b'none' exists= 0
 ./scripts/k8s.sh check oss --confirm
 ```
 
-当前检查只要求 `PUT / GET / HEAD` 成功，不要求 `DeleteObject` 权限。输出会包含测试对象的 URL Ref 字段：
+Pod 入口会编排对象存储事实源：
+
+```bash
+./scripts/oss.sh check --remote --confirm
+```
+
+当前检查要求 `PUT / GET / HEAD` 成功，不要求 `DeleteObject` 权限。输出会包含测试对象的 URL Ref 字段：
 
 ```text
-OSS_TEST_PUBLIC_URL=...
-OSS_TEST_INTERNAL_URL=...
-OSS_TEST_CONTENT_TYPE=...
-OSS_TEST_SHA256=...
+[OK] url-ref: public_url=... internal_url=...
 ```
 
 检查对象会保留在 OSS，需要按输出 key 手动清理或配置生命周期规则清理。

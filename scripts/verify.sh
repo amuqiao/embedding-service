@@ -31,7 +31,7 @@ usage() {
   workflow-modes-smoke 使用内置 workflow 测试 job_type 验证 single/chain/group/chord/map/starmap/chunks 的真实 Job e2e。
   migration-roundtrip 使用临时本地 PostgreSQL 数据库验证 Alembic upgrade/downgrade/re-upgrade。
   env-config          校验 env 文件键名；可用 --env-file/--app-env 提前验证启动配置安全规则。
-  oss-config          校验阿里云 OSS 配置；默认只检查本地配置，--remote 才访问 OSS，--upload-image 可上传图片。
+  oss-config          编排 scripts/oss.sh check；默认只检查本地配置，--remote --confirm 才访问 OSS。
   image-inspect       检测本地路径或 http(s) URL 图片类型、尺寸、alpha 通道和透明背景。
   check               执行脚本语法、入口 help、Python 语法、env 配置、Alembic revision、registry consistency 和 pytest。
   help                显示帮助。
@@ -49,7 +49,7 @@ usage() {
 
 副作用与保护边界：
   test/check/env-config 不修改服务状态。
-  oss-config 默认不修改服务状态；--remote 会写入并删除一个临时 OSS 对象；--upload-image 会上传指定本地图片。
+  oss-config 默认不修改服务状态；--remote --confirm 会写入、读取并 HEAD 一个临时 OSS 对象，不执行 DeleteObject。
   image-inspect 默认只读取入参图片；URL 入参会发起 HTTP GET。
   workflow-smoke 会向已运行的本地 API 创建一个内置 example_sleep 测试 Job。
   workflow-modes-smoke 会向已运行的本地 API 创建多个内置 workflow 测试 Job。
@@ -59,7 +59,7 @@ usage() {
   ./scripts/verify.sh check
   ./scripts/verify.sh test
   ./scripts/verify.sh env-config --env-file .env.test --app-env test
-  ./scripts/verify.sh oss-config --remote
+  ./scripts/verify.sh oss-config --remote --confirm
   ./scripts/verify.sh image-inspect .data/title.png --require-transparent-background
   ./scripts/verify.sh workflow-smoke
 
@@ -137,8 +137,38 @@ EOF
       "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/env_config_check.py" -h
       ;;
     oss-config)
-      require_project_python
-      "$PYTHON_BIN" "$ROOT_DIR/scripts/verify/oss_config_check.py" -h
+      cat <<EOF
+用法：
+  ./scripts/verify.sh oss-config [oss-check-args...]
+  ./scripts/verify.sh oss-config -h|--help
+
+作用域：
+  验证入口别名，编排 ./scripts/oss.sh check。
+  默认只检查 OSS 配置；远端连通性必须显式传 --remote --confirm。
+
+输出：
+  stdout: 默认人读配置摘要；--json 时透传 scripts/oss.sh check 的纯 JSON。
+  stderr: 非法参数、缺少配置或 OSS 检查失败详情。
+
+副作用与保护边界：
+  默认不访问 OSS。
+  --remote --confirm 会执行 PUT / GET / HEAD。
+  不执行 DeleteObject；测试对象会保留在 OSS，需要按输出 key 手动清理或依赖 bucket 生命周期。
+
+常用示例：
+  ./scripts/verify.sh oss-config
+  ./scripts/verify.sh oss-config --json
+  ./scripts/verify.sh oss-config --remote --confirm
+  ./scripts/verify.sh oss-config --remote --confirm --key ai-jobs/manual/check.txt
+
+进阶用法：
+  ./scripts/oss.sh check --help
+
+Exit Codes:
+  0  成功
+  2  非法参数、缺少确认参数或配置错误
+  其他非 0 由 scripts/oss.sh check 返回
+EOF
       ;;
     image-inspect)
       require_project_python

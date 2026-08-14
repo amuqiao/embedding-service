@@ -1,6 +1,6 @@
 # 脚本入口合同
 
-本文记录当前仓库脚本入口的 help envelope 合同。它约束 `scripts/` 下稳定入口脚本的 `-h`、`--help` 和子命令 help 输出结构，避免每个脚本各自组织说明、重复维护命令目录或遗漏默认行为和副作用边界。
+本文记录当前仓库脚本入口和子命令的 help / output 合同。它约束 `scripts/` 下稳定入口脚本的 `-h` / `--help` 输出结构、子命令 help、输出格式和副作用边界，避免每个脚本各自组织说明、重复维护命令目录或遗漏默认行为。
 
 ## 心智模型
 
@@ -14,6 +14,8 @@
 
 长期解释、排障路径和业务背景不放进 help 主体；应放入 `docs/current/`、`docs/runbooks/` 或对应子命令 `-h`。
 
+入口目录分层、能力归属和新增顶层脚本准入规则由 [`../../scripts/README.md`](../../scripts/README.md) 维护。本文不重复维护入口清单，只规定每个入口和子命令对用户暴露时必须满足的 help、输出和副作用合同。
+
 ## 生成方式
 
 不同脚本可以使用不同实现方式，但命令索引只能有一个事实源：
@@ -23,9 +25,11 @@
 | 纯 shell 手写 help | `run.sh`、`dev.sh`、`verify.sh`、`deploy.sh`、`k8s.sh`、`tools.sh` | 可以手写 `用法`、`命令`、`选项` 和说明区块。 |
 | shell wrapper + Typer CLI | `jobs.sh`、`redis.sh`、`job-ops.sh`、`load.sh` | Typer 自动生成的 `Usage`、`Options`、`Commands` 是命令和参数事实源；手写 epilog 不能再重复一份完整命令目录。 |
 | shell wrapper + Python 参数规范层 + Typer 场景实现 | `smoke.sh` | wrapper help 和 `python -m smoke` 共同定义 `./scripts/smoke.sh [smoke options] <scenario> [scenario options]`。全局 smoke 参数必须在场景名前；场景实现仍复用 Typer 命令函数。 |
-| shell wrapper + 普通 Python / argparse | `tools.sh env-url` 这类下沉实现 | 参数事实源以实际执行层为准；wrapper 只在需要统一入口体验时手写薄 help。 |
+| shell wrapper + 普通 Python / argparse | `oss.sh`、`tools.sh env-url` 这类下沉实现 | 参数事实源以实际执行层为准；wrapper 只在需要统一入口体验时手写薄 help。 |
 
 如果 CLI 框架已经生成 `Commands`，手写区不要再出现“命令说明”“命令列表”“子命令索引”等全量目录。需要帮助选择命令时，写“常用示例”“默认行为”或“排障路径”，不要按命令名逐个复述。
+
+本项目只维护当前合同，不保留旧 help 格式兼容。旧测试、旧文档或旧脚本注释如果要求另一套区块名、命令目录格式或示例组织方式，应删除或改成本文标准。
 
 ## 顶层 Envelope
 
@@ -101,6 +105,14 @@ Exit Codes
 - 复杂输入格式只放最小可用结构，例如 JSON 最小格式；完整业务合同链接到 `docs/api/`。
 - 输入要求、素材要求、语种要求、下载路径等领域说明可以放在示例后，但不要冲掉前面的 envelope。
 
+多级子命令按“每一级都能 help”治理：
+
+- `./scripts/<entry>.sh -h` 说明入口边界和可用命令。
+- `./scripts/<entry>.sh <command> -h` 说明该动作的参数、输入、输出和副作用。
+- `./scripts/<entry>.sh <domain> <command> -h` 说明具体领域动作，例如 `media.sh audio prepare -h`。
+
+新增子命令必须有自己的 help 可达路径。不要只在顶层 README 或 runbook 说明参数，而让 `-h` 无法拦截。
+
 ## 示例规则
 
 示例的职责是帮助用户判断“现在该复制哪条命令”，不是公平展示每个命令。
@@ -126,6 +138,16 @@ Exit Codes
 - 会产生费用、写远程对象、写数据库、触发真实 Job、访问远端 API 或迁移数据库的命令必须显式确认。
 - 不要为了“更稳”新增 silent fallback；配置错误、非法环境和越界参数应 fail-fast。
 
+只读、显式写入和费用路径必须在入口合同中分开：
+
+| 路径 | 默认行为 | 必需保护 |
+|---|---|---|
+| 只读排障 | 不修改 DB / Redis / OSS / Job，不投递消息 | 可支持 `--json`，错误直接失败。 |
+| 本地写文件 | 只写明确输出路径或 `.run` / `.data` 约定目录 | 默认拒绝覆盖，覆盖必须显式参数。 |
+| 远端写入 | 默认不写；写入必须由子命令语义或确认参数触发 | `--confirm`、`--confirm-upload` 或等价确认。 |
+| 费用动作 | 默认不产生真实模型费用 | `--confirm-cost` 或等价确认。 |
+| 写库运维 | 默认只读 | `--confirm`，并在 help 中说明前置条件和失败语义。 |
+
 ## 维护与验证
 
 修改脚本 help 时至少运行：
@@ -141,10 +163,19 @@ uv run python -m compileall scripts
 ./scripts/verify.sh check
 ```
 
-自动 `Commands` 入口还应由 `verify.sh check` 防止回归：
+`verify.sh check` 只维护当前脚本合同，不维护旧格式兼容。自动 `Commands` 入口由当前合同检查防止回归：
 
 - 顶层 help 必须包含自动 `Commands`。
-- 手写区不能再出现重复命令目录。
+- 手写区不能再出现重复命令目录、旧“命令说明”目录或另一个子命令索引。
 - `jobs.sh`、`smoke.sh`、`load.sh` 等入口的子命令 help 必须保持可访问。
 
 新增脚本前，先判断是否属于已有入口的子命令。只有职责边界、生命周期或安全边界不同，才新增顶层脚本。
+
+新增或调整脚本时，验收标准是新合同成立：
+
+- 顶层入口职责清楚，且能说明“不负责什么”。
+- 子命令 help 能在执行动作前拦截。
+- 命令索引事实源只有一个。
+- `--json` 时 stdout 只输出 JSON。
+- 写远端、写库、产生费用和覆盖文件都有显式确认或明确参数。
+- 编排入口只组合稳定入口，不新增底层实现。

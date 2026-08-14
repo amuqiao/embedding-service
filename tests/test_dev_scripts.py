@@ -1537,8 +1537,6 @@ def test_jobs_cli_help_is_available_without_db():
     assert "./scripts/jobs.sh dashboard --since 1h" in result.stdout
     assert "./scripts/jobs.sh observe --interval 60 --samples 5" in result.stdout
     assert "./scripts/jobs.sh guide" in result.stdout
-    assert "Scope：" not in result.stdout
-    assert "窗口与实时口径：" not in result.stdout
 
 
 def test_jobs_guide_is_available_without_db():
@@ -1609,17 +1607,15 @@ def test_k8s_cli_help_is_available_without_db():
     assert "migrate --confirm" in result.stdout
 
 
-def test_k8s_check_oss_prints_url_ref_without_delete_requirement():
+def test_k8s_check_oss_delegates_to_oss_entrypoint():
     script = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
     oss_check = script.split("run_check_oss() {", 1)[1].split("\n}\n\nrun_check()", 1)[0]
 
-    assert "oss_url_ref_from_output_object" in oss_check
-    assert "OSS_TEST_PUBLIC_URL" in oss_check
-    assert "OSS_TEST_INTERNAL_URL" in oss_check
-    assert "OSS_TEST_CONTENT_TYPE" in oss_check
-    assert "OSS_TEST_SHA256" in oss_check
+    assert '"$ROOT_DIR/scripts/oss.sh" check --remote --confirm "$@"' in oss_check
+    assert "oss_url_ref_from_output_object" not in oss_check
+    assert "OSS_TEST_PUBLIC_URL" not in oss_check
     assert ".delete_object(" not in oss_check
-    assert "delete_checked=false" in oss_check
+    assert "delete_checked=false" not in oss_check
 
 
 def test_k8s_check_dashboard_runs_read_model_without_default_binding():
@@ -1855,6 +1851,57 @@ def test_k8s_check_oss_requires_confirm_before_remote_write():
     assert "OSS_ACCESS_KEY" not in result.stderr
 
 
+def test_k8s_check_oss_rejects_env_file_override():
+    env = os.environ.copy()
+    env["KUBERNETES_SERVICE_HOST"] = "127.0.0.1"
+
+    result = subprocess.run(
+        ["./scripts/k8s.sh", "check", "oss", "--confirm", "--env-file", "/tmp/other.env"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "--env-file is not allowed" in result.stderr
+    assert "OSS_ACCESS_KEY" not in result.stdout
+    assert "OSS_ACCESS_KEY" not in result.stderr
+
+
+def test_oss_cli_help_is_available_without_env_file():
+    result = subprocess.run(
+        ["./scripts/oss.sh", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    check_help = subprocess.run(
+        ["./scripts/oss.sh", "check", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    upload_help = subprocess.run(
+        ["./scripts/oss.sh", "upload-image", "--help"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "对象存储能力事实源" in result.stdout
+    assert "check" in result.stdout
+    assert "upload-image" in result.stdout
+    assert "--remote" in check_help.stdout
+    assert "--confirm" in check_help.stdout
+    assert "默认只检查配置" in check_help.stdout
+    assert "--confirm-upload" in upload_help.stdout
+
+
 def test_tools_cli_help_is_available_without_env_file():
     result = subprocess.run(
         ["./scripts/tools.sh", "--help"],
@@ -1906,6 +1953,7 @@ def test_shell_entrypoints_require_command_without_help():
         "./scripts/verify.sh",
         "./scripts/k8s.sh",
         "./scripts/smoke.sh",
+        "./scripts/oss.sh",
         "./scripts/models.sh",
         "./scripts/media.sh",
         "./scripts/tools.sh",
@@ -1920,10 +1968,30 @@ def test_shell_entrypoints_require_command_without_help():
 
         assert result.returncode == 2
         assert result.stdout == ""
-        assert "用法：" in result.stderr or "Usage:" in result.stderr
+        assert "用法：" in result.stderr or "usage:" in result.stderr.lower()
 
 
-def test_verify_sh_does_not_keep_legacy_business_smoke_commands():
+def test_repo_python_wrappers_prefer_repo_venv_over_python_bin(tmp_path):
+    fake_python = tmp_path / "python"
+    fake_python.write_text("#!/usr/bin/env bash\nexit 99\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    env = os.environ.copy()
+    env["PYTHON_BIN"] = str(fake_python)
+
+    result = subprocess.run(
+        ["./scripts/jobs.sh", "--help"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Usage:" in result.stdout
+
+
+def test_verify_sh_rejects_business_smoke_commands():
     for command in ("smoke", "mock-smoke", "e2e"):
         result = subprocess.run(
             ["./scripts/verify.sh", command],
@@ -5765,55 +5833,40 @@ def test_workflow_smoke_accepts_standard_string_success_code():
     assert parsed is job
 
 
-def test_verify_sh_documents_workflow_modes_smoke_command():
-    result = subprocess.run(
+@pytest.mark.parametrize(
+    "command",
+    [
+        "test",
+        "check",
+        "workflow-smoke",
+        "workflow-modes-smoke",
+        "migration-roundtrip",
+        "env-config",
+        "oss-config",
+        "image-inspect",
+    ],
+)
+def test_verify_sh_commands_are_documented_and_help_is_accessible(command):
+    top_level = subprocess.run(
         ["./scripts/verify.sh", "--help"],
         cwd=ROOT_DIR,
         capture_output=True,
         text=True,
         check=True,
     )
-    verify_sh = (ROOT_DIR / "scripts/verify.sh").read_text(encoding="utf-8")
-    tasks_sh = (ROOT_DIR / "scripts/verify/tasks.sh").read_text(encoding="utf-8")
-
-    assert "workflow-modes-smoke" in result.stdout
-    assert "workflow-modes-smoke)" in verify_sh
-    assert "run_workflow_modes_smoke" in verify_sh
-    assert "run_workflow_modes_smoke()" in tasks_sh
-
-
-def test_verify_sh_documents_oss_config_command():
-    result = subprocess.run(
-        ["./scripts/verify.sh", "--help"],
+    command_help = subprocess.run(
+        ["./scripts/verify.sh", command, "--help"],
         cwd=ROOT_DIR,
         capture_output=True,
         text=True,
         check=True,
     )
-    verify_sh = (ROOT_DIR / "scripts/verify.sh").read_text(encoding="utf-8")
-    tasks_sh = (ROOT_DIR / "scripts/verify/tasks.sh").read_text(encoding="utf-8")
 
-    assert "oss-config" in result.stdout
-    assert "oss-config)" in verify_sh
-    assert "run_oss_config_check" in verify_sh
-    assert "run_oss_config_check()" in tasks_sh
-
-
-def test_verify_sh_documents_image_inspect_command():
-    result = subprocess.run(
-        ["./scripts/verify.sh", "--help"],
-        cwd=ROOT_DIR,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    verify_sh = (ROOT_DIR / "scripts/verify.sh").read_text(encoding="utf-8")
-    tasks_sh = (ROOT_DIR / "scripts/verify/tasks.sh").read_text(encoding="utf-8")
-
-    assert "image-inspect" in result.stdout
-    assert "image-inspect)" in verify_sh
-    assert "run_image_inspect" in verify_sh
-    assert "run_image_inspect()" in tasks_sh
+    assert command in top_level.stdout
+    assert "用法：" in command_help.stdout or "usage:" in command_help.stdout.lower()
+    if command == "oss-config":
+        assert "写入并删除" not in top_level.stdout
+        assert "PUT / GET / HEAD / DELETE" not in command_help.stdout
 
 
 def test_workflow_modes_smoke_cases_follow_example_catalog():

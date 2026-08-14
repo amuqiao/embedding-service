@@ -59,7 +59,7 @@ usage() {
   执行迁移前应确认当前 Pod 运行的是要发布的代码版本。
   check 和 check postgres / redis 会输出明文连接串和密码，只应在受控终端中执行。
   check 是无副作用一键检查，不包含 check dashboard / check oss，也不会执行 migrate。
-  check oss 是远程写入动作，必须显式传入 --confirm；会留下对象，需要按输出 key 手动清理或配置生命周期清理。
+  check oss 是远程写入动作，必须显式传入 --confirm；不会执行 DeleteObject，检查对象会保留在 OSS。
 
 常用示例：
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check
@@ -85,7 +85,7 @@ command_usage() {
       cat <<EOF
 用法：
   ./scripts/k8s.sh check
-  ./scripts/k8s.sh check <postgres|redis|dashboard|oss> [--confirm]
+  ./scripts/k8s.sh check <postgres|redis|dashboard|oss> [--confirm] [args...]
   ./scripts/k8s.sh check -h|--help
 
 作用域：
@@ -139,18 +139,19 @@ EOF
     check:oss)
       cat <<EOF
 用法：
-  ./scripts/k8s.sh check oss --confirm
+  ./scripts/k8s.sh check oss --confirm [--json] [--key KEY]
   ./scripts/k8s.sh check oss -h|--help
 
 作用域：
-  检查 OSS 配置，并执行临时对象 PUT / GET / HEAD。
+  编排 scripts/oss.sh check --remote，检查 OSS 配置，并执行临时对象 PUT / GET / HEAD。
 
 副作用与保护边界：
   远程写入动作，必须显式传入 --confirm。
-  会留下对象，需要按输出 key 手动清理或配置生命周期清理。
+  不执行 DeleteObject；检查对象会保留在 OSS，需要按输出 key 手动清理或依赖 bucket 生命周期。
 
 常用示例：
   kubectl exec -it <api-pod> -- ./scripts/k8s.sh check oss --confirm
+  kubectl exec -it <api-pod> -- ./scripts/k8s.sh check oss --confirm --key ai-jobs/manual/check.txt
 EOF
       ;;
     current:|heads:|history:)
@@ -414,98 +415,21 @@ PY
 }
 
 run_check_oss() {
+  local arg
+  local json_output=false
   [[ "${1:-}" == "--confirm" ]] || die "check oss requires --confirm because it writes a temporary OSS object" 2
   shift
-  require_no_args "check oss" "$@"
+  for arg in "$@"; do
+    [[ "$arg" != "--env-file" && "$arg" != --env-file=* ]] || die "check oss in a Pod uses current Pod environment; --env-file is not allowed" 2
+    if [[ "$arg" == "--json" ]]; then
+      json_output=true
+    fi
+  done
   prepare_check_runtime
-  section "OSS"
-  "$PYTHON_BIN" <<'PY'
-import os
-import time
-
-from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
-from app.integrations.object_storage import sha256_digest
-from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
-
-
-TEST_CONTENT = b"fastapi-best-ai-architecture k8s oss connectivity check\n"
-TEST_CONTENT_TYPE = "text/plain; charset=utf-8"
-
-
-def require_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise SystemExit(f"{name} is required")
-    return value
-
-
-storage_backend = require_env("STORAGE_BACKEND")
-if storage_backend != "aliyun_oss":
-    raise SystemExit("STORAGE_BACKEND must be aliyun_oss for check oss")
-
-bucket = require_env("OSS_BUCKET")
-region = require_env("OSS_REGION")
-access_key_id = require_env("OSS_ACCESS_KEY_ID")
-access_key_secret = require_env("OSS_ACCESS_KEY_SECRET")
-project_root = require_env("OSS_PROJECT_ROOT")
-public_endpoint = os.getenv("OSS_PUBLIC_ENDPOINT", "")
-endpoint = os.getenv("OSS_ENDPOINT", "") or public_endpoint or f"oss-{region}.aliyuncs.com"
-endpoint_style = "custom_domain" if public_endpoint and endpoint == public_endpoint else "virtual_host"
-
-client = AliyunOSSClient(
-    AliyunOSSConfig(
-        bucket=bucket,
-        region=region,
-        access_key_id=access_key_id,
-        access_key_secret=access_key_secret,
-        project_root=project_root,
-        endpoint=endpoint,
-        endpoint_style=endpoint_style,
-        scheme="https",
-    )
-)
-
-config = client.config
-print(f"OSS_BACKEND={storage_backend}")
-print(f"OSS_BUCKET={config.bucket}")
-print(f"OSS_REGION={config.region}")
-print(f"OSS_PROJECT_ROOT={config.normalized_project_root}")
-output_prefix = os.getenv("OSS_OUTPUT_PREFIX", "ai-jobs").strip().strip("/")
-print(f"OSS_OUTPUT_PREFIX={output_prefix or '-'}")
-print(f"OSS_ENDPOINT={config.normalized_endpoint}")
-print(f"OSS_ENDPOINT_STYLE={config.endpoint_style}")
-print(f"OSS_PUBLIC_ENDPOINT={public_endpoint or '-'}")
-print(f"OSS_ACCESS_KEY_ID_present={'true' if access_key_id else 'false'}")
-print(f"OSS_ACCESS_KEY_SECRET_present={'true' if access_key_secret else 'false'}")
-
-key = "/".join(part for part in (output_prefix, "k8s-check", f"check-{int(time.time())}.txt") if part)
-object_key = client.object_key(key)
-print(f"OSS_TEST_KEY={object_key}")
-content_hash = sha256_digest(TEST_CONTENT)
-url_ref = oss_url_ref_from_output_object(
-    bucket=config.bucket,
-    region=config.region,
-    key=object_key,
-    content_type=TEST_CONTENT_TYPE,
-    content_hash=content_hash,
-    public_endpoint=public_endpoint or None,
-)
-print(f"OSS_TEST_PUBLIC_URL={url_ref['public_url']}")
-print(f"OSS_TEST_INTERNAL_URL={url_ref['internal_url']}")
-print(f"OSS_TEST_CONTENT_TYPE={url_ref['content_type']}")
-print(f"OSS_TEST_SHA256={url_ref['sha256']}")
-
-try:
-    client.put_object(key, TEST_CONTENT, content_type=TEST_CONTENT_TYPE)
-    body = client.get_object(key)
-    if body != TEST_CONTENT:
-        raise RuntimeError("GET body does not match uploaded content")
-    headers = client.head_object(key)
-except (AliyunOSSError, RuntimeError) as exc:
-    raise SystemExit(f"OSS check failed: {exc}") from exc
-
-print(f"OK oss key={object_key} bytes={len(body)} content_length={headers.get('Content-Length', '-')} delete_checked=false")
-PY
+  if [[ "$json_output" != "true" ]]; then
+    section "OSS"
+  fi
+  PYTHON_BIN="$PYTHON_BIN" "$ROOT_DIR/scripts/oss.sh" check --remote --confirm "$@"
 }
 
 run_check() {

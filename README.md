@@ -60,7 +60,7 @@ K8s Pod 内运维入口只在已经部署的 Pod 中执行，不调用 `kubectl`
 ./scripts/k8s.sh migrate --confirm
 ```
 
-`check` 是无副作用聚合命令，会依次执行 `check postgres`、`check redis`、`current` 和 `heads`；单项检查便于只验证某一个外部连接或状态。Redis 排障事实源是 `./scripts/redis.sh`，`k8s.sh check redis` 只在 Pod 内编排调用它，并会打印完整连接串、编码密码和解码密码，便于核对生产连接串中特殊字符是否正确 URL 编码。`check oss --confirm` 是远程写入检查，会创建临时对象，不包含在默认 `check` 中。`migrate` 是写库动作，必须显式传入 `--confirm`。生产多副本部署时，只应在一个 Pod 内执行一次迁移，并在执行前确认该 Pod 运行的是要发布的代码版本。
+`check` 是无副作用聚合命令，会依次执行 `check postgres`、`check redis`、`current` 和 `heads`；单项检查便于只验证某一个外部连接或状态。Redis 排障事实源是 `./scripts/redis.sh`，`k8s.sh check redis` 只在 Pod 内编排调用它，并会打印完整连接串、编码密码和解码密码，便于核对生产连接串中特殊字符是否正确 URL 编码。OSS 排障事实源是 `./scripts/oss.sh`，`k8s.sh check oss --confirm` 只在 Pod 内编排远程写入检查；该检查只执行 `PUT / GET / HEAD`，不会执行 `DeleteObject`，不包含在默认 `check` 中。`migrate` 是写库动作，必须显式传入 `--confirm`。生产多副本部署时，只应在一个 Pod 内执行一次迁移，并在执行前确认该 Pod 运行的是要发布的代码版本。
 
 配置加载优先级：
 
@@ -160,7 +160,7 @@ OSS_PUBLIC_ENDPOINT=
 ./.venv/bin/python examples/business/check_aliyun_oss.py --env-file .env.dev
 ```
 
-该脚本属于业务/供应商扩展示例，不进入 `scripts/verify.sh` 的稳定命令面。脚本会在 `OSS_PROJECT_ROOT` 下写入一个临时对象，验证 `PUT`、`GET`、`HEAD` 后默认删除。服务运行时要使用阿里云 OSS 时，将本地 `.env` 中的 `STORAGE_BACKEND` 设为 `aliyun_oss`，并配置同一组 `OSS_*` 环境变量。
+该脚本属于业务/供应商扩展示例，不进入 `scripts/verify.sh` 的稳定命令面。脚本会在 `OSS_PROJECT_ROOT` 下写入一个临时对象，并验证 `PUT`、`GET`、`HEAD`。服务运行时要使用阿里云 OSS 时，将本地 `.env` 中的 `STORAGE_BACKEND` 设为 `aliyun_oss`，并配置同一组 `OSS_*` 环境变量。
 
 ## 开发脚本
 
@@ -258,7 +258,7 @@ Job 只读排障由 `jobs.sh` 承接：
 
 脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/run.sh` 只编排日常 recipe，`scripts/dev.sh` 调度 `scripts/dev/` 中的宿主机 API / worker 进程能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/jobs.sh` 调度 `scripts/jobs/` 中的只读 Job 排障能力，`scripts/redis.sh` 调度 `scripts/redis_diag/` 中的 Redis 只读排障能力，`scripts/deploy.sh` 只调度 compose 部署能力，`scripts/k8s.sh` 只提供 Pod 内连接检查和 Alembic 运维入口，`scripts/models.sh` 只管理 `.data/models/` 下的本地模型资产下载、路径和必需文件检查，`scripts/media.sh` 只管理本地音视频素材探测、校验和准备，`scripts/tools.sh` 只提供无默认持久副作用的本地开发辅助工具和只读代码清单查看，`scripts/triton-bench.sh` 只直连 Triton 推理服务做保守阶梯压测。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。本地脚本变量、应用配置和 compose 编排变量统一从根目录 `.env` 或运行时环境读取；不再维护 `scripts/.env`。`dev.sh` 只面向宿主机 API / worker 进程，不做部署、不启动或停止 Docker 依赖、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
 
-入口脚本约束：
+入口脚本约束以 [`scripts/README.md`](scripts/README.md) 和 [`docs/current/script-entrypoint-contract.md`](docs/current/script-entrypoint-contract.md) 为准：
 
 - 外层入口脚本只做参数分发、帮助说明和稳定命令面，不承载具体业务实现。
 - 具体能力下沉到职责对应的子目录原子脚本；公共 shell 能力按 `common.sh`、`runtime.sh`、`compose.sh`、`modes.sh` 分层放在 `scripts/lib/`。
