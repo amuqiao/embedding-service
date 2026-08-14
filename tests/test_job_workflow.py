@@ -8,6 +8,7 @@ import pytest
 from app.core.exceptions import AppError
 from app.models.job import Job, JobAttempt
 from app.services.job_runtime import payload_hash
+from app.jobs import registry as job_registry
 from app.jobs.runner import execute_job, fail_job
 from app.jobs.types.register import register_all_job_types
 from app.tasks import jobs as task_jobs
@@ -243,6 +244,26 @@ async def test_workflow_child_validation_rejects_non_text_model_for_builtin_text
         )
 
     assert exc.value.code == "MODEL_NOT_AVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_create_child_job_rejects_disabled_job_type():
+    register_all_job_types()
+    job_registry.configure_enabled_job_types(
+        ("tagged_text_translation",),
+        external_job_types=("tagged_text_translation",),
+    )
+    try:
+        with pytest.raises(AppError) as exc:
+            await _create_child_job(
+                _FakeDB(),
+                root_job=_running_add_job(),
+                node={"key": "child-1", "job_type": "example_sleep", "job_params": {"message": "hello", "repeat": 1}},
+            )
+    finally:
+        job_registry.configure_enabled_job_types(None)
+
+    assert exc.value.code == "INVALID_JOB_TYPE"
 
 
 @pytest.mark.asyncio
@@ -776,7 +797,11 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
     monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", fake_publish_job_attempt)
     monkeypatch.setattr(
         "app.jobs.runner.get_job_executor",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("root executor must not run")),
+        lambda *_args, **_kwargs: SimpleNamespace(
+            execute=lambda *_execute_args, **_execute_kwargs: (_ for _ in ()).throw(
+                AssertionError("root executor must not run")
+            )
+        ),
     )
 
     result = await execute_job(
@@ -2014,6 +2039,7 @@ async def test_execute_workflow_root_rejects_cyclic_persisted_workflow_plan(monk
     monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
     monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
     monkeypatch.setattr("app.jobs.runner.JobRepo.heartbeat_attempt", fake_heartbeat_attempt)
+    monkeypatch.setattr("app.jobs.runner.get_job_executor", lambda *_args, **_kwargs: SimpleNamespace())
 
     with pytest.raises(AppError) as exc:
         await execute_job(
@@ -2143,6 +2169,40 @@ async def test_execute_job_reports_unregistered_job_type(monkeypatch):
 
     with pytest.raises(Exception) as exc:
         await execute_job(db, job.id, attempt_id=attempt.id, lease_token=lease_token)
+
+    assert exc.value.code == "INVALID_JOB_TYPE"
+
+
+@pytest.mark.asyncio
+async def test_execute_job_reports_disabled_job_type(monkeypatch):
+    register_all_job_types()
+    job_registry.configure_enabled_job_types(
+        ("tagged_text_translation",),
+        external_job_types=("tagged_text_translation",),
+    )
+    job = _running_add_job()
+    lease_token = uuid.uuid4()
+    attempt = _attempt(id=job.active_attempt_id, job_id=job.id, lease_token=lease_token)
+
+    async def fake_get_job_or_404(_db, _job_id):
+        return job
+
+    async def fake_get_attempt(_db, attempt_id):
+        assert attempt_id == attempt.id
+        return attempt
+
+    async def fail_update_progress(*_args, **_kwargs):
+        raise AssertionError("disabled job_type must fail before execution progress")
+
+    try:
+        monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
+        monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
+        monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fail_update_progress)
+
+        with pytest.raises(AppError) as exc:
+            await execute_job(_FakeDB(), job.id, attempt_id=attempt.id, lease_token=lease_token)
+    finally:
+        job_registry.configure_enabled_job_types(None)
 
     assert exc.value.code == "INVALID_JOB_TYPE"
 

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.jobs.error_projection import project_public_job_error
-from app.jobs.factory import get_job_executor
+from app.jobs.registry import get_enabled as get_job_executor
 from app.models.job import Job
 from app.repositories.job_repo import JobRepo
 from app.services.executor import run_ai_job
@@ -84,6 +84,15 @@ async def execute_job(
             details={"job_id": str(job.id), "attempt_id": str(attempt_id)},
         )
 
+    try:
+        executor = get_job_executor(job.job_type)
+    except KeyError as exc:
+        raise AppError(
+            "INVALID_JOB_TYPE",
+            "stored job references a disabled or unregistered job_type",
+            details={"job_id": str(job.id), "job_type": job.job_type},
+        ) from exc
+
     workflow_plan = workflow_plan_from_job(job)
     if attempt.purpose == "workflow_orchestration":
         if workflow_plan is None:
@@ -153,14 +162,6 @@ async def execute_job(
             details={"job_id": str(job.id), "attempt_id": str(attempt.id), "purpose": attempt.purpose},
         )
 
-    try:
-        executor = get_job_executor(job.job_type)
-    except KeyError as exc:
-        raise AppError(
-            "INVALID_JOB_TYPE",
-            "stored job references an unregistered job_type",
-            details={"job_id": str(job.id), "job_type": job.job_type},
-        ) from exc
     claimed_execute = await _update_current_progress(
         db,
         job,

@@ -1,5 +1,6 @@
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.routing import APIRoute
 import pytest
@@ -473,6 +474,11 @@ def _assert_default_retry_policy(retry_policy: dict):
     assert orchestration["backoff_kind"] == "fixed"
 
 
+def _patch_job_type_specs(monkeypatch, specs: dict[str, JobTypeSpec]) -> None:
+    monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: specs)
+    monkeypatch.setattr(job_registry, "enabled_job_type_specs", lambda: specs)
+
+
 def test_job_type_registry_exposes_required_metadata():
     register_all_job_types()
     specs = job_registry.all_job_type_specs()
@@ -713,6 +719,113 @@ def test_registered_job_type_names_are_layered_contract():
     }
 
 
+def test_enabled_job_types_default_to_all_registered_job_types():
+    job_registry.clear_for_tests()
+    register_all_job_types()
+
+    assert set(job_registry.enabled_job_types()) == set(job_registry.all_job_types())
+
+
+def test_enabled_job_types_default_external_job_types_exclude_leaf_children():
+    job_registry.clear_for_tests()
+    register_all_job_types()
+
+    external_job_types = set(job_registry.external_job_types())
+
+    assert "example_pair" in external_job_types
+    assert "example_collect" not in external_job_types
+    assert "poster_title_image_join" not in external_job_types
+
+
+def test_enabled_job_types_allowlist_keeps_registered_catalog_and_enables_requested_roots(monkeypatch):
+    job_registry.clear_for_tests()
+    monkeypatch.setattr(
+        "app.core.config.settings",
+        SimpleNamespace(
+            runtime=SimpleNamespace(is_release_env=False),
+            job=SimpleNamespace(enabled_job_types=("tagged_text_translation",)),
+        ),
+    )
+
+    register_all_job_types()
+
+    assert "poster_title_image" in set(job_registry.all_job_types())
+    assert set(job_registry.enabled_job_types()) == {"tagged_text_translation"}
+    assert set(job_registry.external_job_types()) == {"tagged_text_translation"}
+    assert job_registry.is_job_type_enabled("tagged_text_translation") is True
+    assert job_registry.is_job_type_enabled("poster_title_image") is False
+    assert job_registry.is_external_job_type_enabled("tagged_text_translation") is True
+    assert job_registry.is_external_job_type_enabled("poster_title_image") is False
+
+
+def test_enabled_job_types_adds_static_workflow_children(monkeypatch):
+    job_registry.clear_for_tests()
+    monkeypatch.setattr(
+        "app.core.config.settings",
+        SimpleNamespace(
+            runtime=SimpleNamespace(is_release_env=False),
+            job=SimpleNamespace(enabled_job_types=("poster_title_image",)),
+        ),
+    )
+
+    register_all_job_types()
+
+    assert set(job_registry.enabled_job_types()) == {
+        "poster_title_image",
+        "poster_title_image_style_probe",
+        "poster_title_image_generate_item",
+        "poster_title_image_join",
+    }
+    assert set(job_registry.external_job_types()) == {"poster_title_image"}
+    assert job_registry.is_external_job_type_enabled("poster_title_image_generate_item") is False
+
+
+def test_enabled_job_types_does_not_expose_workflow_children_as_external(monkeypatch):
+    job_registry.clear_for_tests()
+    monkeypatch.setattr(
+        "app.core.config.settings",
+        SimpleNamespace(
+            runtime=SimpleNamespace(is_release_env=False),
+            job=SimpleNamespace(enabled_job_types=("example_workflow",)),
+        ),
+    )
+
+    register_all_job_types()
+
+    assert {"example_sleep", "example_pair", "example_collect"} <= set(job_registry.enabled_job_types())
+    assert set(job_registry.external_job_types()) == {"example_workflow"}
+    assert job_registry.is_external_job_type_enabled("example_sleep") is False
+
+
+@pytest.mark.parametrize("enabled_job_types", [("missing_job",), ("poster_title_image_join",)])
+def test_enabled_job_types_rejects_unknown_or_internal_job_type(monkeypatch, enabled_job_types):
+    job_registry.clear_for_tests()
+    monkeypatch.setattr(
+        "app.core.config.settings",
+        SimpleNamespace(
+            runtime=SimpleNamespace(is_release_env=False),
+            job=SimpleNamespace(enabled_job_types=enabled_job_types),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="ENABLED_JOB_TYPES"):
+        register_all_job_types()
+
+
+def test_enabled_job_types_rejects_demo_job_type_in_release_env(monkeypatch):
+    job_registry.clear_for_tests()
+    monkeypatch.setattr(
+        "app.core.config.settings",
+        SimpleNamespace(
+            runtime=SimpleNamespace(is_release_env=True),
+            job=SimpleNamespace(enabled_job_types=("example_pair",)),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="release APP_ENV ENABLED_JOB_TYPES"):
+        register_all_job_types()
+
+
 def test_register_job_type_decorator_is_marker_not_registration_side_effect():
     before = set(job_registry.all_job_types())
 
@@ -923,20 +1036,16 @@ def test_job_executor_requires_explicit_visibility_and_role():
     ],
 )
 def test_validate_job_type_registry_rejects_invalid_phase3_metadata(monkeypatch, overrides, message):
-    monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: {"example_pair": _job_type_spec(**overrides)})
-    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
+    _patch_job_type_specs(monkeypatch, {"example_pair": _job_type_spec(**overrides)})
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda **_kwargs: {"version": "test", "job_types": {}})
 
     with pytest.raises(ValueError, match=message):
         validate_job_type_registry()
 
 
 def test_validate_job_type_registry_rejects_unknown_log_event(monkeypatch):
-    monkeypatch.setattr(
-        job_registry,
-        "all_job_type_specs",
-        lambda: {"example_pair": _job_type_spec(log_events=("not_registered",))},
-    )
-    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
+    _patch_job_type_specs(monkeypatch, {"example_pair": _job_type_spec(log_events=("not_registered",))})
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda **_kwargs: {"version": "test", "job_types": {}})
 
     with pytest.raises(ValueError, match="unknown log events"):
         validate_job_type_registry()
@@ -955,34 +1064,31 @@ def test_validate_job_type_registry_rejects_internal_errors(monkeypatch):
             )
         },
     )
-    monkeypatch.setattr(
-        job_registry,
-        "all_job_type_specs",
-        lambda: {"example_pair": _job_type_spec(error_codes=frozenset({"TEST_INTERNAL_ERROR"}))},
+    _patch_job_type_specs(
+        monkeypatch,
+        {"example_pair": _job_type_spec(error_codes=frozenset({"TEST_INTERNAL_ERROR"}))},
     )
-    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda **_kwargs: {"version": "test", "job_types": {}})
 
     with pytest.raises(ValueError, match="internal errors"):
         validate_job_type_registry()
 
 
 def test_validate_job_type_registry_rejects_invalid_capability_ref(monkeypatch):
-    monkeypatch.setattr(
-        job_registry,
-        "all_job_type_specs",
-        lambda: {"example_pair": _job_type_spec(allowed_capability_refs=frozenset({"media_input"}))},
+    _patch_job_type_specs(
+        monkeypatch,
+        {"example_pair": _job_type_spec(allowed_capability_refs=frozenset({"media_input"}))},
     )
-    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda **_kwargs: {"version": "test", "job_types": {}})
 
     with pytest.raises(ValueError, match="capability_ref"):
         validate_job_type_registry()
 
 
 def test_validate_capability_tool_registry_rejects_unknown_capability_ref(monkeypatch):
-    monkeypatch.setattr(
-        job_registry,
-        "all_job_type_specs",
-        lambda: {"example_pair": _job_type_spec(allowed_capability_refs=frozenset({"media.input:1"}))},
+    _patch_job_type_specs(
+        monkeypatch,
+        {"example_pair": _job_type_spec(allowed_capability_refs=frozenset({"media.input:1"}))},
     )
 
     with pytest.raises(ValueError, match="unknown capability_ref"):
@@ -1089,10 +1195,9 @@ def _prompt_config(prompt_ref: str = "prompt.ref", output_schema_ref: str = "Exa
 
 
 def test_validate_job_type_registry_rejects_missing_prompt_ref(monkeypatch):
-    monkeypatch.setattr(
-        job_registry,
-        "all_job_type_specs",
-        lambda: {
+    _patch_job_type_specs(
+        monkeypatch,
+        {
             "example_pair": _job_type_spec(
                 prompt_specs=(
                     PromptSpec(
@@ -1105,17 +1210,16 @@ def test_validate_job_type_registry_rejects_missing_prompt_ref(monkeypatch):
             )
         },
     )
-    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: _prompt_config())
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda **_kwargs: _prompt_config())
 
     with pytest.raises(ValueError, match="unknown prompt_ref"):
         validate_job_type_registry()
 
 
 def test_validate_job_type_registry_rejects_prompt_output_schema_mismatch(monkeypatch):
-    monkeypatch.setattr(
-        job_registry,
-        "all_job_type_specs",
-        lambda: {
+    _patch_job_type_specs(
+        monkeypatch,
+        {
             "example_pair": _job_type_spec(
                 prompt_specs=(
                     PromptSpec(
@@ -1131,7 +1235,7 @@ def test_validate_job_type_registry_rejects_prompt_output_schema_mismatch(monkey
     monkeypatch.setattr(
         prompt_templates,
         "_load_prompt_config",
-        lambda: _prompt_config(output_schema_ref="ExampleSleepResult"),
+        lambda **_kwargs: _prompt_config(output_schema_ref="ExampleSleepResult"),
     )
 
     with pytest.raises(ValueError, match="output_schema_ref mismatch"):
@@ -1139,27 +1243,25 @@ def test_validate_job_type_registry_rejects_prompt_output_schema_mismatch(monkey
 
 
 def test_validate_job_type_registry_rejects_builtin_llm_without_prompt_spec(monkeypatch):
-    monkeypatch.setattr(
-        job_registry,
-        "all_job_type_specs",
-        lambda: {
+    _patch_job_type_specs(
+        monkeypatch,
+        {
             "example_pair": _job_type_spec(
                 execution_mode="builtin_llm_text_runtime",
                 prompt_specs=(),
             )
         },
     )
-    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: {"version": "test", "job_types": {}})
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda **_kwargs: {"version": "test", "job_types": {}})
 
     with pytest.raises(ValueError, match="requires one prompt_spec"):
         validate_job_type_registry()
 
 
 def test_validate_job_type_registry_rejects_missing_required_prompt_template_block(monkeypatch):
-    monkeypatch.setattr(
-        job_registry,
-        "all_job_type_specs",
-        lambda: {
+    _patch_job_type_specs(
+        monkeypatch,
+        {
             "poster_title_image": _job_type_spec(
                 job_type="poster_title_image",
                 prompt_template_required_blocks=frozenset({"style_probe", "layout_rules"}),
@@ -1169,7 +1271,7 @@ def test_validate_job_type_registry_rejects_missing_required_prompt_template_blo
     monkeypatch.setattr(
         prompt_templates,
         "_load_prompt_config",
-        lambda: {
+        lambda **_kwargs: {
             "version": "test",
             "job_types": {
                 "poster_title_image": {
@@ -1191,11 +1293,97 @@ def test_validate_job_type_registry_rejects_missing_required_prompt_template_blo
         validate_job_type_registry()
 
 
-def test_validate_job_type_registry_rejects_bad_prompt_spec_field_type(monkeypatch):
+def test_validate_job_type_registry_skips_disabled_job_local_prompt_config(monkeypatch, tmp_path):
+    base_prompt_config = tmp_path / "prompts.yaml"
+    base_prompt_config.write_text("version: test\njob_types: {}\nprompts: {}\n", encoding="utf-8")
+    disabled_prompt_dir = tmp_path / "poster_title_image"
+    disabled_prompt_dir.mkdir()
+    (disabled_prompt_dir / "prompts.yaml").write_text(
+        """
+version: broken
+job_types:
+  poster_title_image:
+    name: Poster
+    description: Disabled poster template
+    prompt_blocks: []
+""".strip(),
+        encoding="utf-8",
+    )
+    specs = {
+        "tagged_text_translation": _job_type_spec(
+            job_type="tagged_text_translation",
+            visibility="public",
+            role="root",
+        ),
+        "poster_title_image": _job_type_spec(job_type="poster_title_image", visibility="public", role="root"),
+    }
+    monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: specs)
     monkeypatch.setattr(
         job_registry,
-        "all_job_type_specs",
-        lambda: {
+        "enabled_job_type_specs",
+        lambda: {"tagged_text_translation": specs["tagged_text_translation"]},
+    )
+    monkeypatch.setattr(
+        prompt_templates,
+        "settings",
+        SimpleNamespace(registry=SimpleNamespace(prompt_config_path=base_prompt_config)),
+    )
+    monkeypatch.setattr(prompt_templates, "JOB_PROMPT_CONFIG_ROOT", tmp_path)
+
+    validate_job_type_registry()
+
+
+def test_validate_job_type_registry_skips_disabled_base_prompt_config(monkeypatch, tmp_path):
+    base_prompt_config = tmp_path / "prompts.yaml"
+    base_prompt_config.write_text(
+        """
+version: test
+job_types: {}
+prompts:
+  disabled.prompt: []
+""".strip(),
+        encoding="utf-8",
+    )
+    specs = {
+        "tagged_text_translation": _job_type_spec(
+            job_type="tagged_text_translation",
+            visibility="public",
+            role="root",
+        ),
+        "disabled_job": _job_type_spec(
+            job_type="disabled_job",
+            visibility="public",
+            role="root",
+            prompt_specs=(
+                PromptSpec(
+                    step_name="disabled_step",
+                    runtime_field="prompt_payload",
+                    prompt_ref="disabled.prompt",
+                    output_schema_ref="ExamplePairResult",
+                ),
+            ),
+        ),
+    }
+    monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: specs)
+    monkeypatch.setattr(
+        job_registry,
+        "enabled_job_type_specs",
+        lambda: {"tagged_text_translation": specs["tagged_text_translation"]},
+    )
+    monkeypatch.setattr(
+        prompt_templates,
+        "settings",
+        SimpleNamespace(registry=SimpleNamespace(prompt_config_path=base_prompt_config)),
+    )
+    monkeypatch.setattr(prompt_templates, "JOB_PROMPT_CONFIG_ROOT", tmp_path)
+
+    validate_job_type_registry()
+
+
+def test_validate_job_type_registry_rejects_bad_prompt_spec_field_type(monkeypatch):
+    _patch_job_type_specs(
+        monkeypatch,
+        {
             "example_pair": _job_type_spec(
                 prompt_specs=(
                     PromptSpec(
@@ -1208,7 +1396,7 @@ def test_validate_job_type_registry_rejects_bad_prompt_spec_field_type(monkeypat
             )
         },
     )
-    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: _prompt_config())
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda **_kwargs: _prompt_config())
 
     with pytest.raises(ValueError, match="step_name"):
         validate_job_type_registry()

@@ -165,13 +165,36 @@ def validate_job_type_registry() -> None:
     known_errors = set(error_specs)
     known_events = all_log_events()
     known_schemas = all_schema_names()
-    prompt_templates.validate_prompt_config_shape(known_output_schemas=known_schemas)
-    known_prompt_refs = prompt_templates.all_prompt_refs()
-    prompt_output_schemas = prompt_templates.prompt_output_schema_refs()
-    specs = job_registry.all_job_type_specs()
+    registered_specs = job_registry.all_job_type_specs()
+    specs = job_registry.enabled_job_type_specs()
+    required_prompt_refs = {
+        prompt_spec.prompt_ref
+        for spec in specs.values()
+        for prompt_spec in spec.prompt_specs
+    }
+    required_prompt_template_job_types = {
+        spec.job_type
+        for spec in specs.values()
+        if spec.prompt_template_required_blocks
+    }
+    prompt_templates.validate_prompt_config_shape(
+        known_output_schemas=known_schemas,
+        prompt_refs=required_prompt_refs,
+        job_types=required_prompt_template_job_types,
+    )
+    known_prompt_refs = prompt_templates.all_prompt_refs(
+        prompt_refs=required_prompt_refs,
+        job_types=required_prompt_template_job_types,
+    )
+    prompt_output_schemas = prompt_templates.prompt_output_schema_refs(
+        prompt_refs=required_prompt_refs,
+        job_types=required_prompt_template_job_types,
+    )
     known_error_owners = {"core", "jobs", "storage", "ai", "billing", "broker", "callbacks"} | set(specs)
-    prompt_template_job_types = prompt_templates.prompt_template_job_types()
-    unknown_template_job_types = _missing(prompt_template_job_types, set(specs))
+    prompt_template_job_types = prompt_templates.prompt_template_job_types(
+        job_types=required_prompt_template_job_types,
+    )
+    unknown_template_job_types = _missing(prompt_template_job_types, set(registered_specs))
     if unknown_template_job_types:
         raise ValueError(f"prompt config references unknown job_types: {unknown_template_job_types}")
 
@@ -297,7 +320,7 @@ def validate_capability_tool_registry() -> None:
     known_tool_refs = tool_registry.all_tool_refs()
     known_setting_paths = {".".join(path) for path in APPLICATION_ENV_FIELD_MAP.values()}
 
-    for job_type, spec in job_registry.all_job_type_specs().items():
+    for job_type, spec in job_registry.enabled_job_type_specs().items():
         for capability_ref in spec.allowed_capability_refs:
             normalized_ref = require_capability_ref(capability_ref)
             if normalized_ref not in known_capability_refs:

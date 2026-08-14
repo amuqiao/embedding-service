@@ -59,6 +59,13 @@ class _SettingsProxy:
         return getattr(self._settings, name)
 
 
+def _patch_job_types(monkeypatch, job_types: list[str], *, enabled: list[str] | None = None) -> None:
+    enabled_job_types = job_types if enabled is None else enabled
+    monkeypatch.setattr("app.jobs.registry.all_job_types", lambda: job_types)
+    monkeypatch.setattr("app.jobs.registry.enabled_job_types", lambda: enabled_job_types)
+    monkeypatch.setattr("app.jobs.registry.is_external_job_type_enabled", lambda job_type: job_type in set(enabled_job_types))
+
+
 def _poster_hidden_model_config() -> str:
     return """\
 
@@ -505,7 +512,7 @@ def test_model_registry_filters_by_job_type_model_selection(tmp_path, monkeypatc
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
     monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
-    monkeypatch.setattr("app.jobs.registry.all_job_types", lambda: ["poster_title_image"])
+    _patch_job_types(monkeypatch, ["poster_title_image"])
 
     response = model_registry.list_models_response(job_type="poster_title_image")
 
@@ -525,7 +532,7 @@ def test_model_registry_uses_global_models_for_job_type_without_model_selection(
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
     monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
-    monkeypatch.setattr("app.jobs.registry.all_job_types", lambda: ["test.echo"])
+    _patch_job_types(monkeypatch, ["test.echo"])
 
     response = model_registry.list_models_response(job_type="test.echo")
 
@@ -545,11 +552,29 @@ def test_model_registry_requires_poster_title_image_model_selection_config(tmp_p
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
     monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
-    monkeypatch.setattr("app.jobs.registry.all_job_types", lambda: ["poster_title_image"])
+    _patch_job_types(monkeypatch, ["poster_title_image"])
     monkeypatch.setattr(model_registry, "validate_price_matches_model", lambda **_kwargs: None)
 
     with pytest.raises(RuntimeError, match="poster_title_image requires"):
         model_registry.validate_model_catalog()
+
+
+def test_model_registry_skips_disabled_job_type_model_selection_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "models.yaml"
+    _write_model_config(config_path)
+    job_model_root = tmp_path / "job-types"
+    job_model_root.mkdir()
+    test_settings = _build_settings(
+        OPENAI_API_KEY="test-key",
+        DEFAULT_MODEL_ID="custom-model",
+        MODEL_CONFIG_PATH=str(config_path),
+    )
+    monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
+    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
+    _patch_job_types(monkeypatch, ["poster_title_image"], enabled=[])
+    monkeypatch.setattr(model_registry, "validate_price_matches_model", lambda **_kwargs: None)
+
+    model_registry.validate_model_catalog()
 
 
 @pytest.mark.parametrize("image_adapter", ["missing-image-adapter", "litellm"])
@@ -573,7 +598,7 @@ def test_model_registry_validates_poster_title_image_generation_image_adapter(tm
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
     monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
-    monkeypatch.setattr("app.jobs.registry.all_job_types", lambda: ["poster_title_image"])
+    _patch_job_types(monkeypatch, ["poster_title_image"])
     monkeypatch.setattr(model_registry, "validate_price_matches_model", lambda **_kwargs: None)
 
     with pytest.raises(RuntimeError, match="generation.image_adapter must be one of"):
@@ -602,7 +627,7 @@ def test_model_registry_requires_openai_images_for_poster_title_image_token_pric
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
     monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
-    monkeypatch.setattr("app.jobs.registry.all_job_types", lambda: ["poster_title_image"])
+    _patch_job_types(monkeypatch, ["poster_title_image"])
     monkeypatch.setattr(model_registry, "validate_price_matches_model", lambda **_kwargs: None)
     monkeypatch.setattr(model_registry, "require_price", lambda _pricing_ref: SimpleNamespace(pricing_type="per_image_token"))
 
@@ -619,10 +644,25 @@ def test_model_registry_rejects_unknown_job_type(tmp_path, monkeypatch):
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
-    monkeypatch.setattr("app.jobs.registry.all_job_types", lambda: ["poster_title_image"])
+    _patch_job_types(monkeypatch, ["poster_title_image"])
 
     with pytest.raises(ValidationAppError, match="missing.job"):
         model_registry.list_models_response(job_type="missing.job")
+
+
+def test_model_registry_rejects_disabled_job_type(tmp_path, monkeypatch):
+    config_path = tmp_path / "models.yaml"
+    _write_model_config(config_path)
+    test_settings = _build_settings(
+        OPENAI_API_KEY="test-key",
+        DEFAULT_MODEL_ID="custom-model",
+        MODEL_CONFIG_PATH=str(config_path),
+    )
+    monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
+    _patch_job_types(monkeypatch, ["poster_title_image"], enabled=[])
+
+    with pytest.raises(ValidationAppError, match="poster_title_image"):
+        model_registry.list_models_response(job_type="poster_title_image")
 
 
 def test_model_registry_model_type_does_not_constrain_capabilities_or_output_media(tmp_path, monkeypatch):

@@ -80,7 +80,7 @@ K8s Pod 内运维入口只在已经部署的 Pod 中执行，不调用 `kubectl`
 
 本地配置统一维护在仓库根目录 `.env`，模板是 `.env.example`。`API_PORT`、`API_HOST_PORT`、`POSTGRES_DB`、`POSTGRES_HOST_PORT`、`REDIS_HOST_PORT`、`COMPOSE_PROJECT_NAME`、`WORKER_CONCURRENCY`、`WORKER_LOGLEVEL` 和 `WORKER_RECOVERY_LOOP` 等本地脚本或 compose 编排变量也写入这套文件，避免应用、脚本和 compose 使用不同配置源。
 
-`APP_ENV=test` 或 `APP_ENV=prd` 时，启动会拒绝本地绕过认证、`ALLOW_INSECURE_CALLBACKS=true`、`STORAGE_BACKEND=local`、`TASKIQ_BROKER_KIND=redis_list` 和明显占位或过短的 `SERVICE_API_KEY` / `CALLBACK_SIGNING_SECRET`。`STORAGE_BACKEND=local` 只适用于本地开发或单机 compose；发布模式必须使用外部对象存储后端，例如 `aliyun_oss`，避免 API / worker 节点之间读写不同本地磁盘。
+`APP_ENV=test` 或 `APP_ENV=prd` 时，启动会拒绝本地绕过认证、`ALLOW_INSECURE_CALLBACKS=true`、`TASKIQ_BROKER_KIND=redis_list` 和明显占位或过短的 `SERVICE_API_KEY` / `CALLBACK_SIGNING_SECRET`。如果当前启用的 `job_type` 需要对象存储，发布模式还会拒绝 `STORAGE_BACKEND=local`，必须使用外部对象存储后端，例如 `aliyun_oss`，避免 API / worker 节点之间读写不同本地磁盘。
 
 模板身份默认值：
 
@@ -107,6 +107,8 @@ API 前缀由 `SERVICE_API_PREFIX` 配置，默认是 `/api/v1/ai-jobs`。
 Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts.yaml`。当前内置测试和示例 `job_type` 只用于模板验证与接入样例，边界见 [模板采用就绪度](docs/current/template-readiness.md)；新增正式 LLM 能力时再按项目规范补充 Prompt 模板、`job_type` 注册和验证用例。
 
 `APP_ENV=test` 或 `APP_ENV=prd` 时，`POST /jobs` 只允许提交 `visibility="public"` 的 `job_type`。`visibility="demo"` 的模板示例只能在 `local/dev` 用于本地验证、smoke 或压测；`visibility="internal"` 的类型只供服务内部 workflow child 使用，任何环境都不能被外部直接提交。
+
+`ENABLED_JOB_TYPES` 控制当前服务实例启用的外部 root `job_type`。为空时保持默认行为：启用全部静态注册 job type；显式配置时只启用列表内 root 能力，workflow 内部 child job type 由服务静态补齐。未启用的 `job_type` 不允许外部提交，也不会要求它的模型、Prompt 或对象存储配置通过启动校验。
 
 模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML。顶层字段维护运行时服务配置，例如 `adapter`、`provider_model`、`adapter_model`、`pricing_ref`、所需环境变量和内部模型调用参数；`public` 块维护 `/models` 返回的调用方可见投影，例如稳定模型 ID 对应的展示名、`model_type`、公开 provider 标签、`capabilities`、`input_media_types`、`output_media_types`、`limits` / `features` 类型化元信息和公开 `parameters`。
 

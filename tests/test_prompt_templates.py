@@ -8,7 +8,7 @@ def test_public_prompt_template_blocks_are_declared_by_config(monkeypatch):
     monkeypatch.setattr(
         prompt_templates,
         "_load_prompt_config",
-        lambda: {
+        lambda **_kwargs: {
             "version": "test",
             "job_types": {
                 "job.generic": {
@@ -62,7 +62,7 @@ def test_job_local_prompt_template_uses_job_local_version(monkeypatch):
         },
     }
     prompt_templates._merge_prompt_config(base, overlay, source=Path("job.yaml"))
-    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda: base)
+    monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda **_kwargs: base)
 
     template = prompt_templates.list_prompt_templates(job_type="job.local")
 
@@ -73,7 +73,7 @@ def test_prompt_templates_reject_unknown_job_type(monkeypatch):
     monkeypatch.setattr(
         prompt_templates,
         "_load_prompt_config",
-        lambda: {
+        lambda **_kwargs: {
             "version": "test",
             "job_types": {},
         },

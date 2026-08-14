@@ -37,8 +37,13 @@ def _valid_payload() -> dict:
     }
 
 
-def _job_type_spec(*, execution_mode: str = "custom_executor", visibility: str = "public"):
-    return SimpleNamespace(execution_mode=execution_mode, visibility=visibility)
+def _job_type_spec(*, execution_mode: str = "custom_executor", visibility: str = "public", role: str = "root"):
+    return SimpleNamespace(execution_mode=execution_mode, visibility=visibility, role=role)
+
+
+def _patch_enabled_executor(monkeypatch, handler) -> None:
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: handler)
+    monkeypatch.setattr("app.jobs.registry.get_external", lambda _job_type: handler)
 
 
 def _assert_iso_server_time(value: str) -> None:
@@ -210,7 +215,7 @@ def test_create_job_validation_allows_non_model_runtime(monkeypatch):
             "job_params": {"input": {"value": 1}},
         }
     )
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda job_type: GenericHandler())
+    _patch_enabled_executor(monkeypatch, GenericHandler())
     monkeypatch.setattr("app.services.jobs.get_template", lambda job_type: None)
     monkeypatch.setattr(
         "app.services.jobs.require_enabled_text_model",
@@ -247,7 +252,7 @@ def test_create_job_validation_rejects_non_text_model_for_builtin_text_runtime(m
             "job_params": {"input": {"value": 1}},
         }
     )
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda job_type: BuiltinTextHandler())
+    _patch_enabled_executor(monkeypatch, BuiltinTextHandler())
     monkeypatch.setattr("app.services.jobs.get_template", lambda job_type: None)
 
     def reject_non_text_model(model_id):
@@ -286,7 +291,7 @@ def test_create_job_validation_rejects_non_text_model_for_custom_text_executor(m
             "job_params": {"input": {"value": 1}},
         }
     )
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda job_type: CustomTextHandler())
+    _patch_enabled_executor(monkeypatch, CustomTextHandler())
     monkeypatch.setattr("app.services.jobs.get_template", lambda job_type: None)
 
     def reject_non_text_model(model_id):
@@ -323,7 +328,7 @@ def test_create_job_validation_preserves_runtime_app_error(monkeypatch):
             "job_params": {"input": {"value": 1}},
         }
     )
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda job_type: RuntimeHandler())
+    _patch_enabled_executor(monkeypatch, RuntimeHandler())
 
     with pytest.raises(AppError) as exc:
         _validate_create_request(payload)
@@ -355,7 +360,7 @@ def test_create_job_validation_wraps_unexpected_prerequisite_errors(monkeypatch)
             "job_params": {"input": {"value": 1}},
         }
     )
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda job_type: RuntimeHandler())
+    _patch_enabled_executor(monkeypatch, RuntimeHandler())
 
     with pytest.raises(AppError) as exc:
         _validate_create_request(payload)
@@ -902,6 +907,20 @@ def test_prompt_templates_route_rejects_unknown_job_type(monkeypatch):
     _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.get(f"{API_PREFIX}/prompt-templates", params={"job_type": "missing.job"})
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["code"] == "100011"
+    assert body["data"] is None
+
+
+def test_prompt_templates_route_rejects_disabled_job_type(monkeypatch):
+    from starlette.testclient import TestClient
+
+    _patch_security_settings(monkeypatch, DISABLE_HTTP_AUTH_HEADER=True)
+    monkeypatch.setattr("app.api.routes.meta.job_registry.is_external_job_type_enabled", lambda _job_type: False)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(f"{API_PREFIX}/prompt-templates", params={"job_type": "poster_title_image"})
 
     assert response.status_code == 400
     body = response.json()

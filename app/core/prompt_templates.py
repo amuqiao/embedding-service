@@ -51,9 +51,11 @@ def _merge_prompt_config(base: dict[str, Any], overlay: dict[str, Any], *, sourc
                 versions[key] = version
 
 
-def _load_prompt_config() -> dict[str, Any]:
+def _load_prompt_config(*, job_types: set[str] | None = None) -> dict[str, Any]:
     config = _read_prompt_config_file(settings.registry.prompt_config_path)
     for path in sorted(JOB_PROMPT_CONFIG_ROOT.glob("*/prompts.yaml")):
+        if job_types is not None and path.parent.name not in job_types:
+            continue
         _merge_prompt_config(config, _read_prompt_config_file(path), source=path)
     return config
 
@@ -79,15 +81,24 @@ def _required_prompt_section(config: dict[str, Any], section: str) -> dict[str, 
     return section_config
 
 
-def _prompt_entry_configs(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _prompt_entry_configs(
+    config: dict[str, Any],
+    *,
+    prompt_refs: set[str] | None = None,
+    job_types: set[str] | None = None,
+) -> dict[str, dict[str, Any]]:
     entries: dict[str, dict[str, Any]] = {}
     for section in PROMPT_CONFIG_SECTIONS:
         for prompt_ref, prompt_config in _required_prompt_section(config, section).items():
             if not isinstance(prompt_ref, str) or not prompt_ref.strip():
                 raise RuntimeError(f"prompt config {section} key must be a non-empty string")
+            normalized_ref = prompt_ref.strip()
+            if section == "prompts" and prompt_refs is not None and normalized_ref not in prompt_refs:
+                continue
+            if section == "job_types" and job_types is not None and normalized_ref not in job_types:
+                continue
             if not isinstance(prompt_config, dict):
                 raise RuntimeError(f"prompt {prompt_ref} must be a YAML object")
-            normalized_ref = prompt_ref.strip()
             if normalized_ref in entries:
                 raise RuntimeError(f"duplicate prompt ref: {normalized_ref}")
             entries[normalized_ref] = prompt_config
@@ -112,9 +123,18 @@ def _validate_prompt_blocks(prompt_ref: str, prompt_config: dict[str, Any]) -> N
         _block_content(block)
 
 
-def _prompt_output_schema_refs(config: dict[str, Any]) -> dict[str, str]:
+def _prompt_output_schema_refs(
+    config: dict[str, Any],
+    *,
+    prompt_refs: set[str] | None = None,
+    job_types: set[str] | None = None,
+) -> dict[str, str]:
     refs: dict[str, str] = {}
-    for prompt_ref, prompt_config in _prompt_entry_configs(config).items():
+    for prompt_ref, prompt_config in _prompt_entry_configs(
+        config,
+        prompt_refs=prompt_refs,
+        job_types=job_types,
+    ).items():
         output_schema_ref = prompt_config.get("output_schema_ref")
         if output_schema_ref is None:
             continue
@@ -167,12 +187,11 @@ def _job_template(job_type: str, job_config: dict[str, Any], *, version: str) ->
 
 
 def _job_template_for_type(job_type: str) -> PromptTemplateResponseData:
-    config = _load_prompt_config()
-    job_configs = _required_prompt_section(config, "job_types")
-
     normalized_job_type = job_type.strip()
     if not normalized_job_type:
         raise ValidationAppError("INVALID_JOB_TYPE", "job_type must be a non-empty string")
+    config = _load_prompt_config(job_types={normalized_job_type})
+    job_configs = _required_prompt_section(config, "job_types")
     job_config = job_configs.get(normalized_job_type)
     if not isinstance(job_config, dict):
         raise ValidationAppError("INVALID_JOB_TYPE", f"不支持的 job_type: {normalized_job_type}")
@@ -200,24 +219,57 @@ def prompt_version() -> str:
     return _prompt_version(_load_prompt_config())
 
 
-def all_prompt_refs() -> set[str]:
-    return set(_prompt_entry_configs(_load_prompt_config()))
+def _filtered_prompt_refs(
+    config: dict[str, Any],
+    *,
+    prompt_refs: set[str] | None = None,
+    job_types: set[str] | None = None,
+) -> set[str]:
+    return set(_prompt_entry_configs(config, prompt_refs=prompt_refs, job_types=job_types))
 
 
-def prompt_output_schema_refs() -> dict[str, str]:
-    return _prompt_output_schema_refs(_load_prompt_config())
+def all_prompt_refs(
+    *,
+    prompt_refs: set[str] | None = None,
+    job_types: set[str] | None = None,
+) -> set[str]:
+    config = _load_prompt_config(job_types=job_types)
+    return _filtered_prompt_refs(config, prompt_refs=prompt_refs, job_types=job_types)
 
 
-def prompt_template_job_types() -> set[str]:
-    return set(_required_prompt_section(_load_prompt_config(), "job_types"))
+def prompt_output_schema_refs(
+    *,
+    prompt_refs: set[str] | None = None,
+    job_types: set[str] | None = None,
+) -> dict[str, str]:
+    config = _load_prompt_config(job_types=job_types)
+    return _prompt_output_schema_refs(config, prompt_refs=prompt_refs, job_types=job_types)
 
 
-def validate_prompt_config_shape(*, known_output_schemas: set[str] | None = None) -> None:
-    config = _load_prompt_config()
+def prompt_template_job_types(*, job_types: set[str] | None = None) -> set[str]:
+    configured = set(_required_prompt_section(_load_prompt_config(job_types=job_types), "job_types"))
+    if job_types is None:
+        return configured
+    return configured & job_types
+
+
+def validate_prompt_config_shape(
+    *,
+    known_output_schemas: set[str] | None = None,
+    prompt_refs: set[str] | None = None,
+    job_types: set[str] | None = None,
+) -> None:
+    config = _load_prompt_config(job_types=job_types)
     _prompt_version(config)
-    _prompt_entry_configs(config)
+    _prompt_entry_configs(config, prompt_refs=prompt_refs, job_types=job_types)
     for section in PROMPT_CONFIG_SECTIONS:
         for prompt_ref, prompt_config in _required_prompt_section(config, section).items():
+            if section == "job_types" and job_types is not None and prompt_ref not in job_types:
+                continue
+            if section == "prompts" and prompt_refs is not None and prompt_ref not in prompt_refs:
+                continue
+            if not isinstance(prompt_config, dict):
+                raise RuntimeError(f"prompt {prompt_ref} must be a YAML object")
             if section == "job_types":
                 _template_blocks(prompt_config)
             else:
@@ -228,7 +280,7 @@ def validate_prompt_config_shape(*, known_output_schemas: set[str] | None = None
                 raise RuntimeError(f"prompt {prompt_ref} requires name")
             if not isinstance(description, str) or not description.strip():
                 raise RuntimeError(f"prompt {prompt_ref} requires description")
-    schema_refs = _prompt_output_schema_refs(config)
+    schema_refs = prompt_output_schema_refs(prompt_refs=prompt_refs, job_types=job_types)
     if known_output_schemas is not None:
         missing_schemas = sorted(set(schema_refs.values()) - known_output_schemas)
         if missing_schemas:
@@ -236,7 +288,7 @@ def validate_prompt_config_shape(*, known_output_schemas: set[str] | None = None
 
 
 def get_system_prompt(job_type: str) -> str:
-    config = _load_prompt_config()
+    config = _load_prompt_config(job_types={job_type})
     job_configs = config.get("job_types")
     if not isinstance(job_configs, dict):
         return ""
@@ -252,7 +304,7 @@ def get_system_prompt(job_type: str) -> str:
 
 
 def get_output_contract(job_type: str) -> str:
-    config = _load_prompt_config()
+    config = _load_prompt_config(job_types={job_type})
     job_configs = config.get("job_types")
     if not isinstance(job_configs, dict):
         raise RuntimeError("prompt config job_types must be a YAML object")

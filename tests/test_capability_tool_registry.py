@@ -92,6 +92,7 @@ def clear_registries(monkeypatch):
     capability_registry.clear_for_tests()
     tool_registry.clear_for_tests()
     monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: {})
+    monkeypatch.setattr(job_registry, "enabled_job_type_specs", lambda: {})
     yield
     capability_registry.clear_for_tests()
     tool_registry.clear_for_tests()
@@ -100,11 +101,9 @@ def clear_registries(monkeypatch):
 def test_capability_and_tool_registries_validate_graph(monkeypatch):
     tool_registry.register(_tool())
     capability_registry.register(_capability())
-    monkeypatch.setattr(
-        job_registry,
-        "all_job_type_specs",
-        lambda: {"example_pair": _job_type_spec(allowed_capability_refs=frozenset({"media.input:1"}))},
-    )
+    specs = {"example_pair": _job_type_spec(allowed_capability_refs=frozenset({"media.input:1"}))}
+    monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: specs)
+    monkeypatch.setattr(job_registry, "enabled_job_type_specs", lambda: specs)
 
     validate_capability_tool_registry()
 

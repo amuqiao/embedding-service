@@ -485,7 +485,7 @@ def _model_out(model: ModelCatalogEntry) -> ModelOut:
 def _job_type_exists(job_type: str) -> bool:
     from app.jobs import registry as job_registry
 
-    return job_type in set(job_registry.all_job_types())
+    return job_registry.is_external_job_type_enabled(job_type)
 
 
 def _job_scoped_models(models: list[ModelCatalogEntry], job_type: str) -> tuple[str, list[ModelCatalogEntry]]:
@@ -560,15 +560,18 @@ def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry
     from app.jobs import model_selection
     from app.jobs import registry as job_registry
 
-    known_job_types = set(job_registry.all_job_types())
+    registered_job_types = set(job_registry.all_job_types())
+    enabled_job_types = set(job_registry.enabled_job_types())
     poster_job_type = model_selection.POSTER_TITLE_IMAGE_JOB_TYPE
-    if poster_job_type in known_job_types and not model_selection.has_model_selection_config(poster_job_type):
+    if poster_job_type in enabled_job_types and not model_selection.has_model_selection_config(poster_job_type):
         raise RuntimeError("poster_title_image requires app/jobs/types/poster_title_image/models.yaml")
     model_by_id = {model.id: model for model in enabled_models}
     for path in sorted(model_selection.JOB_MODEL_CONFIG_ROOT.glob(f"*/{model_selection.JOB_MODEL_CONFIG_FILENAME}")):
         job_type = path.parent.name
-        if known_job_types and job_type not in known_job_types:
+        if registered_job_types and job_type not in registered_job_types:
             raise RuntimeError(f"job model selection config references unknown job_type: {job_type}")
+        if job_type not in enabled_job_types:
+            continue
         selection = model_selection.get_public_model_selection(job_type)
         missing_model_ids = sorted(set(selection.allowed_model_ids) - set(model_by_id))
         if missing_model_ids:
@@ -576,7 +579,10 @@ def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry
                 f"job_type {job_type} public_model_selection references non-enabled models: {missing_model_ids}"
             )
 
-    if model_selection.has_model_selection_config(model_selection.POSTER_TITLE_IMAGE_JOB_TYPE):
+    if (
+        model_selection.POSTER_TITLE_IMAGE_JOB_TYPE in enabled_job_types
+        and model_selection.has_model_selection_config(model_selection.POSTER_TITLE_IMAGE_JOB_TYPE)
+    ):
         from app.integrations.image import POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES
 
         poster_selection = model_selection.get_poster_title_image_model_selection()

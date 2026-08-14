@@ -2,9 +2,11 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.operations import OperationID, operation_path, operation_route_kwargs
 from app.core.security import require_service_auth
+from app.core.exceptions import ValidationAppError
 from app.core.language_catalog import list_languages_response
 from app.core.model_registry import list_models_response
 from app.core.prompt_templates import DEFAULT_PROMPT_TEMPLATE_JOB_TYPE, list_prompt_templates
+from app.jobs import registry as job_registry
 
 router = APIRouter(tags=["meta"], dependencies=[Depends(require_service_auth)])
 
@@ -42,4 +44,6 @@ async def prompt_templates(
         description="Job type whose prompt template should be returned.",
     )
 ):
+    if not job_registry.is_external_job_type_enabled(job_type.strip()):
+        raise ValidationAppError("INVALID_JOB_TYPE", f"不支持的 job_type: {job_type.strip()}")
     return list_prompt_templates(job_type=job_type)

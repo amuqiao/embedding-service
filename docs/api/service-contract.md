@@ -58,14 +58,14 @@ CreateJobRequest
 - `reject_duplicate`
 - `return_existing`
 
-外部提交准入由 `job_type.visibility` 和 `APP_ENV` 共同决定：
+外部提交准入由 `ENABLED_JOB_TYPES`、`job_type.visibility` 和 `APP_ENV` 共同决定。`ENABLED_JOB_TYPES` 为空时启用全部静态注册 root 能力；显式配置时，只有 allowlist 内的 root `job_type` 可作为外部入口，workflow 内部 child job type 由服务静态补齐。
 
 | APP_ENV | 可外部提交的 job_type |
 |---|---|
 | `local` / `dev` | `visibility="public"` 或 `visibility="demo"` |
 | `test` / `prd` | 仅 `visibility="public"` |
 
-`visibility="internal"` 的 `job_type` 只供服务内部 workflow child 使用，任何环境都不能被外部直接提交。不允许提交的 `job_type` 返回 `INVALID_JOB_TYPE`。
+`visibility="internal"` 的 `job_type` 只供服务内部 workflow child 使用，任何环境都不能被外部直接提交。未启用或不允许提交的 `job_type` 返回 `INVALID_JOB_TYPE`。
 
 成功响应：
 
@@ -197,11 +197,11 @@ GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
 
 模型运行时配置来自 `MODEL_CONFIG_PATH`，但 `GET /models` 只返回其中 `public` 块声明的调用方可见投影。顶层 `adapter`、`provider_model`、`adapter_model`、`pricing_ref`、`requires_env` 和 `generation` 等运行时字段不属于 `/models` 合同，更新这些字段不应改变调用方看到的模型信息。
 
-`GET /models` 未传 `job_type` 时返回服务级公开模型投影；传入 `job_type` 时，如果该 `job_type` 目录下存在 `models.yaml`，响应会按该任务允许调用方选择的模型列表过滤同一套公开投影。没有 `models.yaml` 的已注册 `job_type` 使用服务级公开模型投影；未知 `job_type` 返回 `INVALID_JOB_TYPE`。
+`GET /models` 未传 `job_type` 时返回服务级公开模型投影；传入 `job_type` 时，如果该 `job_type` 目录下存在 `models.yaml`，响应会按该任务允许调用方选择的模型列表过滤同一套公开投影。没有 `models.yaml` 的已启用 `job_type` 使用服务级公开模型投影；未知或未启用 `job_type` 返回 `INVALID_JOB_TYPE`。
 
 语种目录来自 `app/core/language_catalog.py`，Prompt 配置来自 `PROMPT_CONFIG_PATH` 和各 `job_type` 垂直目录下的 `prompts.yaml`。这些接口只暴露当前服务允许调用方看到的元信息，不暴露 provider 密钥或内部 pricing 明细。
 
-`GET /prompt-templates` 支持可选 query 参数 `job_type`。未传时默认使用 `poster_title_image`，响应只返回该 `job_type` 的模板；传入未知 `job_type` 或不公开 Prompt 模板的 `job_type` 会返回 `INVALID_JOB_TYPE`。例如 `tagged_text_translation` 是可提交 Job，但 Prompt 是服务内部实现细节，不进入该接口。
+`GET /prompt-templates` 支持可选 query 参数 `job_type`。未传时默认使用 `poster_title_image`，响应只返回该 `job_type` 的模板；传入未知、未启用或不公开 Prompt 模板的 `job_type` 会返回 `INVALID_JOB_TYPE`。例如 `tagged_text_translation` 是可提交 Job，但 Prompt 是服务内部实现细节，不进入该接口。
 
 `GET /prompt-templates` 成功响应：
 

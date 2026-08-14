@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import AppError, ValidationAppError
 from app.core.prompt_templates import get_template
-from app.jobs.factory import get_job_executor
+from app.jobs.registry import get_enabled as get_job_executor
 from app.models.job import Job, JobEvent
 from app.repositories.job_repo import JobRepo
 from app.services.job_runtime import (
@@ -452,7 +452,7 @@ async def _create_child_job(
     try:
         handler = get_job_executor(job_type)
     except KeyError as exc:
-        raise ValidationAppError("INVALID_JOB_TYPE", f"不支持的 child job_type: {job_type}") from exc
+        raise ValidationAppError("INVALID_JOB_TYPE", f"不支持或未启用的 child job_type: {job_type}") from exc
     spec = handler.job_type_spec()
     if spec.role not in {"leaf", "root_or_leaf"}:
         raise ValidationAppError(

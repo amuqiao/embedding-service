@@ -1,9 +1,52 @@
 from __future__ import annotations
 
+_ENABLED_JOB_TYPE_DEPENDENCIES: dict[str, frozenset[str]] = {
+    "example_workflow": frozenset({"example_sleep", "example_pair", "example_collect"}),
+    "poster_title_image": frozenset(
+        {
+            "poster_title_image_style_probe",
+            "poster_title_image_generate_item",
+            "poster_title_image_join",
+        }
+    ),
+}
+
+
+def _expanded_enabled_job_types(
+    configured_job_types: tuple[str, ...],
+    *,
+    release_env: bool,
+) -> tuple[frozenset[str], frozenset[str]] | None:
+    if not configured_job_types:
+        return None
+
+    from app.jobs import registry as job_registry
+
+    specs = job_registry.all_job_type_specs()
+    unknown = sorted(set(configured_job_types) - set(specs))
+    if unknown:
+        raise ValueError(f"ENABLED_JOB_TYPES references unknown job_type: {unknown}")
+
+    external = set(configured_job_types)
+    enabled = set(external)
+    for job_type in configured_job_types:
+        spec = specs[job_type]
+        if spec.visibility == "internal" or spec.role == "leaf":
+            raise ValueError("ENABLED_JOB_TYPES must list external root-capable job_types")
+        if release_env and spec.visibility != "public":
+            raise ValueError("release APP_ENV ENABLED_JOB_TYPES must list only public job_types")
+        enabled.update(_ENABLED_JOB_TYPE_DEPENDENCIES.get(job_type, frozenset()))
+
+    missing_dependencies = sorted(enabled - set(specs))
+    if missing_dependencies:
+        raise ValueError(f"ENABLED_JOB_TYPES references unknown dependent job_type: {missing_dependencies}")
+    return frozenset(enabled), frozenset(external)
+
 
 def register_all_job_types() -> None:
+    from app.core.config import settings
     from app.capabilities.register import register_all_capabilities
-    from app.jobs.registry import register
+    from app.jobs.registry import configure_enabled_job_types, register
     from app.jobs.types.audio_stem_separation import AudioStemSeparationJob
     from app.jobs.types.audio_stem_separation.errors import register_audio_stem_separation_errors
     from app.jobs.types.audio_stem_separation_triton import AudioStemSeparationTritonJob
@@ -51,3 +94,12 @@ def register_all_job_types() -> None:
         register(executor_cls())
     register_example_workflows()
     register_poster_title_image_workflow()
+    expanded_enabled_job_types = _expanded_enabled_job_types(
+        settings.job.enabled_job_types,
+        release_env=settings.runtime.is_release_env,
+    )
+    if expanded_enabled_job_types is None:
+        configure_enabled_job_types(None)
+    else:
+        runtime_job_types, external_job_types = expanded_enabled_job_types
+        configure_enabled_job_types(runtime_job_types, external_job_types=external_job_types)

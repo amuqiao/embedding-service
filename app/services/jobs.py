@@ -301,17 +301,22 @@ def _validate_callback(callback: Any) -> None:
 
 
 def validate_create_contract(payload: CreateJobRequest) -> tuple[Any, dict[str, Any]]:
-    from app.jobs.factory import get_job_executor
+    from app.jobs.registry import get_external
     try:
-        handler = get_job_executor(payload.job_type)
+        handler = get_external(payload.job_type)
     except KeyError:
         raise ValidationAppError("INVALID_JOB_TYPE", f"不支持的 job_type: {payload.job_type}")
     spec = handler.job_type_spec()
-    if spec.visibility == "internal" or (settings.runtime.is_release_env and spec.visibility != "public"):
+    if spec.role == "leaf" or spec.visibility == "internal" or (settings.runtime.is_release_env and spec.visibility != "public"):
         raise ValidationAppError(
             "INVALID_JOB_TYPE",
             f"当前环境不支持的 job_type: {payload.job_type}",
-            {"job_type": payload.job_type, "visibility": spec.visibility, "app_env": settings.runtime.app_env},
+            {
+                "job_type": payload.job_type,
+                "visibility": spec.visibility,
+                "role": spec.role,
+                "app_env": settings.runtime.app_env,
+            },
         )
     job_params = _normalize_job_params(payload, handler)
     if payload.callback is not None and not handler.allow_callback:

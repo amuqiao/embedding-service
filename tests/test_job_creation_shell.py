@@ -100,6 +100,11 @@ def _patch_job_settings(monkeypatch, **overrides) -> None:
     monkeypatch.setattr(jobs_module, "settings", _job_settings(**overrides))
 
 
+def _patch_job_executor(monkeypatch, handler) -> None:
+    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: handler)
+    monkeypatch.setattr("app.jobs.registry.get_external", lambda _job_type: handler)
+
+
 @pytest.fixture(autouse=True)
 def _public_callback_dns(monkeypatch):
     monkeypatch.setattr(
@@ -164,7 +169,7 @@ async def test_create_job_writes_shell_fields_without_legacy_shell_payload(monke
     monkeypatch.setattr("app.services.jobs.JobRepo.create_submission_key", fake_create_submission_key)
     monkeypatch.setattr("app.services.jobs.JobRepo.create_initial_attempt", fake_create_initial_attempt)
     monkeypatch.setattr("app.services.jobs.write_runtime_json", fake_write_runtime_json)
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+    _patch_job_executor(monkeypatch, _TestHandler())
 
     payload = CreateJobRequest.model_validate(
         {
@@ -259,7 +264,7 @@ async def test_create_job_holds_capacity_gate_through_job_creation(monkeypatch):
     monkeypatch.setattr("app.services.jobs.JobRepo.create_submission_key", fake_create_submission_key)
     monkeypatch.setattr("app.services.jobs.JobRepo.create_initial_attempt", fake_create_initial_attempt)
     monkeypatch.setattr("app.services.jobs.write_runtime_json", fake_write_runtime_json)
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+    _patch_job_executor(monkeypatch, _TestHandler())
 
     payload = CreateJobRequest.model_validate(
         {
@@ -300,7 +305,7 @@ async def test_create_job_rejects_when_capacity_gate_is_full(monkeypatch):
     monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.count_active_jobs", fake_count_active_jobs)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+    _patch_job_executor(monkeypatch, _TestHandler())
 
     payload = CreateJobRequest.model_validate(
         {
@@ -366,7 +371,7 @@ async def test_create_job_writes_registered_workflow_plan_to_runtime_ref(monkeyp
     monkeypatch.setattr("app.services.jobs.JobRepo.create_submission_key", fake_create_submission_key)
     monkeypatch.setattr("app.services.jobs.JobRepo.create_initial_attempt", fake_create_initial_attempt)
     monkeypatch.setattr("app.services.jobs.write_runtime_json", fake_write_runtime_json)
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+    _patch_job_executor(monkeypatch, _TestHandler())
 
     workflow_registry.clear_for_tests()
 
@@ -445,7 +450,7 @@ async def test_create_job_idempotent_existing_workflow_does_not_recompile(monkey
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
     monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+    _patch_job_executor(monkeypatch, _TestHandler())
 
     workflow_registry.clear_for_tests()
     workflow_registry.register(
@@ -490,7 +495,7 @@ async def test_create_job_maps_invalid_workflow_plan_to_validation_error(monkeyp
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
     monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+    _patch_job_executor(monkeypatch, _TestHandler())
 
     workflow_registry.clear_for_tests()
     workflow_registry.register(
@@ -579,7 +584,7 @@ async def test_create_job_idempotency_uses_shell_request_fingerprint(monkeypatch
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
     monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+    _patch_job_executor(monkeypatch, _TestHandler())
 
     payload = CreateJobRequest.model_validate(
         {
@@ -629,7 +634,7 @@ async def test_create_job_idempotency_return_existing_does_not_consume_capacity(
     monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
     monkeypatch.setattr("app.services.jobs.JobRepo.count_active_jobs", fail_count_active_jobs)
     monkeypatch.setattr("app.services.jobs.JobRepo.create", fail_create)
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+    _patch_job_executor(monkeypatch, _TestHandler())
 
     payload = CreateJobRequest.model_validate(
         {
@@ -671,7 +676,7 @@ async def test_create_job_rejects_duplicate_by_default(monkeypatch):
     _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=0)
     monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
     monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+    _patch_job_executor(monkeypatch, _TestHandler())
 
     payload = CreateJobRequest.model_validate(
         {
@@ -718,7 +723,7 @@ def test_validate_create_contract_rejects_callback_domain_resolving_to_metadata_
         return [(None, None, None, "", ("169.254.169.254", 443))]
 
     monkeypatch.setattr("app.core.callback_security.socket.getaddrinfo", fake_getaddrinfo)
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: _TestHandler())
+    _patch_job_executor(monkeypatch, _TestHandler())
     payload = CreateJobRequest.model_validate(
         {
             "client_request_id": "req-1",
@@ -735,12 +740,12 @@ def test_validate_create_contract_rejects_callback_domain_resolving_to_metadata_
     assert "private or reserved" in exc.value.message
 
 
-@pytest.mark.parametrize("app_env", ["test", "prd"])
-def test_validate_create_contract_rejects_demo_job_type_in_release_env(monkeypatch, app_env):
-    handler = _TestHandler()
-    handler.visibility = "demo"
-    _patch_job_settings(monkeypatch, APP_ENV=app_env)
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: handler)
+def test_validate_create_contract_rejects_disabled_job_type(monkeypatch):
+    def reject_disabled(_job_type):
+        raise KeyError("disabled")
+
+    _patch_job_settings(monkeypatch, APP_ENV="local")
+    monkeypatch.setattr("app.jobs.registry.get_external", reject_disabled)
     payload = CreateJobRequest.model_validate(
         {
             "client_request_id": "req-1",
@@ -753,7 +758,27 @@ def test_validate_create_contract_rejects_demo_job_type_in_release_env(monkeypat
         validate_create_contract(payload)
 
     assert exc.value.code == "INVALID_JOB_TYPE"
-    assert exc.value.details == {"job_type": "test.echo", "visibility": "demo", "app_env": app_env}
+
+
+@pytest.mark.parametrize("app_env", ["test", "prd"])
+def test_validate_create_contract_rejects_demo_job_type_in_release_env(monkeypatch, app_env):
+    handler = _TestHandler()
+    handler.visibility = "demo"
+    _patch_job_settings(monkeypatch, APP_ENV=app_env)
+    _patch_job_executor(monkeypatch, handler)
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-1",
+            "job_type": "test.echo",
+            "job_params": {"value": {"hello": "world"}},
+        }
+    )
+
+    with pytest.raises(ValidationAppError) as exc:
+        validate_create_contract(payload)
+
+    assert exc.value.code == "INVALID_JOB_TYPE"
+    assert exc.value.details == {"job_type": "test.echo", "visibility": "demo", "role": "root", "app_env": app_env}
 
 
 @pytest.mark.parametrize("app_env", ["local", "dev"])
@@ -761,7 +786,7 @@ def test_validate_create_contract_allows_demo_job_type_in_non_release_env(monkey
     handler = _TestHandler()
     handler.visibility = "demo"
     _patch_job_settings(monkeypatch, APP_ENV=app_env)
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: handler)
+    _patch_job_executor(monkeypatch, handler)
     payload = CreateJobRequest.model_validate(
         {
             "client_request_id": "req-1",
@@ -780,7 +805,7 @@ def test_validate_create_contract_rejects_internal_job_type_in_local_env(monkeyp
     handler = _TestHandler()
     handler.visibility = "internal"
     _patch_job_settings(monkeypatch, APP_ENV="local")
-    monkeypatch.setattr("app.jobs.factory.get_job_executor", lambda _job_type: handler)
+    _patch_job_executor(monkeypatch, handler)
     payload = CreateJobRequest.model_validate(
         {
             "client_request_id": "req-1",
@@ -793,4 +818,34 @@ def test_validate_create_contract_rejects_internal_job_type_in_local_env(monkeyp
         validate_create_contract(payload)
 
     assert exc.value.code == "INVALID_JOB_TYPE"
-    assert exc.value.details == {"job_type": "test.echo", "visibility": "internal", "app_env": "local"}
+    assert exc.value.details == {
+        "job_type": "test.echo",
+        "visibility": "internal",
+        "role": "root",
+        "app_env": "local",
+    }
+
+
+def test_validate_create_contract_rejects_leaf_job_type_in_local_env(monkeypatch):
+    handler = _TestHandler()
+    handler.role = "leaf"
+    _patch_job_settings(monkeypatch, APP_ENV="local")
+    _patch_job_executor(monkeypatch, handler)
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-1",
+            "job_type": "test.echo",
+            "job_params": {"value": {"hello": "world"}},
+        }
+    )
+
+    with pytest.raises(ValidationAppError) as exc:
+        validate_create_contract(payload)
+
+    assert exc.value.code == "INVALID_JOB_TYPE"
+    assert exc.value.details == {
+        "job_type": "test.echo",
+        "visibility": "public",
+        "role": "leaf",
+        "app_env": "local",
+    }
