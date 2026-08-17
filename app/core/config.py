@@ -523,7 +523,7 @@ class OpsDashboardSettings(ConfigSection):
 
 class TaggedTextTranslationJobSettings(ConfigSection):
     max_items: int = 100
-    max_text_length: int = 200
+    max_text_length: int = 1000
     max_total_text_length: int = 20_000
 
     @model_validator(mode="after")

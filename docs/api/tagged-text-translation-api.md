@@ -133,9 +133,9 @@ POST /api/v1/ai-jobs/jobs
 规则：
 
 - `items` 必须至少包含 1 条。
-- 默认单次最多提交 100 条 `items`；部署环境可通过 `TAGGED_TEXT_TRANSLATION_MAX_ITEMS` 在服务硬上限 100 内调整。
-- 默认单条 `text` 最多 200 个 Unicode code points；部署环境可通过 `TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH` 在服务硬上限 10000 内调整。字符数按原始 `text` 字符串计算，HTML 标签、占位符、标点和空白字符都计入。
-- 默认单次请求所有 `items[].text` 原始字符数总和最多 20000 个 Unicode code points；部署环境可通过 `TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH` 调整。
+- 单次最多提交 100 条 `items`。
+- 单条 `text` 最多 1000 个 Unicode code points。字符数按原始 `text` 字符串计算，HTML 标签、占位符、标点和空白字符都计入。
+- 单次请求所有 `items[].text` 原始字符数总和最多 20000 个 Unicode code points。
 - 超出条数、单条字符数或总字符数限制时，请求以 `INVALID_JOB_PARAMS` 失败；服务不会截断、丢弃 item 或自动拆分。
 - 同一个请求内 `items[].id` 必须唯一；重复时请求应以 `INVALID_JOB_PARAMS` 失败。
 - `id` 可以是 CMS 字段路径、数据库 ID、数组序号字符串或调用方自定义字符串。
