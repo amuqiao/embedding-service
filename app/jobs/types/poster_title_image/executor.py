@@ -934,6 +934,13 @@ def _workflow_definition() -> WorkflowDefinition:
             root_job_type=POSTER_TITLE_IMAGE_JOB_TYPE,
             build=_workflow_expr,
             max_nodes=_max_workflow_nodes(),
+            runtime_job_type_dependencies=frozenset(
+                {
+                    POSTER_TITLE_IMAGE_STYLE_PROBE_JOB_TYPE,
+                    POSTER_TITLE_IMAGE_GENERATE_ITEM_JOB_TYPE,
+                    POSTER_TITLE_IMAGE_JOIN_JOB_TYPE,
+                }
+            ),
         )
     return _WORKFLOW_DEFINITION
 

@@ -8,6 +8,7 @@ import pytest
 from app.core.exceptions import AppError
 from app.models.job import Job, JobAttempt
 from app.services.job_runtime import payload_hash
+from app.services.jobs import _validate_workflow_child_admission
 from app.jobs import registry as job_registry
 from app.jobs.runner import execute_job, fail_job
 from app.jobs.types.register import register_all_job_types
@@ -54,6 +55,44 @@ def _runtime_ref_for_job(job_type: str, params: dict[str, object], runtime_field
             "output_target": {"type": "oss_prefix", "oss_bucket": "bucket", "oss_prefix": "root/", "oss_region": "region"},
         },
     }
+
+
+def test_validate_workflow_child_admission_rejects_invalid_child_params(monkeypatch):
+    class InvalidChildHandler:
+        prompt_specs = ()
+
+        def job_type_spec(self):
+            return SimpleNamespace(role="leaf", execution_mode="custom_executor")
+
+        def normalize_job_params(self, job_params):
+            return job_params
+
+        def validate_normalized_job_params(self, _job_params):
+            raise ValueError("invalid child params")
+
+        def runtime_job_fields(self, _job_params):
+            return {}
+
+    monkeypatch.setattr("app.services.jobs.get_template", lambda _job_type: None)
+    monkeypatch.setattr(
+        "app.jobs.factory.get_enabled_job_executor",
+        lambda _job_type: InvalidChildHandler(),
+    )
+
+    with pytest.raises(AppError) as exc:
+        _validate_workflow_child_admission(
+            {
+                "nodes": [
+                    {
+                        "key": "child-1",
+                        "job_type": "invalid_child",
+                        "job_params": {"value": "bad"},
+                    }
+                ]
+            }
+        )
+
+    assert exc.value.code == "INVALID_INPUT"
 
 
 def _running_add_job() -> Job:
@@ -185,7 +224,7 @@ async def test_create_child_job_propagates_only_trigger_request_id_and_preserves
     async def fake_create_initial_attempt(_db, child, *, timeout_seconds, purpose=None, retry_policy=None):
         return SimpleNamespace(id=uuid.uuid4())
 
-    monkeypatch.setattr("app.workflows.orchestrator.get_job_executor", lambda _job_type: RuntimeHandler())
+    monkeypatch.setattr("app.workflows.orchestrator.get_enabled_job_executor", lambda _job_type: RuntimeHandler())
     monkeypatch.setattr("app.workflows.orchestrator.get_template", lambda _job_type: None)
     monkeypatch.setattr("app.workflows.orchestrator.JobRepo.create", fake_create)
     monkeypatch.setattr("app.workflows.orchestrator.JobRepo.create_initial_attempt", fake_create_initial_attempt)
@@ -225,7 +264,7 @@ async def test_workflow_child_validation_rejects_non_text_model_for_builtin_text
             return SimpleNamespace(role="leaf", execution_mode="builtin_llm_text_runtime")
 
     root_job = _running_add_job()
-    monkeypatch.setattr("app.workflows.orchestrator.get_job_executor", lambda job_type: BuiltinTextHandler())
+    monkeypatch.setattr("app.workflows.orchestrator.get_enabled_job_executor", lambda job_type: BuiltinTextHandler())
 
     def reject_non_text_model(model_id):
         raise AppError("MODEL_NOT_AVAILABLE", f"模型不支持文本生成: {model_id}")
@@ -286,7 +325,7 @@ async def test_workflow_child_validation_rejects_non_text_model_for_custom_text_
             return SimpleNamespace(role="leaf", execution_mode="custom_executor")
 
     root_job = _running_add_job()
-    monkeypatch.setattr("app.workflows.orchestrator.get_job_executor", lambda job_type: CustomTextHandler())
+    monkeypatch.setattr("app.workflows.orchestrator.get_enabled_job_executor", lambda job_type: CustomTextHandler())
 
     def reject_non_text_model(model_id):
         raise AppError("MODEL_NOT_AVAILABLE", f"模型不支持文本生成: {model_id}")
@@ -316,7 +355,7 @@ async def test_workflow_child_validation_rejects_root_only_job_type(monkeypatch)
             return SimpleNamespace(role="root", execution_mode="custom_executor")
 
     root_job = _running_add_job()
-    monkeypatch.setattr("app.workflows.orchestrator.get_job_executor", lambda job_type: RootOnlyHandler())
+    monkeypatch.setattr("app.workflows.orchestrator.get_enabled_job_executor", lambda job_type: RootOnlyHandler())
 
     with pytest.raises(AppError) as exc:
         await _create_child_job(
@@ -796,7 +835,7 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
     )
     monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", fake_publish_job_attempt)
     monkeypatch.setattr(
-        "app.jobs.runner.get_job_executor",
+        "app.jobs.runner.get_enabled_job_executor",
         lambda *_args, **_kwargs: SimpleNamespace(
             execute=lambda *_execute_args, **_execute_kwargs: (_ for _ in ()).throw(
                 AssertionError("root executor must not run")
@@ -2039,7 +2078,7 @@ async def test_execute_workflow_root_rejects_cyclic_persisted_workflow_plan(monk
     monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
     monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
     monkeypatch.setattr("app.jobs.runner.JobRepo.heartbeat_attempt", fake_heartbeat_attempt)
-    monkeypatch.setattr("app.jobs.runner.get_job_executor", lambda *_args, **_kwargs: SimpleNamespace())
+    monkeypatch.setattr("app.jobs.runner.get_enabled_job_executor", lambda *_args, **_kwargs: SimpleNamespace())
 
     with pytest.raises(AppError) as exc:
         await execute_job(

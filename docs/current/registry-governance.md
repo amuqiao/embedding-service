@@ -32,7 +32,7 @@ Workflow Definition
 | Capability registry | `app/capabilities/registry.py`、`app/capabilities/register.py` | 注册 `CapabilityDefinition`，支持 freeze 和测试清理 |
 | Tool registry | `app/tools/registry.py`、`app/tools/register.py` | 注册 `ToolDefinition`，支持 freeze 和测试清理 |
 | Job Type registry | `app/jobs/registry.py`、`app/jobs/base.py` | `JobTypeSpec.allowed_capability_refs` 声明 job type 可用 capability |
-| Workflow registry | `app/workflows/registry.py` | `WorkflowDefinition` 声明 workflow type、root job type、版本、失败策略和节点上限 |
+| Workflow registry | `app/workflows/registry.py` | `WorkflowDefinition` 声明 workflow type、root job type、版本、失败策略、节点上限和 runtime child job type 依赖 |
 | Operation registry | `app/api/operations.py` | `OperationSpec` 声明 HTTP operation path、method、成功状态、schema、错误码和副作用 |
 | Error registry | `app/core/error_registry.py` | `ErrorSpec` 包含 `visibility` 和 `projection_targets` 元数据 |
 | Registry check | `app/core/registry_checks.py`、`tests/test_registry_contract.py` | 校验 error、operation、job type、capability、tool、schema、log event、entrypoint、settings、error projection、注册入口、import direction 和 route operation |
@@ -72,7 +72,8 @@ Tool `startup_validators` 只用于 API/worker 进程级必需依赖。可选能
 - `ToolDefinition(...)` 只允许出现在 `app/tools/register.py`，`CapabilityDefinition(...)` 只允许出现在 `app/capabilities/register.py`。
 - route decorator 从 `OperationSpec` 派生 path、`operation_id`、`response_model`、成功状态和错误响应描述；registry check 会校验 route/OpenAPI 与 operation metadata 对齐。
 - registered workflow 必须声明 `root_job_type`，且当前 `root_job_type` 必须与 `workflow_type` 相同，因为外部提交路径用 `job_type` 查找 workflow definition。
-- workflow root job type 必须存在且 role 为 `root` 或 `root_or_leaf`；`failure_policy`、`workflow_version`、`max_nodes` 和 `build` callable 由 registry check 校验。
+- workflow root job type 必须存在且 role 为 `root` 或 `root_or_leaf`；`failure_policy`、`workflow_version`、`max_nodes`、`runtime_job_type_dependencies` 和 `build` callable 由 registry check 校验。
+- `runtime_job_type_dependencies` 必须引用已注册且 child-capable 的 `job_type`；`ENABLED_JOB_TYPES` 显式启用 workflow root 时会据此补齐运行期 child job type。创建 workflow root 时，编译后的 `workflow_plan.nodes[].job_type` 必须全部落在 `runtime_job_type_dependencies` 内，并且当前实例必须已启用这些 child job type。
 - `./scripts/tools.sh registry --json` 的当前 manifest 由测试覆盖关键结构；新增 operation、job type、workflow、tool、capability 或 job capability 关系时必须同步测试和文档。
 - import direction 由 registry contract 测试覆盖：`app/capabilities` 不依赖 `app/jobs`，也不跳过 tool 直接依赖 `app/integrations`；`app/tools` 不反向依赖 `app/jobs` / `app/capabilities`；`app/integrations` 不反向依赖 `app/jobs` / `app/capabilities` / `app/tools`。
 - operation registry、job type registry、prompt config、route operation 和 error code 唯一性仍按既有规则校验。
@@ -120,11 +121,13 @@ AudioInputPlanSnapshot
 
 ## 当前准入规则
 
-新增 `job_type` 必须在 executor 上使用 `@register_job_type` 源码标记，并在 `app/jobs/types/register.py` 显式导入和注册。`@register_job_type` 不产生 import-time 注册副作用；源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 composition root 注册结果；新增文件但忘记接入 composition root 会失败。
+新增 `job_type` 必须在 executor 上使用 `@register_job_type` 源码标记，并在 `app/jobs/types/register.py` 显式导入和注册。`@register_job_type` 不产生 import-time 注册副作用；源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 composition root 注册结果；新增文件但忘记接入 composition root 会失败。静态合同校验覆盖全部注册 `job_type`，不因当前实例未启用而跳过 schema、prompt、error、log event 或 capability 引用检查。
 
 新增 tool 必须通过 `app/tools/register.py` 创建 `ToolDefinition`。新增 capability 必须通过 `app/capabilities/register.py` 创建 `CapabilityDefinition`。不要在业务 executor、capability service、tool 实现或测试外路径中直接散落 definition 构造。
 
 新增 capability 与 tool 的 schema、entrypoint、error code、log event 和 settings 引用必须能被 `validate_capability_tool_registry()` 校验。新增 job type 的 `allowed_capability_refs` 必须引用已注册 capability。
+
+`ENABLED_JOB_TYPES` 是运行准入，不只是外部提交准入。缩小该 allowlist 后，未启用 `job_type` 的新提交、workflow child 创建和已落库 running Job 继续执行都会失败；历史状态查询、Callback payload 投影和结果快照仍可读取全量注册目录，以便展示已经产生的 Job 事实。上线时如果存在未完成 Job，应先 drain，或保持对应 `job_type` 启用到旧 Job 结束。
 
 `ToolDefinition.startup_validators` 只允许表达进程级必需依赖；可选模型链路、demo job 或特定业务运行时依赖必须在对应执行路径或专项 smoke / verify 中显式失败，不能扩大为 API/worker 全局启动依赖。
 

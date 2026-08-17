@@ -513,7 +513,51 @@ def test_workflow_registry_compiles_registered_definition():
     workflow_registry.clear_for_tests()
 
 
+def test_compile_registered_workflow_rejects_undeclared_runtime_job_type_dependency():
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+    register_all_job_types()
+    register(
+        WorkflowDefinition(
+            workflow_type="test.workflow",
+            root_job_type="test.workflow",
+            build=lambda _params: task("first", "example_sleep", {"value": "hello"}),
+            max_nodes=5,
+        )
+    )
+
+    with pytest.raises(ValueError, match="undeclared runtime job_type dependencies"):
+        compile_registered_workflow("test.workflow", {})
+
+
+def test_compile_registered_workflow_rejects_disabled_runtime_job_type_dependency():
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+    register_all_job_types()
+    job_registry.configure_enabled_job_types(
+        ("tagged_text_translation",),
+        external_job_types=("tagged_text_translation",),
+    )
+    register(
+        WorkflowDefinition(
+            workflow_type="test.workflow",
+            root_job_type="test.workflow",
+            build=lambda _params: task("first", "example_sleep", {"value": "hello"}),
+            max_nodes=5,
+            runtime_job_type_dependencies=frozenset({"example_sleep"}),
+        )
+    )
+
+    try:
+        with pytest.raises(ValueError, match="disabled runtime job_type dependency"):
+            compile_registered_workflow("test.workflow", {})
+    finally:
+        job_registry.configure_enabled_job_types(None)
+
+
 def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
     register_all_job_types()
 
     specs = all_example_workflow_mode_specs()
@@ -556,6 +600,7 @@ def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
             task("second", "example_sleep", {"value": "done"}),
         ),
         max_nodes=5,
+        runtime_job_type_dependencies=frozenset({"example_sleep"}),
     )
     register(definition)
     register(definition)

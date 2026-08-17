@@ -81,6 +81,7 @@ def registry_snapshot() -> dict[str, list[dict[str, Any]]]:
             "workflow_version": definition.workflow_version,
             "failure_policy": definition.failure_policy,
             "max_nodes": definition.max_nodes,
+            "runtime_job_type_dependencies": sorted(definition.runtime_job_type_dependencies),
             "build": f"{definition.build.__module__}:{definition.build.__qualname__}",
         }
         for definition in sorted(
@@ -161,6 +162,8 @@ def print_human(snapshot: dict[str, list[dict[str, Any]]]) -> None:
         print(f"  root_job_type: {workflow['root_job_type']}")
         print(f"  failure_policy: {workflow['failure_policy']}")
         print(f"  max_nodes: {workflow['max_nodes']}")
+        if workflow["runtime_job_type_dependencies"]:
+            print(f"  runtime_job_type_dependencies: {', '.join(workflow['runtime_job_type_dependencies'])}")
 
     print("")
     print("Tools")

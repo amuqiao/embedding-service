@@ -166,7 +166,7 @@ def validate_job_type_registry() -> None:
     known_events = all_log_events()
     known_schemas = all_schema_names()
     registered_specs = job_registry.all_job_type_specs()
-    specs = job_registry.enabled_job_type_specs()
+    specs = registered_specs
     required_prompt_refs = {
         prompt_spec.prompt_ref
         for spec in specs.values()
@@ -320,7 +320,7 @@ def validate_capability_tool_registry() -> None:
     known_tool_refs = tool_registry.all_tool_refs()
     known_setting_paths = {".".join(path) for path in APPLICATION_ENV_FIELD_MAP.values()}
 
-    for job_type, spec in job_registry.enabled_job_type_specs().items():
+    for job_type, spec in job_registry.all_job_type_specs().items():
         for capability_ref in spec.allowed_capability_refs:
             normalized_ref = require_capability_ref(capability_ref)
             if normalized_ref not in known_capability_refs:
@@ -398,6 +398,22 @@ def validate_workflow_registry() -> None:
         if root_spec.role not in {"root", "root_or_leaf"}:
             raise ValueError(
                 f"workflow {workflow_type} root job_type must be root-capable: {definition.root_job_type}"
+            )
+        unknown_dependencies = _missing(definition.runtime_job_type_dependencies, set(job_type_specs))
+        if unknown_dependencies:
+            raise ValueError(
+                f"workflow {workflow_type} references unknown runtime job_type dependencies: "
+                f"{unknown_dependencies}"
+            )
+        invalid_dependencies = sorted(
+            job_type
+            for job_type in definition.runtime_job_type_dependencies
+            if job_type_specs[job_type].role not in {"leaf", "root_or_leaf"}
+        )
+        if invalid_dependencies:
+            raise ValueError(
+                f"workflow {workflow_type} runtime job_type dependencies must be child-capable: "
+                f"{invalid_dependencies}"
             )
         if definition.workflow_version < 1:
             raise ValueError(f"workflow {workflow_type} workflow_version must be >= 1")

@@ -1,16 +1,5 @@
 from __future__ import annotations
 
-_ENABLED_JOB_TYPE_DEPENDENCIES: dict[str, frozenset[str]] = {
-    "example_workflow": frozenset({"example_sleep", "example_pair", "example_collect"}),
-    "poster_title_image": frozenset(
-        {
-            "poster_title_image_style_probe",
-            "poster_title_image_generate_item",
-            "poster_title_image_join",
-        }
-    ),
-}
-
 
 def _expanded_enabled_job_types(
     configured_job_types: tuple[str, ...],
@@ -21,6 +10,7 @@ def _expanded_enabled_job_types(
         return None
 
     from app.jobs import registry as job_registry
+    from app.workflows import registry as workflow_registry
 
     specs = job_registry.all_job_type_specs()
     unknown = sorted(set(configured_job_types) - set(specs))
@@ -35,12 +25,30 @@ def _expanded_enabled_job_types(
             raise ValueError("ENABLED_JOB_TYPES must list external root-capable job_types")
         if release_env and spec.visibility != "public":
             raise ValueError("release APP_ENV ENABLED_JOB_TYPES must list only public job_types")
-        enabled.update(_ENABLED_JOB_TYPE_DEPENDENCIES.get(job_type, frozenset()))
+        definition = workflow_registry.get_optional(job_type)
+        if definition is not None:
+            enabled.update(definition.runtime_job_type_dependencies)
 
     missing_dependencies = sorted(enabled - set(specs))
     if missing_dependencies:
         raise ValueError(f"ENABLED_JOB_TYPES references unknown dependent job_type: {missing_dependencies}")
     return frozenset(enabled), frozenset(external)
+
+
+def _default_enabled_job_types(*, release_env: bool) -> tuple[frozenset[str], frozenset[str]] | None:
+    if not release_env:
+        return None
+
+    from app.jobs import registry as job_registry
+
+    specs = job_registry.all_job_type_specs()
+    enabled = frozenset(specs)
+    external = frozenset(
+        job_type
+        for job_type, spec in specs.items()
+        if spec.visibility == "public" and spec.role != "leaf"
+    )
+    return enabled, external
 
 
 def register_all_job_types() -> None:
@@ -99,7 +107,12 @@ def register_all_job_types() -> None:
         release_env=settings.runtime.is_release_env,
     )
     if expanded_enabled_job_types is None:
-        configure_enabled_job_types(None)
+        default_job_types = _default_enabled_job_types(release_env=settings.runtime.is_release_env)
+        if default_job_types is None:
+            configure_enabled_job_types(None)
+        else:
+            runtime_job_types, external_job_types = default_job_types
+            configure_enabled_job_types(runtime_job_types, external_job_types=external_job_types)
     else:
         runtime_job_types, external_job_types = expanded_enabled_job_types
         configure_enabled_job_types(runtime_job_types, external_job_types=external_job_types)

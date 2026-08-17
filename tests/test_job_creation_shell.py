@@ -373,6 +373,13 @@ async def test_create_job_writes_registered_workflow_plan_to_runtime_ref(monkeyp
     monkeypatch.setattr("app.services.jobs.write_runtime_json", fake_write_runtime_json)
     _patch_job_executor(monkeypatch, _TestHandler())
 
+    class _ChildHandler(_TestHandler):
+        name = "example_sleep"
+        role = "leaf"
+
+    monkeypatch.setattr("app.jobs.registry.get_enabled", lambda _job_type: _ChildHandler())
+    monkeypatch.setattr("app.jobs.factory.get_enabled_job_executor", lambda _job_type: _ChildHandler())
+
     workflow_registry.clear_for_tests()
 
     def build_workflow(job_params):
@@ -385,6 +392,7 @@ async def test_create_job_writes_registered_workflow_plan_to_runtime_ref(monkeyp
             root_job_type="test.workflow",
             build=build_workflow,
             max_nodes=10,
+            runtime_job_type_dependencies=frozenset({"example_sleep"}),
         )
     )
 
@@ -411,6 +419,53 @@ async def test_create_job_writes_registered_workflow_plan_to_runtime_ref(monkeyp
     assert plan["kind"] == "dag_lite"
     assert plan["workflow_type"] == "test.workflow"
     assert plan["nodes"][0]["job_params"] == {"value": "mutated-in-builder"}
+
+
+@pytest.mark.asyncio
+async def test_create_job_rejects_workflow_with_disabled_child_dependency(monkeypatch):
+    async def fake_advisory_lock(*_args):
+        pass
+
+    async def fake_get_recent(*_args, **_kwargs):
+        return None
+
+    _patch_job_settings(monkeypatch, MAX_ACTIVE_JOBS=0)
+    monkeypatch.setattr("app.services.jobs.JobRepo.advisory_lock_for_client_request", fake_advisory_lock)
+    monkeypatch.setattr("app.services.jobs.JobRepo.get_submission_by_client_request", fake_get_recent)
+    _patch_job_executor(monkeypatch, _TestHandler())
+    monkeypatch.setattr(
+        "app.jobs.registry.get_enabled",
+        lambda _job_type: (_ for _ in ()).throw(KeyError("disabled")),
+    )
+
+    workflow_registry.clear_for_tests()
+    workflow_registry.register(
+        WorkflowDefinition(
+            workflow_type="test.workflow",
+            root_job_type="test.workflow",
+            build=lambda _params: task("first", "example_sleep", {"value": "hello"}),
+            max_nodes=10,
+            runtime_job_type_dependencies=frozenset({"example_sleep"}),
+        )
+    )
+
+    payload = CreateJobRequest.model_validate(
+        {
+            "client_request_id": "req-workflow-disabled-child",
+            "job_type": "test.workflow",
+            "job_params": {"value": "hello"},
+            "metadata": {},
+            "options": {"priority": "normal", "idempotency_mode": "reject_duplicate"},
+        }
+    )
+
+    try:
+        with pytest.raises(AppError) as exc:
+            await create_job(_FakeDB(), payload, "caller-1")
+    finally:
+        workflow_registry.clear_for_tests()
+
+    assert exc.value.code == "INVALID_JOB_TYPE"
 
 
 @pytest.mark.asyncio

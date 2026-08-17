@@ -17,6 +17,7 @@ class WorkflowDefinition:
     workflow_version: int = 1
     failure_policy: str = "fail_fast"
     max_nodes: int = 100
+    runtime_job_type_dependencies: frozenset[str] = frozenset()
 
     def spec_from_params(self, job_params: dict[str, Any]) -> WorkflowSpec:
         return WorkflowSpec(
@@ -29,6 +30,22 @@ class WorkflowDefinition:
 
 
 _registry: dict[str, WorkflowDefinition] = {}
+
+
+class WorkflowRuntimeDependencyError(ValueError):
+    pass
+
+
+class WorkflowRuntimeDependencyUndeclaredError(WorkflowRuntimeDependencyError):
+    pass
+
+
+class WorkflowRuntimeDependencyDisabledError(WorkflowRuntimeDependencyError):
+    pass
+
+
+class WorkflowRuntimeDependencyRoleError(WorkflowRuntimeDependencyError):
+    pass
 
 
 def register(definition: WorkflowDefinition) -> WorkflowDefinition:
@@ -70,7 +87,38 @@ def all_workflow_definitions() -> dict[str, WorkflowDefinition]:
 
 def compile_registered_workflow(workflow_type: str, job_params: dict[str, Any]) -> dict[str, Any]:
     definition = get(workflow_type)
-    return compile_workflow(definition.spec_from_params(job_params))
+    plan = compile_workflow(definition.spec_from_params(job_params))
+    _validate_runtime_job_type_dependencies(definition, plan)
+    return plan
+
+
+def _validate_runtime_job_type_dependencies(definition: WorkflowDefinition, plan: dict[str, Any]) -> None:
+    from app.jobs import registry as job_registry
+
+    node_job_types = {
+        node.get("job_type")
+        for node in plan.get("nodes", [])
+        if isinstance(node, dict) and isinstance(node.get("job_type"), str)
+    }
+    undeclared = sorted(node_job_types - definition.runtime_job_type_dependencies)
+    if undeclared:
+        raise WorkflowRuntimeDependencyUndeclaredError(
+            f"workflow {definition.workflow_type} plan references undeclared runtime job_type dependencies: "
+            f"{undeclared}"
+        )
+    for job_type in sorted(node_job_types):
+        try:
+            spec = job_registry.get_enabled(job_type).job_type_spec()
+        except KeyError as exc:
+            raise WorkflowRuntimeDependencyDisabledError(
+                f"workflow {definition.workflow_type} plan references disabled runtime job_type dependency: "
+                f"{job_type}"
+            ) from exc
+        if spec.role not in {"leaf", "root_or_leaf"}:
+            raise WorkflowRuntimeDependencyRoleError(
+                f"workflow {definition.workflow_type} plan references non-child runtime job_type dependency: "
+                f"{job_type}"
+            )
 
 
 def clear_for_tests() -> None:

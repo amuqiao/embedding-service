@@ -61,7 +61,7 @@
 1. 在 `app/schemas/jobs.py` 中定义 root `job_type` 的 Params、Runtime fields 和 Result schema。
 2. 在 `app/jobs/types/<job_type>.py` 或 `app/jobs/types/<job_type>/` 中实现 root `JobExecutor`，root executor 使用 `role="root"`，只声明 schema 和运行时字段；实际执行由 workflow orchestration 推进 internal child Jobs。正式业务 workflow 优先使用包目录，把 root、internal child executors、workflow definition、业务错误和 prompt 模板放在同一个 `job_type` 边界内。
 3. 使用 `app.workflows` 的 `task`、`chain`、`group`、`chord`、`map_items`、`starmap_items` 或 `chunks` 生成受控 `workflow_plan`。
-4. 在 `app/jobs/types/register.py` 中注册 executor 和 workflow definition。`WorkflowDefinition` 必须声明 `workflow_type`、`root_job_type`、`workflow_version`、`failure_policy` 和 `max_nodes`；当前 `workflow_type` 与 `root_job_type` 必须同名，因为外部提交使用 root `job_type` 查找 workflow。
+4. 在 `app/jobs/types/register.py` 中注册 executor 和 workflow definition。`WorkflowDefinition` 必须声明 `workflow_type`、`root_job_type`、`workflow_version`、`failure_policy`、`max_nodes` 和 `runtime_job_type_dependencies`；当前 `workflow_type` 与 `root_job_type` 必须同名，因为外部提交使用 root `job_type` 查找 workflow。显式配置 `ENABLED_JOB_TYPES=<root>` 时，服务会根据 `runtime_job_type_dependencies` 补齐内部 child job type；创建 root Job 时，编译出的 `workflow_plan.nodes[].job_type` 必须全部落在该依赖集合内。
 5. 按业务语义选择 `failure_policy`；默认 `fail_fast`，需要容忍部分 child 失败时才显式使用 `allow_partial`。
 6. 补充 compiler、orchestrator、registry、workflow smoke 或业务 e2e 测试。
 

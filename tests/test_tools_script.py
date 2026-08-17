@@ -155,6 +155,7 @@ def test_tools_registry_json_prints_registered_graph():
         "workflow_version",
         "failure_policy",
         "max_nodes",
+        "runtime_job_type_dependencies",
         "build",
     }
     assert set(data["capabilities"][0]) == {
@@ -197,8 +198,18 @@ def test_tools_registry_json_prints_registered_graph():
 
     workflows = {item["workflow_type"]: item for item in data["workflows"]}
     assert workflows["example_workflow"]["root_job_type"] == "example_workflow"
+    assert workflows["example_workflow"]["runtime_job_type_dependencies"] == [
+        "example_collect",
+        "example_pair",
+        "example_sleep",
+    ]
     assert workflows["poster_title_image"]["root_job_type"] == "poster_title_image"
     assert workflows["poster_title_image"]["failure_policy"] == "fail_fast"
+    assert workflows["poster_title_image"]["runtime_job_type_dependencies"] == [
+        "poster_title_image_generate_item",
+        "poster_title_image_join",
+        "poster_title_image_style_probe",
+    ]
 
     capabilities = {item["capability_ref"]: item for item in data["capabilities"]}
     assert capabilities["media.audio_input:2"]["allowed_tool_refs"] == [

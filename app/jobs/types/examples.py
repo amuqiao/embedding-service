@@ -239,6 +239,7 @@ def _workflow_definition() -> WorkflowDefinition:
             root_job_type="example_workflow",
             build=_workflow_expr,
             max_nodes=10,
+            runtime_job_type_dependencies=frozenset({"example_sleep", "example_pair", "example_collect"}),
         )
     return _WORKFLOW_DEFINITION
 

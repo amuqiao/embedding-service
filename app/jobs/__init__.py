@@ -1,7 +1,7 @@
 """Job type system public entrypoint."""
 
 from app.jobs.base import JobExecutor, JobTypeSpec
-from app.jobs.factory import get_job_executor
+from app.jobs.factory import get_enabled_job_executor, get_job_executor
 from app.jobs.registry import (
     all_job_type_specs,
     all_job_types,
@@ -17,6 +17,7 @@ __all__ = [
     "all_job_type_specs",
     "all_job_types",
     "get",
+    "get_enabled_job_executor",
     "get_job_executor",
     "get_job_type_spec",
     "register",

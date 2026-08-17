@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import uuid
+from copy import deepcopy
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -29,7 +30,12 @@ from app.services.job_runtime import (
     runtime_fields_from_job,
     write_runtime_json,
 )
-from app.workflows.registry import compile_registered_workflow, has_workflow
+from app.workflows.registry import (
+    WorkflowRuntimeDependencyDisabledError,
+    WorkflowRuntimeDependencyError,
+    compile_registered_workflow,
+    has_workflow,
+)
 
 logger = logging.getLogger(__name__)
 _JOB_RESULT_UNSET = object()
@@ -382,6 +388,63 @@ def _validate_create_request(payload: CreateJobRequest) -> tuple[Any, dict[str, 
     return handler, job_params, runtime_fields
 
 
+def _validate_workflow_child_admission(workflow_plan: dict[str, Any]) -> None:
+    from app.jobs.factory import get_enabled_job_executor
+
+    for node in workflow_plan.get("nodes", []):
+        if not isinstance(node, dict):
+            raise ValidationAppError("INVALID_INPUT", "workflow plan node must be an object")
+        job_type = node.get("job_type")
+        node_key = node.get("key")
+        if not isinstance(job_type, str) or not isinstance(node_key, str):
+            raise ValidationAppError("INVALID_INPUT", "workflow plan node requires key and job_type")
+        try:
+            handler = get_enabled_job_executor(job_type)
+        except KeyError as exc:
+            raise ValidationAppError(
+                "INVALID_JOB_TYPE",
+                f"不支持或未启用的 child job_type: {job_type}",
+                {"job_type": job_type, "workflow_node_key": node_key},
+            ) from exc
+        spec = handler.job_type_spec()
+        if spec.role not in {"leaf", "root_or_leaf"}:
+            raise ValidationAppError(
+                "INVALID_JOB_TYPE",
+                f"job_type 不允许作为 workflow child: {job_type}",
+                {"job_type": job_type, "role": spec.role, "workflow_node_key": node_key},
+            )
+        try:
+            job_params = handler.normalize_job_params(deepcopy(node.get("job_params", {})))
+            if not isinstance(job_params, dict):
+                raise ValueError("child job_params normalizer must return an object")
+            handler.validate_normalized_job_params(job_params)
+            runtime_fields = handler.runtime_job_fields(job_params)
+            if not isinstance(runtime_fields, dict):
+                raise ValueError("child runtime fields must be an object")
+        except AppError:
+            raise
+        except ValueError as exc:
+            raise ValidationAppError(
+                "INVALID_INPUT",
+                "workflow child job_params does not match job_type schema",
+                {"job_type": job_type, "workflow_node_key": node_key},
+            ) from exc
+        except NotImplementedError as exc:
+            raise ValidationAppError(
+                "INVALID_JOB_TYPE",
+                f"child job_type 缺少运行时适配: {job_type}",
+            ) from exc
+        model_id = runtime_fields.get("model_id")
+        if model_id and _requires_text_generation_model(handler):
+            require_enabled_text_model(model_id)
+        template = get_template(job_type)
+        if template and handler.prompt_specs:
+            prompt_payload = runtime_fields.get("prompt_payload")
+            if not isinstance(prompt_payload, dict):
+                raise ValidationAppError("INVALID_INPUT", "child job_type runtime fields must include prompt_payload")
+            _validate_prompt(job_type, prompt_payload)
+
+
 async def create_job(
     db: AsyncSession,
     payload: CreateJobRequest,
@@ -423,6 +486,19 @@ async def create_job(
     if has_workflow(payload.job_type):
         try:
             workflow_plan = compile_registered_workflow(payload.job_type, job_params)
+            _validate_workflow_child_admission(workflow_plan)
+        except WorkflowRuntimeDependencyDisabledError as exc:
+            raise ValidationAppError(
+                "INVALID_JOB_TYPE",
+                "workflow plan references a disabled child job_type",
+                {"job_type": payload.job_type},
+            ) from exc
+        except WorkflowRuntimeDependencyError as exc:
+            raise InternalAppError(
+                "JOB_PREREQUISITE_CHECK_FAILED",
+                "workflow runtime dependency check failed",
+                {"job_type": payload.job_type},
+            ) from exc
         except (KeyError, TypeError, ValueError) as exc:
             raise ValidationAppError(
                 "INVALID_INPUT",

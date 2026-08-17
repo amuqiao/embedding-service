@@ -749,11 +749,13 @@ job_audit_events         排障时间线，不参与状态推进
 
 | 配置 | 当前含义 |
 |---|---|
-| `ENABLED_JOB_TYPES` | 当前服务实例启用的外部 root `job_type` allowlist；为空表示启用全部静态注册 job type，显式配置时 workflow 内部 child job type 由服务静态补齐 |
+| `ENABLED_JOB_TYPES` | 当前服务实例启用的外部 root `job_type` allowlist；为空表示运行期启用全部静态注册 job type，外部入口仍按 `APP_ENV` 过滤，显式配置时 workflow 内部 child job type 由 `WorkflowDefinition.runtime_job_type_dependencies` 补齐 |
 | `TAGGED_TEXT_TRANSLATION_MAX_ITEMS` / `TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH` / `TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH` | `tagged_text_translation` 的单 Job item 数量、单条原始 `text` 字符数和单 Job 原始文本总字符数上限；字符数按 Unicode code point 计算，缺省时使用代码默认值，并受 schema 或 schema 派生硬上限保护 |
 | `POSTER_TITLE_IMAGE_MAX_ITEMS` / `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` | `poster_title_image` 的批量数量和单 item 出图数量上限 |
 | `POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS` / `POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS` | `poster_title_image` 参考图输入 OSS 来源白名单 |
 | `AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS` / `AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS` | `audio_stem_separation` / `audio_stem_separation_triton` 输入音频 OSS 来源白名单 |
+
+缩小 `ENABLED_JOB_TYPES` 会阻止未启用 `job_type` 的 running Job 继续执行；发布或切流前应先 drain 对应未完成 Job，或保持旧 `job_type` 启用到存量 Job 结束。
 | `AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER` | `audio_stem_separation` 的 ONNX Runtime provider 模式：`auto` 有 CUDA 用 CUDA 否则 CPU，`cpu` 强制 CPU，`cuda` 强制 CUDA 且不可用时失败 |
 | `HTDEMUCS_MODEL_DIR` | `audio_stem_separation` 使用的 htdemucs-ft ONNX required 模型目录 |
 | `AUDIO_STEM_TRITON_URL` | `audio_stem_separation_triton` 调用的 Triton HTTP endpoint；按 `tritonclient` 约定不包含 `http://` 或 `https://` |

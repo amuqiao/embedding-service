@@ -737,6 +737,25 @@ def test_enabled_job_types_default_external_job_types_exclude_leaf_children():
     assert "poster_title_image_join" not in external_job_types
 
 
+def test_enabled_job_types_default_external_job_types_exclude_demo_in_release_env(monkeypatch):
+    job_registry.clear_for_tests()
+    monkeypatch.setattr(
+        "app.core.config.settings",
+        SimpleNamespace(
+            runtime=SimpleNamespace(is_release_env=True),
+            job=SimpleNamespace(enabled_job_types=()),
+        ),
+    )
+
+    register_all_job_types()
+
+    assert set(job_registry.enabled_job_types()) == set(job_registry.all_job_types())
+    assert "tagged_text_translation" in set(job_registry.external_job_types())
+    assert "poster_title_image" in set(job_registry.external_job_types())
+    assert "example_pair" not in set(job_registry.external_job_types())
+    assert "audio_stem_separation" not in set(job_registry.external_job_types())
+
+
 def test_enabled_job_types_allowlist_keeps_registered_catalog_and_enables_requested_roots(monkeypatch):
     job_registry.clear_for_tests()
     monkeypatch.setattr(
@@ -756,6 +775,25 @@ def test_enabled_job_types_allowlist_keeps_registered_catalog_and_enables_reques
     assert job_registry.is_job_type_enabled("poster_title_image") is False
     assert job_registry.is_external_job_type_enabled("tagged_text_translation") is True
     assert job_registry.is_external_job_type_enabled("poster_title_image") is False
+
+
+def test_enabled_job_type_factory_keeps_registered_catalog_separate_from_runtime_allowlist(monkeypatch):
+    from app.jobs.factory import get_enabled_job_executor, get_job_executor
+
+    job_registry.clear_for_tests()
+    monkeypatch.setattr(
+        "app.core.config.settings",
+        SimpleNamespace(
+            runtime=SimpleNamespace(is_release_env=False),
+            job=SimpleNamespace(enabled_job_types=("tagged_text_translation",)),
+        ),
+    )
+
+    register_all_job_types()
+
+    assert get_job_executor("poster_title_image").name == "poster_title_image"
+    with pytest.raises(KeyError, match="No enabled job executor"):
+        get_enabled_job_executor("poster_title_image")
 
 
 def test_enabled_job_types_adds_static_workflow_children(monkeypatch):
@@ -1095,6 +1133,31 @@ def test_validate_capability_tool_registry_rejects_unknown_capability_ref(monkey
         validate_capability_tool_registry()
 
 
+def test_validate_capability_tool_registry_rejects_unknown_capability_ref_on_disabled_job_type(monkeypatch):
+    specs = {
+        "tagged_text_translation": _job_type_spec(
+            job_type="tagged_text_translation",
+            visibility="public",
+            role="root",
+        ),
+        "disabled_job": _job_type_spec(
+            job_type="disabled_job",
+            visibility="public",
+            role="root",
+            allowed_capability_refs=frozenset({"media.input:1"}),
+        ),
+    }
+    monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: specs)
+    monkeypatch.setattr(
+        job_registry,
+        "enabled_job_type_specs",
+        lambda: {"tagged_text_translation": specs["tagged_text_translation"]},
+    )
+
+    with pytest.raises(ValueError, match="unknown capability_ref"):
+        validate_capability_tool_registry()
+
+
 def _workflow_definition(**overrides) -> WorkflowDefinition:
     values = {
         "workflow_type": "example_workflow",
@@ -1139,6 +1202,19 @@ def test_validate_workflow_registry_accepts_registered_root_job_type(monkeypatch
             _workflow_definition(),
             {"example_workflow": _job_type_spec(role="leaf")},
             "root-capable",
+        ),
+        (
+            _workflow_definition(runtime_job_type_dependencies=frozenset({"missing_child"})),
+            {"example_workflow": _job_type_spec(role="root")},
+            "unknown runtime job_type dependencies",
+        ),
+        (
+            _workflow_definition(runtime_job_type_dependencies=frozenset({"root_child"})),
+            {
+                "example_workflow": _job_type_spec(role="root"),
+                "root_child": _job_type_spec(job_type="root_child", role="root"),
+            },
+            "child-capable",
         ),
         (
             _workflow_definition(workflow_version=0),
@@ -1333,7 +1409,7 @@ job_types:
     validate_job_type_registry()
 
 
-def test_validate_job_type_registry_skips_disabled_base_prompt_config(monkeypatch, tmp_path):
+def test_validate_job_type_registry_checks_disabled_base_prompt_config(monkeypatch, tmp_path):
     base_prompt_config = tmp_path / "prompts.yaml"
     base_prompt_config.write_text(
         """
@@ -1377,7 +1453,8 @@ prompts:
     )
     monkeypatch.setattr(prompt_templates, "JOB_PROMPT_CONFIG_ROOT", tmp_path)
 
-    validate_job_type_registry()
+    with pytest.raises(RuntimeError, match="YAML object"):
+        validate_job_type_registry()
 
 
 def test_validate_job_type_registry_rejects_bad_prompt_spec_field_type(monkeypatch):

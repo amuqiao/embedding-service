@@ -65,9 +65,9 @@ async def run_ai_job(
     attempt_id: uuid.UUID,
     request_id: str | None,
 ) -> JobResult:
-    from app.jobs.factory import get_job_executor
+    from app.jobs.factory import get_enabled_job_executor
 
-    executor = get_job_executor(job_type)
+    executor = get_enabled_job_executor(job_type)
     result = await generate_text_with_ledger(
         caller_id=caller_id,
         scope_type="job",

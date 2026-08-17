@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.jobs.error_projection import project_public_job_error
-from app.jobs.registry import get_enabled as get_job_executor
+from app.jobs.factory import get_enabled_job_executor
 from app.models.job import Job
 from app.repositories.job_repo import JobRepo
 from app.services.executor import run_ai_job
@@ -85,7 +85,7 @@ async def execute_job(
         )
 
     try:
-        executor = get_job_executor(job.job_type)
+        executor = get_enabled_job_executor(job.job_type)
     except KeyError as exc:
         raise AppError(
             "INVALID_JOB_TYPE",
