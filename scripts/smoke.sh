@@ -63,6 +63,24 @@ Usage:
     --target-language zh \
     --text '<span>Hello {user_name}, welcome back!</span>'
 
+  # 远端测试环境 tagged_text_translation。
+  API_URL=http://test-cms-ai-translation-service.epubgame.com \
+    SERVICE_API_KEY='<测试环境 SERVICE_API_KEY>' \
+    ./scripts/smoke.sh \
+      --allow-remote-api \
+      --caller-id cms-test \
+      --json \
+      --timeout 300 \
+      --poll-interval 2 \
+      tagged-text-translation \
+      --confirm-cost \
+      --source-language en \
+      --target-language zh \
+      --client-request-id test-translate-001 \
+      --text '<span>Hello {user_name}, welcome back!</span>'
+
+  # 同一 client-request-id 重复执行可能命中幂等结果；需要新 Job 时改掉 test-translate-001。
+
   ENV_FILE=.env ./scripts/smoke.sh \
     --timeout 7200 \
     --poll-interval 5 \
