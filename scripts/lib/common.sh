@@ -82,6 +82,77 @@ env_value() {
   env_value_from "$key" "$(application_env_file)"
 }
 
+export_env_file_defaults_from() {
+  local env_file="$1"
+  local required="${2:-false}"
+  local line
+  local key
+  local value
+
+  if [[ ! -f "$env_file" ]]; then
+    if [[ "$required" == "true" ]]; then
+      die "$env_file not found; set ENV_FILE to an existing file" 2
+    fi
+    return 0
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    case "$line" in
+      export\ *)
+        line="${line#export }"
+        ;;
+    esac
+    case "$line" in
+      ""|\#*)
+        continue
+        ;;
+      *=*)
+        key="${line%%=*}"
+        value="${line#*=}"
+        ;;
+      *)
+        continue
+        ;;
+    esac
+    case "$value" in
+      \"*\")
+        if [[ "$value" == *\" ]]; then
+          value="${value#\"}"
+          value="${value%\"}"
+        fi
+        ;;
+      \'*\')
+        if [[ "$value" == *\' ]]; then
+          value="${value#\'}"
+          value="${value%\'}"
+        fi
+        ;;
+    esac
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    [[ -n "${!key+x}" ]] && continue
+    export "$key=$value"
+  done < "$env_file"
+}
+
+export_env_file_defaults() {
+  local default_env_file
+  local selected_env_file
+
+  default_env_file="$(resolve_repo_path ".env")"
+  if [[ -n "${ENV_FILE:-}" ]]; then
+    selected_env_file="$(application_env_file)"
+    export_env_file_defaults_from "$selected_env_file" true
+    if [[ "${APP_CONFIG_SKIP_DEFAULT_ENV_FILE:-}" != "true" && "$selected_env_file" != "$default_env_file" ]]; then
+      export_env_file_defaults_from "$default_env_file" false
+    fi
+    return 0
+  fi
+  if [[ "${APP_CONFIG_SKIP_DEFAULT_ENV_FILE:-}" != "true" ]]; then
+    export_env_file_defaults_from "$default_env_file" false
+  fi
+}
+
 assert_local_url() {
   local key="$1"
   local env_file

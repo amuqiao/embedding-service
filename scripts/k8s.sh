@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # k8s.sh - K8s Pod 内手动运维入口
 #
-# 运行环境：Bash；需要在已注入应用环境变量的 K8s Pod 内执行。
+# 运行环境：Bash；需要在已注入应用环境变量或可读取应用 env 文件的 K8s Pod 内执行。
 # 作用域：只提供 Pod 内连接检查、OSS 连通性检查、dashboard read model 检查、Alembic 迁移和迁移状态查询。
 # 约束：不创建或管理 Kubernetes 资源，不调用 kubectl，不管理 API/worker 生命周期。
 # 输出：按生产排障需要打印完整连接串和解析结果；Alembic 输出透传。
@@ -22,6 +22,7 @@ usage() {
 作用域：
   本脚本是 K8s Pod 内手动运维入口。
   进入已部署的 api 或 worker Pod 后，使用同一份应用代码和同一组环境变量连接外部依赖。
+  若当前环境未显式注入配置，会按 ENV_FILE 指定文件或根目录 .env 补充导出缺失变量。
   只负责 PostgreSQL / Redis / OSS 连接检查、dashboard read model 检查、Alembic 迁移状态查询和手动执行迁移。
 
 不负责：
@@ -35,7 +36,7 @@ usage() {
   必须在 K8s Pod 内执行，且环境变量 KUBERNETES_SERVICE_HOST 必须存在。
   check 会打印完整 DATABASE_URL / REDIS_URL、编码密码和解码密码，输出包含敏感信息。
   check oss 会向 OSS 写入、读取、HEAD 一个临时对象并打印 URL Ref；默认不打印 OSS secret。
-  check / current / heads / history / migrate 必须注入应用 DATABASE_URL。
+  check / current / heads / history / migrate 必须可通过环境变量、ENV_FILE 或根目录 .env 读取 DATABASE_URL。
 
 命令：
   check               聚合执行 PostgreSQL、Redis、Alembic current 和 heads 无副作用检查。
@@ -195,6 +196,11 @@ require_k8s_pod() {
   [[ -n "${KUBERNETES_SERVICE_HOST:-}" ]] || die "k8s.sh must run inside a K8s Pod; KUBERNETES_SERVICE_HOST is not set" 2
 }
 
+load_k8s_env_file_defaults() {
+  require_k8s_pod
+  export_env_file_defaults
+}
+
 require_database_url() {
   [[ -n "${DATABASE_URL:-}" ]] || die "DATABASE_URL is required" 2
 }
@@ -249,7 +255,7 @@ PY
 }
 
 prepare_migration_runtime() {
-  require_k8s_pod
+  load_k8s_env_file_defaults
   require_database_url
   PYTHON_BIN="$(resolve_python_bin)"
   ALEMBIC_BIN="$(resolve_alembic_bin)"
@@ -275,6 +281,7 @@ require_no_args() {
 
 run_check_postgres() {
   require_no_args "check postgres" "$@"
+  load_k8s_env_file_defaults
   prepare_check_runtime
   section "PostgreSQL"
   "$PYTHON_BIN" <<'PY'
@@ -341,6 +348,7 @@ PY
 
 run_check_redis() {
   require_no_args "check redis" "$@"
+  load_k8s_env_file_defaults
   prepare_check_runtime
   require_redis_url
   "$ROOT_DIR/scripts/redis.sh" check --show-url --no-broker-key --redis-url "$REDIS_URL"

@@ -1762,6 +1762,124 @@ def test_k8s_check_redis_delegates_to_redis_entrypoint():
     assert "urlsplit" not in redis_check
 
 
+def test_common_export_env_file_defaults_does_not_override_existing_env(tmp_path):
+    lib_dir = tmp_path / "scripts" / "lib"
+    lib_dir.mkdir(parents=True)
+    (lib_dir / "common.sh").write_text(
+        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql://file-user:file-pass@file-db:5432/file-app",
+                'export REDIS_URL="redis://:file-pass@file-redis:6379/9"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env = _clean_root_env()
+    env["DATABASE_URL"] = "postgresql://runtime-user:runtime-pass@runtime-db:5432/runtime-app"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            "source scripts/lib/common.sh >/dev/null; "
+            "export_env_file_defaults; "
+            "printf 'DATABASE_URL=%s\\nREDIS_URL=%s\\n' \"$DATABASE_URL\" \"$REDIS_URL\"",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "DATABASE_URL=postgresql://runtime-user:runtime-pass@runtime-db:5432/runtime-app" in result.stdout
+    assert "REDIS_URL=redis://:file-pass@file-redis:6379/9" in result.stdout
+
+
+def test_common_export_env_file_defaults_layers_selected_env_over_root_env(tmp_path):
+    lib_dir = tmp_path / "scripts" / "lib"
+    env_dir = tmp_path / "envs"
+    lib_dir.mkdir(parents=True)
+    env_dir.mkdir()
+    (lib_dir / "common.sh").write_text(
+        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql://root-user:root-pass@root-db:5432/root-app",
+                "REDIS_URL=redis://:root-pass@root-redis:6379/0",
+                "SERVICE_API_KEY='root-service-key'",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    selected_env = env_dir / "selected.env"
+    selected_env.write_text('export REDIS_URL="redis://:selected-pass@selected-redis:6379/9"\n', encoding="utf-8")
+    env = _clean_root_env()
+    env["ENV_FILE"] = str(selected_env)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            "source scripts/lib/common.sh >/dev/null; "
+            "export_env_file_defaults; "
+            "printf 'DATABASE_URL=%s\\nREDIS_URL=%s\\nSERVICE_API_KEY=%s\\n' "
+            "\"$DATABASE_URL\" \"$REDIS_URL\" \"$SERVICE_API_KEY\"",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "DATABASE_URL=postgresql://root-user:root-pass@root-db:5432/root-app" in result.stdout
+    assert "REDIS_URL=redis://:selected-pass@selected-redis:6379/9" in result.stdout
+    assert "SERVICE_API_KEY=root-service-key" in result.stdout
+
+
+def test_common_export_env_file_defaults_requires_explicit_missing_env_file(tmp_path):
+    lib_dir = tmp_path / "scripts" / "lib"
+    lib_dir.mkdir(parents=True)
+    (lib_dir / "common.sh").write_text(
+        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    env = _clean_root_env()
+
+    default_result = subprocess.run(
+        ["bash", "-lc", "source scripts/lib/common.sh >/dev/null; export_env_file_defaults"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert default_result.returncode == 0
+
+    explicit_env = env | {"ENV_FILE": str(tmp_path / "missing.env")}
+    explicit_result = subprocess.run(
+        ["bash", "-lc", "source scripts/lib/common.sh >/dev/null; export_env_file_defaults"],
+        cwd=tmp_path,
+        env=explicit_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert explicit_result.returncode == 2
+    assert "missing.env not found" in explicit_result.stderr
+
+
 def test_k8s_default_check_runs_only_side_effect_free_targets(tmp_path):
     script_dir = tmp_path / "scripts"
     lib_dir = script_dir / "lib"
@@ -1829,6 +1947,244 @@ printf 'alembic %s\\n' "$*" >> {tmp_path / "calls.log"}
     assert "OSS" not in result.stdout
     assert "Ops Dashboard" not in result.stdout
     assert "upgrade" not in result.stdout
+
+
+def test_k8s_default_check_loads_root_env_file_defaults(tmp_path):
+    script_dir = tmp_path / "scripts"
+    lib_dir = script_dir / "lib"
+    bin_dir = tmp_path / "bin"
+    lib_dir.mkdir(parents=True)
+    bin_dir.mkdir()
+    (tmp_path / "calls.log").write_text("", encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql://file-user:file-pass@file-db.example:5432/file-app",
+                "REDIS_URL=redis://:file-pass@file-redis.example:6379/9",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (script_dir / "k8s.sh").write_text((ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    (script_dir / "k8s.sh").chmod(0o755)
+    (script_dir / "redis.sh").write_text(
+        f"""#!/usr/bin/env bash
+printf 'redis.sh %s\\n' "$*" >> {tmp_path / "calls.log"}
+""",
+        encoding="utf-8",
+    )
+    (script_dir / "redis.sh").chmod(0o755)
+    (lib_dir / "common.sh").write_text(
+        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    _write_fake_command(
+        bin_dir,
+        "python3",
+        f"""#!/usr/bin/env bash
+cat >/dev/null
+printf 'python3\\n' >> {tmp_path / "calls.log"}
+""",
+    )
+    _write_fake_command(
+        bin_dir,
+        "alembic",
+        f"""#!/usr/bin/env bash
+printf 'alembic %s\\n' "$*" >> {tmp_path / "calls.log"}
+""",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "KUBERNETES_SERVICE_HOST": "127.0.0.1",
+            "PATH": f"{bin_dir}:/bin:/usr/bin",
+        }
+    )
+
+    result = subprocess.run(
+        ["./scripts/k8s.sh", "check"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = (tmp_path / "calls.log").read_text(encoding="utf-8").splitlines()
+    assert calls == [
+        "python3",
+        "redis.sh check --show-url --no-broker-key --redis-url redis://:file-pass@file-redis.example:6379/9",
+        "python3",
+        "alembic current",
+        "python3",
+        "alembic heads",
+    ]
+
+
+def test_k8s_check_redis_loads_selected_env_file(tmp_path):
+    script_dir = tmp_path / "scripts"
+    lib_dir = script_dir / "lib"
+    bin_dir = tmp_path / "bin"
+    env_dir = tmp_path / "envs"
+    lib_dir.mkdir(parents=True)
+    bin_dir.mkdir()
+    env_dir.mkdir()
+    env_file = env_dir / "k8s.env"
+    env_file.write_text("REDIS_URL=redis://:selected-pass@selected-redis.example:6679/9\n", encoding="utf-8")
+    (tmp_path / "calls.log").write_text("", encoding="utf-8")
+    (script_dir / "k8s.sh").write_text((ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    (script_dir / "k8s.sh").chmod(0o755)
+    (script_dir / "redis.sh").write_text(
+        f"""#!/usr/bin/env bash
+printf 'redis.sh %s\\n' "$*" >> {tmp_path / "calls.log"}
+""",
+        encoding="utf-8",
+    )
+    (script_dir / "redis.sh").chmod(0o755)
+    (lib_dir / "common.sh").write_text(
+        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    _write_fake_command(
+        bin_dir,
+        "python3",
+        f"""#!/usr/bin/env bash
+cat >/dev/null
+printf 'python3\\n' >> {tmp_path / "calls.log"}
+""",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "ENV_FILE": str(env_file),
+            "KUBERNETES_SERVICE_HOST": "127.0.0.1",
+            "PATH": f"{bin_dir}:/bin:/usr/bin",
+        }
+    )
+
+    result = subprocess.run(
+        ["./scripts/k8s.sh", "check", "redis"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = (tmp_path / "calls.log").read_text(encoding="utf-8").splitlines()
+    assert calls == [
+        "redis.sh check --show-url --no-broker-key --redis-url redis://:selected-pass@selected-redis.example:6679/9",
+    ]
+
+
+def test_k8s_current_loads_selected_env_file_before_database_guard(tmp_path):
+    script_dir = tmp_path / "scripts"
+    lib_dir = script_dir / "lib"
+    bin_dir = tmp_path / "bin"
+    env_dir = tmp_path / "envs"
+    lib_dir.mkdir(parents=True)
+    bin_dir.mkdir()
+    env_dir.mkdir()
+    env_file = env_dir / "k8s.env"
+    env_file.write_text(
+        "DATABASE_URL=postgresql://selected-user:selected-pass@selected-db.example:5432/selected-app\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "calls.log").write_text("", encoding="utf-8")
+    (script_dir / "k8s.sh").write_text((ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    (script_dir / "k8s.sh").chmod(0o755)
+    (lib_dir / "common.sh").write_text(
+        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    _write_fake_command(
+        bin_dir,
+        "python3",
+        f"""#!/usr/bin/env bash
+cat >/dev/null
+printf 'python3 database=%s\\n' "$DATABASE_URL" >> {tmp_path / "calls.log"}
+""",
+    )
+    _write_fake_command(
+        bin_dir,
+        "alembic",
+        f"""#!/usr/bin/env bash
+printf 'alembic %s\\n' "$*" >> {tmp_path / "calls.log"}
+""",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "ENV_FILE": str(env_file),
+            "KUBERNETES_SERVICE_HOST": "127.0.0.1",
+            "PATH": f"{bin_dir}:/bin:/usr/bin",
+        }
+    )
+
+    result = subprocess.run(
+        ["./scripts/k8s.sh", "current"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = (tmp_path / "calls.log").read_text(encoding="utf-8").splitlines()
+    assert calls == [
+        "python3 database=postgresql://selected-user:selected-pass@selected-db.example:5432/selected-app",
+        "alembic current",
+    ]
+
+
+def test_k8s_help_ignores_missing_explicit_env_file(tmp_path):
+    env = _clean_root_env()
+    env["ENV_FILE"] = str(tmp_path / "missing.env")
+
+    help_result = subprocess.run(
+        ["./scripts/k8s.sh", "--help"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    check_help_result = subprocess.run(
+        ["./scripts/k8s.sh", "check", "--help"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert help_result.returncode == 0
+    assert check_help_result.returncode == 0
+    assert "ENV_FILE not found" not in help_result.stderr
+    assert "ENV_FILE not found" not in check_help_result.stderr
+
+
+def test_k8s_migrate_without_confirm_does_not_require_env_file_or_pod(tmp_path):
+    env = _clean_root_env()
+    env["ENV_FILE"] = str(tmp_path / "missing.env")
+
+    result = subprocess.run(
+        ["./scripts/k8s.sh", "migrate"],
+        cwd=ROOT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "migrate requires --confirm" in result.stderr
+    assert "ENV_FILE not found" not in result.stderr
+    assert "KUBERNETES_SERVICE_HOST" not in result.stderr
 
 
 def test_k8s_check_oss_requires_confirm_before_remote_write():
