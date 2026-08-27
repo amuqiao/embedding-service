@@ -816,7 +816,7 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
 
     async def fake_publish_job_attempt(attempt_id):
         published_attempt_ids.append(attempt_id)
-        raise task_jobs.TaskiqPublishDeferredError(attempt_id, {"code": "TASKIQ_PUBLISH_FAILED"})
+        raise AssertionError("workflow orchestration must not publish Taskiq directly")
 
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
     monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
@@ -857,7 +857,8 @@ async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypat
         "created_child_jobs": 1,
     }
     assert [child.workflow_node_key for child in created_children] == ["first"]
-    assert published_attempt_ids == created_attempt_ids
+    assert published_attempt_ids == []
+    assert len(created_attempt_ids) == 1
     assert root_job.status == "running"
     assert root_job.active_attempt_id is None
     assert heartbeats and heartbeats[0][0] == root_attempt_id
@@ -2387,7 +2388,7 @@ async def test_attempt_heartbeat_guard_prefers_completed_operation_over_simultan
 
 
 @pytest.mark.asyncio
-async def test_fail_job_marks_job_failed_and_delivers_callback(monkeypatch):
+async def test_fail_job_marks_job_failed_and_leaves_callback_to_callbacker(monkeypatch):
     job = _running_add_job()
     job.active_attempt_id = None
     error = {"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {}}
@@ -2404,7 +2405,7 @@ async def test_fail_job_marks_job_failed_and_delivers_callback(monkeypatch):
 
     async def fake_deliver_callback_for_job(job_id):
         marked["callback_job_id"] = job_id
-        return False
+        raise AssertionError("fail_job must not deliver callback directly")
 
     db = _FakeDB()
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
@@ -2417,7 +2418,6 @@ async def test_fail_job_marks_job_failed_and_delivers_callback(monkeypatch):
     assert marked == {
         "job_id": job.id,
         "error": error,
-        "callback_job_id": job.id,
     }
 
 
@@ -2440,7 +2440,7 @@ async def test_fail_job_projects_unlisted_runtime_error_before_public_exposure(m
 
     async def fake_deliver_callback_for_job(job_id):
         marked["callback_job_id"] = job_id
-        return False
+        raise AssertionError("fail_job must not deliver callback directly")
 
     db = _FakeDB()
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
@@ -2456,7 +2456,6 @@ async def test_fail_job_projects_unlisted_runtime_error_before_public_exposure(m
             "message": "job execution failed",
             "details": {"internal_reason": "MODEL_CALL_FAILED"},
         },
-        "callback_job_id": job.id,
     }
 
 

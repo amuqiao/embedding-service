@@ -25,7 +25,7 @@ FastAPI AI Job 执行后端模板。`fastapi-best-ai-architecture` 是模板默�
 
 `local` 可以与 `compose-deps` 组合使用，但不能与当前仓库下任何 `compose-full` 的 API / worker 混跑。切换到 `compose-full` 前先执行 `./scripts/run.sh down dev` 或 `./scripts/dev.sh stop`；切回 `dev` recipe 前先执行 `./scripts/deploy.sh down compose-full`。
 
-生产 K8s 形态不由本仓库创建或管理资源。api / worker Pod 可继续使用 `start-api.sh` 和 `start-worker.sh` 作为启动入口；Pod 内连接检查、OSS 显式检查、Alembic 状态查询和手动数据库迁移使用 `./scripts/k8s.sh`。
+生产 K8s 形态不由本仓库创建或管理资源。默认小流量形态是 api Pod + worker Pod；worker Pod 可用 `start-worker-bundle.sh` 同时运行 Taskiq worker、dispatcher、callbacker 和 reconciler。需要多容器同 Pod 或拆成独立 Deployment 时，分别使用 `start-worker.sh`、`start-dispatcher.sh`、`start-callbacker.sh` 和 `start-reconciler.sh`。Pod 内连接检查、OSS 显式检查、Alembic 状态查询和手动数据库迁移使用 `./scripts/k8s.sh`。
 运行镜像会包含 `scripts/` 目录，便于在 `compose-full` 容器或 K8s Pod 内执行 `./scripts/jobs.sh` Job 只读排障、`./scripts/redis.sh` Redis 只读排障和 `./scripts/k8s.sh` 手动运维。`dev.sh`、`deploy.sh` 和 `verify.sh` 仍是宿主机侧开发、部署入口和质量门，不作为容器内稳定运维入口。
 
 `run.sh` 只管理日常 recipe：
@@ -78,7 +78,7 @@ K8s Pod 内运维入口只在已经部署的 Pod 中执行，不调用 `kubectl`
 
 应用默认只自动读取根目录 `.env`。`.env.dev`、`.env.test` 和 `.env.prd` 可以作为开发者本地自管的配置草稿或复制粘贴来源，但项目不维护这些文件，也不会根据 `APP_ENV` 自动选择它们。需要显式使用某份文件时，由启动或部署入口设置 `ENV_FILE`，或由平台直接注入环境变量。
 
-本地配置统一维护在仓库根目录 `.env`，模板是 `.env.example`。`API_PORT`、`API_HOST_PORT`、`POSTGRES_DB`、`POSTGRES_HOST_PORT`、`REDIS_HOST_PORT`、`COMPOSE_PROJECT_NAME`、`WORKER_CONCURRENCY`、`WORKER_LOGLEVEL` 和 `WORKER_RECOVERY_LOOP` 等本地脚本或 compose 编排变量也写入这套文件，避免应用、脚本和 compose 使用不同配置源。
+本地配置统一维护在仓库根目录 `.env`，模板是 `.env.example`。`API_PORT`、`API_HOST_PORT`、`POSTGRES_DB`、`POSTGRES_HOST_PORT`、`REDIS_HOST_PORT`、`COMPOSE_PROJECT_NAME`、`WORKER_CONCURRENCY` 和 `WORKER_LOGLEVEL` 等本地脚本或 compose 编排变量也写入这套文件，避免应用、脚本和 compose 使用不同配置源。
 
 `APP_ENV=test` 或 `APP_ENV=prd` 时，启动会拒绝本地绕过认证、`ALLOW_INSECURE_CALLBACKS=true`、`TASKIQ_BROKER_KIND=redis_list` 和明显占位或过短的 `SERVICE_API_KEY` / `CALLBACK_SIGNING_SECRET`。如果当前启用的 `job_type` 需要对象存储，发布模式还会拒绝 `STORAGE_BACKEND=local`，必须使用外部对象存储后端，例如 `aliyun_oss`，避免 API / worker 节点之间读写不同本地磁盘。
 
@@ -188,11 +188,11 @@ OSS_PUBLIC_ENDPOINT=
 `run.sh` 是本服务的日常快捷 recipe 入口，`dev.sh` 是宿主机 API / worker 进程控制入口：
 
 - `bootstrap`：缺少 `.env` 时从 `.env.example` 生成，并执行 `uv sync`。
-- `run.sh up dev`：启动 PostgreSQL、Redis，执行数据库迁移，启动 API 和 worker，并检查 `/health`。
+- `run.sh up dev`：启动 PostgreSQL、Redis，执行数据库迁移，启动 API 和 worker-bundle，并检查 `/health`。
 - `run.sh status dev`：展示 API、worker、PostgreSQL 和 Redis 状态。
 - `run.sh down dev`：停止 API、worker、PostgreSQL 和 Redis。
-- `dev.sh start [api|worker]`：启动指定宿主机进程；不传服务名时启动 API 和 worker，并检查 `/health`。
-  本地 API 默认通过 `start-api.sh` 稳定启动；需要热更新时临时执行 `DEV_API_RELOAD=true ./scripts/dev.sh start api`，改用 `uvicorn --reload`。reload 默认使用 polling，避免 macOS 或受限目录中文件监听失败；如需使用系统文件事件，可临时执行 `WATCHFILES_FORCE_POLLING=false DEV_API_RELOAD=true ./scripts/dev.sh start api`。worker 不做自动热更新，代码变更后使用 `./scripts/dev.sh restart worker`。
+- `dev.sh start [api|worker]`：启动指定宿主机进程；不传服务名时启动 API 和 worker-bundle，并检查 `/health`。
+  本地 API 默认通过 `start-api.sh` 稳定启动；需要热更新时临时执行 `DEV_API_RELOAD=true ./scripts/dev.sh start api`，改用 `uvicorn --reload`。reload 默认使用 polling，避免 macOS 或受限目录中文件监听失败；如需使用系统文件事件，可临时执行 `WATCHFILES_FORCE_POLLING=false DEV_API_RELOAD=true ./scripts/dev.sh start api`。worker-bundle 不做自动热更新，代码变更后使用 `./scripts/dev.sh restart worker`。
 - `dev.sh stop [api|worker]`：停止指定宿主机进程；不传服务名时停止 API 和 worker。
 - `dev.sh restart [api|worker]`：重启指定宿主机进程；不传服务名时重启 API 和 worker。
 - `dev.sh status [api|worker]`：展示指定宿主机进程状态；不传服务名时展示应用进程 PID、日志路径和健康状态。

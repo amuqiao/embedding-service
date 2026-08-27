@@ -27,9 +27,9 @@ usage() {
   Dependencies: recipe 调用到的 dev.sh / deploy.sh 子命令所需依赖。
 
 命令：
-  up dev        启动常见本地开发环境：compose-deps + migration + 宿主机 API / worker。
-  status dev    查看常见本地开发环境：宿主机 API / worker + compose-deps。
-  down dev      停止常见本地开发环境：宿主机 API / worker + compose-deps。
+  up dev        启动常见本地开发环境：compose-deps + migration + 宿主机 API / worker-bundle。
+  status dev    查看常见本地开发环境：宿主机 API / worker-bundle + compose-deps。
+  down dev      停止常见本地开发环境：宿主机 API / worker-bundle + compose-deps。
   restart dev   重启常见本地开发环境：先 down dev，再 up dev。
   help          显示帮助。
 
@@ -38,6 +38,7 @@ usage() {
   up dev 依次执行 ./scripts/deploy.sh up compose-deps、./scripts/dev.sh migrate、./scripts/dev.sh start api、./scripts/dev.sh start worker。
   status dev 依次执行 ./scripts/dev.sh status、./scripts/deploy.sh status compose-deps。
   down dev 依次执行 ./scripts/dev.sh stop api、./scripts/dev.sh stop worker、./scripts/deploy.sh down compose-deps。
+  dev.sh 的 worker 服务是 worker-bundle，包含 Taskiq worker、dispatcher、callbacker 和 reconciler。
   restart dev 等价于先执行 down dev，再执行 up dev。
   down dev 不等同全量停止，不会停止 compose-full。
 

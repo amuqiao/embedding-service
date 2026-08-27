@@ -28,7 +28,7 @@ services:
       retries: 10
 
   migrate:
-    profiles: ["app"]
+    profiles: ["app", "roles"]
     build:
       context: .
     env_file:
@@ -86,14 +86,13 @@ services:
       context: .
     env_file:
       - ${ENV_FILE:-.env}
-    command: ["/app/start-worker.sh"]
+    command: ["/app/start-worker-bundle.sh"]
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_ai_translation_service}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
       WORKER_LOGLEVEL: ${WORKER_LOGLEVEL:-INFO}
-      WORKER_RECOVERY_LOOP: ${WORKER_RECOVERY_LOOP:-true}
     volumes:
       - object_storage:/app/storage/objects
       - ./.data/models:/app/.data/models:ro
@@ -101,6 +100,81 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  dispatcher:
+    profiles: ["roles"]
+    build:
+      context: .
+    env_file:
+      - ${ENV_FILE:-.env}
+    command: ["/app/start-dispatcher.sh"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_ai_translation_service}
+      REDIS_URL: redis://redis:6379/0
+      LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  taskiq-worker:
+    profiles: ["roles"]
+    build:
+      context: .
+    env_file:
+      - ${ENV_FILE:-.env}
+    command: ["/app/start-worker.sh"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_ai_translation_service}
+      REDIS_URL: redis://redis:6379/0
+      LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      WORKER_LOGLEVEL: ${WORKER_LOGLEVEL:-INFO}
+    volumes:
+      - object_storage:/app/storage/objects
+      - ./.data/models:/app/.data/models:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  callbacker:
+    profiles: ["roles"]
+    build:
+      context: .
+    env_file:
+      - ${ENV_FILE:-.env}
+    command: ["/app/start-callbacker.sh"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_ai_translation_service}
+      LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  reconciler:
+    profiles: ["roles"]
+    build:
+      context: .
+    env_file:
+      - ${ENV_FILE:-.env}
+    command: ["/app/start-reconciler.sh"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_ai_translation_service}
+      LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
+    depends_on:
+      postgres:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully

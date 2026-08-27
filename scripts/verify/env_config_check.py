@@ -42,7 +42,6 @@ ENV_KEY_MANIFEST = EnvKeyManifest(
             "REDIS_HOST_PORT",
             "WORKER_CONCURRENCY",
             "WORKER_LOGLEVEL",
-            "WORKER_RECOVERY_LOOP",
         }
     ),
     deprecated_keys=frozenset(
@@ -68,6 +67,7 @@ ENV_KEY_MANIFEST = EnvKeyManifest(
             "SHORT_DRAMA_RS_TIMEOUT_SECONDS",
             "TASKIQ_MAX_RETRIES",
             "TASKIQ_RETRY_DELAY",
+            "WORKER_RECOVERY_LOOP",
         }
     ),
     derived_keys=frozenset(
@@ -115,20 +115,6 @@ LAUNCHER_ENV_KEYS = constant_keys_from_config("LAUNCHER_ENV_KEYS")
 ROOT_ENV_KEYS = APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS
 DEPRECATED_KEYS = ENV_KEY_MANIFEST.deprecated_keys
 DERIVED_ENV_KEYS = ENV_KEY_MANIFEST.derived_keys
-
-
-def _relative_path(path: Path) -> Path:
-    try:
-        return path.resolve().relative_to(ROOT_DIR)
-    except ValueError:
-        return path
-
-
-def _is_service_env_file(path: Path) -> bool:
-    relative = _relative_path(path)
-    if len(relative.parts) == 1 and (relative.name == ".env" or relative.name.startswith(".env.")):
-        return True
-    return relative == Path("env_test/.env")
 
 
 def _key_set(path: Path) -> frozenset[str]:
@@ -192,9 +178,6 @@ def check_example_alignment() -> list[str]:
 def default_env_files() -> list[Path]:
     candidates: list[Path] = []
     candidates.extend(path for path in sorted(ROOT_DIR.glob(".env*")) if path.is_file())
-    env_test = ROOT_DIR / "env_test" / ".env"
-    if env_test.exists():
-        candidates.append(env_test)
 
     seen: set[Path] = set()
     result: list[Path] = []

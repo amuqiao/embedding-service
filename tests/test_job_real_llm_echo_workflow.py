@@ -252,16 +252,11 @@ async def test_job_real_llm_echo_uses_shared_llm_runtime(monkeypatch):
         job.status = "succeeded"
         return True
 
-    async def fake_deliver_callback_for_job(_job_id):
-        captured["callback_checked"] = True
-        return False
-
     monkeypatch.setattr("app.jobs.runner.get_job_or_404", fake_get_job_or_404)
     monkeypatch.setattr("app.jobs.runner.JobRepo.get_attempt", fake_get_attempt)
     monkeypatch.setattr("app.jobs.runner.JobRepo.update_progress", fake_update_progress)
     monkeypatch.setattr("app.jobs.runner.run_ai_job", fake_run_ai_job)
     monkeypatch.setattr("app.jobs.runner.JobRepo.mark_succeeded", fake_mark_succeeded)
-    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", fake_deliver_callback_for_job)
 
     result = await execute_job(_FakeDB(), job.id, attempt_id=attempt.id, lease_token=lease_token)
 
@@ -275,7 +270,7 @@ async def test_job_real_llm_echo_uses_shared_llm_runtime(monkeypatch):
     assert captured["request_id"] == "req-real-1"
     assert captured["input_text"] == "hello"
     assert captured["canonical_result"] == {"artifacts": [], "signals": {"message": "ok"}}
-    assert captured["callback_checked"] is True
+    assert "callback_checked" not in captured
 
 
 @pytest.mark.asyncio

@@ -637,20 +637,8 @@ async def submit_job_request(
         trigger_request_id=request_id,
     )
     await db.commit()
-    if created and job.active_attempt_id is not None:
+    if created:
         await db.refresh(job)
-        from app.tasks.jobs import TaskiqPublishDeferredError, publish_job_attempt
-
-        try:
-            await publish_job_attempt(job.active_attempt_id)
-        except TaskiqPublishDeferredError:
-            logger.exception(
-                "job_attempt_publish_deferred_after_create job_id=%s attempt_id=%s",
-                job.id,
-                job.active_attempt_id,
-            )
-        else:
-            await db.refresh(job)
     return create_job_response(job, request_id=request_id)
 
 

@@ -167,6 +167,14 @@ check_deploy() {
   event "OK" "start-api.sh" "present"
   require_file "start-worker.sh"
   event "OK" "start-worker.sh" "present"
+  require_file "start-worker-bundle.sh"
+  event "OK" "start-worker-bundle.sh" "present"
+  require_file "start-dispatcher.sh"
+  event "OK" "start-dispatcher.sh" "present"
+  require_file "start-callbacker.sh"
+  event "OK" "start-callbacker.sh" "present"
+  require_file "start-reconciler.sh"
+  event "OK" "start-reconciler.sh" "present"
   require_file "scripts/lib/modes.sh"
   event "OK" "modes.sh" "present"
 
@@ -175,6 +183,8 @@ check_deploy() {
   event "OK" "compose-deps" "docker compose config"
   ENV_FILE=.env.example compose --profile app config --quiet
   event "OK" "compose-full" "docker compose --profile app config"
+  ENV_FILE=.env.example compose --profile roles config --quiet
+  event "OK" "compose-roles" "docker compose --profile roles config"
   assert_no_compose_project_name_conflict
   event "OK" "compose-project" "no working_dir conflict"
 
@@ -189,6 +199,14 @@ check_deploy() {
   event "OK" "start-api.sh" "syntax"
   sh -n "$ROOT_DIR/start-worker.sh"
   event "OK" "start-worker.sh" "syntax"
+  bash -n "$ROOT_DIR/start-worker-bundle.sh"
+  event "OK" "start-worker-bundle.sh" "syntax"
+  sh -n "$ROOT_DIR/start-dispatcher.sh"
+  event "OK" "start-dispatcher.sh" "syntax"
+  sh -n "$ROOT_DIR/start-callbacker.sh"
+  event "OK" "start-callbacker.sh" "syntax"
+  sh -n "$ROOT_DIR/start-reconciler.sh"
+  event "OK" "start-reconciler.sh" "syntax"
 }
 
 up_deps() {

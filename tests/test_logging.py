@@ -84,22 +84,23 @@ async def test_taskiq_worker_startup_configures_stdout_logging(monkeypatch, isol
     assert handler.stream is stream
 
 
-def test_recovery_loop_main_configures_stdout_logging_before_loop(monkeypatch, isolated_root_logger):
-    from app.tasks import recovery_loop
+def test_reconciler_main_configures_stdout_logging_before_loop(monkeypatch, isolated_root_logger):
+    from app.runtime import common, reconciler
 
     stream = io.StringIO()
     calls = []
     monkeypatch.setattr(logging_module.sys, "stdout", stream)
-    monkeypatch.setattr(recovery_loop, "ensure_worker_runtime_initialized", lambda: calls.append("bootstrap"))
+    monkeypatch.setattr(common, "ensure_worker_runtime_initialized", lambda: calls.append("bootstrap"))
+    monkeypatch.setattr(common.sys, "argv", ["python -m app.runtime.reconciler", "loop"])
 
-    def stop_after_first_recovery():
+    async def stop_after_first_recovery():
         calls.append("recover")
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(recovery_loop, "run_recovery", stop_after_first_recovery)
+    monkeypatch.setattr(reconciler, "run_recovery_once", stop_after_first_recovery)
 
     with pytest.raises(KeyboardInterrupt):
-        recovery_loop.main()
+        reconciler.main()
 
     assert calls == ["bootstrap", "recover"]
     assert len(isolated_root_logger.handlers) == 1
@@ -107,3 +108,21 @@ def test_recovery_loop_main_configures_stdout_logging_before_loop(monkeypatch, i
     assert isinstance(handler, logging.StreamHandler)
     assert not isinstance(handler, logging.FileHandler)
     assert handler.stream is stream
+
+
+@pytest.mark.asyncio
+async def test_reconciler_once_uses_async_recovery_entrypoint(monkeypatch):
+    from app.runtime import reconciler
+
+    calls = []
+
+    async def run_recovery_once():
+        calls.append("recover")
+        return {"locked": True}
+
+    monkeypatch.setattr(reconciler, "run_recovery_once", run_recovery_once)
+
+    result = await reconciler.run_reconciler_once()
+
+    assert result == {"locked": True}
+    assert calls == ["recover"]

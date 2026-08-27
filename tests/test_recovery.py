@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.job import DispatchOutbox, Job, JobAttempt
+from app.runtime.callbacker import _run_callbacker_once
+from app.runtime.dispatcher import _run_dispatcher_once
 from app.tasks.recovery import _run_recovery, _stale_pending_ai_call_before
 
 
@@ -113,7 +115,7 @@ def _patch_common_recovery(monkeypatch, *, due_dispatches=None, stale_attempts=N
 
 
 @pytest.mark.asyncio
-async def test_recovery_republishes_due_attempts(monkeypatch):
+async def test_dispatcher_publishes_due_attempts(monkeypatch):
     attempt_id = uuid.uuid4()
     dispatch = _dispatch(attempt_id)
     published: list[uuid.UUID] = []
@@ -124,13 +126,13 @@ async def test_recovery_republishes_due_attempts(monkeypatch):
     async def publish(attempt_id):
         published.append(attempt_id)
 
-    _patch_common_recovery(monkeypatch, due_dispatches=due_dispatches)
-    monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", publish)
+    monkeypatch.setattr("app.runtime.dispatcher.JobRepo.find_due_dispatches", due_dispatches)
+    monkeypatch.setattr("app.runtime.dispatcher.publish_job_attempt", publish)
 
-    result = await _run_recovery(_FakeDB())
+    result = await _run_dispatcher_once(_FakeDB())
 
-    assert result["recovered"] == 1
-    assert result["failed"] == 0
+    assert result["published"] == 1
+    assert result["deferred"] == 0
     assert published == [attempt_id]
 
 
@@ -293,9 +295,6 @@ async def test_recovery_advances_workflow_after_dead_lettered_internal_child_fai
         advanced["child_job_id"] = child_job.id
         return advance_result
 
-    async def handle_result(result):
-        advanced["result"] = result
-
     _patch_common_recovery(monkeypatch)
     monkeypatch.setattr(
         "app.tasks.recovery.JobRepo.find_dead_lettered_pending_dispatches",
@@ -306,14 +305,16 @@ async def test_recovery_advances_workflow_after_dead_lettered_internal_child_fai
         mark_dead_lettered,
     )
     monkeypatch.setattr("app.workflows.orchestrator.advance_workflow_after_child_terminal", advance)
-    monkeypatch.setattr("app.tasks.jobs.handle_workflow_advance_result", handle_result)
+    monkeypatch.setattr(
+        "app.tasks.jobs.handle_workflow_advance_result",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("reconciler must not run side effects")),
+    )
 
     result = await _run_recovery(_FakeDB())
 
     assert result["failed"] == 1
     assert result["dispatch_dead_letter_failed"] == 1
     assert advanced["child_job_id"] == child.id
-    assert advanced["result"] is advance_result
 
 
 @pytest.mark.asyncio
@@ -354,24 +355,23 @@ async def test_recovery_advances_workflow_after_stale_internal_child_failed(monk
         advanced["child_job_id"] = child_job.id
         return advance_result
 
-    async def handle_result(result):
-        advanced["result"] = result
-
     _patch_common_recovery(monkeypatch, stale_attempts=stale_attempts)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.mark_attempt_failed", mark_failed)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.get", get_job)
     monkeypatch.setattr("app.workflows.orchestrator.advance_workflow_after_child_terminal", advance)
-    monkeypatch.setattr("app.tasks.jobs.handle_workflow_advance_result", handle_result)
+    monkeypatch.setattr(
+        "app.tasks.jobs.handle_workflow_advance_result",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("reconciler must not run side effects")),
+    )
 
     result = await _run_recovery(_FakeDB())
 
     assert result["failed"] == 1
     assert advanced["child_job_id"] == child.id
-    assert advanced["result"] is advance_result
 
 
 @pytest.mark.asyncio
-async def test_recovery_reconciles_workflow_root_and_handles_side_effects(monkeypatch):
+async def test_recovery_reconciles_workflow_root_without_running_side_effects(monkeypatch):
     root_job_id = uuid.uuid4()
     child_attempt_id = uuid.uuid4()
     root = Job(
@@ -386,8 +386,6 @@ async def test_recovery_reconciles_workflow_root_and_handles_side_effects(monkey
         created_attempt_ids=(child_attempt_id,),
         finalized_root_job_id=None,
     )
-    handled = []
-
     async def workflow_roots(*_args, **_kwargs):
         return [root]
 
@@ -395,22 +393,21 @@ async def test_recovery_reconciles_workflow_root_and_handles_side_effects(monkey
         assert root_job_id == root.id
         return advance_result
 
-    async def handle_result(result):
-        handled.append(result)
-
     _patch_common_recovery(monkeypatch)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.find_workflow_roots_for_reconciliation", workflow_roots)
     monkeypatch.setattr("app.workflows.orchestrator.reconcile_workflow_root", reconcile)
-    monkeypatch.setattr("app.tasks.jobs.handle_workflow_advance_result", handle_result)
+    monkeypatch.setattr(
+        "app.tasks.jobs.handle_workflow_advance_result",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("reconciler must not run side effects")),
+    )
 
     result = await _run_recovery(_FakeDB())
 
     assert result["workflow_reconciled"] == 1
-    assert handled == [advance_result]
 
 
 @pytest.mark.asyncio
-async def test_recovery_deduplicates_dispatch_attempt_from_reconciler_and_due_scan(monkeypatch):
+async def test_recovery_reconciles_workflow_root_without_publishing_due_dispatch(monkeypatch):
     root_job_id = uuid.uuid4()
     child_attempt_id = uuid.uuid4()
     root = Job(
@@ -425,7 +422,6 @@ async def test_recovery_deduplicates_dispatch_attempt_from_reconciler_and_due_sc
         created_attempt_ids=(child_attempt_id,),
         finalized_root_job_id=None,
     )
-    due_dispatch = _dispatch(child_attempt_id)
     published = []
 
     async def workflow_roots(*_args, **_kwargs):
@@ -435,13 +431,10 @@ async def test_recovery_deduplicates_dispatch_attempt_from_reconciler_and_due_sc
         assert root_job_id == root.id
         return advance_result
 
-    async def due_dispatches(*_args, **_kwargs):
-        return [due_dispatch]
-
     async def publish(attempt_id):
         published.append(attempt_id)
 
-    _patch_common_recovery(monkeypatch, due_dispatches=due_dispatches)
+    _patch_common_recovery(monkeypatch)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.find_workflow_roots_for_reconciliation", workflow_roots)
     monkeypatch.setattr("app.workflows.orchestrator.reconcile_workflow_root", reconcile)
     monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", publish)
@@ -450,11 +443,11 @@ async def test_recovery_deduplicates_dispatch_attempt_from_reconciler_and_due_sc
 
     assert result["workflow_reconciled"] == 1
     assert result["recovered"] == 0
-    assert published == [child_attempt_id]
+    assert published == []
 
 
 @pytest.mark.asyncio
-async def test_recovery_deduplicates_callback_from_reconciler_and_due_scan(monkeypatch):
+async def test_recovery_reconciles_finalized_root_without_delivering_due_callback(monkeypatch):
     root_job_id = uuid.uuid4()
     root = Job(
         id=root_job_id,
@@ -462,13 +455,6 @@ async def test_recovery_deduplicates_callback_from_reconciler_and_due_scan(monke
         job_type="test.workflow",
         status="running",
         active_attempt_id=None,
-    )
-    due_job = Job(
-        id=root_job_id,
-        caller_id="caller-1",
-        job_type="test.workflow",
-        status="succeeded",
-        callback_url="https://callback.example/jobs",
     )
     advance_result = SimpleNamespace(
         root_job_id=root_job_id,
@@ -484,9 +470,6 @@ async def test_recovery_deduplicates_callback_from_reconciler_and_due_scan(monke
         assert root_job_id == root.id
         return advance_result
 
-    async def due_callbacks(*_args, **_kwargs):
-        return [due_job]
-
     async def deliver_callback(job_id):
         delivered.append(job_id)
         return True
@@ -496,20 +479,22 @@ async def test_recovery_deduplicates_callback_from_reconciler_and_due_scan(monke
 
     _patch_common_recovery(monkeypatch)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.find_workflow_roots_for_reconciliation", workflow_roots)
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_due_callbacks", due_callbacks)
     monkeypatch.setattr("app.workflows.orchestrator.reconcile_workflow_root", reconcile)
     monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", deliver_callback)
-    monkeypatch.setattr("app.tasks.jobs.handle_workflow_advance_result", handle_result)
+    monkeypatch.setattr(
+        "app.tasks.jobs.handle_workflow_advance_result",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("reconciler must not run side effects")),
+    )
 
     result = await _run_recovery(_FakeDB())
 
     assert result["workflow_reconciled"] == 1
     assert result["callbacks"] == 0
-    assert delivered == [root_job_id]
+    assert delivered == []
 
 
 @pytest.mark.asyncio
-async def test_recovery_repairs_missing_dispatch_outbox_and_publishes_attempt(monkeypatch):
+async def test_recovery_repairs_missing_dispatch_outbox_without_publishing_attempt(monkeypatch):
     attempt = _attempt("pending")
     created = []
     published = []
@@ -535,9 +520,9 @@ async def test_recovery_repairs_missing_dispatch_outbox_and_publishes_attempt(mo
     result = await _run_recovery(_FakeDB())
 
     assert result["dispatch_reconciled"] == 1
-    assert result["recovered"] == 1
+    assert result["recovered"] == 0
     assert created == [attempt.id]
-    assert published == [attempt.id]
+    assert published == []
 
 
 @pytest.mark.asyncio
@@ -575,7 +560,7 @@ async def test_recovery_repairs_future_missing_dispatch_without_early_publish(mo
 
 
 @pytest.mark.asyncio
-async def test_recovery_repairs_missing_callback_outbox_and_delivers(monkeypatch):
+async def test_recovery_repairs_missing_callback_outbox_without_delivering(monkeypatch):
     job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
@@ -607,9 +592,9 @@ async def test_recovery_repairs_missing_callback_outbox_and_delivers(monkeypatch
     result = await _run_recovery(_FakeDB())
 
     assert result["callback_reconciled"] == 1
-    assert result["callbacks"] == 1
+    assert result["callbacks"] == 0
     assert ensured == [job.id]
-    assert delivered == [job.id]
+    assert delivered == []
 
 
 @pytest.mark.asyncio
@@ -639,7 +624,7 @@ async def test_recovery_skips_stale_attempt_when_peer_already_claimed(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_recovery_delivers_due_callbacks(monkeypatch):
+async def test_callbacker_delivers_due_callbacks(monkeypatch):
     from app.models.job import Job
 
     due_job = Job(id=uuid.uuid4(), job_type="example_pair", status="failed")
@@ -652,13 +637,13 @@ async def test_recovery_delivers_due_callbacks(monkeypatch):
         delivered.append(str(job_id))
         return True
 
-    _patch_common_recovery(monkeypatch)
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_due_callbacks", due_callbacks)
-    monkeypatch.setattr("app.tasks.jobs.deliver_callback_for_job", deliver_callback)
+    monkeypatch.setattr("app.runtime.callbacker.JobRepo.find_due_callbacks", due_callbacks)
+    monkeypatch.setattr("app.runtime.callbacker.deliver_callback_for_job", deliver_callback)
 
-    result = await _run_recovery(_FakeDB())
+    result = await _run_callbacker_once(_FakeDB())
 
-    assert result["callbacks"] == 1
+    assert result["jobs"] == 1
+    assert result["delivered"] == 1
     assert delivered == [str(due_job.id)]
 
 
@@ -766,8 +751,7 @@ async def test_recovery_due_callback_uses_initialized_job_type_registry(monkeypa
             "lease_token": lease_token,
         }
 
-    _patch_common_recovery(monkeypatch)
-    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_due_callbacks", due_callbacks)
+    monkeypatch.setattr("app.runtime.callbacker.JobRepo.find_due_callbacks", due_callbacks)
     monkeypatch.setattr("app.tasks.jobs._with_db", fake_with_db)
     monkeypatch.setattr("app.tasks.jobs.get_job_or_404", fake_get_job_or_404)
     monkeypatch.setattr("app.tasks.jobs.JobRepo.mark_callback_delivering", fake_mark_callback_delivering)
@@ -778,9 +762,10 @@ async def test_recovery_due_callback_uses_initialized_job_type_registry(monkeypa
         lambda *_args, **_kwargs: [(None, None, None, "", ("93.184.216.34", 443))],
     )
 
-    result = await _run_recovery(_FakeDB())
+    result = await _run_callbacker_once(_FakeDB())
 
-    assert result["callbacks"] == 1
+    assert result["jobs"] == 1
+    assert result["delivered"] == 1
     assert recorded["callback_url"] == due_job.callback_url
     assert recorded["result"]["status"] == "delivered"
     assert recorded["result"]["last_http_status"] == 200

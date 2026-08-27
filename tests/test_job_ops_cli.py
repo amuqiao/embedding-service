@@ -93,8 +93,9 @@ def test_restore_family_maps_repo_value_error_to_not_eligible(monkeypatch):
     assert "already used" in payload["message"]
 
 
-def test_replay_dispatch_reports_publish_requested_without_claiming_delivery(monkeypatch):
+def test_replay_dispatch_resets_outbox_without_inline_publish(monkeypatch):
     candidate = _candidate()
+    published = []
 
     async def get_candidate(*_args, **_kwargs):
         return candidate
@@ -103,7 +104,7 @@ def test_replay_dispatch_reports_publish_requested_without_claiming_delivery(mon
         return candidate
 
     async def publish(_attempt_id):
-        return None
+        published.append(_attempt_id)
 
     monkeypatch.setattr(cli, "_with_db", _fake_with_db)
     monkeypatch.setattr(cli.JobRepo, "get_dead_lettered_dispatch_replay_candidate", get_candidate)
@@ -118,4 +119,5 @@ def test_replay_dispatch_reports_publish_requested_without_claiming_delivery(mon
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["status"] == "replayed"
-    assert payload["publish_status"] == "requested"
+    assert payload["publish_status"] == "dispatcher_pending"
+    assert published == []

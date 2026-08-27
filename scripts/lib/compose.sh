@@ -37,7 +37,7 @@ compose() {
   resolved_project_name="$(compose_project_name)"
   env_args+=(ENV_FILE="${ENV_FILE:-.env}")
   env_args+=(COMPOSE_PROJECT_NAME="$resolved_project_name")
-  for key in API_HOST_PORT POSTGRES_DB POSTGRES_HOST_PORT REDIS_HOST_PORT WORKER_CONCURRENCY WORKER_LOGLEVEL WORKER_RECOVERY_LOOP; do
+  for key in API_HOST_PORT POSTGRES_DB POSTGRES_HOST_PORT REDIS_HOST_PORT WORKER_CONCURRENCY WORKER_LOGLEVEL; do
     value="${!key:-$(env_value_from "$key" "$env_file")}"
     [[ -n "$value" ]] && env_args+=("$key=$value")
   done

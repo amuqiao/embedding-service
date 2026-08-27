@@ -16,6 +16,8 @@
 
 入口目录分层、能力归属和新增顶层脚本准入规则由 [`../../scripts/README.md`](../../scripts/README.md) 维护。本文不重复维护入口清单，只规定每个入口和子命令对用户暴露时必须满足的 help、输出和副作用合同。
 
+运行角色启动脚本是部署拓扑事实源：`start-api.sh`、`start-worker.sh`、`start-dispatcher.sh`、`start-callbacker.sh` 和 `start-reconciler.sh` 分别只启动一个角色；`start-worker-bundle.sh` 只组合 Taskiq worker、dispatcher、callbacker 和 reconciler。`scripts/run.sh` 仍只编排 recipe，不能直接复制这些进程管理细节。
+
 ## 生成方式
 
 不同脚本可以使用不同实现方式，但命令索引只能有一个事实源：

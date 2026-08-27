@@ -739,7 +739,7 @@ def test_dev_restart_worker_escalates_residual_cleanup_to_kill(tmp_path):
 def test_dev_worker_service_command_injects_root_env(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "WORKER_CONCURRENCY=7\nWORKER_LOGLEVEL=DEBUG\nWORKER_RECOVERY_LOOP=false\n",
+        "WORKER_CONCURRENCY=7\nWORKER_LOGLEVEL=DEBUG\n",
         encoding="utf-8",
     )
 
@@ -747,11 +747,11 @@ def test_dev_worker_service_command_injects_root_env(tmp_path):
 
     assert "WORKER_CONCURRENCY=7" in command
     assert "WORKER_LOGLEVEL=DEBUG" in command
-    assert "WORKER_RECOVERY_LOOP=false" in command
-    assert "start-worker.sh" in command
+    assert "WORKER_RECOVERY_LOOP" not in command
+    assert "start-worker-bundle.sh" in command
 
 
-def test_start_worker_without_recovery_loop_uses_python_module_taskiq(tmp_path):
+def test_start_worker_uses_python_module_taskiq(tmp_path):
     script = tmp_path / "start-worker.sh"
     script.write_text((ROOT_DIR / "start-worker.sh").read_text(encoding="utf-8"), encoding="utf-8")
     script.chmod(0o755)
@@ -776,8 +776,7 @@ def test_start_worker_without_recovery_loop_uses_python_module_taskiq(tmp_path):
     env = _clean_root_env()
     env.update(
         {
-            "PATH": str(fake_bin),
-            "WORKER_RECOVERY_LOOP": "false",
+            "PATH": f"{fake_bin}:{env['PATH']}",
             "WORKER_CONCURRENCY": "1",
             "WORKER_LOGLEVEL": "INFO",
         }
@@ -798,6 +797,46 @@ def test_start_worker_without_recovery_loop_uses_python_module_taskiq(tmp_path):
     assert "python not found" not in result.stderr
 
 
+def test_start_worker_bundle_exits_when_role_exits(tmp_path):
+    script = tmp_path / "start-worker-bundle.sh"
+    script.write_text((ROOT_DIR / "start-worker-bundle.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    script.chmod(0o755)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin,
+        "python3",
+        "#!/bin/sh\n"
+        "printf 'python3 %s\\n' \"$*\"\n"
+        "case \"$*\" in\n"
+        "  *'app.runtime.dispatcher loop'*) exit 7 ;;\n"
+        "  *) while :; do :; done ;;\n"
+        "esac\n",
+    )
+    env = _clean_root_env()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "WORKER_CONCURRENCY": "1",
+            "WORKER_LOGLEVEL": "INFO",
+        }
+    )
+
+    result = subprocess.run(
+        [str(script)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 7
+    assert "started dispatcher pid=" in result.stdout
+    assert "role dispatcher exited status=7" in result.stderr
+
+
 def test_compose_wrapper_injects_root_env_file_values(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -811,7 +850,6 @@ def test_compose_wrapper_injects_root_env_file_values(tmp_path):
                 "API_HOST_PORT=38100",
                 "WORKER_CONCURRENCY=6",
                 "WORKER_LOGLEVEL=DEBUG",
-                "WORKER_RECOVERY_LOOP=false",
             ]
         )
         + "\n",
@@ -830,8 +868,7 @@ def test_compose_wrapper_injects_root_env_file_values(tmp_path):
         "printf '%s\\n' \"REDIS_HOST_PORT=$REDIS_HOST_PORT\"\n"
         "printf '%s\\n' \"API_HOST_PORT=$API_HOST_PORT\"\n"
         "printf '%s\\n' \"WORKER_CONCURRENCY=$WORKER_CONCURRENCY\"\n"
-        "printf '%s\\n' \"WORKER_LOGLEVEL=$WORKER_LOGLEVEL\"\n"
-        "printf '%s\\n' \"WORKER_RECOVERY_LOOP=$WORKER_RECOVERY_LOOP\"\n",
+        "printf '%s\\n' \"WORKER_LOGLEVEL=$WORKER_LOGLEVEL\"\n",
         encoding="utf-8",
     )
     docker.chmod(0o755)
@@ -856,7 +893,7 @@ def test_compose_wrapper_injects_root_env_file_values(tmp_path):
     assert "API_HOST_PORT=38100" in result.stdout
     assert "WORKER_CONCURRENCY=6" in result.stdout
     assert "WORKER_LOGLEVEL=DEBUG" in result.stdout
-    assert "WORKER_RECOVERY_LOOP=false" in result.stdout
+    assert "WORKER_RECOVERY_LOOP" not in result.stdout
 
 
 def test_deploy_check_rejects_compose_project_used_by_other_working_dir(tmp_path):
@@ -871,6 +908,7 @@ def test_deploy_check_rejects_compose_project_used_by_other_working_dir(tmp_path
         "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
         "if [[ \"$1 $2\" == \"compose config\" ]]; then exit 0; fi\n"
         "if [[ \"$1\" == \"compose\" && \"$2 $3 $4\" == \"--profile app config\" ]]; then exit 0; fi\n"
+        "if [[ \"$1\" == \"compose\" && \"$2 $3 $4\" == \"--profile roles config\" ]]; then exit 0; fi\n"
         "if [[ \"$1 $2\" == \"ps -a\" ]]; then\n"
         "  if [[ \"$*\" == *\"label=com.docker.compose.project=shared-project\"* ]]; then\n"
         "    printf '/srv/other-service\\n'\n"
@@ -910,6 +948,7 @@ def test_deploy_check_allows_compose_project_from_current_working_dir(tmp_path):
         "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
         "if [[ \"$1 $2\" == \"compose config\" ]]; then exit 0; fi\n"
         "if [[ \"$1\" == \"compose\" && \"$2 $3 $4\" == \"--profile app config\" ]]; then exit 0; fi\n"
+        "if [[ \"$1\" == \"compose\" && \"$2 $3 $4\" == \"--profile roles config\" ]]; then exit 0; fi\n"
         "if [[ \"$1 $2\" == \"ps -a\" ]]; then\n"
         "  if [[ \"$*\" == *\"label=com.docker.compose.project=current-project\"* ]]; then\n"
         f"    printf '%s\\n' '{ROOT_DIR}'\n"
@@ -948,6 +987,7 @@ def test_deploy_check_allows_current_working_dir_symlink_path(tmp_path):
         "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
         "if [[ \"$1 $2\" == \"compose config\" ]]; then exit 0; fi\n"
         "if [[ \"$1\" == \"compose\" && \"$2 $3 $4\" == \"--profile app config\" ]]; then exit 0; fi\n"
+        "if [[ \"$1\" == \"compose\" && \"$2 $3 $4\" == \"--profile roles config\" ]]; then exit 0; fi\n"
         "if [[ \"$1 $2\" == \"ps -a\" ]]; then\n"
         "  if [[ \"$*\" == *\"label=com.docker.compose.project=current-project\"* ]]; then\n"
         f"    printf '%s\\n' '{repo_link}'\n"
@@ -984,6 +1024,7 @@ def test_deploy_check_uses_runtime_compose_project_override(tmp_path):
         "if [[ \"$1 $2\" == \"compose version\" ]]; then exit 0; fi\n"
         "if [[ \"$1 $2\" == \"compose config\" ]]; then exit 0; fi\n"
         "if [[ \"$1\" == \"compose\" && \"$2 $3 $4\" == \"--profile app config\" ]]; then exit 0; fi\n"
+        "if [[ \"$1\" == \"compose\" && \"$2 $3 $4\" == \"--profile roles config\" ]]; then exit 0; fi\n"
         "if [[ \"$1 $2\" == \"ps -a\" ]]; then\n"
         "  if [[ \"$*\" == *\"label=com.docker.compose.project=runtime-project\"* ]]; then\n"
         "    printf '/srv/runtime-owner\\n'\n"
@@ -1031,6 +1072,7 @@ def test_deploy_check_requires_docker_cli_for_project_conflict_check(tmp_path):
         "#!/usr/bin/env bash\n"
         "if [[ \"$*\" == \"config --quiet\" ]]; then exit 0; fi\n"
         "if [[ \"$*\" == \"--profile app config --quiet\" ]]; then exit 0; fi\n"
+        "if [[ \"$*\" == \"--profile roles config --quiet\" ]]; then exit 0; fi\n"
         "exit 1\n",
     )
     env = _clean_root_env()
@@ -4534,13 +4576,17 @@ def test_jobs_runtime_command_outputs_current_pod_scope(monkeypatch):
             "scope": "current_pod",
             "environment": {
                 "WORKER_CONCURRENCY": "4",
-                "WORKER_RECOVERY_LOOP": "true",
                 "TASKIQ_BROKER_KIND": "redis_stream",
                 "MAX_ACTIVE_JOBS": "5000",
                 "DB_POOL_SIZE": "5",
                 "DB_MAX_OVERFLOW": "10",
             },
-            "processes": [{"name": "taskiq_worker", "count": 1, "sample": "taskiq worker app.tasks.taskiq_app:broker"}],
+            "processes": [
+                {"name": "taskiq_worker", "count": 1, "sample": "taskiq worker app.tasks.taskiq_app:broker"},
+                {"name": "dispatcher", "count": 1, "sample": "python -m app.runtime.dispatcher loop"},
+                {"name": "callbacker", "count": 1, "sample": "python -m app.runtime.callbacker loop"},
+                {"name": "reconciler", "count": 1, "sample": "python -m app.runtime.reconciler loop"},
+            ],
             "cgroup": {
                 "cpu_max": "200000 100000",
                 "cpu_quota_cores": 2,
@@ -4558,6 +4604,7 @@ def test_jobs_runtime_command_outputs_current_pod_scope(monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["scope"] == "current_pod"
     assert payload["environment"]["WORKER_CONCURRENCY"] == "4"
+    assert "WORKER_RECOVERY_LOOP" not in payload["environment"]
     assert payload["processes"][0]["name"] == "taskiq_worker"
 
 

@@ -117,7 +117,6 @@ LAUNCHER_ENV_KEYS: frozenset[str] = frozenset(
         "REDIS_HOST_PORT",
         "WORKER_CONCURRENCY",
         "WORKER_LOGLEVEL",
-        "WORKER_RECOVERY_LOOP",
     }
 )
 DERIVED_ENV_KEYS = frozenset(
@@ -154,6 +153,7 @@ DEPRECATED_ENV_KEYS = frozenset(
         "SHORT_DRAMA_RS_TIMEOUT_SECONDS",
         "TASKIQ_MAX_RETRIES",
         "TASKIQ_RETRY_DELAY",
+        "WORKER_RECOVERY_LOOP",
     }
 )
 

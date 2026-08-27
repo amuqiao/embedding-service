@@ -102,9 +102,11 @@ Shell 入口默认只负责：
 
 ## 运行模式边界
 
-`run.sh` 只编排日常 recipe，不直接实现进程管理、Compose 管理或迁移细节。默认本地开发路径是 `./scripts/run.sh up dev`，它按顺序调用 `deploy.sh up compose-deps`、`dev.sh migrate`、`dev.sh start api` 和 `dev.sh start worker`。
+`run.sh` 只编排日常 recipe，不直接实现进程管理、Compose 管理或迁移细节。默认本地开发路径是 `./scripts/run.sh up dev`，它按顺序调用 `deploy.sh up compose-deps`、`dev.sh migrate`、`dev.sh start api` 和 `dev.sh start worker`。这里的 `worker` 是本地 worker-bundle，包含 Taskiq worker、dispatcher、callbacker 和 reconciler。
 
 `dev.sh` 只管理宿主机 API / worker 进程，不启动或停止 PostgreSQL / Redis。`deploy.sh` 只管理 `compose-deps` 和 `compose-full`。不要把 recipe 塞回 `dev.sh` 或 `deploy.sh`。
+
+运行角色入口按 role-first 设计：`start-worker.sh` 只运行 Taskiq worker，`start-dispatcher.sh` 只运行 dispatch outbox publisher，`start-callbacker.sh` 只运行 callback outbox delivery，`start-reconciler.sh` 只运行状态修复；`start-worker-bundle.sh` 只负责把四个角色组合成单个本地/compose worker 服务。
 
 `local` 与当前仓库下任何 `compose-full` 的 API / worker 不能混跑。`local` 可以复用 `compose-deps` 的 PostgreSQL / Redis，但当 `compose-full` 的 API / worker 已运行时，`dev.sh start` / `migrate` 应直接失败；当本地 API / worker 或残留本地进程仍在运行时，`deploy.sh up compose-full` 应直接失败。
 

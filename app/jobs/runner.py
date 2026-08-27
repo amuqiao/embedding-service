@@ -138,17 +138,6 @@ async def execute_job(
                 details={"job_id": str(job_id), "attempt_id": str(attempt_id)},
             )
         await db.commit()
-        from app.tasks.jobs import TaskiqPublishDeferredError, publish_job_attempt
-
-        for child_attempt_id in orchestration.created_attempt_ids:
-            try:
-                await publish_job_attempt(child_attempt_id)
-            except TaskiqPublishDeferredError:
-                logger.exception(
-                    "workflow_child_attempt_publish_deferred root_job_id=%s child_attempt_id=%s",
-                    job.id,
-                    child_attempt_id,
-                )
         return {
             "job_id": str(job_id),
             "status": "succeeded",
@@ -245,9 +234,6 @@ async def execute_job(
                 lease_token=lease_token,
             )
             await db.commit()
-            from app.tasks.jobs import deliver_callback_for_job
-
-            await deliver_callback_for_job(job_id)
             return {"job_id": str(job_id), "status": "failed"}
         marked_side_effect_done = await _update_current_progress(
             db,
@@ -280,12 +266,10 @@ async def execute_job(
         workflow_advance = await advance_workflow_after_child_terminal(db, child_job=job)
     await db.commit()
     await db.refresh(job)
-    from app.tasks.jobs import deliver_callback_for_job, handle_workflow_advance_result
+    from app.tasks.jobs import handle_workflow_advance_result
 
     if workflow_advance is not None:
         await handle_workflow_advance_result(workflow_advance)
-    else:
-        await deliver_callback_for_job(job_id)
     return {"job_id": str(job_id), "status": "succeeded"}
 
 
@@ -304,6 +288,3 @@ async def fail_job(
         )
     await JobRepo.mark_failed(db, job_id, project_public_job_error(job.job_type, error))
     await db.commit()
-    from app.tasks.jobs import deliver_callback_for_job
-
-    await deliver_callback_for_job(job_id)

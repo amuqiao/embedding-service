@@ -163,7 +163,7 @@ def replay_dispatch(
         if not confirm:
             return {
                 "status": "dry_run",
-                "message": "pass --confirm to reset dispatch and publish the attempt",
+                "message": "pass --confirm to reset dispatch; dispatcher will publish the attempt",
                 **_candidate_payload(candidate),
             }
 
@@ -185,38 +185,24 @@ def replay_dispatch(
                 "message": "candidate disappeared before replay; rerun inspect",
             }
         job, attempt, dispatch = replayed
-        publish_status = "requested"
-        publish_error: dict[str, Any] | None = None
-        from app.tasks.jobs import TaskiqPublishDeferredError, publish_job_attempt
-
-        try:
-            await publish_job_attempt(attempt.id)
-        except TaskiqPublishDeferredError as exc:
-            publish_status = "deferred"
-            publish_error = exc.error
-        except Exception as exc:  # noqa: BLE001 - CLI must report operational failure details.
-            publish_status = "failed"
-            publish_error = {"type": type(exc).__name__, "message": str(exc)[:500]}
         return {
-            "status": "replayed" if publish_status == "requested" else "replay_committed_publish_" + publish_status,
+            "status": "replayed",
             "job_id": str(job.id),
             "attempt_id": str(attempt.id),
             "dispatch_id": str(dispatch.id),
             "dispatch_status": dispatch.status,
-            "publish_status": publish_status,
-            "publish_error": publish_error,
+            "publish_status": "dispatcher_pending",
+            "publish_error": None,
         }
 
     result = asyncio.run(run())
     _print(
         result,
         json_output=json_output,
-        err=result["status"] in {"not_eligible", "replay_committed_publish_deferred", "replay_committed_publish_failed"},
+        err=result["status"] == "not_eligible",
     )
     if result["status"] == "not_eligible":
         raise typer.Exit(3)
-    if result["status"] in {"replay_committed_publish_deferred", "replay_committed_publish_failed"}:
-        raise typer.Exit(4)
 
 
 @app.command("delete-family", help="软删除 settled public root Job family。", epilog=DELETE_HELP_EPILOG)

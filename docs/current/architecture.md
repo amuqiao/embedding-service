@@ -54,7 +54,18 @@ Recovery / publisher loop
 
 API 与 worker 可以多副本运行。并发安全依赖数据库唯一约束、`SELECT ... FOR UPDATE SKIP LOCKED`、lease token、heartbeat 和 outbox 幂等键，而不是依赖单进程内存。
 
-API 进程的 PostgreSQL async engine 和 session factory 由 FastAPI lifespan 管理：API startup 创建连接池，API shutdown 释放连接池。静态合同初始化仍由 `bootstrap_runtime()` 完成，供 API、worker、脚本共享。Taskiq worker 和 recovery loop 不依赖 FastAPI lifespan；worker 在自己的启动路径初始化数据库访问，recovery loop 使用独立的一次性数据库连接。
+当前运行角色按 role-first 设计，部署拓扑可以合并或拆分：
+
+- `api`：运行 `start-api.sh`，只处理 HTTP、创建 Job、查询 Job 和写入 outbox 意图。
+- `taskiq-worker`：运行 `start-worker.sh`，只消费 Taskiq `jobs.run_attempt` 并执行 Job attempt。
+- `dispatcher`：运行 `start-dispatcher.sh`，扫描 `dispatch_outbox` 并发布 Taskiq 消息。
+- `callbacker`：运行 `start-callbacker.sh`，扫描 `callback_outbox` 并投递终态 Callback。
+- `reconciler`：运行 `start-reconciler.sh`，修复 stale attempt、missing outbox、workflow root 和 dead-letter 状态。
+- `worker-bundle`：运行 `start-worker-bundle.sh`，在一个服务/容器内组合 `taskiq-worker + dispatcher + callbacker + reconciler`。
+
+默认本地和 `compose-full` 使用 `api + worker-bundle` 两服务形态；K8s 小流量部署可以使用 api Pod + worker Pod，并在 worker Pod 内以多容器方式运行四个角色；高流量部署可以把四个角色拆成独立 Deployment。代码入口和数据表不随部署拓扑改变。
+
+API 进程的 PostgreSQL async engine 和 session factory 由 FastAPI lifespan 管理：API startup 创建连接池，API shutdown 释放连接池。静态合同初始化仍由 `bootstrap_runtime()` 完成，供 API、worker、脚本共享。Taskiq worker、dispatcher、callbacker 和 reconciler 不依赖 FastAPI lifespan；后台角色在自己的启动路径初始化运行时。
 
 ## 主要模块
 

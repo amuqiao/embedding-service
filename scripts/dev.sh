@@ -31,8 +31,8 @@ usage() {
 服务：
   api       FastAPI 服务，URL: ${API_URL}，文档: ${API_DOCS_URL}，OpenAPI: ${API_OPENAPI_URL}，健康检查: ${API_HEALTH_URL}
             本地默认使用 start-api.sh 稳定启动；如需 uvicorn --reload 热更新，执行 DEV_API_RELOAD=true ./scripts/dev.sh start api。
-  worker    Taskiq worker，处理 jobs.run_attempt 异步任务
-            worker 通过 PostgreSQL attempt lease 获取执行权。
+  worker    本地 worker-bundle，包含 Taskiq worker、dispatcher、callbacker 和 reconciler。
+            Taskiq worker 通过 PostgreSQL attempt lease 获取执行权。
             worker 代码变更后使用 ./scripts/dev.sh restart worker。
 
 命令：

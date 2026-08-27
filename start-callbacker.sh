@@ -2,8 +2,6 @@
 set -e
 
 ROOT_DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
-WORKER_LOGLEVEL="${WORKER_LOGLEVEL:-INFO}"
-WORKER_CONCURRENCY="${WORKER_CONCURRENCY:-1}"
 
 if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
   PYTHON="$ROOT_DIR/.venv/bin/python"
@@ -12,12 +10,9 @@ elif command -v python3 >/dev/null 2>&1; then
 elif command -v python >/dev/null 2>&1; then
   PYTHON="$(command -v python)"
 else
-  echo "ERROR: python not found; cannot start worker" >&2
+  echo "ERROR: python not found; cannot start callbacker" >&2
   exit 1
 fi
 
 cd "$ROOT_DIR"
-
-exec "$PYTHON" -m taskiq worker app.tasks.taskiq_app:broker \
-  --log-level "$WORKER_LOGLEVEL" \
-  --workers "$WORKER_CONCURRENCY"
+exec "$PYTHON" -m app.runtime.callbacker loop "$@"

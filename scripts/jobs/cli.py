@@ -995,7 +995,6 @@ def _broker_columns() -> list[tuple[str, str]]:
 def _runtime_env_columns() -> list[tuple[str, str]]:
     return [
         ("WORKER_CONCURRENCY", "WORKER_CONCURRENCY"),
-        ("WORKER_RECOVERY_LOOP", "WORKER_RECOVERY_LOOP"),
         ("TASKIQ_BROKER_KIND", "TASKIQ_BROKER_KIND"),
         ("MAX_ACTIVE_JOBS", "MAX_ACTIVE_JOBS"),
         ("DB_POOL_SIZE", "DB_POOL_SIZE"),
@@ -3750,8 +3749,10 @@ def _process_rows() -> list[dict[str, Any]]:
         return [{"name": "procfs", "count": 0, "sample": "unavailable"}]
     patterns = {
         "taskiq_worker": "taskiq worker",
-        "recovery_loop": "app.tasks.recovery_loop",
-        "start_worker": "start-worker.sh",
+        "dispatcher": "app.runtime.dispatcher",
+        "callbacker": "app.runtime.callbacker",
+        "reconciler": "app.runtime.reconciler",
+        "start_worker_bundle": "start-worker-bundle.sh",
         "api_server": "uvicorn",
     }
     matches = {name: [] for name in patterns}
@@ -3797,7 +3798,7 @@ def _runtime_cgroup_payload() -> dict[str, Any]:
 
 
 def _runtime_payload() -> dict[str, Any]:
-    env_keys = ["WORKER_CONCURRENCY", "WORKER_RECOVERY_LOOP", "TASKIQ_BROKER_KIND", "MAX_ACTIVE_JOBS", "DB_POOL_SIZE", "DB_MAX_OVERFLOW"]
+    env_keys = ["WORKER_CONCURRENCY", "TASKIQ_BROKER_KIND", "MAX_ACTIVE_JOBS", "DB_POOL_SIZE", "DB_MAX_OVERFLOW"]
     env = {key: db.env_value(key) or "-" for key in env_keys}
     processes = _process_rows()
     cgroup = _runtime_cgroup_payload()

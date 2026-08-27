@@ -25,7 +25,7 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
 COPY scripts ./scripts
-COPY start-api.sh start-worker.sh ./
+COPY start-api.sh start-worker.sh start-worker-bundle.sh start-dispatcher.sh start-callbacker.sh start-reconciler.sh ./
 
 RUN mkdir -p /app/storage/objects
 

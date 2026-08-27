@@ -90,11 +90,10 @@ service_command() {
       fi
       ;;
     worker)
-      printf "env WORKER_CONCURRENCY=%q WORKER_LOGLEVEL=%q WORKER_RECOVERY_LOOP=%q %q " \
+      printf "env WORKER_CONCURRENCY=%q WORKER_LOGLEVEL=%q %q " \
         "$WORKER_CONCURRENCY" \
         "$WORKER_LOGLEVEL" \
-        "$WORKER_RECOVERY_LOOP" \
-        "$ROOT_DIR/start-worker.sh"
+        "$ROOT_DIR/start-worker-bundle.sh"
       ;;
     *)
       die "unknown service: $1" 2
@@ -201,7 +200,7 @@ terminate_service_residuals() {
       command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
       [[ -n "$command" ]] || continue
       case "$command" in
-        *"/start-worker.sh"*|*"taskiq worker app.tasks.taskiq_app:broker"*|*"app.tasks.recovery_loop"*) ;;
+        *"/start-worker-bundle.sh"*|*"/start-worker.sh"*|*"/start-dispatcher.sh"*|*"/start-callbacker.sh"*|*"/start-reconciler.sh"*|*"taskiq worker app.tasks.taskiq_app:broker"*|*"app.runtime.dispatcher"*|*"app.runtime.callbacker"*|*"app.runtime.reconciler"*) ;;
         *)
           die "$service residual pid=${pid} is not a recognized worker process; command=${command:-unknown}. Stop it manually before continuing." 4
           ;;
@@ -334,7 +333,7 @@ start_service() {
       require_executable "$ROOT_DIR/start-api.sh" "missing start-api.sh"
     fi
   fi
-  [[ "$service" == "worker" ]] && require_executable "$ROOT_DIR/start-worker.sh" "missing start-worker.sh"
+  [[ "$service" == "worker" ]] && require_executable "$ROOT_DIR/start-worker-bundle.sh" "missing start-worker-bundle.sh"
 
   pid_file="$(service_pid_file "$service")"
   log_file="$(service_log_file "$service")"
@@ -508,6 +507,7 @@ status_service() {
     detail "log" "$display_log"
   else
     detail "concurrency" "$WORKER_CONCURRENCY"
+    detail "roles" "taskiq-worker,dispatcher,callbacker,reconciler"
     detail "log" "$display_log"
   fi
 }

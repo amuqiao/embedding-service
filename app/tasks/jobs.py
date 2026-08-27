@@ -212,18 +212,12 @@ async def publish_job_attempt(attempt_id: uuid.UUID) -> None:
 
 
 async def handle_workflow_advance_result(result: Any) -> None:
-    for child_attempt_id in getattr(result, "created_attempt_ids", ()) or ():
-        try:
-            await publish_job_attempt(child_attempt_id)
-        except TaskiqPublishDeferredError:
-            logger.exception(
-                "workflow_downstream_attempt_publish_deferred root_job_id=%s child_attempt_id=%s",
-                getattr(result, "root_job_id", None),
-                child_attempt_id,
-            )
-    finalized_root_job_id = getattr(result, "finalized_root_job_id", None)
-    if finalized_root_job_id is not None:
-        await deliver_callback_for_job(finalized_root_job_id)
+    logger.info(
+        "workflow_advanced root_job_id=%s created_attempts=%d finalized_root_job_id=%s",
+        getattr(result, "root_job_id", None),
+        len(getattr(result, "created_attempt_ids", ()) or ()),
+        getattr(result, "finalized_root_job_id", None),
+    )
 
 
 @broker.task(task_name="jobs.run_attempt")
@@ -315,8 +309,6 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
             if marked and job_id is not None:
                 if workflow_advance is not None:
                     await handle_workflow_advance_result(workflow_advance)
-                else:
-                    await deliver_callback_for_job(job_id)
         raise
 
 
