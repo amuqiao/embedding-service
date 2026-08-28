@@ -6,6 +6,7 @@ from typing import Any
 from app.core.exceptions import AppError
 from app.jobs.base import JobExecutor, PromptSpec
 from app.jobs.registry import register_job_type
+from app.jobs.types._registrar import JobTypePackage, RegisterExecutor
 from app.schemas.jobs import JobRealLlmEchoParams, JobRealLlmEchoResult, JobRealLlmEchoRuntimeFields, JobResult
 
 
@@ -54,3 +55,10 @@ class JobRealLlmEchoJob(JobExecutor):
         if not isinstance(payload, dict):
             raise AppError("MODEL_OUTPUT_INVALID", "job_real_llm_echo output must be a JSON object")
         return JobResult.model_validate(payload)
+
+
+def register_job_package(register: RegisterExecutor) -> None:
+    register(JobRealLlmEchoJob())
+
+
+PACKAGE = JobTypePackage(name="job_real_llm_echo", register=register_job_package)

@@ -4,6 +4,7 @@ from typing import Any
 
 from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
+from app.jobs.types._registrar import JobTypePackage, RegisterExecutor
 from app.schemas.jobs import ArithmeticParams, ArithmeticResult, ArithmeticRuntimeFields
 from app.services.job_runtime import job_params_from_job
 
@@ -41,3 +42,10 @@ class ArithmeticJob(JobExecutor):
             multiplication=params.a * params.b,
             division=params.a / params.b,
         ).model_dump()
+
+
+def register_job_package(register: RegisterExecutor) -> None:
+    register(ArithmeticJob())
+
+
+PACKAGE = JobTypePackage(name="arithmetic", register=register_job_package)

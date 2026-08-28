@@ -6,8 +6,9 @@ import uuid
 import pytest
 
 from app.core.exceptions import AppError
-from app.jobs.types import examples
-from app.jobs.types.examples import ExampleLifecycleProbeJob
+from app.jobs.types.example_lifecycle_probe import executor as lifecycle_probe_executor
+from app.jobs.types.example_lifecycle_probe import ExampleLifecycleProbeJob
+from app.jobs.types.example_lifecycle_probe.errors import EXAMPLE_LIFECYCLE_PROBE_FORCED_FAILURE
 from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest, ExampleLifecycleProbeParams
 from app.services.job_runtime import payload_hash, write_runtime_json
@@ -22,7 +23,7 @@ async def test_lifecycle_probe_can_simulate_execution_delay(monkeypatch):
     async def fake_sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    monkeypatch.setattr(examples.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(lifecycle_probe_executor.asyncio, "sleep", fake_sleep)
     params = {"probe_id": "probe-1", "message": "ready", "sleep_seconds": 3, "result_payload": "ok"}
     job = Job(id=uuid.uuid4(), job_type="example_lifecycle_probe", job_params_hash=payload_hash(params))
     job.job_params_ref = write_runtime_json(job, "job_params.json", params)
@@ -47,7 +48,7 @@ async def test_lifecycle_probe_can_force_failure(monkeypatch):
     async def fake_sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    monkeypatch.setattr(examples.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(lifecycle_probe_executor.asyncio, "sleep", fake_sleep)
     params = {"probe_id": "probe-fail", "fail": True, "fail_after_seconds": 2}
     job = Job(id=uuid.uuid4(), job_type="example_lifecycle_probe", job_params_hash=payload_hash(params))
     job.job_params_ref = write_runtime_json(job, "job_params.json", params)
@@ -56,7 +57,7 @@ async def test_lifecycle_probe_can_force_failure(monkeypatch):
         await ExampleLifecycleProbeJob()._execute(job, None)
 
     assert slept == [2]
-    assert exc.value.code == "JOB_EXECUTION_FAILED"
+    assert exc.value.code == EXAMPLE_LIFECYCLE_PROBE_FORCED_FAILURE
     assert exc.value.details["job_type"] == "example_lifecycle_probe"
 
 

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppError
 from app.jobs.base import JobExecutor, PromptSpec
 from app.jobs.registry import register_job_type
+from app.jobs.types._registrar import JobTypePackage, RegisterExecutor
 from app.models.job import Job
 from app.schemas.jobs import (
     JobRealLlmDoubleEchoParams,
@@ -131,3 +132,10 @@ class JobRealLlmDoubleEchoJob(JobExecutor):
 
     def canonical_job_params(self, job_params: dict[str, Any]) -> dict[str, Any]:
         return JobRealLlmDoubleEchoParams.model_validate(job_params).model_dump()
+
+
+def register_job_package(register: RegisterExecutor) -> None:
+    register(JobRealLlmDoubleEchoJob())
+
+
+PACKAGE = JobTypePackage(name="job_real_llm_double_echo", register=register_job_package)

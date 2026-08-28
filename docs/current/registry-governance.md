@@ -37,7 +37,7 @@ Workflow Definition
 | Error registry | `app/core/error_registry.py` | `ErrorSpec` 包含 `visibility` 和 `projection_targets` 元数据 |
 | Registry check | `app/core/registry_checks.py`、`tests/test_registry_contract.py` | 校验 error、operation、job type、capability、tool、schema、log event、entrypoint、settings、error projection、注册入口、import direction 和 route operation |
 
-API startup 和 worker startup 都执行同一组注册和校验。`app/jobs/types/register.py` 仍是当前 composition root：它显式调用 tool、capability、error、job type 和 workflow 注册入口。`@register_job_type` 只作为源码准入标记，import executor 不写入全局 registry。注册完成后 API/worker 会 freeze error、tool 和 capability registry；freeze 后相同 definition 可幂等重复注册，变更 definition 会失败。
+API startup 和 worker startup 都执行同一组注册和校验。`app/jobs/types/register.py` 仍是当前 composition root：它显式调用 tool、capability 注册入口，并通过 `JOB_TYPE_PACKAGE_MODULES` 懒加载各业务包的 `PACKAGE = JobTypePackage(...)` registrar；error、job type 和 workflow 注册由业务包 registrar 内聚完成。`app/jobs/types/example_lifecycle_probe/` 是标准业务包样板。`@register_job_type` 只作为源码准入标记，import executor 不写入全局 registry。注册完成后 API/worker 会 freeze error、tool 和 capability registry；freeze 后相同 definition 可幂等重复注册，变更 definition 会失败。
 
 开发者查看当前注册清单使用只读命令：
 
@@ -121,7 +121,7 @@ AudioInputPlanSnapshot
 
 ## 当前准入规则
 
-新增 `job_type` 必须在 executor 上使用 `@register_job_type` 源码标记，并在 `app/jobs/types/register.py` 显式导入和注册。`@register_job_type` 不产生 import-time 注册副作用；源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 composition root 注册结果；新增文件但忘记接入 composition root 会失败。静态合同校验覆盖全部注册 `job_type`，不因当前实例未启用而跳过 schema、prompt、error、log event 或 capability 引用检查。
+新增 `job_type` 必须在 executor 上使用 `@register_job_type` 源码标记，并通过业务包 `PACKAGE = JobTypePackage(...)` 注册。正式业务包使用 `app/jobs/types/<job_type>/register.py` 内聚 executor、errors 和 workflow definition 注册；中心 `app/jobs/types/register.py` 只维护 `JOB_TYPE_PACKAGE_MODULES` 显式清单并懒加载 package registrar，不直接 import 业务 executor。`@register_job_type` 不产生 import-time 注册副作用；源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 package registrar 注册结果；新增文件但忘记接入 package registrar 或中心 package module 清单会失败。静态合同校验覆盖全部注册 `job_type`，不因当前实例未启用而跳过 schema、prompt、error、log event 或 capability 引用检查。
 
 新增 tool 必须通过 `app/tools/register.py` 创建 `ToolDefinition`。新增 capability 必须通过 `app/capabilities/register.py` 创建 `CapabilityDefinition`。不要在业务 executor、capability service、tool 实现或测试外路径中直接散落 definition 构造。
 

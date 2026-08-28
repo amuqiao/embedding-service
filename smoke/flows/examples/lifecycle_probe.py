@@ -26,6 +26,7 @@ CALLBACK_EVENT_CHOICES = {
     "failed": ["job.failed"],
     "both": ["job.succeeded", "job.failed"],
 }
+FORCED_FAILURE_REASON = "EXAMPLE_LIFECYCLE_PROBE_FORCED_FAILURE"
 
 
 def expected_status(*, fail: bool, expect_status: str) -> str:
@@ -142,9 +143,9 @@ def _assert_terminal_job(
         if not isinstance(error, dict):
             raise FlowError(f"failed job {job.get('job_id')} missing job_error", exit_code=1)
         reason = error.get("reason") or error.get("code")
-        if forced_failure and reason != "JOB_EXECUTION_FAILED":
+        if forced_failure and reason != FORCED_FAILURE_REASON:
             raise FlowError(
-                f"failed job {job.get('job_id')} reason mismatch: expected=JOB_EXECUTION_FAILED actual={reason}",
+                f"failed job {job.get('job_id')} reason mismatch: expected={FORCED_FAILURE_REASON} actual={reason}",
                 exit_code=1,
             )
         details = error.get("details")

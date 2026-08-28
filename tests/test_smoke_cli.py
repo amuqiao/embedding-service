@@ -1537,7 +1537,10 @@ def test_example_lifecycle_probe_forced_failure_requires_expected_fault():
             {
                 "job_id": "probe-job-4",
                 "job_status": "failed",
-                "job_error": {"reason": "JOB_EXECUTION_FAILED", "details": {"fault": "other"}},
+                "job_error": {
+                    "reason": example_lifecycle_probe.FORCED_FAILURE_REASON,
+                    "details": {"fault": "other"},
+                },
             },
             expected="failed",
             probe_id="probe",

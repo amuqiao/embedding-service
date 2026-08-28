@@ -243,6 +243,7 @@ run_python_syntax() {
   # py_compile 成功时汇总为脚本事件；失败时保留 Python 原始错误。
   "$PYTHON_BIN" -m py_compile \
     "$ROOT_DIR/scripts/dev/check_ports.py" \
+    "$ROOT_DIR/scripts/dev/launch_service.py" \
     "$ROOT_DIR/scripts/verify/alembic_revision_check.py" \
     "$ROOT_DIR/scripts/verify/env_config_check.py" \
     "$ROOT_DIR/scripts/verify/job_workflow_smoke.py" \
@@ -304,7 +305,7 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/media/video.py" \
     "$ROOT_DIR/scripts/tools/env_url.py" \
     "$ROOT_DIR/scripts/tools/registry.py"
-  event "OK" "dev/check_ports.py" "py_compile"
+  event "OK" "dev/*.py" "py_compile"
   event "OK" "verify/*.py" "py_compile"
   event "OK" "oss/*.py" "py_compile"
   event "OK" "load/*.py" "py_compile"

@@ -27,7 +27,7 @@ from app.core.registry_checks import (
 )
 from app.main import app
 from app.jobs.base import JobExecutor, JobTypeSpec, PromptSpec
-from app.jobs.types.register import register_all_job_types
+from app.jobs.types.register import job_type_package_modules, load_job_type_packages, register_all_job_types
 from app.jobs import registry as job_registry
 from app.jobs.types.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
@@ -37,6 +37,8 @@ from app.jobs.types.audio_stem_separation.errors import (
     AUDIO_STEM_INPUT_INVALID,
     AUDIO_STEM_MODEL_ASSET_MISSING,
 )
+from app.jobs.types.example_lifecycle_probe.errors import EXAMPLE_LIFECYCLE_PROBE_FORCED_FAILURE
+from app.workflows import registry as workflow_registry
 from app.workflows.registry import WorkflowDefinition
 
 
@@ -557,6 +559,7 @@ def test_job_type_registry_exposes_required_metadata():
     assert lifecycle_probe_spec.execution_mode == "custom_executor"
     _assert_default_retry_policy(lifecycle_probe_spec.retry_policy)
     assert lifecycle_probe_spec.side_effect_policy == "none"
+    assert EXAMPLE_LIFECYCLE_PROBE_FORCED_FAILURE in lifecycle_probe_spec.error_codes
     assert lifecycle_probe_spec.error_codes <= all_error_reasons()
     assert lifecycle_probe_spec.prompt_specs == ()
 
@@ -733,6 +736,63 @@ def test_registered_job_type_names_are_layered_contract():
         "poster_title_image_join",
         "poster_title_image_style_probe",
     }
+
+
+def test_job_type_packages_are_explicit_lazy_composition_root():
+    expected_modules = (
+        "app.jobs.types.arithmetic",
+        "app.jobs.types.examples",
+        "app.jobs.types.example_lifecycle_probe.register",
+        "app.jobs.types.job_real_llm_echo",
+        "app.jobs.types.job_real_llm_double_echo",
+        "app.jobs.types.poster_title_image.register",
+        "app.jobs.types.tagged_text_translation.register",
+        "app.jobs.types.audio_stem_separation.register",
+        "app.jobs.types.audio_stem_separation_triton.register",
+    )
+
+    assert job_type_package_modules() == expected_modules
+    packages = load_job_type_packages()
+    assert [package.name for package in packages] == [
+        "arithmetic",
+        "examples",
+        "example_lifecycle_probe",
+        "job_real_llm_echo",
+        "job_real_llm_double_echo",
+        "poster_title_image",
+        "tagged_text_translation",
+        "audio_stem_separation",
+        "audio_stem_separation_triton",
+    ]
+
+    register_path = APP_DIR / "jobs" / "types" / "register.py"
+    tree = ast.parse(register_path.read_text(encoding="utf-8"))
+    direct_business_imports = []
+    unexpected_job_type_import_strings = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module is not None:
+            if node.module.startswith("app.jobs.types.") and node.module != "app.jobs.types._registrar":
+                direct_business_imports.append(node.module)
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("app.jobs.types.") and alias.name != "app.jobs.types._registrar":
+                    direct_business_imports.append(alias.name)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value.startswith("app.jobs.types.") and node.value not in expected_modules:
+                unexpected_job_type_import_strings.append(node.value)
+    assert direct_business_imports == []
+    assert unexpected_job_type_import_strings == []
+
+
+def test_loading_job_type_packages_has_no_registry_side_effects():
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+
+    packages = load_job_type_packages()
+
+    assert packages
+    assert job_registry.all_job_types() == []
+    assert workflow_registry.all_workflow_types() == []
 
 
 def test_enabled_job_types_default_to_all_registered_job_types():

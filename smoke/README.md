@@ -68,7 +68,7 @@ Smoke 全局选项统一放在场景命令前，例如 `--base-url`、`--env-fil
 
 当前场景以 `python -m smoke --json list` 为事实源；其中 `entrypoints` 是可直接执行的入口。业务 Job 场景会真实提交 Job、等待终态并查询结果证据；provider probe/helper 必须显式确认费用或上传副作用。
 
-`example-lifecycle-probe` 使用 `visibility=demo` 的标准探针 Job，仅用于 `local` / `dev` 平台链路验收；它不调用真实模型，不产生模型费用。配置 `--local-callback` 时可以验证 callbacker 投递；普通成功链路不会证明 reconciler 被触发。
+`example-lifecycle-probe` 使用 `visibility=demo` 的标准探针 Job，仅用于 `local` / `dev` 平台链路验收；它不调用真实模型，不产生模型费用。Job 样板代码在 `app/jobs/types/example_lifecycle_probe/`，smoke 样板代码在 `smoke/flows/examples/lifecycle_probe.py`。配置 `--local-callback` 时可以验证 callbacker 投递；普通成功链路不会证明 reconciler 被触发。
 
 常用场景：
 
@@ -147,7 +147,7 @@ smoke/flows/<domain>/<business>.py
   -> 做业务结果断言并输出 summary/responses
 ```
 
-`example-lifecycle-probe` 是标准参考：它演示了 `api -> dispatcher -> taskiq_worker` 验收，以及配置 callback 后的 `callback_outbox -> callbacker -> receiver -> callback.status=delivered` 验收。
+`example-lifecycle-probe` 是标准参考：它演示了标准业务包注册、`api -> dispatcher -> taskiq_worker` 验收，以及配置 callback 后的 `callback_outbox -> callbacker -> receiver -> callback.status=delivered` 验收。
 
 ## 跨项目复用
 
@@ -162,7 +162,7 @@ smoke/scenarios.py
 scripts/smoke.sh
 ```
 
-其中 `smoke/harness/` 是不用动的公共层；`smoke/cli.py` 和 `smoke/scenarios.py` 是项目装配层。普通 FastAPI 项目复制后保留 `list/health/ready`，删除或替换当前 Job/业务命令即可，不需要复制 `smoke/jobs/` 和当前 `smoke/flows/<domain>/`。Job 服务项目再额外复制 `smoke/jobs/` 和 `smoke/flows/examples/lifecycle_probe.py`。
+其中 `smoke/harness/` 是不用动的公共层；`smoke/cli.py` 和 `smoke/scenarios.py` 是项目装配层。普通 FastAPI 项目复制后保留 `list/health/ready`，删除或替换当前 Job/业务命令即可，不需要复制 `smoke/jobs/` 和当前 `smoke/flows/<domain>/`。Job 服务项目再额外复制 `smoke/jobs/`、`smoke/flows/examples/lifecycle_probe.py` 和 `app/jobs/types/example_lifecycle_probe/` 这组标准样板。
 
 ## 维护规则
 

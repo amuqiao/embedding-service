@@ -1,5 +1,6 @@
 import os
 import json
+import signal
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -287,6 +288,37 @@ def test_start_api_does_not_read_env_file_directly():
 
     assert "ENV_FILE" not in script
     assert "grep -E" not in script
+
+
+def test_dev_launch_service_detaches_and_writes_child_pid(tmp_path):
+    pid_file = tmp_path / "service.pid"
+    log_file = tmp_path / "service.log"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/dev/launch_service.py",
+            "--pid-file",
+            str(pid_file),
+            "--log-file",
+            str(log_file),
+            "--",
+            sys.executable,
+            "-c",
+            "import time; time.sleep(30)",
+        ],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    pid = int(pid_file.read_text(encoding="utf-8").strip())
+    try:
+        os.kill(pid, 0)
+    finally:
+        os.kill(pid, signal.SIGTERM)
 
 
 @pytest.mark.parametrize("flag", ["DISABLE_HTTP_AUTH_HEADER", "DISABLE_CALLER_ID_HEADER"])

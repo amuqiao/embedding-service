@@ -1,5 +1,22 @@
 from __future__ import annotations
 
+from importlib import import_module
+
+from app.jobs.types._registrar import JobTypePackage, RegisterExecutor
+
+
+JOB_TYPE_PACKAGE_MODULES: tuple[str, ...] = (
+    "app.jobs.types.arithmetic",
+    "app.jobs.types.examples",
+    "app.jobs.types.example_lifecycle_probe.register",
+    "app.jobs.types.job_real_llm_echo",
+    "app.jobs.types.job_real_llm_double_echo",
+    "app.jobs.types.poster_title_image.register",
+    "app.jobs.types.tagged_text_translation.register",
+    "app.jobs.types.audio_stem_separation.register",
+    "app.jobs.types.audio_stem_separation_triton.register",
+)
+
 
 def _expanded_enabled_job_types(
     configured_job_types: tuple[str, ...],
@@ -51,59 +68,34 @@ def _default_enabled_job_types(*, release_env: bool) -> tuple[frozenset[str], fr
     return enabled, external
 
 
+def job_type_package_modules() -> tuple[str, ...]:
+    return JOB_TYPE_PACKAGE_MODULES
+
+
+def load_job_type_packages() -> tuple[JobTypePackage, ...]:
+    packages: list[JobTypePackage] = []
+    for module_path in JOB_TYPE_PACKAGE_MODULES:
+        package = getattr(import_module(module_path), "PACKAGE")
+        if not isinstance(package, JobTypePackage):
+            raise TypeError(f"{module_path}.PACKAGE must be JobTypePackage")
+        packages.append(package)
+    return tuple(packages)
+
+
+def register_all_job_type_packages(register: RegisterExecutor) -> None:
+    for package in load_job_type_packages():
+        package.register(register)
+
+
 def register_all_job_types() -> None:
     from app.core.config import settings
     from app.capabilities.register import register_all_capabilities
     from app.jobs.registry import configure_enabled_job_types, register
-    from app.jobs.types.audio_stem_separation import AudioStemSeparationJob
-    from app.jobs.types.audio_stem_separation.errors import register_audio_stem_separation_errors
-    from app.jobs.types.audio_stem_separation_triton import AudioStemSeparationTritonJob
-    from app.jobs.types.poster_title_image.errors import register_poster_title_image_errors
-    from app.jobs.types.arithmetic import ArithmeticJob
-    from app.jobs.types.examples import (
-        ExampleCollectJob,
-        ExampleLifecycleProbeJob,
-        ExamplePairJob,
-        ExampleSleepJob,
-        ExampleWorkflowJob,
-        register_example_workflows,
-    )
-    from app.jobs.types.job_real_llm_double_echo import JobRealLlmDoubleEchoJob
-    from app.jobs.types.job_real_llm_echo import JobRealLlmEchoJob
-    from app.jobs.types.poster_title_image import (
-        PosterTitleImageGenerateItemJob,
-        PosterTitleImageJoinJob,
-        PosterTitleImageJob,
-        PosterTitleImageStyleProbeJob,
-        register_poster_title_image_workflow,
-    )
-    from app.jobs.types.tagged_text_translation import TaggedTextTranslationJob
     from app.tools.register import register_all_tools
 
     register_all_tools()
     register_all_capabilities()
-    register_audio_stem_separation_errors()
-    register_poster_title_image_errors()
-    for executor_cls in (
-        ArithmeticJob,
-        ExamplePairJob,
-        ExampleSleepJob,
-        ExampleLifecycleProbeJob,
-        ExampleCollectJob,
-        ExampleWorkflowJob,
-        JobRealLlmEchoJob,
-        JobRealLlmDoubleEchoJob,
-        PosterTitleImageJob,
-        PosterTitleImageStyleProbeJob,
-        PosterTitleImageGenerateItemJob,
-        PosterTitleImageJoinJob,
-        TaggedTextTranslationJob,
-        AudioStemSeparationJob,
-        AudioStemSeparationTritonJob,
-    ):
-        register(executor_cls())
-    register_example_workflows()
-    register_poster_title_image_workflow()
+    register_all_job_type_packages(register)
     expanded_enabled_job_types = _expanded_enabled_job_types(
         settings.job.enabled_job_types,
         release_env=settings.runtime.is_release_env,

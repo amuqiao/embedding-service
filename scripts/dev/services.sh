@@ -348,8 +348,11 @@ start_service() {
   [[ "$service" == "api" ]] && assert_api_port_free
 
   command="$(service_command "$service")"
-  nohup bash -c "exec ${command}" > "$log_file" 2>&1 &
-  echo $! > "$pid_file"
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/dev/launch_service.py" \
+    --pid-file "$pid_file" \
+    --log-file "$log_file" \
+    -- \
+    bash -c "exec ${command}"
   pid="$(pid_of "$pid_file")"
 
   sleep 1
