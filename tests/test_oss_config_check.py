@@ -1,7 +1,8 @@
 import pytest
 
 from scripts.oss import cli as oss_cli
-from smoke.harness import job_runtime
+from smoke.harness import env_runtime
+from smoke.harness.errors import FlowError
 
 STORAGE_ENV_KEYS = [
     "STORAGE_BACKEND",
@@ -118,7 +119,7 @@ def test_oss_cli_upload_image_requires_confirmation(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    with pytest.raises(job_runtime.FlowError, match="--confirm-upload"):
+    with pytest.raises(FlowError, match="--confirm-upload"):
         oss_cli.main(["upload-image", str(image), "--env-file", str(env_file)])
 
 

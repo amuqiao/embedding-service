@@ -7,7 +7,7 @@ import threading
 import time
 from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 
@@ -21,9 +21,8 @@ class CallbackCaptureError(RuntimeError):
 
 @dataclass(frozen=True)
 class CallbackExpectation:
-    job_id: str | None = None
-    event: str | None = None
-    job_status: str | None = None
+    description: str
+    matcher: Callable[[dict[str, Any]], bool]
 
 
 def _header_value(headers: dict[str, str], name: str) -> str | None:
@@ -77,19 +76,7 @@ def verify_callback_signature(
 
 
 def _event_matches(event: dict[str, Any], expectation: CallbackExpectation) -> bool:
-    body = event.get("body")
-    if not isinstance(body, dict):
-        return False
-    if expectation.event is not None and body.get("event") != expectation.event:
-        return False
-    job = body.get("job")
-    if not isinstance(job, dict):
-        return False
-    if expectation.job_id is not None and str(job.get("job_id")) != expectation.job_id:
-        return False
-    if expectation.job_status is not None and job.get("job_status") != expectation.job_status:
-        return False
-    return True
+    return expectation.matcher(event)
 
 
 class CallbackCaptureServer:
@@ -207,7 +194,7 @@ class CallbackCaptureServer:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise CallbackCaptureError(
-                        f"callback event not received within {timeout_seconds}s; expectation={expectation}",
+                        f"callback event not received within {timeout_seconds}s; expectation={expectation.description}",
                         exit_code=5,
                     )
                 self._condition.wait(timeout=min(remaining, 0.5))

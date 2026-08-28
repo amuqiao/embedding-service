@@ -11,18 +11,21 @@ from typer.testing import CliRunner
 from smoke.cli import app
 from app.integrations.aliyun_oss import AliyunOSSConfig
 from app.integrations.ai_adapters.base import ImageGenerationResult
-from smoke.flows import (
-    adapter_image_probe,
-    audio_stem_separation,
-    llm_job_billing,
-    oss_image_upload,
-    poster_title_image,
-    tagged_text_translation,
-)
+from smoke.flows.audio import stem_separation as audio_stem_separation
+from smoke.flows.image import adapter_probe as adapter_image_probe
+from smoke.flows.image import poster_title_image
+from smoke.flows.llm import billing as llm_job_billing
+from smoke.flows.oss import image_upload as oss_image_upload
+from smoke.flows.translation import tagged_text_translation
 from smoke.flows.examples import lifecycle_probe as example_lifecycle_probe
 from smoke.harness import callback_capture
-from smoke.harness import job_runtime
 from smoke.harness import cli_contract
+from smoke.harness import env_runtime
+from smoke.harness import http_runtime
+from smoke.harness import service_runtime
+from smoke.harness.errors import FlowError
+from smoke.jobs import cli_contract as job_cli_contract
+from smoke.jobs import runtime as job_runtime
 
 
 runner = CliRunner()
@@ -90,8 +93,8 @@ def _job_options(
     confirm_run: bool = True,
     client_request_id: str | None = None,
     expect_status: str = "auto",
-) -> cli_contract.JobSmokeOptions:
-    return cli_contract.job_smoke_options(
+) -> job_cli_contract.JobSmokeOptions:
+    return job_cli_contract.job_smoke_options(
         confirm_run=confirm_run,
         client_request_id=client_request_id,
         expect_status=expect_status,
@@ -187,7 +190,7 @@ def test_example_lifecycle_probe_cli_forwards_options(monkeypatch):
 
     assert result.exit_code == 0
     assert captured == {
-        "job_options": cli_contract.JobSmokeOptions(
+        "job_options": job_cli_contract.JobSmokeOptions(
             confirm_run=True,
             client_request_id="client-probe-1",
             expect_status="failed",
@@ -383,7 +386,7 @@ def test_tagged_text_translation_json_output_includes_complete_translation_evide
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     append_root_env(
         tmp_path,
         "API_HOST=127.0.0.1",
@@ -411,7 +414,7 @@ def test_tagged_text_translation_json_output_includes_complete_translation_evide
             }
         raise AssertionError(f"unexpected call: {method} {url}")
 
-    monkeypatch.setattr(job_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
     monkeypatch.setattr(
             job_runtime,
             "poll_job_envelope",
@@ -479,7 +482,7 @@ def test_tagged_text_translation_human_output_prints_translation_preview(tmp_pat
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     append_root_env(
         tmp_path,
         "API_HOST=127.0.0.1",
@@ -505,7 +508,7 @@ def test_tagged_text_translation_human_output_prints_translation_preview(tmp_pat
             },
         }
 
-    monkeypatch.setattr(job_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
     monkeypatch.setattr(
             job_runtime,
             "poll_job_envelope",
@@ -591,8 +594,8 @@ def test_smoke_ready_prints_resolved_context(tmp_path, monkeypatch):
         "OSS_PUBLIC_ENDPOINT",
     ]:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
-    monkeypatch.setattr(job_runtime, "request_json", lambda *args, **kwargs: {"status": "ok", "db": "ok", "redis": "ok"})
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(http_runtime, "request_json", lambda *args, **kwargs: {"status": "ok", "db": "ok", "redis": "ok"})
     env_dir = tmp_path / "env_test"
     env_dir.mkdir()
     (env_dir / ".env").write_text(
@@ -629,8 +632,9 @@ def test_smoke_ready_prints_resolved_context(tmp_path, monkeypatch):
     assert payload["api_url_source"] == "env_file"
     assert payload["service_api_key_source"] == "env_file"
     assert payload["caller_id"] == "default"
-    assert payload["storage_backend"] == "aliyun_oss"
-    assert payload["oss_public_endpoint"] == "cdn.example.com"
+    assert "jobs_url" not in payload
+    assert "storage_backend" not in payload
+    assert "oss_public_endpoint" not in payload
     assert payload["ready"] is True
     assert payload["problems"] == []
     assert payload["ready_response"] == {"status": "ok", "db": "ok", "redis": "ok"}
@@ -639,7 +643,7 @@ def test_smoke_ready_prints_resolved_context(tmp_path, monkeypatch):
 def test_smoke_ready_rejects_missing_service_api_key(tmp_path, monkeypatch):
     for name in ["API_URL", "SERVICE_API_KEY", "DISABLE_HTTP_AUTH_HEADER"]:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text("API_URL=http://127.0.0.1:8100\n", encoding="utf-8")
 
     result = runner.invoke(app, ["--json", "ready"])
@@ -682,7 +686,7 @@ def test_smoke_health_checks_service_health_endpoint(tmp_path, monkeypatch):
 
     for name in ["API_URL", "API_HOST", "API_PORT"]:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text("API_URL=http://127.0.0.1:18123\n", encoding="utf-8")
 
     def fake_request_json(url, **kwargs):
@@ -690,7 +694,7 @@ def test_smoke_health_checks_service_health_endpoint(tmp_path, monkeypatch):
         captured.update(kwargs)
         return {"status": "ok", "service": "test", "version": "1.0.0"}
 
-    monkeypatch.setattr(job_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
 
     result = runner.invoke(app, ["--json", "health"])
 
@@ -704,9 +708,9 @@ def test_smoke_health_checks_service_health_endpoint(tmp_path, monkeypatch):
 def test_smoke_health_returns_3_when_service_is_not_ok(tmp_path, monkeypatch):
     for name in ["API_URL", "API_HOST", "API_PORT"]:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text("API_URL=http://127.0.0.1:18123\n", encoding="utf-8")
-    monkeypatch.setattr(job_runtime, "request_json", lambda *args, **kwargs: {"status": "degraded"})
+    monkeypatch.setattr(http_runtime, "request_json", lambda *args, **kwargs: {"status": "degraded"})
 
     result = runner.invoke(app, ["--json", "health"])
 
@@ -716,7 +720,7 @@ def test_smoke_health_returns_3_when_service_is_not_ok(tmp_path, monkeypatch):
 
 
 def test_smoke_poll_timeout_uses_standard_exit_code_5():
-    with pytest.raises(job_runtime.FlowError) as exc_info:
+    with pytest.raises(FlowError) as exc_info:
         job_runtime.poll_job_envelope(
             jobs_url="http://127.0.0.1:8100/jobs",
             job_id="job-timeout",
@@ -729,9 +733,7 @@ def test_smoke_poll_timeout_uses_standard_exit_code_5():
 
 
 def test_smoke_poll_progress_callback_skips_terminal_status(monkeypatch):
-    monkeypatch.setattr(
-            job_runtime,
-            "request_json",
+    monkeypatch.setattr(http_runtime, "request_json",
         lambda *args, **kwargs: {
             "code": "0",
             "data": {"job": {"job_id": "job-1", "job_status": "succeeded"}},
@@ -753,9 +755,7 @@ def test_smoke_poll_progress_callback_skips_terminal_status(monkeypatch):
 
 
 def test_job_runtime_poll_job_returns_data_job(monkeypatch):
-    monkeypatch.setattr(
-            job_runtime,
-            "request_json",
+    monkeypatch.setattr(http_runtime, "request_json",
         lambda *args, **kwargs: {
             "code": "0",
             "data": {"job": {"job_id": "job-1", "job_status": "succeeded"}},
@@ -778,7 +778,7 @@ def test_example_lifecycle_probe_flow_outputs_json_and_callback_payload(tmp_path
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     append_root_env(
         tmp_path,
         "API_HOST=127.0.0.1",
@@ -795,7 +795,7 @@ def test_example_lifecycle_probe_flow_outputs_json_and_callback_payload(tmp_path
         captured["payload"] = payload
         return {"code": "0", "data": {"job": {"job_id": "probe-job-1", "job_status": "queued"}}}
 
-    monkeypatch.setattr(job_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
     monkeypatch.setattr(
             job_runtime,
             "poll_job_envelope",
@@ -880,7 +880,7 @@ def test_example_lifecycle_probe_callback_poll_waits_until_delivered(monkeypatch
         ]
     )
 
-    monkeypatch.setattr(job_runtime, "request_json", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(http_runtime, "request_json", lambda *args, **kwargs: next(responses))
     monkeypatch.setattr(example_lifecycle_probe.time, "sleep", lambda _seconds: None)
 
     envelope = example_lifecycle_probe.poll_callback_envelope(
@@ -895,9 +895,7 @@ def test_example_lifecycle_probe_callback_poll_waits_until_delivered(monkeypatch
 
 
 def test_example_lifecycle_probe_callback_poll_fails_on_callback_failed(monkeypatch):
-    monkeypatch.setattr(
-        job_runtime,
-        "request_json",
+    monkeypatch.setattr(http_runtime, "request_json",
         lambda *args, **kwargs: {
             "code": "0",
             "data": {
@@ -968,7 +966,7 @@ def test_example_lifecycle_probe_rejects_local_callback_without_wait():
 
 
 def test_example_lifecycle_probe_wraps_local_callback_bind_errors(monkeypatch):
-    context = job_runtime.RuntimeContext(
+    context = service_runtime.RuntimeContext(
         app_env={
             "CALLBACK_SIGNING_SECRET": "test-callback-signing-secret",
             "DISABLE_HTTP_AUTH_HEADER": "true",
@@ -984,7 +982,7 @@ def test_example_lifecycle_probe_wraps_local_callback_bind_errors(monkeypatch):
     def fake_server(*_args, **_kwargs):
         raise PermissionError("denied")
 
-    monkeypatch.setattr(job_runtime, "resolve_runtime_context", lambda **_kwargs: context)
+    monkeypatch.setattr(job_runtime, "resolve_job_context", lambda **_kwargs: context)
     monkeypatch.setattr(callback_capture, "ThreadingHTTPServer", fake_server)
 
     with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
@@ -1014,7 +1012,7 @@ def test_example_lifecycle_probe_wraps_local_callback_bind_errors(monkeypatch):
 
 def test_example_lifecycle_probe_local_callback_requires_signing_secret(monkeypatch):
     monkeypatch.delenv("CALLBACK_SIGNING_SECRET", raising=False)
-    context = job_runtime.RuntimeContext(
+    context = service_runtime.RuntimeContext(
         app_env={"DISABLE_HTTP_AUTH_HEADER": "true", "DISABLE_CALLER_ID_HEADER": "true"},
         summary={
             "api_url": "http://127.0.0.1:8100",
@@ -1022,7 +1020,7 @@ def test_example_lifecycle_probe_local_callback_requires_signing_secret(monkeypa
             "ready": True,
         },
     )
-    monkeypatch.setattr(job_runtime, "resolve_runtime_context", lambda **_kwargs: context)
+    monkeypatch.setattr(job_runtime, "resolve_job_context", lambda **_kwargs: context)
 
     with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
         example_lifecycle_probe.run(
@@ -1050,7 +1048,7 @@ def test_example_lifecycle_probe_local_callback_requires_signing_secret(monkeypa
 
 
 def test_example_lifecycle_probe_rejects_local_callback_for_non_loopback_api(monkeypatch):
-    context = job_runtime.RuntimeContext(
+    context = service_runtime.RuntimeContext(
         app_env={
             "CALLBACK_SIGNING_SECRET": "test-callback-signing-secret",
             "DISABLE_HTTP_AUTH_HEADER": "true",
@@ -1062,7 +1060,7 @@ def test_example_lifecycle_probe_rejects_local_callback_for_non_loopback_api(mon
             "ready": True,
         },
     )
-    monkeypatch.setattr(job_runtime, "resolve_runtime_context", lambda **_kwargs: context)
+    monkeypatch.setattr(job_runtime, "resolve_job_context", lambda **_kwargs: context)
 
     with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
         example_lifecycle_probe.run(
@@ -1090,7 +1088,7 @@ def test_example_lifecycle_probe_rejects_local_callback_for_non_loopback_api(mon
 
 
 def test_example_lifecycle_probe_rejects_local_callback_event_mismatch(monkeypatch):
-    context = job_runtime.RuntimeContext(
+    context = service_runtime.RuntimeContext(
         app_env={
             "CALLBACK_SIGNING_SECRET": "test-callback-signing-secret",
             "DISABLE_HTTP_AUTH_HEADER": "true",
@@ -1102,7 +1100,7 @@ def test_example_lifecycle_probe_rejects_local_callback_event_mismatch(monkeypat
             "ready": True,
         },
     )
-    monkeypatch.setattr(job_runtime, "resolve_runtime_context", lambda **_kwargs: context)
+    monkeypatch.setattr(job_runtime, "resolve_job_context", lambda **_kwargs: context)
 
     class FakeReceiver:
         url = "http://127.0.0.1:19000/callback"
@@ -1141,7 +1139,7 @@ def test_example_lifecycle_probe_rejects_local_callback_event_mismatch(monkeypat
 
 
 def test_example_lifecycle_probe_local_callback_uses_single_timeout_budget(monkeypatch, capsys):
-    context = job_runtime.RuntimeContext(
+    context = service_runtime.RuntimeContext(
         app_env={
             "CALLBACK_SIGNING_SECRET": "test-callback-signing-secret",
             "DISABLE_HTTP_AUTH_HEADER": "true",
@@ -1209,8 +1207,8 @@ def test_example_lifecycle_probe_local_callback_uses_single_timeout_budget(monke
             },
         }
 
-    monkeypatch.setattr(job_runtime, "resolve_runtime_context", lambda **_kwargs: context)
-    monkeypatch.setattr(job_runtime, "request_json", lambda *_args, **_kwargs: {
+    monkeypatch.setattr(job_runtime, "resolve_job_context", lambda **_kwargs: context)
+    monkeypatch.setattr(http_runtime, "request_json", lambda *_args, **_kwargs: {
         "code": "0",
         "data": {"job": {"job_id": "probe-job-budget", "job_status": "queued"}},
     })
@@ -1313,7 +1311,7 @@ def test_example_lifecycle_probe_build_payload_rejects_invalid_wait_parameters()
 
 
 def test_smoke_failed_terminal_job_uses_standard_exit_code_1(monkeypatch):
-    context = job_runtime.RuntimeContext(
+    context = service_runtime.RuntimeContext(
         app_env={"DISABLE_HTTP_AUTH_HEADER": "true", "DISABLE_CALLER_ID_HEADER": "true"},
         summary={"jobs_url": "http://127.0.0.1:8100/jobs", "ready": True},
     )
@@ -1325,10 +1323,10 @@ def test_smoke_failed_terminal_job_uses_standard_exit_code_1(monkeypatch):
         ]
     )
 
-    monkeypatch.setattr(job_runtime, "resolve_runtime_context", lambda **kwargs: context)
-    monkeypatch.setattr(job_runtime, "request_json", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(job_runtime, "resolve_job_context", lambda **kwargs: context)
+    monkeypatch.setattr(http_runtime, "request_json", lambda *args, **kwargs: next(responses))
 
-    with pytest.raises(job_runtime.FlowError) as exc_info:
+    with pytest.raises(FlowError) as exc_info:
         llm_job_billing.run(
             confirm_cost=True,
             job_type="job_real_llm_echo",
@@ -1840,7 +1838,7 @@ def test_oss_image_upload_accepts_standard_jpeg_mime_and_rejects_jpg_alias(tmp_p
 
     assert oss_image_upload.image_content_type(image_path, None) == "image/jpeg"
 
-    with pytest.raises(job_runtime.FlowError, match="image/jpg"):
+    with pytest.raises(FlowError, match="image/jpg"):
         oss_image_upload.image_content_type(image_path, "image/jpg")
 
 
@@ -2119,7 +2117,7 @@ def test_poster_title_image_run_supports_items_json_with_multiple_references(tmp
 
     monkeypatch.setattr(oss_image_upload, "upload_image", fake_upload_image)
     monkeypatch.setattr(oss_image_upload, "delete_uploaded_image", lambda **kwargs: cleanup_calls.append(kwargs))
-    monkeypatch.setattr(job_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
     monkeypatch.setattr(
             job_runtime,
             "poll_job_envelope",
@@ -2288,8 +2286,8 @@ def test_smoke_headers_require_service_key_when_auth_enabled(monkeypatch):
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
 
-    with pytest.raises(job_runtime.FlowError) as exc:
-        job_runtime.build_headers({}, caller_id="caller-1")
+    with pytest.raises(FlowError) as exc:
+        service_runtime.build_headers({}, caller_id="caller-1")
 
     assert exc.value.exit_code == 2
     assert "SERVICE_API_KEY is required" in str(exc.value)
@@ -2300,7 +2298,7 @@ def test_smoke_headers_use_auth_and_caller_id(monkeypatch):
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
 
-    headers = job_runtime.build_headers(
+    headers = service_runtime.build_headers(
         {
             "SERVICE_API_KEY": "secret",
             "DISABLE_HTTP_AUTH_HEADER": "false",
@@ -2318,7 +2316,7 @@ def test_smoke_headers_use_explicit_service_key(monkeypatch):
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
 
-    headers = job_runtime.build_headers(
+    headers = service_runtime.build_headers(
         {
             "SERVICE_API_KEY": "env-secret",
             "DISABLE_HTTP_AUTH_HEADER": "false",
@@ -2333,48 +2331,48 @@ def test_smoke_headers_use_explicit_service_key(monkeypatch):
 
 
 def test_smoke_load_app_env_uses_explicit_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     monkeypatch.delenv("ENV_FILE", raising=False)
     env_dir = tmp_path / "env_test"
     env_dir.mkdir()
     (env_dir / ".env").write_text("API_URL=http://test.example.com\nSERVICE_API_KEY=file-token\n", encoding="utf-8")
 
-    values = job_runtime.load_app_env("env_test/.env")
+    values = env_runtime.load_app_env("env_test/.env")
 
     assert values["API_URL"] == "http://test.example.com"
     assert values["SERVICE_API_KEY"] == "file-token"
 
 
 def test_smoke_load_app_env_rejects_missing_explicit_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     monkeypatch.delenv("ENV_FILE", raising=False)
 
-    with pytest.raises(job_runtime.FlowError) as exc:
-        job_runtime.load_app_env("env_test/.env")
+    with pytest.raises(FlowError) as exc:
+        env_runtime.load_app_env("env_test/.env")
 
     assert exc.value.exit_code == 2
     assert "env file not found" in str(exc.value)
 
 
 def test_smoke_load_app_env_uses_env_file_variable(tmp_path, monkeypatch):
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     env_dir = tmp_path / "config"
     env_dir.mkdir()
     (tmp_path / ".env").write_text("API_URL=http://root.example.com\n", encoding="utf-8")
     (env_dir / "smoke.env").write_text("API_URL=http://env-file.example.com\n", encoding="utf-8")
     monkeypatch.setenv("ENV_FILE", "config/smoke.env")
 
-    values = job_runtime.load_app_env()
+    values = env_runtime.load_app_env()
 
     assert values["API_URL"] == "http://env-file.example.com"
 
 
 def test_smoke_load_app_env_rejects_missing_env_file_variable(tmp_path, monkeypatch):
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     monkeypatch.setenv("ENV_FILE", "missing/.env")
 
-    with pytest.raises(job_runtime.FlowError) as exc:
-        job_runtime.load_app_env()
+    with pytest.raises(FlowError) as exc:
+        env_runtime.load_app_env()
 
     assert exc.value.exit_code == 2
     assert "env file not found" in str(exc.value)
@@ -2383,7 +2381,7 @@ def test_smoke_load_app_env_rejects_missing_env_file_variable(tmp_path, monkeypa
 def test_smoke_env_value_prefers_runtime_env(monkeypatch):
     monkeypatch.setenv("SERVICE_API_KEY", "runtime-token")
 
-    value = job_runtime.env_value("SERVICE_API_KEY", {"SERVICE_API_KEY": "file-token"})
+    value = env_runtime.env_value("SERVICE_API_KEY", {"SERVICE_API_KEY": "file-token"})
 
     assert value == "runtime-token"
 
@@ -2391,21 +2389,21 @@ def test_smoke_env_value_prefers_runtime_env(monkeypatch):
 def test_smoke_resolves_api_url_from_root_env(monkeypatch):
     clear_api_env(monkeypatch)
 
-    api_url = job_runtime.resolved_api_url(None, {"API_HOST": "127.0.0.1", "API_PORT": "18200"})
+    api_url = service_runtime.resolved_api_url(None, {"API_HOST": "127.0.0.1", "API_PORT": "18200"})
 
     assert api_url == "http://127.0.0.1:18200"
 
 
 def test_smoke_rejects_non_local_api_url():
-    with pytest.raises(job_runtime.FlowError) as exc:
-        job_runtime.resolved_api_url("https://api.example.com", {})
+    with pytest.raises(FlowError) as exc:
+        service_runtime.resolved_api_url("https://api.example.com", {})
 
     assert exc.value.exit_code == 2
     assert "only targets local API URLs" in str(exc.value)
 
 
 def test_smoke_accepts_remote_api_url_when_explicitly_allowed():
-    api_url = job_runtime.resolved_api_url(
+    api_url = service_runtime.resolved_api_url(
         "https://api.example.com",
         {},
         allow_remote_api=True,
@@ -2416,15 +2414,15 @@ def test_smoke_accepts_remote_api_url_when_explicitly_allowed():
 
 @pytest.mark.parametrize("api_url", ["https://127.example.com", "https://127.0.0.1.nip.io"])
 def test_smoke_rejects_loopback_prefix_hostnames(api_url):
-    with pytest.raises(job_runtime.FlowError) as exc:
-        job_runtime.resolved_api_url(api_url, {})
+    with pytest.raises(FlowError) as exc:
+        service_runtime.resolved_api_url(api_url, {})
 
     assert exc.value.exit_code == 2
     assert "only targets local API URLs" in str(exc.value)
 
 
 def test_smoke_accepts_loopback_ip_url():
-    api_url = job_runtime.resolved_api_url("http://127.0.0.1:18200", {})
+    api_url = service_runtime.resolved_api_url("http://127.0.0.1:18200", {})
 
     assert api_url == "http://127.0.0.1:18200"
 
@@ -2441,7 +2439,7 @@ def test_smoke_run_uses_http_job_and_billing_flow(tmp_path, monkeypatch):
         "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=false\nDEFAULT_MODEL_ID=gpt-5.4-mini\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     append_root_env(tmp_path, "API_HOST=127.0.0.1", "API_PORT=18200")
 
     calls = []
@@ -2477,7 +2475,7 @@ def test_smoke_run_uses_http_job_and_billing_flow(tmp_path, monkeypatch):
             "data": {"job": {"job_id": "job-1", "job_status": "succeeded", "job_type": "job_real_llm_echo"}},
         }
 
-    monkeypatch.setattr(job_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
     monkeypatch.setattr(job_runtime, "poll_job_envelope", fake_poll_job_envelope)
 
     llm_job_billing.run(
@@ -2508,7 +2506,7 @@ def test_smoke_run_uses_env_file_for_remote_api_and_service_key(tmp_path, monkey
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
 
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     env_dir = tmp_path / "env_test"
     env_dir.mkdir()
     (env_dir / ".env").write_text(
@@ -2548,7 +2546,7 @@ def test_smoke_run_uses_env_file_for_remote_api_and_service_key(tmp_path, monkey
             },
         }
 
-    monkeypatch.setattr(job_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
     monkeypatch.setattr(
             job_runtime,
             "poll_job_envelope",
@@ -2588,7 +2586,7 @@ def test_audio_stem_separation_run_uses_payload_file_api_flow(tmp_path, monkeypa
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text(
         "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
@@ -2627,7 +2625,7 @@ def test_audio_stem_separation_run_uses_payload_file_api_flow(tmp_path, monkeypa
             "sha256": "b" * 64,
         }
 
-    monkeypatch.setattr(job_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
     def fake_poll_job_envelope(**kwargs):
         kwargs["progress_callback"](
             {
@@ -2713,7 +2711,7 @@ def test_audio_stem_separation_run_prints_stage_poll_and_callback_status(tmp_pat
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text(
         "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
@@ -2739,9 +2737,7 @@ def test_audio_stem_separation_run_prints_stage_poll_and_callback_status(tmp_pat
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(
-            job_runtime,
-            "request_json",
+    monkeypatch.setattr(http_runtime, "request_json",
         lambda url, *, method, headers, payload=None, timeout_seconds=10: {
             "code": "0",
             "data": {"job": {"job_id": "audio-job-1", "job_status": "queued"}},
@@ -2819,7 +2815,7 @@ def test_audio_stem_separation_run_does_not_download_outputs_for_failed_job(tmp_
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text(
         "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
@@ -2845,9 +2841,7 @@ def test_audio_stem_separation_run_does_not_download_outputs_for_failed_job(tmp_
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(
-            job_runtime,
-            "request_json",
+    monkeypatch.setattr(http_runtime, "request_json",
         lambda url, *, method, headers, payload=None, timeout_seconds=10: {
             "code": "0",
             "data": {"job": {"job_id": "audio-job-failed", "job_status": "queued"}},
@@ -2911,7 +2905,7 @@ def test_audio_stem_separation_failed_job_prints_diagnostic_hints(tmp_path, monk
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text(
         "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
@@ -2936,9 +2930,7 @@ def test_audio_stem_separation_failed_job_prints_diagnostic_hints(tmp_path, monk
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-            job_runtime,
-            "request_json",
+    monkeypatch.setattr(http_runtime, "request_json",
         lambda url, *, method, headers, payload=None, timeout_seconds=10: {
             "code": "0",
             "data": {"job": {"job_id": "audio-job-failed", "job_status": "queued"}},
@@ -3007,7 +2999,7 @@ def test_audio_stem_separation_poll_timeout_prints_diagnostic_hints(tmp_path, mo
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text(
         "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
@@ -3032,9 +3024,7 @@ def test_audio_stem_separation_poll_timeout_prints_diagnostic_hints(tmp_path, mo
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-            job_runtime,
-            "request_json",
+    monkeypatch.setattr(http_runtime, "request_json",
         lambda url, *, method, headers, payload=None, timeout_seconds=10: {
             "code": "0",
             "data": {"job": {"job_id": "audio-job-timeout", "job_status": "queued"}},
@@ -3042,11 +3032,11 @@ def test_audio_stem_separation_poll_timeout_prints_diagnostic_hints(tmp_path, mo
     )
 
     def timeout_poll(**_kwargs):
-        raise job_runtime.FlowError("job audio-job-timeout did not finish within 1s", exit_code=5)
+        raise FlowError("job audio-job-timeout did not finish within 1s", exit_code=5)
 
     monkeypatch.setattr(job_runtime, "poll_job_envelope", timeout_poll)
 
-    with pytest.raises(job_runtime.FlowError) as exc_info:
+    with pytest.raises(FlowError) as exc_info:
         audio_stem_separation.run(
             confirm_run=True,
             confirm_upload=False,
@@ -3085,7 +3075,7 @@ def test_audio_stem_separation_run_cleans_staged_input_after_terminal_job(tmp_pa
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text(
         "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
@@ -3121,9 +3111,7 @@ def test_audio_stem_separation_run_cleans_staged_input_after_terminal_job(tmp_pa
         ),
     )
     monkeypatch.setattr(audio_stem_separation, "cleanup_staged_input", lambda staged_input, app_env: cleanup_calls.append(staged_input))
-    monkeypatch.setattr(
-            job_runtime,
-            "request_json",
+    monkeypatch.setattr(http_runtime, "request_json",
         lambda url, *, method, headers, payload=None, timeout_seconds=10: {
             "code": "0",
             "data": {"job": {"job_id": "audio-job-cleanup", "job_status": "queued"}},
@@ -3179,7 +3167,7 @@ def test_audio_stem_separation_run_keeps_staged_input_when_create_response_is_un
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     monkeypatch.setattr(audio_stem_separation, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text(
         "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n",
@@ -3209,9 +3197,9 @@ def test_audio_stem_separation_run_keeps_staged_input_when_create_response_is_un
         ),
     )
     monkeypatch.setattr(audio_stem_separation, "cleanup_staged_input", lambda staged_input, app_env: cleanup_calls.append(staged_input))
-    monkeypatch.setattr(job_runtime, "request_json", lambda *_args, **_kwargs: {"code": "0", "data": {}})
+    monkeypatch.setattr(http_runtime, "request_json", lambda *_args, **_kwargs: {"code": "0", "data": {}})
 
-    with pytest.raises(job_runtime.FlowError, match="response missing data.job"):
+    with pytest.raises(FlowError, match="response missing data.job"):
         audio_stem_separation.run(
             confirm_run=True,
             confirm_upload=True,
@@ -3246,7 +3234,7 @@ def test_smoke_run_uses_double_job_type(tmp_path, monkeypatch):
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text("DISABLE_HTTP_AUTH_HEADER=true\nDEFAULT_MODEL_ID=gpt-5.4-mini\n", encoding="utf-8")
     append_root_env(tmp_path, "API_PORT=18200")
     calls = []
@@ -3273,7 +3261,7 @@ def test_smoke_run_uses_double_job_type(tmp_path, monkeypatch):
             },
         }
 
-    monkeypatch.setattr(job_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
     monkeypatch.setattr(
             job_runtime,
             "poll_job_envelope",
@@ -3361,7 +3349,7 @@ def test_smoke_run_uses_poster_title_image_api_flow(tmp_path, monkeypatch, capsy
             }
         raise AssertionError(f"unexpected call: {method} {url}")
 
-    monkeypatch.setattr(job_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
     monkeypatch.setattr(
             job_runtime,
             "poll_job_envelope",
@@ -3476,9 +3464,7 @@ def test_poster_title_image_downloads_all_output_artifacts(tmp_path, monkeypatch
             "sha256": poster_title_image._bare_sha256(data),
         }
 
-    monkeypatch.setattr(
-            job_runtime,
-            "request_json",
+    monkeypatch.setattr(http_runtime, "request_json",
         lambda url, *, method, headers, payload=None, timeout_seconds=10: (
             {"code": "0", "data": {"job": {"job_id": "poster-job-1", "job_status": "queued"}}}
             if method == "POST"
@@ -3841,7 +3827,7 @@ def test_smoke_run_uploads_poster_reference_when_aliyun_oss_enabled(tmp_path, mo
         "delete_uploaded_image",
         lambda **kwargs: cleanup_calls.append(kwargs),
     )
-    monkeypatch.setattr(job_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
     monkeypatch.setattr(
             job_runtime,
             "poll_job_envelope",
@@ -4149,9 +4135,9 @@ def test_poster_title_image_keeps_uploaded_reference_when_create_response_is_unk
         "delete_uploaded_image",
         lambda **kwargs: cleanup_calls.append(kwargs),
     )
-    monkeypatch.setattr(job_runtime, "request_json", lambda *_args, **_kwargs: {"code": "0", "data": {}})
+    monkeypatch.setattr(http_runtime, "request_json", lambda *_args, **_kwargs: {"code": "0", "data": {}})
 
-    with pytest.raises(job_runtime.FlowError, match="response missing data.job"):
+    with pytest.raises(FlowError, match="response missing data.job"):
         poster_title_image.run(
             confirm_cost=True,
             confirm_upload=True,
@@ -4226,15 +4212,13 @@ def test_poster_title_image_cleans_uploaded_reference_when_failure_happens_befor
     monkeypatch.setattr(
         poster_title_image,
         "build_job_payload",
-        lambda **_kwargs: (_ for _ in ()).throw(job_runtime.FlowError("payload failed", exit_code=4)),
+        lambda **_kwargs: (_ for _ in ()).throw(FlowError("payload failed", exit_code=4)),
     )
-    monkeypatch.setattr(
-            job_runtime,
-            "request_json",
+    monkeypatch.setattr(http_runtime, "request_json",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("POST must not be attempted")),
     )
 
-    with pytest.raises(job_runtime.FlowError, match="payload failed"):
+    with pytest.raises(FlowError, match="payload failed"):
         poster_title_image.run(
             confirm_cost=True,
             confirm_upload=True,
@@ -4330,13 +4314,11 @@ def test_smoke_json_output_is_machine_readable(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
 
-    monkeypatch.setattr(job_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
     (tmp_path / ".env").write_text("DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=true\n", encoding="utf-8")
     append_root_env(tmp_path, "API_PORT=18200")
 
-    monkeypatch.setattr(
-            job_runtime,
-            "request_json",
+    monkeypatch.setattr(http_runtime, "request_json",
         lambda url, **kwargs: (
             {"code": "0", "data": {"job": {"job_id": "job-1"}}}
             if kwargs["method"] == "POST"

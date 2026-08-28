@@ -20,13 +20,6 @@ class SmokeOptions:
 
 
 @dataclass(frozen=True)
-class JobSmokeOptions:
-    confirm_run: bool
-    client_request_id: str | None
-    expect_status: str
-
-
-@dataclass(frozen=True)
 class CallbackSmokeOptions:
     callback_url: str | None
     local_callback: bool
@@ -72,26 +65,6 @@ JsonOutputOption = Annotated[
     typer.Option("--json", help="输出机器可读 JSON；全局参数，放在场景命令前。"),
 ]
 
-ConfirmRunOption = Annotated[
-    bool,
-    typer.Option("--confirm-run", help="确认本命令会创建真实 Job 并写入 Job/Outbox/Callback 数据。"),
-]
-ConfirmCostOption = Annotated[
-    bool,
-    typer.Option("--confirm-cost", help="确认本命令会调用真实模型或 provider，并可能产生费用。"),
-]
-ConfirmUploadOption = Annotated[
-    bool,
-    typer.Option("--confirm-upload", help="确认本命令可能上传本地文件到对象存储。"),
-]
-ClientRequestIdOption = Annotated[
-    str | None,
-    typer.Option("--client-request-id", help="显式 client_request_id；默认由场景自动生成。"),
-]
-ExpectStatusOption = Annotated[
-    str,
-    typer.Option("--expect-status", help="期望终态：auto、succeeded 或 failed。"),
-]
 CallbackUrlOption = Annotated[
     str | None,
     typer.Option("--callback-url", help="外部 callback receiver URL。"),
@@ -168,19 +141,6 @@ def validate_global_options(ctx: typer.Context, scenario: str, supported: set[st
     if unsupported:
         typer.echo(f"ERROR: {unsupported[0]} is not supported by smoke scenario '{scenario}'", err=True)
         raise typer.Exit(2)
-
-
-def job_smoke_options(
-    *,
-    confirm_run: bool,
-    client_request_id: str | None,
-    expect_status: str = "auto",
-) -> JobSmokeOptions:
-    return JobSmokeOptions(
-        confirm_run=confirm_run,
-        client_request_id=client_request_id,
-        expect_status=expect_status,
-    )
 
 
 def callback_smoke_options(

@@ -11,11 +11,10 @@ from typing import Any
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
 from app.integrations.object_storage import sha256_digest
 from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
-from scripts.jobs import formatters
-from smoke.harness import job_runtime
-
-FlowError = job_runtime.FlowError
-ROOT_DIR = job_runtime.ROOT_DIR
+from smoke.harness import formatters
+from smoke.harness import env_runtime
+from smoke.harness.errors import FlowError
+ROOT_DIR = env_runtime.ROOT_DIR
 ALLOWED_IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
 DEFAULT_UPLOAD_PREFIX = "smoke/uploads/images"
 OUTPUT_MODES = {"table", "json", "url-ref-json", "poster-args"}
@@ -40,21 +39,21 @@ def bare_sha256(data: bytes) -> str:
 
 
 def _required_env(name: str, app_env: dict[str, str]) -> str:
-    value = job_runtime.env_value(name, app_env)
+    value = env_runtime.env_value(name, app_env)
     if not value:
         raise FlowError(f"{name} is required for Aliyun OSS upload", exit_code=2)
     return value
 
 
 def load_aliyun_oss_config(app_env: dict[str, str]) -> AliyunOSSConfig:
-    storage_backend = job_runtime.env_value("STORAGE_BACKEND", app_env) or "local"
+    storage_backend = env_runtime.env_value("STORAGE_BACKEND", app_env) or "local"
     if storage_backend != "aliyun_oss":
         raise FlowError("Aliyun OSS upload requires STORAGE_BACKEND=aliyun_oss", exit_code=2)
 
     bucket = _required_env("OSS_BUCKET", app_env)
     region = _required_env("OSS_REGION", app_env)
-    public_endpoint = job_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or ""
-    endpoint = job_runtime.env_value("OSS_ENDPOINT", app_env) or public_endpoint
+    public_endpoint = env_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or ""
+    endpoint = env_runtime.env_value("OSS_ENDPOINT", app_env) or public_endpoint
     endpoint_style = "custom_domain" if public_endpoint and endpoint == public_endpoint else "virtual_host"
 
     return AliyunOSSConfig(
@@ -70,7 +69,7 @@ def load_aliyun_oss_config(app_env: dict[str, str]) -> AliyunOSSConfig:
 
 
 def _default_key(*, source: Path, app_env: dict[str, str], key_prefix: str | None) -> str:
-    output_prefix = (job_runtime.env_value("OSS_OUTPUT_PREFIX", app_env) or "ai-jobs").strip().strip("/")
+    output_prefix = (env_runtime.env_value("OSS_OUTPUT_PREFIX", app_env) or "ai-jobs").strip().strip("/")
     clean_key_prefix = (key_prefix or DEFAULT_UPLOAD_PREFIX).strip().strip("/")
     parts = [part for part in (output_prefix, clean_key_prefix) if part]
     parts.append(f"{int(time.time())}-{uuid.uuid4().hex}")
@@ -110,7 +109,7 @@ def upload_image(
         key=object_key,
         content_type=resolved_content_type,
         content_hash=content_hash,
-        public_endpoint=job_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
+        public_endpoint=env_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
     )
     return {
         "provider": "aliyun_oss",
@@ -166,7 +165,7 @@ def run(
     if output_mode not in OUTPUT_MODES:
         raise FlowError(f"output mode must be one of {sorted(OUTPUT_MODES)}, got {output_mode!r}", exit_code=2)
 
-    app_env = job_runtime.load_app_env(env_file, root_dir=ROOT_DIR)
+    app_env = env_runtime.load_app_env(env_file, root_dir=ROOT_DIR)
     result = upload_image(
         image=image,
         content_type=content_type,

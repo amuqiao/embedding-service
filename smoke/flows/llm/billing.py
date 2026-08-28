@@ -3,11 +3,13 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from scripts.jobs import formatters
-from smoke.harness import job_runtime
+from smoke.harness import formatters
+from smoke.harness import env_runtime
+from smoke.harness import http_runtime
+from smoke.harness import service_runtime
+from smoke.harness.errors import FlowError
+from smoke.jobs import runtime as job_runtime
 
-
-FlowError = job_runtime.FlowError
 
 
 def build_job_payload(
@@ -100,7 +102,7 @@ def run(
 ) -> None:
     if not confirm_cost:
         raise FlowError("real LLM smoke scenario requires --confirm-cost", exit_code=2)
-    context = job_runtime.resolve_runtime_context(
+    context = job_runtime.resolve_job_context(
         env_file=env_file,
         api_url=api_url,
         allow_remote_api=allow_remote_api,
@@ -108,9 +110,9 @@ def run(
         service_api_key=service_api_key,
     )
     app_env = context.app_env
-    selected_model = model_id or job_runtime.env_value("DEFAULT_MODEL_ID", app_env) or "gpt-5.5"
+    selected_model = model_id or env_runtime.env_value("DEFAULT_MODEL_ID", app_env) or "gpt-5.5"
     jobs_url = str(context.summary["jobs_url"])
-    headers = job_runtime.build_headers(app_env, caller_id=caller_id, service_api_key=service_api_key)
+    headers = service_runtime.build_headers(app_env, caller_id=caller_id, service_api_key=service_api_key)
 
     if job_type == "job_real_llm_double_echo":
         if second_instruction is None:
@@ -130,8 +132,8 @@ def run(
             instruction=instruction,
             client_request_id=client_request_id,
         )
-    create_envelope = job_runtime.request_json(jobs_url, method="POST", headers=headers, payload=payload)
-    created = job_runtime.data_object(create_envelope, "job")
+    create_envelope = http_runtime.request_json(jobs_url, method="POST", headers=headers, payload=payload)
+    created = http_runtime.data_object(create_envelope, "job")
     job_id = str(created["job_id"])
     get_job_envelope = job_runtime.poll_job_envelope(
         jobs_url=jobs_url,
@@ -140,9 +142,9 @@ def run(
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
     )
-    terminal_job = job_runtime.data_object(get_job_envelope, "job")
-    billing_envelope = job_runtime.request_json(f"{jobs_url}/{job_id}/billing", method="GET", headers=headers)
-    billing = job_runtime.data_object(billing_envelope, "billing")
+    terminal_job = http_runtime.data_object(get_job_envelope, "job")
+    billing_envelope = http_runtime.request_json(f"{jobs_url}/{job_id}/billing", method="GET", headers=headers)
+    billing = http_runtime.data_object(billing_envelope, "billing")
     summary = summarize(terminal_job, billing)
     summary["context"] = context.summary
     if json_output:

@@ -19,13 +19,15 @@ from app.integrations.image import (
     validate_image_bytes,
 )
 from app.jobs.payload_adapters.oss_url_ref import canonical_ref_from_oss_url_ref
-from scripts.jobs import formatters
-from smoke.flows import oss_image_upload
-from smoke.harness import job_runtime
+from smoke.harness import formatters
+from smoke.flows.oss import image_upload as oss_image_upload
+from smoke.harness import env_runtime
+from smoke.harness import http_runtime
+from smoke.harness import service_runtime
+from smoke.harness.errors import FlowError
+from smoke.jobs import runtime as job_runtime
 from scripts.verify import image_inspect
-
-FlowError = job_runtime.FlowError
-ROOT_DIR = job_runtime.ROOT_DIR
+ROOT_DIR = env_runtime.ROOT_DIR
 DEFAULT_REFERENCE_IMAGE = ".data/title/英语.png"
 DEFAULT_OUTPUT_DIR = ".data/smoke/poster-title-image"
 DEFAULT_JOB_TYPE = "poster_title_image"
@@ -190,7 +192,7 @@ def stage_local_reference_image(
     content_type: str | None,
     app_env: dict[str, str],
 ) -> dict[str, str]:
-    storage_backend = job_runtime.env_value("STORAGE_BACKEND", app_env) or "local"
+    storage_backend = env_runtime.env_value("STORAGE_BACKEND", app_env) or "local"
     if storage_backend != "local":
         raise FlowError(
             "local reference staging requires STORAGE_BACKEND=local; pass explicit OSS URL Ref options instead",
@@ -202,10 +204,10 @@ def stage_local_reference_image(
     data = source.read_bytes()
     resolved_content_type = _content_type(source, content_type)
     _validate_reference_input_bytes(data, content_type=resolved_content_type)
-    bucket = job_runtime.env_value("OSS_BUCKET", app_env) or DEFAULT_BUCKET
-    region = job_runtime.env_value("OSS_REGION", app_env) or DEFAULT_REGION
+    bucket = env_runtime.env_value("OSS_BUCKET", app_env) or DEFAULT_BUCKET
+    region = env_runtime.env_value("OSS_REGION", app_env) or DEFAULT_REGION
     storage_root = _resolve_repo_path(
-        job_runtime.env_value("LOCAL_OBJECT_STORAGE_PATH", app_env) or "storage/objects"
+        env_runtime.env_value("LOCAL_OBJECT_STORAGE_PATH", app_env) or "storage/objects"
     )
     key = f"smoke/poster-title-image/reference/{int(time.time())}-{uuid.uuid4().hex}/{source.name}"
     storage_root_resolved = storage_root.resolve()
@@ -262,7 +264,7 @@ def resolve_reference_image(
             "poster title image flow requires --reference, --reference-url-ref-json, or explicit OSS URL Ref options",
             exit_code=2,
         )
-    storage_backend = job_runtime.env_value("STORAGE_BACKEND", app_env) or "local"
+    storage_backend = env_runtime.env_value("STORAGE_BACKEND", app_env) or "local"
     if storage_backend == "aliyun_oss":
         if not confirm_upload:
             raise FlowError("poster title image Aliyun OSS reference upload requires --confirm-upload", exit_code=2)
@@ -495,9 +497,9 @@ def _canonical_output_ref(*, app_env: dict[str, str], output: dict[str, Any]):
     try:
         return canonical_ref_from_oss_url_ref(
             output,
-            public_endpoint=job_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
-            public_endpoint_bucket=job_runtime.env_value("OSS_BUCKET", app_env) or None,
-            public_endpoint_region=job_runtime.env_value("OSS_REGION", app_env) or None,
+            public_endpoint=env_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
+            public_endpoint_bucket=env_runtime.env_value("OSS_BUCKET", app_env) or None,
+            public_endpoint_region=env_runtime.env_value("OSS_REGION", app_env) or None,
         )
     except AppError as exc:
         raise FlowError(f"output object is not a supported OSS URL Ref: {exc.message}", exit_code=4) from exc
@@ -506,7 +508,7 @@ def _canonical_output_ref(*, app_env: dict[str, str], output: dict[str, Any]):
 def _local_storage_path(*, app_env: dict[str, str], output: dict[str, Any]) -> Path:
     ref = _canonical_output_ref(app_env=app_env, output=output)
     storage_root = _resolve_repo_path(
-        job_runtime.env_value("LOCAL_OBJECT_STORAGE_PATH", app_env) or "storage/objects"
+        env_runtime.env_value("LOCAL_OBJECT_STORAGE_PATH", app_env) or "storage/objects"
     )
     root_resolved = storage_root.resolve()
     bucket_root = (storage_root / ref.bucket).resolve()
@@ -556,7 +558,7 @@ def _read_remote_output(
     try:
         return _download_url(public_url), "public_url"
     except FlowError:
-        storage_backend = job_runtime.env_value("STORAGE_BACKEND", app_env) or "local"
+        storage_backend = env_runtime.env_value("STORAGE_BACKEND", app_env) or "local"
         if storage_backend != "aliyun_oss":
             raise
         signed_url = _signed_download_url(
@@ -573,7 +575,7 @@ def _read_output_bytes(
     output: dict[str, Any],
     signed_url_expires_seconds: int,
 ) -> tuple[bytes, str]:
-    storage_backend = job_runtime.env_value("STORAGE_BACKEND", app_env) or "local"
+    storage_backend = env_runtime.env_value("STORAGE_BACKEND", app_env) or "local"
     if storage_backend == "local":
         return _read_local_output(app_env=app_env, output=output), "local_storage"
     return _read_remote_output(
@@ -736,11 +738,17 @@ def run(
 ) -> None:
     if not confirm_cost:
         raise FlowError("poster title image smoke scenario requires --confirm-cost", exit_code=2)
-    app_env = job_runtime.load_app_env(env_file, root_dir=ROOT_DIR)
-    base_url = job_runtime.resolved_api_url(api_url, app_env, allow_remote_api=allow_remote_api)
-    api_prefix = (job_runtime.env_value("SERVICE_API_PREFIX", app_env) or job_runtime.DEFAULT_API_PREFIX).rstrip("/")
-    jobs_url = f"{base_url}{api_prefix}/jobs"
-    headers = job_runtime.build_headers(app_env, caller_id=caller_id, service_api_key=service_api_key)
+    context = job_runtime.resolve_job_context(
+        env_file=env_file,
+        api_url=api_url,
+        allow_remote_api=allow_remote_api,
+        caller_id=caller_id,
+        service_api_key=service_api_key,
+        root_dir=ROOT_DIR,
+    )
+    app_env = context.app_env
+    jobs_url = str(context.summary["jobs_url"])
+    headers = service_runtime.build_headers(app_env, caller_id=caller_id, service_api_key=service_api_key)
     resolutions: list[ReferenceImageResolution] = []
     create_attempted = False
     job_id: str | None = None
@@ -787,8 +795,8 @@ def run(
                 items[0]["model_id"] = model_id
         payload = build_job_payload(items=items, client_request_id=client_request_id)
         create_attempted = True
-        create_envelope = job_runtime.request_json(jobs_url, method="POST", headers=headers, payload=payload)
-        created = job_runtime.data_object(create_envelope, "job")
+        create_envelope = http_runtime.request_json(jobs_url, method="POST", headers=headers, payload=payload)
+        created = http_runtime.data_object(create_envelope, "job")
         job_id = str(created["job_id"])
         get_job_envelope = job_runtime.poll_job_envelope(
             jobs_url=jobs_url,
@@ -797,9 +805,9 @@ def run(
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
         )
-        terminal_job = job_runtime.data_object(get_job_envelope, "job")
-        billing_envelope = job_runtime.request_json(f"{jobs_url}/{job_id}/billing", method="GET", headers=headers)
-        billing = job_runtime.data_object(billing_envelope, "billing")
+        terminal_job = http_runtime.data_object(get_job_envelope, "job")
+        billing_envelope = http_runtime.request_json(f"{jobs_url}/{job_id}/billing", method="GET", headers=headers)
+        billing = http_runtime.data_object(billing_envelope, "billing")
     except Exception as exc:
         for resolution in resolutions:
             uploaded_image = resolution.uploaded_image

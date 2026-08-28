@@ -267,12 +267,33 @@ run_python_syntax() {
     "$ROOT_DIR/smoke/__init__.py" \
     "$ROOT_DIR/smoke/__main__.py" \
     "$ROOT_DIR/smoke/cli.py" \
+    "$ROOT_DIR/smoke/scenarios.py" \
     "$ROOT_DIR/smoke/flows/__init__.py" \
-    "$ROOT_DIR/smoke/flows/adapter_image_probe.py" \
-    "$ROOT_DIR/smoke/flows/audio_stem_separation.py" \
-    "$ROOT_DIR/smoke/flows/llm_job_billing.py" \
-    "$ROOT_DIR/smoke/flows/oss_image_upload.py" \
-    "$ROOT_DIR/smoke/flows/poster_title_image.py" \
+    "$ROOT_DIR/smoke/flows/audio/__init__.py" \
+    "$ROOT_DIR/smoke/flows/audio/stem_separation.py" \
+    "$ROOT_DIR/smoke/flows/examples/__init__.py" \
+    "$ROOT_DIR/smoke/flows/examples/lifecycle_probe.py" \
+    "$ROOT_DIR/smoke/flows/image/__init__.py" \
+    "$ROOT_DIR/smoke/flows/image/adapter_probe.py" \
+    "$ROOT_DIR/smoke/flows/image/poster_title_image.py" \
+    "$ROOT_DIR/smoke/flows/llm/__init__.py" \
+    "$ROOT_DIR/smoke/flows/llm/billing.py" \
+    "$ROOT_DIR/smoke/flows/oss/__init__.py" \
+    "$ROOT_DIR/smoke/flows/oss/image_upload.py" \
+    "$ROOT_DIR/smoke/flows/translation/__init__.py" \
+    "$ROOT_DIR/smoke/flows/translation/tagged_text_translation.py" \
+    "$ROOT_DIR/smoke/harness/__init__.py" \
+    "$ROOT_DIR/smoke/harness/callback_capture.py" \
+    "$ROOT_DIR/smoke/harness/cli_contract.py" \
+    "$ROOT_DIR/smoke/harness/env_runtime.py" \
+    "$ROOT_DIR/smoke/harness/errors.py" \
+    "$ROOT_DIR/smoke/harness/formatters.py" \
+    "$ROOT_DIR/smoke/harness/http_runtime.py" \
+    "$ROOT_DIR/smoke/harness/service_runtime.py" \
+    "$ROOT_DIR/smoke/jobs/__init__.py" \
+    "$ROOT_DIR/smoke/jobs/callback.py" \
+    "$ROOT_DIR/smoke/jobs/cli_contract.py" \
+    "$ROOT_DIR/smoke/jobs/runtime.py" \
     "$ROOT_DIR/scripts/media/__init__.py" \
     "$ROOT_DIR/scripts/media/audio.py" \
     "$ROOT_DIR/scripts/media/video.py" \

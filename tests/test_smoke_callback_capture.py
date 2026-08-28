@@ -6,6 +6,7 @@ from urllib.request import Request, urlopen
 import pytest
 
 from smoke.harness import callback_capture
+from smoke.jobs import callback as job_callback
 
 
 def test_callback_capture_signature_verification_accepts_service_contract():
@@ -56,7 +57,10 @@ def test_callback_capture_wait_timeout_uses_standard_exit_code_5():
 
     with pytest.raises(callback_capture.CallbackCaptureError) as exc_info:
         receiver.wait_for_event(
-            callback_capture.CallbackExpectation(job_id="probe-job", event="job.succeeded", job_status="succeeded"),
+            callback_capture.CallbackExpectation(
+                description="never matches",
+                matcher=lambda _event: False,
+            ),
             timeout_seconds=0,
         )
 
@@ -115,7 +119,7 @@ def test_callback_capture_server_captures_http_callback_and_returns_ack():
 
         status, ack = _post_callback(url=str(entered.url), body=body, secret="test-secret")
         event = entered.wait_for_event(
-            callback_capture.CallbackExpectation(
+            job_callback.job_callback_expectation(
                 job_id="probe-job",
                 event="job.succeeded",
                 job_status="succeeded",
@@ -151,7 +155,7 @@ def test_callback_capture_server_rejects_bad_signature_when_waiting_for_match():
         assert ack["accepted"] is True
         with pytest.raises(callback_capture.CallbackCaptureError) as exc_info:
             entered.wait_for_event(
-                callback_capture.CallbackExpectation(
+                job_callback.job_callback_expectation(
                     job_id="probe-job",
                     event="job.failed",
                     job_status="failed",

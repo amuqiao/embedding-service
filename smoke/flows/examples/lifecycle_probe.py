@@ -6,13 +6,17 @@ import uuid
 from typing import Any
 from urllib.parse import urlparse
 
-from scripts.jobs import formatters
-from smoke.harness import job_runtime
+from smoke.harness import formatters
 from smoke.harness import callback_capture
 from smoke.harness import cli_contract
+from smoke.harness import env_runtime
+from smoke.harness import http_runtime
+from smoke.harness import service_runtime
+from smoke.harness.errors import FlowError
+from smoke.jobs import callback as job_callback
+from smoke.jobs import cli_contract as job_cli_contract
+from smoke.jobs import runtime as job_runtime
 
-
-FlowError = job_runtime.FlowError
 
 JOB_TYPE = "example_lifecycle_probe"
 SCENARIO_NAME = "example-lifecycle-probe"
@@ -108,8 +112,8 @@ def poll_callback_envelope(
     deadline = time.monotonic() + timeout_seconds
     last_envelope: dict[str, Any] | None = None
     while time.monotonic() < deadline:
-        last_envelope = job_runtime.request_json(f"{jobs_url}/{job_id}", method="GET", headers=headers)
-        job = job_runtime.data_object(last_envelope, "job")
+        last_envelope = http_runtime.request_json(f"{jobs_url}/{job_id}", method="GET", headers=headers)
+        job = http_runtime.data_object(last_envelope, "job")
         status = _callback_status(job)
         if status == "delivered":
             return last_envelope
@@ -168,8 +172,8 @@ def _is_loopback_api(api_url: str) -> bool:
     return host in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
 
 
-def _local_callback_server(context: job_runtime.RuntimeContext) -> callback_capture.CallbackCaptureServer:
-    signing_secret = job_runtime.env_value("CALLBACK_SIGNING_SECRET", context.app_env)
+def _local_callback_server(context: service_runtime.RuntimeContext) -> callback_capture.CallbackCaptureServer:
+    signing_secret = env_runtime.env_value("CALLBACK_SIGNING_SECRET", context.app_env)
     if not signing_secret:
         raise FlowError("CALLBACK_SIGNING_SECRET is required for --local-callback signature verification", exit_code=2)
     return callback_capture.CallbackCaptureServer(
@@ -231,7 +235,7 @@ def _summary(
 
 def run(
     *,
-    job_options: cli_contract.JobSmokeOptions,
+    job_options: job_cli_contract.JobSmokeOptions,
     callback_options: cli_contract.CallbackSmokeOptions,
     api_url: str | None,
     env_file: str | None,
@@ -256,7 +260,7 @@ def run(
     if callback_options.local_callback and not callback_options.wait_callback:
         raise FlowError("--local-callback requires --wait-callback", exit_code=2)
     expected = expected_status(fail=fail, expect_status=job_options.expect_status)
-    context = job_runtime.resolve_runtime_context(
+    context = job_runtime.resolve_job_context(
         env_file=env_file,
         api_url=api_url,
         allow_remote_api=allow_remote_api,
@@ -267,7 +271,7 @@ def run(
         raise FlowError("--local-callback requires a loopback API URL", exit_code=2)
 
     jobs_url = str(context.summary["jobs_url"])
-    headers = job_runtime.build_headers(context.app_env, caller_id=caller_id, service_api_key=service_api_key)
+    headers = service_runtime.build_headers(context.app_env, caller_id=caller_id, service_api_key=service_api_key)
     receiver_context = _local_callback_server(context) if callback_options.local_callback else nullcontext(None)
     capture_event = None
     deadline = time.monotonic() + timeout_seconds
@@ -292,8 +296,8 @@ def run(
                 callback_event=callback_options.callback_event,
                 client_request_id=job_options.client_request_id,
             )
-            create_envelope = job_runtime.request_json(jobs_url, method="POST", headers=headers, payload=create_payload)
-            created = job_runtime.data_object(create_envelope, "job")
+            create_envelope = http_runtime.request_json(jobs_url, method="POST", headers=headers, payload=create_payload)
+            created = http_runtime.data_object(create_envelope, "job")
             job_id = str(created["job_id"])
             get_job_envelope = job_runtime.poll_job_envelope(
                 jobs_url=jobs_url,
@@ -302,7 +306,7 @@ def run(
                 timeout_seconds=_remaining_timeout_seconds(deadline, timeout_seconds=timeout_seconds),
                 poll_interval_seconds=poll_interval_seconds,
             )
-            terminal_job = job_runtime.data_object(get_job_envelope, "job")
+            terminal_job = http_runtime.data_object(get_job_envelope, "job")
             _assert_terminal_job(
                 terminal_job,
                 expected=expected,
@@ -326,10 +330,10 @@ def run(
                     ),
                     poll_interval_seconds=poll_interval_seconds,
                 )
-                callback_job = job_runtime.data_object(callback_envelope, "job")
+                callback_job = http_runtime.data_object(callback_envelope, "job")
                 if receiver is not None:
                     capture_event = receiver.wait_for_event(
-                        callback_capture.CallbackExpectation(
+                        job_callback.job_callback_expectation(
                             job_id=job_id,
                             event=f"job.{expected}",
                             job_status=expected,

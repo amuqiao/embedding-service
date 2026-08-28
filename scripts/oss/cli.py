@@ -11,8 +11,9 @@ from typing import Any
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSError
 from app.integrations.object_storage import sha256_digest
 from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
-from smoke.flows import oss_image_upload
-from smoke.harness import job_runtime
+from smoke.flows.oss import image_upload as oss_image_upload
+from smoke.harness import env_runtime
+from smoke.harness.errors import FlowError
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -27,28 +28,28 @@ def _event(status: str, name: str, detail: str) -> None:
 def _config_summary(client: AliyunOSSClient, app_env: dict[str, str]) -> dict[str, str | bool]:
     config = client.config
     return {
-        "backend": job_runtime.env_value("STORAGE_BACKEND", app_env) or "local",
+        "backend": env_runtime.env_value("STORAGE_BACKEND", app_env) or "local",
         "bucket": config.bucket,
         "region": config.region,
         "project_root": config.normalized_project_root,
-        "output_prefix": job_runtime.env_value("OSS_OUTPUT_PREFIX", app_env) or "ai-jobs",
+        "output_prefix": env_runtime.env_value("OSS_OUTPUT_PREFIX", app_env) or "ai-jobs",
         "endpoint": config.normalized_endpoint,
         "endpoint_style": config.endpoint_style,
-        "public_endpoint": job_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or "",
+        "public_endpoint": env_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or "",
         "scheme": config.scheme,
-        "access_key_id_present": bool(job_runtime.env_value("OSS_ACCESS_KEY_ID", app_env)),
-        "access_key_secret_present": bool(job_runtime.env_value("OSS_ACCESS_KEY_SECRET", app_env)),
+        "access_key_id_present": bool(env_runtime.env_value("OSS_ACCESS_KEY_ID", app_env)),
+        "access_key_secret_present": bool(env_runtime.env_value("OSS_ACCESS_KEY_SECRET", app_env)),
     }
 
 
 def _load_client(env_file: Path | None) -> tuple[dict[str, str], AliyunOSSClient]:
-    app_env = job_runtime.load_app_env(str(env_file) if env_file is not None else None, root_dir=ROOT_DIR)
+    app_env = env_runtime.load_app_env(str(env_file) if env_file is not None else None, root_dir=ROOT_DIR)
     config = oss_image_upload.load_aliyun_oss_config(app_env)
     return app_env, AliyunOSSClient(config)
 
 
 def _default_check_key(app_env: dict[str, str]) -> str:
-    output_prefix = (job_runtime.env_value("OSS_OUTPUT_PREFIX", app_env) or "ai-jobs").strip().strip("/")
+    output_prefix = (env_runtime.env_value("OSS_OUTPUT_PREFIX", app_env) or "ai-jobs").strip().strip("/")
     parts = [part for part in (output_prefix, "oss-check", f"check-{int(time.time())}-{uuid.uuid4().hex}.txt") if part]
     return "/".join(parts)
 
@@ -74,7 +75,7 @@ def _connectivity_check(
         key=object_key,
         content_type=DEFAULT_TEST_CONTENT_TYPE,
         content_hash=sha256_digest(DEFAULT_TEST_CONTENT),
-        public_endpoint=job_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
+        public_endpoint=env_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
     )
     return {
         "key": object_key,
@@ -209,7 +210,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _run_check(args: argparse.Namespace) -> int:
     if args.remote and not args.confirm:
-        raise job_runtime.FlowError("oss check --remote requires --confirm", exit_code=2)
+        raise FlowError("oss check --remote requires --confirm", exit_code=2)
     app_env, client = _load_client(args.env_file)
     result: dict[str, Any] = {"config": _config_summary(client, app_env)}
     if args.remote:
@@ -221,7 +222,7 @@ def _run_check(args: argparse.Namespace) -> int:
 
 def _run_upload_image(args: argparse.Namespace) -> int:
     if not args.confirm_upload:
-        raise job_runtime.FlowError("oss upload-image requires --confirm-upload", exit_code=2)
+        raise FlowError("oss upload-image requires --confirm-upload", exit_code=2)
     app_env, client = _load_client(args.env_file)
     result: dict[str, Any] = {"config": _config_summary(client, app_env)}
     result["upload"] = oss_image_upload.upload_image(
@@ -249,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except job_runtime.FlowError as exc:
+    except FlowError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise SystemExit(exc.exit_code)
     except Exception as exc:

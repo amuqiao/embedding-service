@@ -5,18 +5,13 @@ from urllib.error import HTTPError, URLError
 
 import typer
 
-from smoke.flows import (
-    adapter_image_probe,
-    audio_stem_separation,
-    llm_job_billing,
-    oss_image_upload,
-    poster_title_image,
-    tagged_text_translation,
-)
-from smoke.flows.examples import lifecycle_probe as example_lifecycle_probe
+from smoke import scenarios as smoke_scenarios
 from smoke.harness import cli_contract
-from smoke.harness import job_runtime
-from smoke.harness import scenarios as smoke_scenarios
+from smoke.harness import env_runtime
+from smoke.harness import formatters
+from smoke.harness import http_runtime
+from smoke.harness import service_runtime
+from smoke.harness.errors import FlowError
 from smoke.harness.cli_contract import (
     AllowRemoteApiOption,
     BaseUrlOption,
@@ -24,12 +19,7 @@ from smoke.harness.cli_contract import (
     CallbackTimeoutOption,
     CallbackUrlOption,
     CallerIdOption,
-    ClientRequestIdOption,
-    ConfirmCostOption,
-    ConfirmRunOption,
-    ConfirmUploadOption,
     EnvFileOption,
-    ExpectStatusOption,
     JsonOutputOption,
     LocalCallbackOption,
     OutputDirOption,
@@ -37,6 +27,32 @@ from smoke.harness.cli_contract import (
     ServiceApiKeyOption,
     TimeoutOption,
 )
+
+
+DEFAULT_AUDIO_STEM_JOB_TYPE = "audio_stem_separation"
+DEFAULT_AUDIO_STEM_OUTPUT_DIR = ".data/smoke/audio-stem-separation"
+DEFAULT_POSTER_TITLE_IMAGE_OUTPUT_DIR = ".data/smoke/poster-title-image"
+
+ConfirmRunOption = Annotated[
+    bool,
+    typer.Option("--confirm-run", help="确认本命令会创建真实 Job 并写入 Job/Outbox/Callback 数据。"),
+]
+ConfirmCostOption = Annotated[
+    bool,
+    typer.Option("--confirm-cost", help="确认本命令会调用真实模型或 provider，并可能产生费用。"),
+]
+ConfirmUploadOption = Annotated[
+    bool,
+    typer.Option("--confirm-upload", help="确认本命令可能上传本地文件到对象存储。"),
+]
+ClientRequestIdOption = Annotated[
+    str | None,
+    typer.Option("--client-request-id", help="显式 client_request_id；默认由场景自动生成。"),
+]
+ExpectStatusOption = Annotated[
+    str,
+    typer.Option("--expect-status", help="期望终态：auto、succeeded 或 failed。"),
+]
 
 
 POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
@@ -388,8 +404,9 @@ HELP_EPILOG = """\b
 
 \b
 扩展规范：
-  新增 Job smoke 时，命令函数只声明标准参数和业务参数；公共 create/poll/callback/artifact/summary 能力放在 smoke/harness。
-  新增业务 flow 只实现 payload 构造、业务断言和业务证据，不重复实现 env 解析、HTTP 请求、callback receiver 或 JSON summary。
+  新增 Job smoke 时，命令函数只声明标准参数和业务参数；Job context、Job 轮询和 Job 标准参数放在 smoke/jobs。
+  跨项目通用能力放在 smoke/harness：env、HTTP、service runtime、callback receiver、CLI contract。
+  新增业务 flow 放在 smoke/flows/<domain>/，只实现 payload 构造、业务断言和业务证据。
 
 \b
 副作用与保护边界：
@@ -480,8 +497,6 @@ def _ready_url(base_url: str) -> str:
 
 @app.command("list", help="列出当前项目 smoke 场景。")
 def list_command(ctx: typer.Context) -> None:
-    from scripts.jobs import formatters
-
     _validate_global_options(ctx, "list", cli_contract.GLOBAL_LIST_OPTIONS)
     options = _smoke_options(ctx)
     payload = {"scenarios": SCENARIOS}
@@ -496,24 +511,22 @@ def list_command(ctx: typer.Context) -> None:
 
 @app.command("health", help="检查服务进程级健康，不上传、不提交 Job、不产生费用。")
 def health_command(ctx: typer.Context) -> None:
-    from scripts.jobs import formatters
-
     _validate_global_options(ctx, "health", cli_contract.GLOBAL_HEALTH_OPTIONS)
     options = _smoke_options(ctx)
     try:
-        app_env = job_runtime.load_app_env(options.env_file)
-        resolved_base_url = job_runtime.resolved_api_url(
+        app_env = env_runtime.load_app_env(options.env_file)
+        resolved_base_url = service_runtime.resolved_api_url(
             options.api_url,
             app_env,
             allow_remote_api=options.allow_remote_api,
         )
-        payload = job_runtime.request_json(
+        payload = http_runtime.request_json(
             _health_url(resolved_base_url),
             method="GET",
             headers={"Accept": "application/json"},
             timeout_seconds=10,
         )
-    except job_runtime.FlowError as exc:
+    except FlowError as exc:
         if options.json_output:
             formatters.print_json({"ready": False, "phase": "health", "error": str(exc)})
         else:
@@ -535,12 +548,12 @@ def health_command(ctx: typer.Context) -> None:
         raise typer.Exit(3)
 
 
-@app.command("ready", help="检查 smoke 运行上下文和必要配置，不上传、不提交 Job、不产生费用。", epilog=READY_HELP_EPILOG)
+@app.command("ready", help="检查 smoke 服务运行上下文和 /healthz，不上传、不提交 Job、不产生费用。", epilog=READY_HELP_EPILOG)
 def ready_command(ctx: typer.Context) -> None:
     _validate_global_options(ctx, "ready", cli_contract.GLOBAL_READY_OPTIONS)
     options = _smoke_options(ctx)
     try:
-        context = job_runtime.resolve_runtime_context(
+        context = service_runtime.resolve_runtime_context(
             env_file=options.env_file,
             api_url=options.api_url,
             allow_remote_api=options.allow_remote_api,
@@ -549,18 +562,16 @@ def ready_command(ctx: typer.Context) -> None:
         )
         ready_payload = None
         if context.summary["ready"]:
-            ready_payload = job_runtime.request_json(
+            ready_payload = http_runtime.request_json(
                 _ready_url(str(context.summary["api_url"])),
                 method="GET",
                 headers={"Accept": "application/json"},
                 timeout_seconds=10,
             )
-    except job_runtime.FlowError as exc:
+    except FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(3 if exc.exit_code == 4 else exc.exit_code) from exc
     if options.json_output:
-        from scripts.jobs import formatters
-
         payload = {**context.summary, "ready_response": ready_payload}
         formatters.print_json(payload)
         if not context.summary["ready"]:
@@ -619,9 +630,12 @@ def example_lifecycle_probe_command(
     callback_timeout_seconds: CallbackTimeoutOption = None,
     client_request_id: ClientRequestIdOption = None,
 ) -> None:
+    from smoke.flows.examples import lifecycle_probe as example_lifecycle_probe
+    from smoke.jobs import cli_contract as job_cli_contract
+
     _validate_global_options(ctx, "example-lifecycle-probe", cli_contract.GLOBAL_CONTEXT_OPTIONS)
     options = _smoke_options(ctx)
-    job_options = cli_contract.job_smoke_options(
+    job_options = job_cli_contract.job_smoke_options(
         confirm_run=confirm_run,
         client_request_id=client_request_id,
         expect_status=expect_status,
@@ -676,6 +690,8 @@ def llm_job_billing_command(
     ] = "用一句话确认真实 LLM 计费链路可用。",
     client_request_id: ClientRequestIdOption = None,
 ) -> None:
+    from smoke.flows.llm import billing as llm_job_billing
+
     _validate_global_options(ctx, "llm-job-billing", cli_contract.GLOBAL_CONTEXT_OPTIONS)
     options = _smoke_options(ctx)
     try:
@@ -696,7 +712,7 @@ def llm_job_billing_command(
             service_api_key=options.service_api_key,
             env_file=options.env_file,
         )
-    except job_runtime.FlowError as exc:
+    except FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(exc.exit_code) from exc
 
@@ -727,6 +743,8 @@ def llm_job_double_billing_command(
     ] = "第二次调用：用另一句话确认同一 Job 的多次 LLM 计费可汇总。",
     client_request_id: ClientRequestIdOption = None,
 ) -> None:
+    from smoke.flows.llm import billing as llm_job_billing
+
     _validate_global_options(ctx, "llm-job-double-billing", cli_contract.GLOBAL_CONTEXT_OPTIONS)
     options = _smoke_options(ctx)
     try:
@@ -747,7 +765,7 @@ def llm_job_double_billing_command(
             service_api_key=options.service_api_key,
             env_file=options.env_file,
         )
-    except job_runtime.FlowError as exc:
+    except FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(exc.exit_code) from exc
 
@@ -786,6 +804,8 @@ def tagged_text_translation_command(
     ] = None,
     client_request_id: ClientRequestIdOption = None,
 ) -> None:
+    from smoke.flows.translation import tagged_text_translation
+
     _validate_global_options(ctx, "tagged-text-translation", cli_contract.GLOBAL_CONTEXT_OPTIONS)
     options = _smoke_options(ctx)
     try:
@@ -845,6 +865,8 @@ def oss_upload_image_command(
         typer.Option("--emit-poster-args", help="输出可复制到 poster-title-image 的 --reference-* 参数。"),
     ] = False,
 ) -> None:
+    from smoke.flows.oss import image_upload as oss_image_upload
+
     _validate_global_options(ctx, "oss-upload-image", cli_contract.GLOBAL_ENV_JSON_OPTIONS)
     options = _smoke_options(ctx)
     try:
@@ -881,7 +903,7 @@ def audio_stem_separation_build_payload_command(
     job_type: Annotated[
         str,
         typer.Option("--job-type", help="提交的音频分离 job_type：audio_stem_separation 或 audio_stem_separation_triton。"),
-    ] = audio_stem_separation.DEFAULT_JOB_TYPE,
+    ] = DEFAULT_AUDIO_STEM_JOB_TYPE,
     input_url_ref_json: Annotated[
         str | None,
         typer.Option("--input-url-ref-json", help="读取已有 audio URL Ref JSON；传 - 表示 stdin。"),
@@ -917,6 +939,8 @@ def audio_stem_separation_build_payload_command(
         typer.Option("--output", help="payload 输出路径；- 表示 stdout。"),
     ] = "-",
 ) -> None:
+    from smoke.flows.audio import stem_separation as audio_stem_separation
+
     _validate_global_options(ctx, "audio-stem-separation build-payload", cli_contract.GLOBAL_ENV_ONLY_OPTIONS)
     options = _smoke_options(ctx)
     try:
@@ -952,7 +976,7 @@ def audio_stem_separation_run_command(
     job_type: Annotated[
         str,
         typer.Option("--job-type", help="提交的音频分离 job_type：audio_stem_separation 或 audio_stem_separation_triton。"),
-    ] = audio_stem_separation.DEFAULT_JOB_TYPE,
+    ] = DEFAULT_AUDIO_STEM_JOB_TYPE,
     payload_file: Annotated[
         str | None,
         typer.Option("--payload-file", help="已构建的 audio_stem_separation/audio_stem_separation_triton create-job payload JSON。"),
@@ -994,6 +1018,8 @@ def audio_stem_separation_run_command(
         typer.Option("--download-outputs", help="下载 Job 结果里的 drums/bass/other/vocals WAV 到本地目录，并校验 sha256。"),
     ] = False,
 ) -> None:
+    from smoke.flows.audio import stem_separation as audio_stem_separation
+
     _validate_global_options(
         ctx,
         "audio-stem-separation run",
@@ -1023,7 +1049,7 @@ def audio_stem_separation_run_command(
             key_prefix=key_prefix,
             signed_url_expires_seconds=signed_url_expires_seconds,
             download_outputs=download_outputs,
-            output_dir=options.output_dir or audio_stem_separation.DEFAULT_OUTPUT_DIR,
+            output_dir=options.output_dir or DEFAULT_AUDIO_STEM_OUTPUT_DIR,
             json_output=options.json_output,
         )
     except audio_stem_separation.FlowError as exc:
@@ -1087,6 +1113,8 @@ def adapter_image_probe_command(
         typer.Option("--output-format", help="输出格式。"),
     ] = "png",
 ) -> None:
+    from smoke.flows.image import adapter_probe as adapter_image_probe
+
     _validate_global_options(ctx, "adapter-image-probe", cli_contract.GLOBAL_PROVIDER_OPTIONS)
     options = _smoke_options(ctx)
     try:
@@ -1190,6 +1218,8 @@ def poster_title_image_command(
         typer.Option("--signed-url-expires-seconds", min=1, help="public_url 不可读时生成临时 signed URL 的有效秒数。"),
     ] = 3600,
 ) -> None:
+    from smoke.flows.image import poster_title_image
+
     _validate_global_options(
         ctx,
         "poster-title-image",
@@ -1221,7 +1251,7 @@ def poster_title_image_command(
             client_request_id=client_request_id,
             json_output=options.json_output,
             download_outputs=download_outputs,
-            output_dir=options.output_dir or poster_title_image.DEFAULT_OUTPUT_DIR,
+            output_dir=options.output_dir or DEFAULT_POSTER_TITLE_IMAGE_OUTPUT_DIR,
             signed_url_expires_seconds=signed_url_expires_seconds,
             allow_remote_api=options.allow_remote_api,
             service_api_key=options.service_api_key,

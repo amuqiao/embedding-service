@@ -48,7 +48,7 @@ Usage:
 
 命令:
   health                  检查服务进程级健康。
-  ready                   检查 smoke 运行上下文和必要依赖配置。
+  ready                   检查 smoke 服务运行上下文和 /healthz。
   list                    列出当前项目 smoke 场景。
   example-lifecycle-probe 提交 local/dev 标准探针 Job，验收 api/dispatcher/taskiq_worker；配置 callback 后验收 callbacker。
   llm-job-billing         提交真实 LLM Job，轮询终态并查询 billing。
@@ -76,8 +76,9 @@ Usage:
 
 扩展规范:
   顶层只维护全局参数、标准 Job/Callback 参数和场景列表。
-  业务参数只出现在对应 <command> -h 中。
-  新增 Job smoke 应复用公共 create/poll/callback/artifact/summary 逻辑，只实现业务 payload 和结果断言。
+  跨项目通用能力放在 smoke/harness：env、HTTP、service runtime、callback receiver、CLI contract。
+  Job 服务能力放在 smoke/jobs：Job 参数、jobs_url 推导、Job 轮询和 Job 服务依赖检查。
+  业务参数只出现在对应 <command> -h 中；业务 flow 放在 smoke/flows/<domain>/。
 
 输出:
   默认人读模式输出 Job 状态、计费摘要和关键证据；tagged-text-translation 会展示翻译前后 preview。

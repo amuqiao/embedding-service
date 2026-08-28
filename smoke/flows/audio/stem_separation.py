@@ -10,13 +10,16 @@ from urllib.parse import urlsplit
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSError
 from app.integrations.object_storage import sha256_digest
 from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
-from scripts.jobs import formatters
+from smoke.harness import formatters
 from scripts.media import audio as audio_media
-from smoke.flows import oss_image_upload, poster_title_image
-from smoke.harness import job_runtime
-
-FlowError = job_runtime.FlowError
-ROOT_DIR = job_runtime.ROOT_DIR
+from smoke.flows.image import poster_title_image
+from smoke.flows.oss import image_upload as oss_image_upload
+from smoke.harness import env_runtime
+from smoke.harness import http_runtime
+from smoke.harness import service_runtime
+from smoke.harness.errors import FlowError
+from smoke.jobs import runtime as job_runtime
+ROOT_DIR = env_runtime.ROOT_DIR
 DEFAULT_JOB_TYPE = "audio_stem_separation"
 TRITON_JOB_TYPE = "audio_stem_separation_triton"
 SUPPORTED_JOB_TYPES = (DEFAULT_JOB_TYPE, TRITON_JOB_TYPE)
@@ -138,7 +141,7 @@ def _local_audio_url_ref(*, bucket: str, region: str, key: str, sha256: str, app
         key=key,
         content_type=AUDIO_WAV_CONTENT_TYPE,
         content_hash=f"sha256:{sha256}",
-        public_endpoint=job_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
+        public_endpoint=env_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
     )
 
 
@@ -168,10 +171,10 @@ def _stage_local_audio(
         raise FlowError(f"audio input file not found: {source}", exit_code=2)
     verification = _verify_htdemucs_input(source, max_duration_seconds=max_duration_seconds)
     data = source.read_bytes()
-    bucket = job_runtime.env_value("OSS_BUCKET", app_env) or "local-dev"
-    region = job_runtime.env_value("OSS_REGION", app_env) or "local"
+    bucket = env_runtime.env_value("OSS_BUCKET", app_env) or "local-dev"
+    region = env_runtime.env_value("OSS_REGION", app_env) or "local"
     storage_root = _resolve_repo_path(
-        job_runtime.env_value("LOCAL_OBJECT_STORAGE_PATH", app_env) or "storage/objects"
+        env_runtime.env_value("LOCAL_OBJECT_STORAGE_PATH", app_env) or "storage/objects"
     )
     prefix = (key_prefix or DEFAULT_INPUT_KEY_PREFIX).strip().strip("/")
     key = f"{prefix}/{int(time.time())}-{uuid.uuid4().hex}/{source.name}" if prefix else f"{int(time.time())}-{uuid.uuid4().hex}/{source.name}"
@@ -214,7 +217,7 @@ def _upload_audio_to_aliyun_oss(
     data = source.read_bytes()
     config = oss_image_upload.load_aliyun_oss_config(app_env)
     client = AliyunOSSClient(config)
-    output_prefix = (job_runtime.env_value("OSS_OUTPUT_PREFIX", app_env) or "ai-jobs").strip().strip("/")
+    output_prefix = (env_runtime.env_value("OSS_OUTPUT_PREFIX", app_env) or "ai-jobs").strip().strip("/")
     clean_key_prefix = (key_prefix or DEFAULT_INPUT_KEY_PREFIX).strip().strip("/")
     parts = [part for part in (output_prefix, clean_key_prefix) if part]
     parts.append(f"{int(time.time())}-{uuid.uuid4().hex}")
@@ -243,7 +246,7 @@ def _upload_audio_to_aliyun_oss(
             key=object_key,
             content_type=AUDIO_WAV_CONTENT_TYPE,
             content_hash=content_hash,
-            public_endpoint=job_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
+            public_endpoint=env_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or None,
         ),
         "verification": verification,
     }
@@ -274,7 +277,7 @@ def resolve_input_audio(
     if input_url_ref_json is not None:
         return input_ref_from_url_ref_json(input_url_ref_json), None
     assert input_file is not None
-    storage_backend = job_runtime.env_value("STORAGE_BACKEND", app_env) or "local"
+    storage_backend = env_runtime.env_value("STORAGE_BACKEND", app_env) or "local"
     if storage_backend == "aliyun_oss":
         if not confirm_upload:
             raise FlowError("audio stem separation Aliyun OSS input upload requires --confirm-upload", exit_code=2)
@@ -383,7 +386,7 @@ def build_payload(
     key_prefix: str | None,
     signed_url_expires_seconds: int,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    app_env = job_runtime.load_app_env(env_file, root_dir=ROOT_DIR)
+    app_env = env_runtime.load_app_env(env_file, root_dir=ROOT_DIR)
     input_audio, staged_input = resolve_input_audio(
         input_file=input_file,
         input_url_ref_json=input_url_ref_json,
@@ -636,7 +639,7 @@ def run(
     target_job_type = validate_job_type(job_type)
     if not json_output:
         formatters.section("Audio Stem Separation Smoke")
-    context = job_runtime.resolve_runtime_context(
+    context = job_runtime.resolve_job_context(
         env_file=env_file,
         api_url=api_url,
         allow_remote_api=allow_remote_api,
@@ -646,7 +649,7 @@ def run(
     app_env = context.app_env
     staged_input: dict[str, Any] | None = None
     jobs_url = str(context.summary["jobs_url"])
-    headers = job_runtime.build_headers(app_env, caller_id=caller_id, service_api_key=service_api_key)
+    headers = service_runtime.build_headers(app_env, caller_id=caller_id, service_api_key=service_api_key)
     if not json_output:
         formatters.event(
             "OK",
@@ -690,8 +693,8 @@ def run(
             formatters.event("OK", "prepare", _staged_input_summary(staged_input))
             formatters.event("RUN", "submit", f"url={jobs_url}")
         create_attempted = True
-        create_envelope = job_runtime.request_json(jobs_url, method="POST", headers=headers, payload=payload)
-        created = job_runtime.data_object(create_envelope, "job")
+        create_envelope = http_runtime.request_json(jobs_url, method="POST", headers=headers, payload=payload)
+        created = http_runtime.data_object(create_envelope, "job")
         job_id = str(created["job_id"])
         if not json_output:
             formatters.event("OK", "submit", f"id={job_id} status={created.get('job_status')}")
@@ -718,7 +721,7 @@ def run(
             poll_interval_seconds=poll_interval_seconds,
             progress_callback=progress_callback,
         )
-        terminal_job = job_runtime.data_object(get_job_envelope, "job")
+        terminal_job = http_runtime.data_object(get_job_envelope, "job")
     except Exception as exc:
         if staged_input is not None and should_cleanup_staged_input(
             create_attempted=create_attempted,
