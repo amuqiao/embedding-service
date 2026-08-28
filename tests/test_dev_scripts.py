@@ -1624,13 +1624,16 @@ def test_smoke_cli_help_is_available_without_api():
     assert "完整 source_text / translated_text" in result.stdout
     assert "oss-upload-image" in result.stdout
     assert "poster-title-image" in result.stdout
-    assert "远端测试环境 tagged_text_translation" in result.stdout
-    assert "API_URL=http://test-cms-ai-translation-service.epubgame.com" in result.stdout
-    assert "SERVICE_API_KEY='<测试环境 SERVICE_API_KEY>'" in result.stdout
+    assert "标准 Job 参数" in result.stdout
+    assert "--confirm-run" in result.stdout
+    assert "--confirm-cost" in result.stdout
+    assert "--client-request-id <id>" in result.stdout
+    assert "标准 Callback 参数" in result.stdout
+    assert "--local-callback" in result.stdout
+    assert "--callback-timeout-seconds <seconds>" in result.stdout
+    assert "扩展规范" in result.stdout
+    assert "./scripts/smoke.sh <command> -h" in result.stdout
     assert "--allow-remote-api" in result.stdout
-    assert "--caller-id cms-test" in result.stdout
-    assert "--client-request-id test-translate-001" in result.stdout
-    assert "同一 client-request-id 重复执行可能命中幂等结果" in result.stdout
 
 
 def test_k8s_cli_help_is_available_without_db():

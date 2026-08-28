@@ -8,7 +8,7 @@ source "$ROOT_DIR/scripts/lib/runtime.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/smoke.sh [smoke options] <command> [args...]
+  ./scripts/smoke.sh [global options] <command> [standard job options] [business options]
   ./scripts/smoke.sh -h|--help
 
 职责:
@@ -22,10 +22,29 @@ Usage:
 通用参数:
   --base-url <url>        显式覆盖服务 HTTP base URL；不传时由 API_URL / API_HOST:API_PORT 推导。
   --env-file <path>      显式加载 env 文件；也可通过 ENV_FILE 指定。
+  --allow-remote-api      允许 --base-url 或 API_URL 指向非本机地址。
+  --service-api-key <key> 覆盖 SERVICE_API_KEY；共享环境优先用环境变量注入。
+  --caller-id <id>        X-AI-Service-Caller-ID。
   --timeout <seconds>    场景最大等待时间。
   --poll-interval <sec>  轮询间隔。
   --output-dir <path>    artifacts 或下载输出目录，默认由场景决定。
   --json                 输出机器可读 JSON；全局参数，放在 <command> 前。
+
+标准 Job 参数:
+  --confirm-run           确认会创建真实 Job。
+  --confirm-cost          确认会调用真实模型或 provider，并可能产生费用。
+  --confirm-upload        确认可能上传本地文件到对象存储。
+  --client-request-id <id> 显式幂等键；不传时由场景自动生成。
+  --expect-status <status> 期望终态：auto、succeeded 或 failed。
+
+标准 Callback 参数:
+  --callback-url <url>    外部 callback receiver URL。
+  --local-callback        本地启动临时 callback receiver，用于验收真实 callbacker 投递。
+  --callback-event <name> succeeded、failed 或 both。
+  --wait-callback/--no-wait-callback
+                          配置 callback 后是否等待 delivered。
+  --callback-timeout-seconds <seconds>
+                          等待 callback 的最长秒数；默认使用场景剩余 timeout。
 
 命令:
   health                  检查服务进程级健康。
@@ -53,50 +72,12 @@ Usage:
     --confirm-run \
     --local-callback
 
-  ENV_FILE=.env ./scripts/smoke.sh \
-    --timeout 300 \
-    --poll-interval 2 \
-    tagged-text-translation \
-    --confirm-cost \
-    --source-language en \
-    --target-language zh \
-    --text '<span>Hello {user_name}, welcome back!</span>'
+  ./scripts/smoke.sh <command> -h
 
-  ENV_FILE=.env ./scripts/smoke.sh \
-    --json \
-    --timeout 300 \
-    --poll-interval 2 \
-    tagged-text-translation \
-    --confirm-cost \
-    --source-language en \
-    --target-language zh \
-    --text '<span>Hello {user_name}, welcome back!</span>'
-
-  # 远端测试环境 tagged_text_translation。
-  API_URL=http://test-cms-ai-translation-service.epubgame.com \
-    SERVICE_API_KEY='<测试环境 SERVICE_API_KEY>' \
-    ./scripts/smoke.sh \
-      --allow-remote-api \
-      --caller-id cms-test \
-      --json \
-      --timeout 300 \
-      --poll-interval 2 \
-      tagged-text-translation \
-      --confirm-cost \
-      --source-language en \
-      --target-language zh \
-      --client-request-id test-translate-001 \
-      --text '<span>Hello {user_name}, welcome back!</span>'
-
-  # 同一 client-request-id 重复执行可能命中幂等结果；需要新 Job 时改掉 test-translate-001。
-
-  ENV_FILE=.env ./scripts/smoke.sh \
-    --timeout 7200 \
-    --poll-interval 5 \
-    audio-stem-separation run \
-    --confirm-run \
-    --confirm-upload \
-    --input-file .data/misc/2485_0003_S6_梁萧.wav
+扩展规范:
+  顶层只维护全局参数、标准 Job/Callback 参数和场景列表。
+  业务参数只出现在对应 <command> -h 中。
+  新增 Job smoke 应复用公共 create/poll/callback/artifact/summary 逻辑，只实现业务 payload 和结果断言。
 
 输出:
   默认人读模式输出 Job 状态、计费摘要和关键证据；tagged-text-translation 会展示翻译前后 preview。

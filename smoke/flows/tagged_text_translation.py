@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.jobs import formatters
-from smoke.flows import llm_job_billing
+from smoke.harness import job_runtime
 
 
 HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
@@ -19,7 +19,7 @@ TEXT_SLOT = "<text>"
 HUMAN_PREVIEW_ITEM_LIMIT = 3
 HUMAN_PREVIEW_TEXT_MAX_LENGTH = 500
 
-FlowError = llm_job_billing.FlowError
+FlowError = job_runtime.FlowError
 
 
 def _protected_segments(text: str) -> list[tuple[int, int, str]]:
@@ -270,7 +270,7 @@ def run(
 ) -> None:
     if not confirm_cost:
         raise FlowError("tagged-text-translation smoke requires --confirm-cost", exit_code=2)
-    context = llm_job_billing.resolve_runtime_context(
+    context = job_runtime.resolve_runtime_context(
         env_file=env_file,
         api_url=api_url,
         allow_remote_api=allow_remote_api,
@@ -279,24 +279,24 @@ def run(
     )
     items = _load_items(items_json, item_id=item_id, text=text, max_target_chars_hint=max_target_chars_hint)
     jobs_url = str(context.summary["jobs_url"])
-    headers = llm_job_billing.build_headers(context.app_env, caller_id=caller_id, service_api_key=service_api_key)
+    headers = job_runtime.build_headers(context.app_env, caller_id=caller_id, service_api_key=service_api_key)
     create_payload = build_payload(
         source_language=source_language,
         target_language=target_language,
         items=items,
         client_request_id=client_request_id,
     )
-    create_envelope = llm_job_billing.request_json(jobs_url, method="POST", headers=headers, payload=create_payload)
-    created = llm_job_billing.data_object(create_envelope, "job")
+    create_envelope = job_runtime.request_json(jobs_url, method="POST", headers=headers, payload=create_payload)
+    created = job_runtime.data_object(create_envelope, "job")
     job_id = str(created["job_id"])
-    get_job_envelope = llm_job_billing.poll_job_envelope(
+    get_job_envelope = job_runtime.poll_job_envelope(
         jobs_url=jobs_url,
         job_id=job_id,
         headers=headers,
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
     )
-    terminal_job = llm_job_billing.data_object(get_job_envelope, "job")
+    terminal_job = job_runtime.data_object(get_job_envelope, "job")
     _assert_translation_result(
         items,
         terminal_job,
@@ -308,8 +308,8 @@ def run(
         raise FlowError("tagged_text_translation result missing object", exit_code=1)
     request_items = _request_items_evidence(items)
     result_items = _translation_items_evidence(items, terminal_job)
-    billing_envelope = llm_job_billing.request_json(f"{jobs_url}/{job_id}/billing", method="GET", headers=headers)
-    billing = llm_job_billing.data_object(billing_envelope, "billing")
+    billing_envelope = job_runtime.request_json(f"{jobs_url}/{job_id}/billing", method="GET", headers=headers)
+    billing = job_runtime.data_object(billing_envelope, "billing")
     job_summary = {
         "id": job_id,
         "status": terminal_job.get("job_status"),

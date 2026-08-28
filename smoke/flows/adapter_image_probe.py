@@ -9,10 +9,11 @@ import yaml
 
 from app.integrations.ai_adapters.base import ImageGenerationRequest, ImageInput, ImageGenerationResult
 from scripts.jobs import formatters
-from smoke.flows import llm_job_billing, oss_image_upload
+from smoke.flows import oss_image_upload
+from smoke.harness import job_runtime
 
-FlowError = llm_job_billing.FlowError
-ROOT_DIR = llm_job_billing.ROOT_DIR
+FlowError = job_runtime.FlowError
+ROOT_DIR = job_runtime.ROOT_DIR
 ADAPTERS = ("openai_images", "openai_responses")
 DEFAULT_MODELS_CONFIG = "app/jobs/types/poster_title_image/models.yaml"
 
@@ -69,7 +70,7 @@ def _provider_model_for_model_id(model_id: str) -> str:
 
 
 def _required_openai_api_key(app_env: dict[str, str]) -> str:
-    value = llm_job_billing.env_value("OPENAI_API_KEY", app_env)
+    value = job_runtime.env_value("OPENAI_API_KEY", app_env)
     if not value or value.startswith("<"):
         raise FlowError("OPENAI_API_KEY is required for adapter-image-probe", exit_code=2)
     return value
@@ -78,7 +79,7 @@ def _required_openai_api_key(app_env: dict[str, str]) -> str:
 def _timeout_seconds(app_env: dict[str, str], explicit: int | None) -> int:
     if explicit is not None:
         return explicit
-    raw = llm_job_billing.env_value("MODEL_CALL_TIMEOUT_SECONDS", app_env)
+    raw = job_runtime.env_value("MODEL_CALL_TIMEOUT_SECONDS", app_env)
     if raw is None or not raw.strip():
         return 300
     try:
@@ -176,9 +177,9 @@ def run(
         raise FlowError("adapter image probe requires --confirm-cost", exit_code=2)
 
     probe_config = load_models_config(models_config)
-    app_env = llm_job_billing.load_app_env(env_file)
+    app_env = job_runtime.load_app_env(env_file)
     api_key = _required_openai_api_key(app_env)
-    api_base = llm_job_billing.env_value("OPENAI_BASE_URL", app_env) or None
+    api_base = job_runtime.env_value("OPENAI_BASE_URL", app_env) or None
     resolved_timeout_seconds = _timeout_seconds(app_env, timeout_seconds)
     images = _reference_images(reference_image, reference_content_type)
     configured_provider_model_id = str(probe_config["provider_model_id"])

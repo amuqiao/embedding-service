@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Annotated, Any
 from urllib.error import HTTPError, URLError
 
@@ -15,6 +14,29 @@ from smoke.flows import (
     tagged_text_translation,
 )
 from smoke.flows.examples import lifecycle_probe as example_lifecycle_probe
+from smoke.harness import cli_contract
+from smoke.harness import job_runtime
+from smoke.harness import scenarios as smoke_scenarios
+from smoke.harness.cli_contract import (
+    AllowRemoteApiOption,
+    BaseUrlOption,
+    CallbackEventOption,
+    CallbackTimeoutOption,
+    CallbackUrlOption,
+    CallerIdOption,
+    ClientRequestIdOption,
+    ConfirmCostOption,
+    ConfirmRunOption,
+    ConfirmUploadOption,
+    EnvFileOption,
+    ExpectStatusOption,
+    JsonOutputOption,
+    LocalCallbackOption,
+    OutputDirOption,
+    PollIntervalOption,
+    ServiceApiKeyOption,
+    TimeoutOption,
+)
 
 
 POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
@@ -336,7 +358,7 @@ items-json 最小格式：
 """
 
 
-HELP_EPILOG = f"""\b
+HELP_EPILOG = """\b
 作用域：
   Smoke/E2E runtime。Job 类场景会调用已运行的服务 HTTP API、创建真实 Job、等待 worker 执行，并查询结果证据。
   adapter-image-probe 会直接调用本仓库封装的 provider adapter，不经过本地 API/worker。
@@ -344,9 +366,11 @@ HELP_EPILOG = f"""\b
   服务启动、停止、迁移和排障查询分别归属 run/dev/deploy、jobs.sh 与 job-ops.sh。
 
 \b
-配置与环境变量：
-  .env: API_HOST / API_PORT / SERVICE_API_PREFIX / SERVICE_API_KEY / DISABLE_HTTP_AUTH_HEADER / DISABLE_CALLER_ID_HEADER / DEFAULT_MODEL_ID。
-  --env-file 可以显式指定配置文件路径；运行时环境变量仍优先于 env 文件。
+参数分层：
+  全局参数放在 <command> 前：--base-url、--env-file、--allow-remote-api、--service-api-key、--caller-id、--timeout、--poll-interval、--output-dir、--json。
+  标准 Job 参数由 Job 场景复用：--confirm-run、--confirm-cost、--confirm-upload、--client-request-id、--expect-status。
+  标准 Callback 参数由需要 callback 的 Job 场景复用：--callback-url、--local-callback、--callback-event、--wait-callback/--no-wait-callback、--callback-timeout-seconds。
+  业务参数只放在对应 <command> -h，不放进顶层 help。
 
 \b
 输出：
@@ -356,23 +380,16 @@ HELP_EPILOG = f"""\b
 
 \b
 常用示例：
-  ./scripts/smoke.sh list
+  ./scripts/smoke.sh --json list
   ./scripts/smoke.sh health
   ./scripts/smoke.sh ready
-  ./scripts/smoke.sh --timeout 180 llm-job-billing --confirm-cost --model-id gpt-5.4-mini
-  ./scripts/smoke.sh --timeout 240 llm-job-double-billing --confirm-cost --model-id gpt-5.4-mini
-  ./scripts/smoke.sh --timeout 300 --poll-interval 2 tagged-text-translation --confirm-cost
-  ./scripts/smoke.sh oss-upload-image --confirm-upload --image .data/title/英语.png
-  ./scripts/smoke.sh audio-stem-separation build-payload --input-file .data/misc/2485_0003_S6_梁萧.wav
-  ./scripts/smoke.sh --json adapter-image-probe --confirm-cost
-  ./scripts/smoke.sh --json poster-title-image --confirm-cost --reference .data/title/英语.png --language es --title-text "Cuando el amor se alejo"
+  ./scripts/smoke.sh --json --timeout 120 example-lifecycle-probe --confirm-run --local-callback
+  ./scripts/smoke.sh <command> -h
 
 \b
-进阶用法：
-  各子命令的参数组合、确认参数、远端环境和 JSON 输出示例请查看：
-  ./scripts/smoke.sh <command> -h
-  poster-title-image 的本地参考图、多 item JSON、OSS URL Ref 和输出下载示例请查看：
-  ./scripts/smoke.sh poster-title-image -h
+扩展规范：
+  新增 Job smoke 时，命令函数只声明标准参数和业务参数；公共 create/poll/callback/artifact/summary 能力放在 smoke/harness。
+  新增业务 flow 只实现 payload 构造、业务断言和业务证据，不重复实现 env 解析、HTTP 请求、callback receiver 或 JSON summary。
 
 \b
 副作用与保护边界：
@@ -417,96 +434,24 @@ audio_stem_separation_app = typer.Typer(
 )
 
 
-@dataclass(frozen=True)
-class SmokeOptions:
-    api_url: str | None
-    env_file: str | None
-    allow_remote_api: bool
-    service_api_key: str | None
-    caller_id: str
-    timeout_seconds: int
-    poll_interval_seconds: float
-    output_dir: str | None
-    json_output: bool
-
-
-def _smoke_options(ctx: typer.Context) -> SmokeOptions:
-    if not isinstance(ctx.obj, SmokeOptions):
-        raise RuntimeError("smoke global options are not initialized")
-    return ctx.obj
-
-
-_GLOBAL_OPTION_PARAMS = {
-    "api_url": "--base-url",
-    "env_file": "--env-file",
-    "allow_remote_api": "--allow-remote-api",
-    "service_api_key": "--service-api-key",
-    "caller_id": "--caller-id",
-    "timeout_seconds": "--timeout",
-    "poll_interval_seconds": "--poll-interval",
-    "output_dir": "--output-dir",
-    "json_output": "--json",
-}
-
-
-def _provided_global_options(ctx: typer.Context) -> set[str]:
-    root = ctx.find_root()
-    provided: set[str] = set()
-    for param_name, option_name in _GLOBAL_OPTION_PARAMS.items():
-        source = root.get_parameter_source(param_name)
-        if getattr(source, "name", None) == "COMMANDLINE":
-            provided.add(option_name)
-    return provided
-
-
-def _validate_global_options(ctx: typer.Context, scenario: str, supported: set[str]) -> None:
-    unsupported = sorted(_provided_global_options(ctx) - supported)
-    if unsupported:
-        typer.echo(f"ERROR: {unsupported[0]} is not supported by smoke scenario '{scenario}'", err=True)
-        raise typer.Exit(2)
+_smoke_options = cli_contract.smoke_options
+_validate_global_options = cli_contract.validate_global_options
 
 
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    api_url: Annotated[
-        str | None,
-        typer.Option("--base-url", help="服务 HTTP base URL；默认从 env 文件的 API_URL 或 API_HOST/API_PORT 推导。"),
-    ] = None,
-    env_file: Annotated[
-        str | None,
-        typer.Option("--env-file", help="显式配置文件路径；默认读取仓库根目录 .env，运行时环境变量优先。"),
-    ] = None,
-    allow_remote_api: Annotated[
-        bool,
-        typer.Option("--allow-remote-api", help="允许 --base-url 或 API_URL 指向非本机地址。"),
-    ] = False,
-    service_api_key: Annotated[
-        str | None,
-        typer.Option("--service-api-key", help="覆盖 SERVICE_API_KEY，作为 Authorization: Bearer token 发送。"),
-    ] = None,
-    caller_id: Annotated[
-        str,
-        typer.Option("--caller-id", help="X-AI-Service-Caller-ID。"),
-    ] = "smoke-cli",
-    timeout_seconds: Annotated[
-        int,
-        typer.Option("--timeout", min=1, help="等待 Job 到达终态或 provider probe 的最长秒数。"),
-    ] = 300,
-    poll_interval_seconds: Annotated[
-        float,
-        typer.Option("--poll-interval", min=0.1, help="轮询 Job 状态的间隔秒数。"),
-    ] = 2.0,
-    output_dir: Annotated[
-        str | None,
-        typer.Option("--output-dir", help="artifacts 或下载输出目录，默认由场景决定。"),
-    ] = None,
-    json_output: Annotated[
-        bool,
-        typer.Option("--json", help="输出机器可读 JSON；全局参数，放在场景命令前。"),
-    ] = False,
+    api_url: BaseUrlOption = None,
+    env_file: EnvFileOption = None,
+    allow_remote_api: AllowRemoteApiOption = False,
+    service_api_key: ServiceApiKeyOption = None,
+    caller_id: CallerIdOption = "smoke-cli",
+    timeout_seconds: TimeoutOption = 300,
+    poll_interval_seconds: PollIntervalOption = 2.0,
+    output_dir: OutputDirOption = None,
+    json_output: JsonOutputOption = False,
 ) -> None:
-    ctx.obj = SmokeOptions(
+    ctx.obj = cli_contract.SmokeOptions(
         api_url=api_url,
         env_file=env_file,
         allow_remote_api=allow_remote_api,
@@ -522,74 +467,7 @@ def main(
         raise typer.Exit(2)
 
 
-SCENARIOS: list[dict[str, Any]] = [
-    {
-        "name": "example-lifecycle-probe",
-        "type": "workflow",
-        "acceptance_class": "platform_acceptance",
-        "dependencies": ["api", "dispatcher", "taskiq_worker", "db", "redis"],
-        "conditional_dependencies": ["callbacker"],
-        "contract_roles": ["reconciler"],
-        "destructive": False,
-        "supports_resume": False,
-    },
-    {
-        "name": "llm-job-billing",
-        "type": "workflow",
-        "acceptance_class": "business_e2e",
-        "dependencies": ["api", "worker", "db", "redis", "llm_provider"],
-        "destructive": False,
-        "supports_resume": False,
-    },
-    {
-        "name": "llm-job-double-billing",
-        "type": "workflow",
-        "acceptance_class": "business_e2e",
-        "dependencies": ["api", "worker", "db", "redis", "llm_provider"],
-        "destructive": False,
-        "supports_resume": False,
-    },
-    {
-        "name": "poster-title-image",
-        "type": "workflow",
-        "acceptance_class": "business_e2e",
-        "dependencies": ["api", "worker", "db", "redis", "oss", "image_provider"],
-        "destructive": False,
-        "supports_resume": False,
-    },
-    {
-        "name": "tagged-text-translation",
-        "type": "workflow",
-        "acceptance_class": "business_e2e",
-        "dependencies": ["api", "worker", "db", "redis", "llm_provider"],
-        "destructive": False,
-        "supports_resume": False,
-    },
-    {
-        "name": "audio-stem-separation",
-        "type": "workflow",
-        "acceptance_class": "business_e2e",
-        "dependencies": ["api", "worker", "db", "redis", "oss", "ffmpeg", "model_runtime"],
-        "destructive": False,
-        "supports_resume": True,
-    },
-    {
-        "name": "adapter-image-probe",
-        "type": "provider_probe",
-        "acceptance_class": "exploratory",
-        "dependencies": ["image_provider"],
-        "destructive": False,
-        "supports_resume": False,
-    },
-    {
-        "name": "oss-upload-image",
-        "type": "provider_probe",
-        "acceptance_class": "plumbing",
-        "dependencies": ["oss"],
-        "destructive": False,
-        "supports_resume": False,
-    },
-]
+SCENARIOS: list[dict[str, Any]] = smoke_scenarios.scenario_payloads()
 
 
 def _health_url(base_url: str) -> str:
@@ -604,7 +482,7 @@ def _ready_url(base_url: str) -> str:
 def list_command(ctx: typer.Context) -> None:
     from scripts.jobs import formatters
 
-    _validate_global_options(ctx, "list", {"--json"})
+    _validate_global_options(ctx, "list", cli_contract.GLOBAL_LIST_OPTIONS)
     options = _smoke_options(ctx)
     payload = {"scenarios": SCENARIOS}
     if options.json_output:
@@ -612,7 +490,7 @@ def list_command(ctx: typer.Context) -> None:
         return
     formatters.print_table(
         SCENARIOS,
-        columns=["name", "type", "acceptance_class", "dependencies", "destructive", "supports_resume"],
+        columns=["name", "entrypoints", "type", "acceptance_class", "dependencies", "destructive", "supports_resume"],
     )
 
 
@@ -620,22 +498,22 @@ def list_command(ctx: typer.Context) -> None:
 def health_command(ctx: typer.Context) -> None:
     from scripts.jobs import formatters
 
-    _validate_global_options(ctx, "health", {"--base-url", "--env-file", "--allow-remote-api", "--json"})
+    _validate_global_options(ctx, "health", cli_contract.GLOBAL_HEALTH_OPTIONS)
     options = _smoke_options(ctx)
     try:
-        app_env = llm_job_billing.load_app_env(options.env_file)
-        resolved_base_url = llm_job_billing.resolved_api_url(
+        app_env = job_runtime.load_app_env(options.env_file)
+        resolved_base_url = job_runtime.resolved_api_url(
             options.api_url,
             app_env,
             allow_remote_api=options.allow_remote_api,
         )
-        payload = llm_job_billing.request_json(
+        payload = job_runtime.request_json(
             _health_url(resolved_base_url),
             method="GET",
             headers={"Accept": "application/json"},
             timeout_seconds=10,
         )
-    except llm_job_billing.FlowError as exc:
+    except job_runtime.FlowError as exc:
         if options.json_output:
             formatters.print_json({"ready": False, "phase": "health", "error": str(exc)})
         else:
@@ -659,14 +537,10 @@ def health_command(ctx: typer.Context) -> None:
 
 @app.command("ready", help="检查 smoke 运行上下文和必要配置，不上传、不提交 Job、不产生费用。", epilog=READY_HELP_EPILOG)
 def ready_command(ctx: typer.Context) -> None:
-    _validate_global_options(
-        ctx,
-        "ready",
-        {"--base-url", "--env-file", "--allow-remote-api", "--service-api-key", "--caller-id", "--json"},
-    )
+    _validate_global_options(ctx, "ready", cli_contract.GLOBAL_READY_OPTIONS)
     options = _smoke_options(ctx)
     try:
-        context = llm_job_billing.resolve_runtime_context(
+        context = job_runtime.resolve_runtime_context(
             env_file=options.env_file,
             api_url=options.api_url,
             allow_remote_api=options.allow_remote_api,
@@ -675,13 +549,13 @@ def ready_command(ctx: typer.Context) -> None:
         )
         ready_payload = None
         if context.summary["ready"]:
-            ready_payload = llm_job_billing.request_json(
+            ready_payload = job_runtime.request_json(
                 _ready_url(str(context.summary["api_url"])),
                 method="GET",
                 headers={"Accept": "application/json"},
                 timeout_seconds=10,
             )
-    except llm_job_billing.FlowError as exc:
+    except job_runtime.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(3 if exc.exit_code == 4 else exc.exit_code) from exc
     if options.json_output:
@@ -708,10 +582,7 @@ def ready_command(ctx: typer.Context) -> None:
 )
 def example_lifecycle_probe_command(
     ctx: typer.Context,
-    confirm_run: Annotated[
-        bool,
-        typer.Option("--confirm-run", help="确认本命令会创建真实 Job 并写入 Job/Outbox/Callback 数据。"),
-    ] = False,
+    confirm_run: ConfirmRunOption = False,
     probe_id: Annotated[
         str,
         typer.Option("--probe-id", help="写入 Job 参数和结果的探针 ID。"),
@@ -740,49 +611,32 @@ def example_lifecycle_probe_command(
         int,
         typer.Option("--result-size-bytes", min=0, max=65536, help="成功结果中生成固定大小 payload 字符串。"),
     ] = 0,
-    expect_status: Annotated[
-        str,
-        typer.Option("--expect-status", help="期望终态：auto、succeeded 或 failed。"),
-    ] = "auto",
-    callback_url: Annotated[
-        str | None,
-        typer.Option("--callback-url", help="外部 callback receiver URL。"),
-    ] = None,
-    local_callback: Annotated[
-        bool,
-        typer.Option("--local-callback", help="临时启动本地 callback receiver，并等待 callbacker 投递成功。"),
-    ] = False,
-    callback_event: Annotated[
-        str,
-        typer.Option("--callback-event", help="订阅 callback 事件：succeeded、failed 或 both。"),
-    ] = "both",
-    wait_callback: Annotated[
-        bool,
-        typer.Option("--wait-callback/--no-wait-callback", help="配置 callback 后是否等待 callback.status=delivered。"),
-    ] = True,
-    client_request_id: Annotated[
-        str | None,
-        typer.Option("--client-request-id", help="显式 client_request_id；默认自动生成。"),
-    ] = None,
+    expect_status: ExpectStatusOption = "auto",
+    callback_url: CallbackUrlOption = None,
+    local_callback: LocalCallbackOption = False,
+    callback_event: CallbackEventOption = "both",
+    wait_callback: cli_contract.WaitCallbackOption = True,
+    callback_timeout_seconds: CallbackTimeoutOption = None,
+    client_request_id: ClientRequestIdOption = None,
 ) -> None:
-    _validate_global_options(
-        ctx,
-        "example-lifecycle-probe",
-        {
-            "--base-url",
-            "--env-file",
-            "--allow-remote-api",
-            "--service-api-key",
-            "--caller-id",
-            "--timeout",
-            "--poll-interval",
-            "--json",
-        },
-    )
+    _validate_global_options(ctx, "example-lifecycle-probe", cli_contract.GLOBAL_CONTEXT_OPTIONS)
     options = _smoke_options(ctx)
+    job_options = cli_contract.job_smoke_options(
+        confirm_run=confirm_run,
+        client_request_id=client_request_id,
+        expect_status=expect_status,
+    )
+    callback_options = cli_contract.callback_smoke_options(
+        callback_url=callback_url,
+        local_callback=local_callback,
+        callback_event=callback_event,
+        wait_callback=wait_callback,
+        callback_timeout_seconds=callback_timeout_seconds,
+    )
     try:
         example_lifecycle_probe.run(
-            confirm_run=confirm_run,
+            job_options=job_options,
+            callback_options=callback_options,
             api_url=options.api_url,
             env_file=options.env_file,
             allow_remote_api=options.allow_remote_api,
@@ -797,12 +651,6 @@ def example_lifecycle_probe_command(
             fail_after_seconds=fail_after_seconds,
             result_payload=result_payload,
             result_size_bytes=result_size_bytes,
-            expect_status=expect_status,
-            callback_url=callback_url,
-            local_callback=local_callback,
-            callback_event=callback_event,
-            wait_callback=wait_callback,
-            client_request_id=client_request_id,
             json_output=options.json_output,
         )
     except example_lifecycle_probe.FlowError as exc:
@@ -813,10 +661,7 @@ def example_lifecycle_probe_command(
 @app.command("llm-job-billing", help="真实调用 LLM，并查询 Job billing。", epilog=LLM_JOB_BILLING_HELP_EPILOG)
 def llm_job_billing_command(
     ctx: typer.Context,
-    confirm_cost: Annotated[
-        bool,
-        typer.Option("--confirm-cost", help="确认本命令会真实调用 LLM 并可能产生费用。"),
-    ] = False,
+    confirm_cost: ConfirmCostOption = False,
     model_id: Annotated[
         str | None,
         typer.Option("--model-id", help="模型 ID；默认使用 DEFAULT_MODEL_ID。"),
@@ -829,25 +674,9 @@ def llm_job_billing_command(
         str,
         typer.Option("--instruction", help="传给验证 Job 的指令。"),
     ] = "用一句话确认真实 LLM 计费链路可用。",
-    client_request_id: Annotated[
-        str | None,
-        typer.Option("--client-request-id", help="显式 client_request_id；默认自动生成。"),
-    ] = None,
+    client_request_id: ClientRequestIdOption = None,
 ) -> None:
-    _validate_global_options(
-        ctx,
-        "llm-job-billing",
-        {
-            "--base-url",
-            "--env-file",
-            "--allow-remote-api",
-            "--service-api-key",
-            "--caller-id",
-            "--timeout",
-            "--poll-interval",
-            "--json",
-        },
-    )
+    _validate_global_options(ctx, "llm-job-billing", cli_contract.GLOBAL_CONTEXT_OPTIONS)
     options = _smoke_options(ctx)
     try:
         llm_job_billing.run(
@@ -867,7 +696,7 @@ def llm_job_billing_command(
             service_api_key=options.service_api_key,
             env_file=options.env_file,
         )
-    except llm_job_billing.FlowError as exc:
+    except job_runtime.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(exc.exit_code) from exc
 
@@ -879,10 +708,7 @@ def llm_job_billing_command(
 )
 def llm_job_double_billing_command(
     ctx: typer.Context,
-    confirm_cost: Annotated[
-        bool,
-        typer.Option("--confirm-cost", help="确认本命令会真实调用两次 LLM 并可能产生费用。"),
-    ] = False,
+    confirm_cost: ConfirmCostOption = False,
     model_id: Annotated[
         str | None,
         typer.Option("--model-id", help="模型 ID；默认使用 DEFAULT_MODEL_ID。"),
@@ -899,25 +725,9 @@ def llm_job_double_billing_command(
         str,
         typer.Option("--second-instruction", help="第二次真实 LLM 调用的指令。"),
     ] = "第二次调用：用另一句话确认同一 Job 的多次 LLM 计费可汇总。",
-    client_request_id: Annotated[
-        str | None,
-        typer.Option("--client-request-id", help="显式 client_request_id；默认自动生成。"),
-    ] = None,
+    client_request_id: ClientRequestIdOption = None,
 ) -> None:
-    _validate_global_options(
-        ctx,
-        "llm-job-double-billing",
-        {
-            "--base-url",
-            "--env-file",
-            "--allow-remote-api",
-            "--service-api-key",
-            "--caller-id",
-            "--timeout",
-            "--poll-interval",
-            "--json",
-        },
-    )
+    _validate_global_options(ctx, "llm-job-double-billing", cli_contract.GLOBAL_CONTEXT_OPTIONS)
     options = _smoke_options(ctx)
     try:
         llm_job_billing.run(
@@ -937,7 +747,7 @@ def llm_job_double_billing_command(
             service_api_key=options.service_api_key,
             env_file=options.env_file,
         )
-    except llm_job_billing.FlowError as exc:
+    except job_runtime.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(exc.exit_code) from exc
 
@@ -949,10 +759,7 @@ def llm_job_double_billing_command(
 )
 def tagged_text_translation_command(
     ctx: typer.Context,
-    confirm_cost: Annotated[
-        bool,
-        typer.Option("--confirm-cost", help="确认本命令会真实调用 LLM 并可能产生费用。"),
-    ] = False,
+    confirm_cost: ConfirmCostOption = False,
     source_language: Annotated[
         str | None,
         typer.Option("--source-language", help="源语种；不传时由模型识别。"),
@@ -977,25 +784,9 @@ def tagged_text_translation_command(
         str | None,
         typer.Option("--items-json", help="读取 {\"items\": [...]} JSON 文件作为批量输入。"),
     ] = None,
-    client_request_id: Annotated[
-        str | None,
-        typer.Option("--client-request-id", help="显式 client_request_id；默认自动生成。"),
-    ] = None,
+    client_request_id: ClientRequestIdOption = None,
 ) -> None:
-    _validate_global_options(
-        ctx,
-        "tagged-text-translation",
-        {
-            "--base-url",
-            "--env-file",
-            "--allow-remote-api",
-            "--service-api-key",
-            "--caller-id",
-            "--timeout",
-            "--poll-interval",
-            "--json",
-        },
-    )
+    _validate_global_options(ctx, "tagged-text-translation", cli_contract.GLOBAL_CONTEXT_OPTIONS)
     options = _smoke_options(ctx)
     try:
         tagged_text_translation.run(
@@ -1024,10 +815,7 @@ def tagged_text_translation_command(
 @app.command("oss-upload-image", help="上传本地图片到阿里云 OSS，并输出 URL Ref。", epilog=OSS_UPLOAD_IMAGE_HELP_EPILOG)
 def oss_upload_image_command(
     ctx: typer.Context,
-    confirm_upload: Annotated[
-        bool,
-        typer.Option("--confirm-upload", help="确认本命令会上传文件到阿里云 OSS。"),
-    ] = False,
+    confirm_upload: ConfirmUploadOption = False,
     image: Annotated[
         str | None,
         typer.Option("--image", help="需要上传的本地图片路径；必须显式传入。"),
@@ -1057,7 +845,7 @@ def oss_upload_image_command(
         typer.Option("--emit-poster-args", help="输出可复制到 poster-title-image 的 --reference-* 参数。"),
     ] = False,
 ) -> None:
-    _validate_global_options(ctx, "oss-upload-image", {"--env-file", "--json"})
+    _validate_global_options(ctx, "oss-upload-image", cli_contract.GLOBAL_ENV_JSON_OPTIONS)
     options = _smoke_options(ctx)
     try:
         if image is None:
@@ -1114,14 +902,8 @@ def audio_stem_separation_build_payload_command(
         float | None,
         typer.Option("--max-duration-seconds", min=0.1, help="传给 Job 的最大输入时长限制，并用于本地输入预校验。"),
     ] = None,
-    client_request_id: Annotated[
-        str | None,
-        typer.Option("--client-request-id", help="显式 client_request_id；默认自动生成。"),
-    ] = None,
-    confirm_upload: Annotated[
-        bool,
-        typer.Option("--confirm-upload", help="确认 STORAGE_BACKEND=aliyun_oss 时会上传本地音频到阿里云 OSS。"),
-    ] = False,
+    client_request_id: ClientRequestIdOption = None,
+    confirm_upload: ConfirmUploadOption = False,
     key_prefix: Annotated[
         str | None,
         typer.Option("--key-prefix", help="本地 stage 或 OSS upload 的输入对象业务前缀。"),
@@ -1135,7 +917,7 @@ def audio_stem_separation_build_payload_command(
         typer.Option("--output", help="payload 输出路径；- 表示 stdout。"),
     ] = "-",
 ) -> None:
-    _validate_global_options(ctx, "audio-stem-separation build-payload", {"--env-file"})
+    _validate_global_options(ctx, "audio-stem-separation build-payload", cli_contract.GLOBAL_ENV_ONLY_OPTIONS)
     options = _smoke_options(ctx)
     try:
         payload, _staged_input = audio_stem_separation.build_payload(
@@ -1164,18 +946,9 @@ def audio_stem_separation_build_payload_command(
 )
 def audio_stem_separation_run_command(
     ctx: typer.Context,
-    confirm_run: Annotated[
-        bool,
-        typer.Option("--confirm-run", help="确认本命令会真实提交 Job、占用模型推理资源并写输出对象。"),
-    ] = False,
-    confirm_upload: Annotated[
-        bool,
-        typer.Option("--confirm-upload", help="确认 STORAGE_BACKEND=aliyun_oss 时会上传本地音频到阿里云 OSS。"),
-    ] = False,
-    client_request_id: Annotated[
-        str | None,
-        typer.Option("--client-request-id", help="显式 client_request_id；默认自动生成。"),
-    ] = None,
+    confirm_run: ConfirmRunOption = False,
+    confirm_upload: ConfirmUploadOption = False,
+    client_request_id: ClientRequestIdOption = None,
     job_type: Annotated[
         str,
         typer.Option("--job-type", help="提交的音频分离 job_type：audio_stem_separation 或 audio_stem_separation_triton。"),
@@ -1224,17 +997,7 @@ def audio_stem_separation_run_command(
     _validate_global_options(
         ctx,
         "audio-stem-separation run",
-        {
-            "--base-url",
-            "--env-file",
-            "--allow-remote-api",
-            "--service-api-key",
-            "--caller-id",
-            "--timeout",
-            "--poll-interval",
-            "--output-dir",
-            "--json",
-        },
+        cli_contract.GLOBAL_CONTEXT_OPTIONS | cli_contract.GLOBAL_OUTPUT_OPTIONS,
     )
     options = _smoke_options(ctx)
     try:
@@ -1282,10 +1045,7 @@ app.add_typer(
 )
 def adapter_image_probe_command(
     ctx: typer.Context,
-    confirm_cost: Annotated[
-        bool,
-        typer.Option("--confirm-cost", help="确认本命令会直接调用真实 OpenAI image adapter 并可能产生费用。"),
-    ] = False,
+    confirm_cost: ConfirmCostOption = False,
     models_config: Annotated[
         str | None,
         typer.Option("--models-config", help="poster_title_image models.yaml 路径；默认使用内置配置。"),
@@ -1327,7 +1087,7 @@ def adapter_image_probe_command(
         typer.Option("--output-format", help="输出格式。"),
     ] = "png",
 ) -> None:
-    _validate_global_options(ctx, "adapter-image-probe", {"--env-file", "--timeout", "--json"})
+    _validate_global_options(ctx, "adapter-image-probe", cli_contract.GLOBAL_PROVIDER_OPTIONS)
     options = _smoke_options(ctx)
     try:
         adapter_image_probe.run(
@@ -1358,14 +1118,8 @@ def adapter_image_probe_command(
 )
 def poster_title_image_command(
     ctx: typer.Context,
-    confirm_cost: Annotated[
-        bool,
-        typer.Option("--confirm-cost", help="确认本命令会真实调用 gpt-image-2 并可能产生费用。"),
-    ] = False,
-    confirm_upload: Annotated[
-        bool,
-        typer.Option("--confirm-upload", help="确认 STORAGE_BACKEND=aliyun_oss 时会上传本地参考图到阿里云 OSS。"),
-    ] = False,
+    confirm_cost: ConfirmCostOption = False,
+    confirm_upload: ConfirmUploadOption = False,
     reference_image: Annotated[
         str | None,
         typer.Option(
@@ -1426,10 +1180,7 @@ def poster_title_image_command(
         int,
         typer.Option("--draw-count", min=1, max=4, help="生成张数。"),
     ] = 1,
-    client_request_id: Annotated[
-        str | None,
-        typer.Option("--client-request-id", help="显式 client_request_id；默认自动生成。"),
-    ] = None,
+    client_request_id: ClientRequestIdOption = None,
     download_outputs: Annotated[
         bool,
         typer.Option("--download-outputs", help="下载 Job 结果里的全部输出图片到本地目录，并校验 sha256 与透明背景。"),
@@ -1442,17 +1193,7 @@ def poster_title_image_command(
     _validate_global_options(
         ctx,
         "poster-title-image",
-        {
-            "--base-url",
-            "--env-file",
-            "--allow-remote-api",
-            "--service-api-key",
-            "--caller-id",
-            "--timeout",
-            "--poll-interval",
-            "--output-dir",
-            "--json",
-        },
+        cli_contract.GLOBAL_CONTEXT_OPTIONS | cli_contract.GLOBAL_OUTPUT_OPTIONS,
     )
     options = _smoke_options(ctx)
     try:

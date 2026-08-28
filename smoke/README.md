@@ -19,7 +19,10 @@ jobs.sh / job-ops.sh
 
 ## 目录边界
 
-- `smoke/harness/`：可复用的 smoke 基础能力，例如本地 callback receiver、签名校验和事件等待。
+- `smoke/harness/job_runtime.py`：服务 env 解析、API URL 保护、HTTP 请求、header 构造、Job 轮询和 response envelope 解析。
+- `smoke/harness/cli_contract.py`：全局参数、标准 Job 参数、标准 Callback 参数和场景可用全局参数校验。
+- `smoke/harness/scenarios.py`：`smoke.sh list` 的场景元数据事实源。
+- `smoke/harness/callback_capture.py`：本地 callback receiver、签名校验、事件等待和 capture snapshot。
 - `smoke/flows/`：具体业务或探针场景；业务参数、提交 payload、结果断言放在这里。
 - `smoke/flows/examples/`：标准示例场景，用于验证 Job 服务平台链路，也可作为新项目接入 smoke 的参考。
 
@@ -34,14 +37,18 @@ jobs.sh / job-ops.sh
 `scripts/smoke.sh` 是 thin wrapper；业务执行最终进入：
 
 ```bash
-ENV_FILE=.env uv run python -m smoke [smoke options] <scenario> [args...]
+ENV_FILE=.env uv run python -m smoke [global options] <scenario> [standard job options] [business options]
 ```
 
-Smoke 全局选项统一放在场景命令前，例如 `--base-url`、`--env-file`、`--timeout`、`--poll-interval`、`--output-dir` 和 `--json`。
+Smoke 全局选项统一放在场景命令前，例如 `--base-url`、`--env-file`、`--allow-remote-api`、`--service-api-key`、`--caller-id`、`--timeout`、`--poll-interval`、`--output-dir` 和 `--json`。
+
+标准 Job 参数由支持的 Job 场景复用，例如 `--confirm-run`、`--confirm-cost`、`--confirm-upload`、`--client-request-id` 和 `--expect-status`。
+
+标准 Callback 参数由支持 callback 的 Job 场景复用，例如 `--callback-url`、`--local-callback`、`--callback-event`、`--wait-callback/--no-wait-callback` 和 `--callback-timeout-seconds`。
 
 ## 场景
 
-当前场景以 `python -m smoke --json list` 为事实源。业务 Job 场景会真实提交 Job、等待终态并查询结果证据；provider probe/helper 必须显式确认费用或上传副作用。
+当前场景以 `python -m smoke --json list` 为事实源；其中 `entrypoints` 是可直接执行的入口。业务 Job 场景会真实提交 Job、等待终态并查询结果证据；provider probe/helper 必须显式确认费用或上传副作用。
 
 `example-lifecycle-probe` 使用 `visibility=demo` 的标准探针 Job，仅用于 `local` / `dev` 平台链路验收；它不调用真实模型，不产生模型费用。配置 `--local-callback` 时可以验证 callbacker 投递；普通成功链路不会证明 reconciler 被触发。
 
@@ -98,10 +105,32 @@ ENV_FILE=.env ./scripts/smoke.sh \
 | `4` | 外部依赖不可用或证据不可达 |
 | `5` | 超时 |
 
+## 新增业务 Flow
+
+新增业务 smoke 时按这个拆分：
+
+```text
+smoke/cli.py
+  -> 声明 Typer 命令、标准参数和业务参数
+  -> 把全局参数组装成 harness dataclass
+  -> 调用 smoke/flows/<business>.py
+
+smoke/harness/
+  -> 复用 env/http/poll/callback/scenario metadata
+  -> 不放业务 payload 和业务断言
+
+smoke/flows/<business>.py
+  -> 构造 create-job payload
+  -> 提交 Job、轮询终态、查询 billing 或 artifact
+  -> 做业务结果断言并输出 summary/responses
+```
+
+`example-lifecycle-probe` 是标准参考：它演示了 `api -> dispatcher -> taskiq_worker` 验收，以及配置 callback 后的 `callback_outbox -> callbacker -> receiver -> callback.status=delivered` 验收。
+
 ## 维护规则
 
-- 新增业务 E2E 场景时，先把场景加入 `SCENARIOS`，再实现命令。
-- callback receiver、签名校验、事件等待等通用能力放在 `smoke/harness/`，业务场景只负责声明 callback URL 如何注入 create payload。
+- 新增业务 E2E 场景时，先把场景加入 `smoke/harness/scenarios.py`，再实现命令。
+- env 解析、HTTP 请求、Job 轮询、response envelope 解析、callback receiver、签名校验和事件等待等通用能力放在 `smoke/harness/`，业务场景只负责声明 callback URL 如何注入 create payload。
 - 场景参数表达业务输入，不暴露服务生命周期或数据库排障细节。
 - `preflight -> prepare -> submit -> poll -> assert -> collect evidence -> cleanup` 是业务场景的目标结构；新增场景应按这个生命周期组织。
 - 需要真实费用、上传或写远端资源的命令必须保留显式确认参数。
