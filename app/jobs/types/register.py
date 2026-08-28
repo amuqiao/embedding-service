@@ -62,6 +62,7 @@ def register_all_job_types() -> None:
     from app.jobs.types.arithmetic import ArithmeticJob
     from app.jobs.types.examples import (
         ExampleCollectJob,
+        ExampleLifecycleProbeJob,
         ExamplePairJob,
         ExampleSleepJob,
         ExampleWorkflowJob,
@@ -87,6 +88,7 @@ def register_all_job_types() -> None:
         ArithmeticJob,
         ExamplePairJob,
         ExampleSleepJob,
+        ExampleLifecycleProbeJob,
         ExampleCollectJob,
         ExampleWorkflowJob,
         JobRealLlmEchoJob,

@@ -1,4 +1,4 @@
-name: ${COMPOSE_PROJECT_NAME:-cms-ai-translation-service}
+name: ${COMPOSE_PROJECT_NAME:-embedding-service}
 
 services:
   postgres:
@@ -6,9 +6,9 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: ${POSTGRES_DB:-cms_ai_translation_service}
+      POSTGRES_DB: ${POSTGRES_DB:-embedding_service}
     ports:
-      - "${POSTGRES_HOST_PORT:-25439}:5432"
+      - "${POSTGRES_HOST_PORT:-25440}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -20,7 +20,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "${REDIS_HOST_PORT:-26386}:6379"
+      - "${REDIS_HOST_PORT:-26387}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -34,7 +34,7 @@ services:
     env_file:
       - ${ENV_FILE:-.env}
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_ai_translation_service}
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-embedding_service}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
     command: ["alembic", "upgrade", "head"]
@@ -52,7 +52,7 @@ services:
       - ${ENV_FILE:-.env}
     command: ["/app/start-api.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_ai_translation_service}
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-embedding_service}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
       API_HOST: 0.0.0.0
@@ -88,7 +88,7 @@ services:
       - ${ENV_FILE:-.env}
     command: ["/app/start-worker-bundle.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_ai_translation_service}
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-embedding_service}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
@@ -112,7 +112,7 @@ services:
       - ${ENV_FILE:-.env}
     command: ["/app/start-dispatcher.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_ai_translation_service}
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-embedding_service}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
     depends_on:
@@ -131,7 +131,7 @@ services:
       - ${ENV_FILE:-.env}
     command: ["/app/start-worker.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_ai_translation_service}
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-embedding_service}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
@@ -155,7 +155,7 @@ services:
       - ${ENV_FILE:-.env}
     command: ["/app/start-callbacker.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_ai_translation_service}
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-embedding_service}
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
     depends_on:
       postgres:
@@ -171,7 +171,7 @@ services:
       - ${ENV_FILE:-.env}
     command: ["/app/start-reconciler.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-cms_ai_translation_service}
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-embedding_service}
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
     depends_on:
       postgres:

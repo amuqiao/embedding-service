@@ -156,9 +156,8 @@ class JobRepo:
         }
 
     @staticmethod
-    def _trigger_request_id(job: Job) -> str | None:
-        runtime_ref = job.runtime_ref if isinstance(job.runtime_ref, dict) else {}
-        payload = runtime_ref.get("payload")
+    def _trigger_request_id_from_runtime_ref(runtime_ref: dict[str, Any] | None) -> str | None:
+        payload = (runtime_ref or {}).get("payload")
         if not isinstance(payload, dict):
             return None
         runtime_fields = payload.get("runtime_fields")
@@ -169,6 +168,74 @@ class JobRepo:
             return None
         value = system_fields.get("trigger_request_id")
         return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def _trigger_request_id(job: Job) -> str | None:
+        runtime_ref = job.runtime_ref if isinstance(job.runtime_ref, dict) else {}
+        return JobRepo._trigger_request_id_from_runtime_ref(runtime_ref)
+
+    @staticmethod
+    def _terminal_callback_payload_from_snapshot(
+        *,
+        job_id: uuid.UUID,
+        client_request_id: str,
+        job_type: str,
+        job_status: str,
+        progress_percent: int,
+        progress_text: str | None,
+        job_error: dict[str, Any] | None,
+        callback_events: list[str] | None,
+        runtime_ref: dict[str, Any] | None,
+        caller_id: str,
+        created_at: datetime | None,
+        updated_at: datetime | None,
+        finished_at: datetime | None,
+        event_id: uuid.UUID,
+        event_type: str,
+        now: datetime,
+        job_result: dict[str, Any] | None,
+        delivery_attempts: int = 0,
+        next_retry_at: datetime | None = None,
+        last_error: dict[str, Any] | None = None,
+        cost: dict[str, Any] | None = None,
+        usage: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        progress_stage = "completed" if job_status == "succeeded" else "failed"
+        event_subscriptions = callback_events if callback_events is not None else ["job.succeeded", "job.failed"]
+        callback_status = "pending" if event_type in set(event_subscriptions) else "skipped"
+        return {
+            "event": event_type,
+            "event_id": str(event_id),
+            "attempt": 1,
+            "sent_at": now.isoformat(),
+            "trigger_request_id": JobRepo._trigger_request_id_from_runtime_ref(runtime_ref),
+            "caller_id": caller_id,
+            "job": {
+                "job_id": str(job_id),
+                "client_request_id": client_request_id,
+                "job_type": job_type,
+                "job_status": job_status,
+                "job_progress": {
+                    "percent": progress_percent or 0,
+                    "message": progress_text or progress_stage,
+                    "stage": progress_stage,
+                },
+                "job_result": job_result,
+                "job_error": JobRepo._job_error_detail(job_error),
+                "cost": cost,
+                "usage": usage,
+                "callback": {
+                    "status": callback_status,
+                    "attempt": delivery_attempts,
+                    "last_error": last_error,
+                    "next_retry_at": (next_retry_at or now).isoformat() if callback_status == "pending" else None,
+                },
+                "status_url": f"{settings.service.api_prefix}/jobs/{job_id}",
+                "created_at": (created_at or now).isoformat(),
+                "updated_at": (updated_at or now).isoformat(),
+                "finished_at": (finished_at or now).isoformat(),
+            },
+        }
 
     @staticmethod
     def _terminal_callback_payload(
@@ -184,85 +251,109 @@ class JobRepo:
         cost: dict[str, Any] | None = None,
         usage: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        progress_stage = "completed" if job.status == "succeeded" else "failed"
-        callback_status = "pending" if event_type in set(JobRepo._callback_events(job)) else "skipped"
-        return {
-            "event": event_type,
-            "event_id": str(event_id),
-            "attempt": 1,
-            "sent_at": now.isoformat(),
-            "trigger_request_id": JobRepo._trigger_request_id(job),
-            "caller_id": job.caller_id,
-            "job": {
-                "job_id": str(job.id),
-                "client_request_id": job.client_request_id,
-                "job_type": job.job_type,
-                "job_status": job.status,
-                "job_progress": {
-                    "percent": job.progress_percent or 0,
-                    "message": job.progress_text or progress_stage,
-                    "stage": progress_stage,
-                },
-                "job_result": job_result,
-                "job_error": JobRepo._job_error_detail(job.error),
-                "cost": cost,
-                "usage": usage,
-                "callback": {
-                    "status": callback_status,
-                    "attempt": delivery_attempts,
-                    "last_error": last_error,
-                    "next_retry_at": (next_retry_at or now).isoformat() if callback_status == "pending" else None,
-                },
-                "status_url": f"{settings.service.api_prefix}/jobs/{job.id}",
-                "created_at": (job.created_at or now).isoformat(),
-                "updated_at": (job.updated_at or now).isoformat(),
-                "finished_at": (job.finished_at or now).isoformat(),
-            },
-        }
+        runtime_ref = job.runtime_ref if isinstance(job.runtime_ref, dict) else {}
+        return JobRepo._terminal_callback_payload_from_snapshot(
+            job_id=job.id,
+            client_request_id=job.client_request_id,
+            job_type=job.job_type,
+            job_status=job.status,
+            progress_percent=job.progress_percent or 0,
+            progress_text=job.progress_text,
+            job_error=job.error,
+            callback_events=JobRepo._callback_events(job),
+            runtime_ref=runtime_ref,
+            caller_id=job.caller_id,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+            finished_at=job.finished_at,
+            event_id=event_id,
+            event_type=event_type,
+            now=now,
+            job_result=job_result,
+            delivery_attempts=delivery_attempts,
+            next_retry_at=next_retry_at,
+            last_error=last_error,
+            cost=cost,
+            usage=usage,
+        )
 
     @staticmethod
     async def ensure_terminal_callback_outbox(db: AsyncSession, job: Job, *, now: datetime) -> CallbackOutbox | None:
         event_type = JobRepo._terminal_callback_event_type(job)
         if not job.callback_url or event_type is None:
             return None
+        job_snapshot = {
+            "job_id": job.id,
+            "client_request_id": job.client_request_id,
+            "job_type": job.job_type,
+            "job_status": job.status,
+            "progress_percent": job.progress_percent or 0,
+            "progress_text": job.progress_text,
+            "job_error": job.error,
+            "callback_events": JobRepo._callback_events(job),
+            "runtime_ref": job.runtime_ref if isinstance(job.runtime_ref, dict) else {},
+            "caller_id": job.caller_id,
+            "created_at": job.created_at,
+            "updated_at": job.updated_at,
+            "finished_at": job.finished_at,
+            "callback_url": job.callback_url,
+            "result": job.result,
+        }
 
         result = await db.execute(
             select(CallbackOutbox)
-            .where(CallbackOutbox.job_id == job.id, CallbackOutbox.event_type == event_type)
+            .where(CallbackOutbox.job_id == job_snapshot["job_id"], CallbackOutbox.event_type == event_type)
             .with_for_update(skip_locked=True)
         )
         existing = result.scalar_one_or_none()
         if existing is not None:
             return existing
 
-        subscribed = event_type in set(JobRepo._callback_events(job))
+        subscribed = event_type in set(job_snapshot["callback_events"])
         outbox_status = "pending" if subscribed else "skipped"
-        event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{CALLBACK_EVENT_NAMESPACE}:{job.id}:{event_type}")
+        event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{CALLBACK_EVENT_NAMESPACE}:{job_snapshot['job_id']}:{event_type}")
         from app.services.billing import get_scope_billing, job_cost_from_billing, job_usage_from_billing
 
-        billing = await get_scope_billing(db, scope_type="job", scope_id=str(job.id), caller_id=job.caller_id)
+        billing = await get_scope_billing(
+            db,
+            scope_type="job",
+            scope_id=str(job_snapshot["job_id"]),
+            caller_id=str(job_snapshot["caller_id"]),
+        )
         mapped_cost = job_cost_from_billing(billing)
         cost = mapped_cost.model_dump() if mapped_cost is not None else None
         mapped_usage = job_usage_from_billing(billing)
         usage = mapped_usage.model_dump() if mapped_usage is not None else None
-        projected_result = job.result
-        if job.status == "failed":
+        projected_result = job_snapshot["result"]
+        if job_snapshot["job_status"] == "failed":
             from app.jobs.factory import get_job_executor
 
-            handler = get_job_executor(job.job_type)
+            handler = get_job_executor(str(job_snapshot["job_type"]))
             projected_result = None
-            if handler.supports_result_snapshot(job.status):
-                projected_result = await handler.build_result_snapshot(job.status, job, db)
-            projected_result = handler.validate_result_snapshot(job.status, projected_result)
+            if handler.supports_result_snapshot(str(job_snapshot["job_status"])):
+                projected_result = await handler.build_result_snapshot(str(job_snapshot["job_status"]), job, db)
+            projected_result = handler.validate_result_snapshot(str(job_snapshot["job_status"]), projected_result)
         outbox = CallbackOutbox(
-            job_id=job.id,
+            job_id=job_snapshot["job_id"],
             event_id=event_id,
             event_type=event_type,
-            callback_url=job.callback_url,
+            callback_url=str(job_snapshot["callback_url"]),
             signature_version="hmac-sha256:v1",
             status=outbox_status,
-            payload=JobRepo._terminal_callback_payload(
-                job,
+            payload=JobRepo._terminal_callback_payload_from_snapshot(
+                job_id=job_snapshot["job_id"],
+                client_request_id=str(job_snapshot["client_request_id"]),
+                job_type=str(job_snapshot["job_type"]),
+                job_status=str(job_snapshot["job_status"]),
+                progress_percent=int(job_snapshot["progress_percent"]),
+                progress_text=job_snapshot["progress_text"],
+                job_error=job_snapshot["job_error"],
+                callback_events=job_snapshot["callback_events"],
+                runtime_ref=job_snapshot["runtime_ref"],
+                caller_id=str(job_snapshot["caller_id"]),
+                created_at=job_snapshot["created_at"],
+                updated_at=job_snapshot["updated_at"],
+                finished_at=job_snapshot["finished_at"],
                 event_id=event_id,
                 event_type=event_type,
                 now=now,

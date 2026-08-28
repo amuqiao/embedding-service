@@ -551,6 +551,19 @@ def test_callback_signature_requires_non_empty_secret(monkeypatch):
         _sign("2026-06-21T00:00:00+00:00", b"{}")
 
 
+def test_callback_signature_uses_timestamp_dot_raw_body_contract(monkeypatch):
+    _patch_callback_settings(monkeypatch, CALLBACK_SIGNING_SECRET="test-secret")
+    timestamp = "2026-08-28T00:00:00+00:00"
+    raw_body = '{"event":"job.succeeded","job":{"message":"你好"}}'.encode("utf-8")
+    expected = "sha256=" + hmac.new(
+        b"test-secret",
+        timestamp.encode("utf-8") + b"." + raw_body,
+        "sha256",
+    ).hexdigest()
+
+    assert _sign(timestamp, raw_body) == expected
+
+
 @pytest.mark.asyncio
 async def test_deliver_callback_records_invalid_body_contract():
     job = _job()

@@ -14,6 +14,7 @@ from smoke.flows import (
     poster_title_image,
     tagged_text_translation,
 )
+from smoke.flows.examples import lifecycle_probe as example_lifecycle_probe
 
 
 POSTER_TITLE_IMAGE_HELP_EPILOG = """\b
@@ -139,6 +140,33 @@ READY_HELP_EPILOG = """\b
     --base-url http://test-cms-poster-title.epubgame.com \\
     --json \\
     ready
+"""
+
+EXAMPLE_LIFECYCLE_PROBE_HELP_EPILOG = """\b
+常用示例：
+  # 验证 api -> dispatcher -> taskiq_worker 基础成功链路。
+  ./scripts/smoke.sh example-lifecycle-probe --confirm-run
+
+\b
+  # 验证 callbacker：本地临时启动 callback receiver，等待 callback.status=delivered。
+  ./scripts/smoke.sh --json example-lifecycle-probe \\
+    --confirm-run \\
+    --local-callback
+
+\b
+  # 模拟耗时与失败，用于复盘失败终态、错误记录和 callback 失败事件。
+  ./scripts/smoke.sh example-lifecycle-probe \\
+    --confirm-run \\
+    --fail \\
+    --fail-after-seconds 1 \\
+    --expect-status failed \\
+    --local-callback
+
+\b
+说明：
+  本场景使用 visibility=demo 的 example_lifecycle_probe 标准 Job，仅用于 local/dev 平台验收，不调用真实模型、不产生模型费用。
+  --local-callback 只适合本机 API/worker 运行形态；远端或容器内 callbacker 无法访问调用方的 127.0.0.1。
+  普通成功链路不能证明 reconciler 被触发；输出会把 reconciler 标记为兜底收敛合同角色。
 """
 
 LLM_JOB_BILLING_HELP_EPILOG = """\b
@@ -496,6 +524,16 @@ def main(
 
 SCENARIOS: list[dict[str, Any]] = [
     {
+        "name": "example-lifecycle-probe",
+        "type": "workflow",
+        "acceptance_class": "platform_acceptance",
+        "dependencies": ["api", "dispatcher", "taskiq_worker", "db", "redis"],
+        "conditional_dependencies": ["callbacker"],
+        "contract_roles": ["reconciler"],
+        "destructive": False,
+        "supports_resume": False,
+    },
+    {
         "name": "llm-job-billing",
         "type": "workflow",
         "acceptance_class": "business_e2e",
@@ -661,6 +699,115 @@ def ready_command(ctx: typer.Context) -> None:
         typer.echo(f"ready_response={ready_payload}")
     if not context.summary["ready"]:
         raise typer.Exit(2)
+
+
+@app.command(
+    "example-lifecycle-probe",
+    help="提交 example_lifecycle_probe 标准 Job，验收平台异步链路和 callbacker。",
+    epilog=EXAMPLE_LIFECYCLE_PROBE_HELP_EPILOG,
+)
+def example_lifecycle_probe_command(
+    ctx: typer.Context,
+    confirm_run: Annotated[
+        bool,
+        typer.Option("--confirm-run", help="确认本命令会创建真实 Job 并写入 Job/Outbox/Callback 数据。"),
+    ] = False,
+    probe_id: Annotated[
+        str,
+        typer.Option("--probe-id", help="写入 Job 参数和结果的探针 ID。"),
+    ] = "default",
+    message: Annotated[
+        str,
+        typer.Option("--message", help="写入 Job 参数和结果的探针消息。"),
+    ] = "lifecycle probe",
+    sleep_seconds: Annotated[
+        float,
+        typer.Option("--sleep-seconds", min=0, max=600, help="模拟 Job 执行耗时秒数。"),
+    ] = 0,
+    fail: Annotated[
+        bool,
+        typer.Option("--fail", help="让 Job 执行失败，用于验证失败终态和失败 callback。"),
+    ] = False,
+    fail_after_seconds: Annotated[
+        float,
+        typer.Option("--fail-after-seconds", min=0, max=600, help="失败前模拟等待秒数，仅在 --fail 时生效。"),
+    ] = 0,
+    result_payload: Annotated[
+        str | None,
+        typer.Option("--result-payload", help="成功结果中的自定义 payload，不能与 --result-size-bytes 同时使用。"),
+    ] = None,
+    result_size_bytes: Annotated[
+        int,
+        typer.Option("--result-size-bytes", min=0, max=65536, help="成功结果中生成固定大小 payload 字符串。"),
+    ] = 0,
+    expect_status: Annotated[
+        str,
+        typer.Option("--expect-status", help="期望终态：auto、succeeded 或 failed。"),
+    ] = "auto",
+    callback_url: Annotated[
+        str | None,
+        typer.Option("--callback-url", help="外部 callback receiver URL。"),
+    ] = None,
+    local_callback: Annotated[
+        bool,
+        typer.Option("--local-callback", help="临时启动本地 callback receiver，并等待 callbacker 投递成功。"),
+    ] = False,
+    callback_event: Annotated[
+        str,
+        typer.Option("--callback-event", help="订阅 callback 事件：succeeded、failed 或 both。"),
+    ] = "both",
+    wait_callback: Annotated[
+        bool,
+        typer.Option("--wait-callback/--no-wait-callback", help="配置 callback 后是否等待 callback.status=delivered。"),
+    ] = True,
+    client_request_id: Annotated[
+        str | None,
+        typer.Option("--client-request-id", help="显式 client_request_id；默认自动生成。"),
+    ] = None,
+) -> None:
+    _validate_global_options(
+        ctx,
+        "example-lifecycle-probe",
+        {
+            "--base-url",
+            "--env-file",
+            "--allow-remote-api",
+            "--service-api-key",
+            "--caller-id",
+            "--timeout",
+            "--poll-interval",
+            "--json",
+        },
+    )
+    options = _smoke_options(ctx)
+    try:
+        example_lifecycle_probe.run(
+            confirm_run=confirm_run,
+            api_url=options.api_url,
+            env_file=options.env_file,
+            allow_remote_api=options.allow_remote_api,
+            service_api_key=options.service_api_key,
+            caller_id=options.caller_id,
+            timeout_seconds=options.timeout_seconds,
+            poll_interval_seconds=options.poll_interval_seconds,
+            probe_id=probe_id,
+            message=message,
+            sleep_seconds=sleep_seconds,
+            fail=fail,
+            fail_after_seconds=fail_after_seconds,
+            result_payload=result_payload,
+            result_size_bytes=result_size_bytes,
+            expect_status=expect_status,
+            callback_url=callback_url,
+            local_callback=local_callback,
+            callback_event=callback_event,
+            wait_callback=wait_callback,
+            client_request_id=client_request_id,
+            json_output=options.json_output,
+        )
+    except example_lifecycle_probe.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
 
 
 @app.command("llm-job-billing", help="真实调用 LLM，并查询 Job billing。", epilog=LLM_JOB_BILLING_HELP_EPILOG)

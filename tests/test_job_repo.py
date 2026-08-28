@@ -2124,6 +2124,56 @@ async def test_mark_attempt_failed_uses_attempt_retry_delay_when_no_explicit_sch
     assert retry_dispatches[0].next_attempt_at <= after + timedelta(seconds=5)
 
 
+@pytest.mark.asyncio
+async def test_mark_attempt_failed_final_failure_creates_callback_outbox(monkeypatch):
+    error = {"code": "JOB_EXECUTION_FAILED", "message": "failed", "details": {"fault": "forced_failure"}}
+    lease_token = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id="client-1",
+        job_type="test.echo",
+        status="running",
+        progress_percent=50,
+        metadata_={},
+        callback_url="https://example.com/callback",
+        callback_events=["job.failed"],
+        created_at=datetime.now(UTC),
+    )
+    attempt = _attempt(
+        id=uuid.uuid4(),
+        job_id=job.id,
+        status="running",
+        lease_token=lease_token,
+        policy_max_attempts=1,
+    )
+    job.active_attempt_id = attempt.id
+    db = _FakeDB()
+    db.results.extend([_OneRowResult((job, attempt)), _ScalarResult(None), _ScalarListResult([])])
+    monkeypatch.setattr(
+        "app.jobs.factory.get_job_executor",
+        lambda _job_type: _DefaultOffResultSnapshotHandler(),
+    )
+
+    updated = await JobRepo.mark_attempt_failed(
+        db,
+        attempt.id,
+        lease_token=lease_token,
+        error=error,
+        retryable=True,
+    )
+
+    outboxes = [item for item in db.added if isinstance(item, CallbackOutbox)]
+    assert updated is True
+    assert job.status == "failed"
+    assert len(outboxes) == 1
+    assert outboxes[0].event_type == "job.failed"
+    assert outboxes[0].status == "pending"
+    assert outboxes[0].payload["job"]["job_error"]["reason"] == "JOB_EXECUTION_FAILED"
+    assert outboxes[0].payload["job"]["job_error"]["details"] == {"fault": "forced_failure"}
+    assert outboxes[0].payload["job"]["updated_at"] == outboxes[0].payload["sent_at"]
+
+
 def test_next_retry_scheduled_at_applies_exponential_backoff():
     now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
     attempt = _attempt(

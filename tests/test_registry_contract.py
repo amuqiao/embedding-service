@@ -545,6 +545,21 @@ def test_job_type_registry_exposes_required_metadata():
     assert echo_spec.error_codes <= all_error_reasons()
     assert echo_spec.prompt_specs == ()
 
+    assert "example_lifecycle_probe" in specs
+    lifecycle_probe_spec = specs["example_lifecycle_probe"]
+    assert lifecycle_probe_spec.params_schema == "ExampleLifecycleProbeParams"
+    assert lifecycle_probe_spec.runtime_fields_schema == "ExampleLifecycleProbeRuntimeFields"
+    assert lifecycle_probe_spec.canonical_result_schema == "ExampleLifecycleProbeResult"
+    assert lifecycle_probe_spec.public_result_schema == "ExampleLifecycleProbeResult"
+    assert lifecycle_probe_spec.visibility == "demo"
+    assert lifecycle_probe_spec.role == "root"
+    assert lifecycle_probe_spec.allow_callback is True
+    assert lifecycle_probe_spec.execution_mode == "custom_executor"
+    _assert_default_retry_policy(lifecycle_probe_spec.retry_policy)
+    assert lifecycle_probe_spec.side_effect_policy == "none"
+    assert lifecycle_probe_spec.error_codes <= all_error_reasons()
+    assert lifecycle_probe_spec.prompt_specs == ()
+
     assert "example_workflow" in specs
     workflow_spec = specs["example_workflow"]
     assert workflow_spec.params_schema == "ExampleWorkflowParams"
@@ -696,6 +711,7 @@ def test_registered_job_type_names_are_layered_contract():
         "job_real_llm_echo",
         "example_pair",
         "example_collect",
+        "example_lifecycle_probe",
         "example_sleep",
         "example_workflow",
         "audio_stem_separation",

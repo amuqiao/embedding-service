@@ -19,6 +19,8 @@ from smoke.flows import (
     poster_title_image,
     tagged_text_translation,
 )
+from smoke.flows.examples import lifecycle_probe as example_lifecycle_probe
+from smoke.harness import callback_capture
 
 
 runner = CliRunner()
@@ -88,6 +90,87 @@ def test_smoke_cli_requires_confirm_cost():
 
     assert result.exit_code == 2
     assert "real LLM smoke scenario requires --confirm-cost" in result.stderr
+
+
+def test_example_lifecycle_probe_cli_requires_confirm_run():
+    result = runner.invoke(app, ["example-lifecycle-probe"])
+
+    assert result.exit_code == 2
+    assert "example lifecycle probe smoke requires --confirm-run" in result.stderr
+
+
+def test_example_lifecycle_probe_cli_forwards_options(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(example_lifecycle_probe, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "--base-url",
+            "http://127.0.0.1:18200",
+            "--env-file",
+            ".env",
+            "--service-api-key",
+            "test-token",
+            "--caller-id",
+            "cms-test",
+            "--timeout",
+            "30",
+            "--poll-interval",
+            "0.25",
+            "--json",
+            "example-lifecycle-probe",
+            "--confirm-run",
+            "--probe-id",
+            "probe-1",
+            "--message",
+            "hello",
+            "--sleep-seconds",
+            "1.5",
+            "--fail",
+            "--fail-after-seconds",
+            "0.5",
+            "--expect-status",
+            "failed",
+            "--callback-url",
+            "http://127.0.0.1:19000/callback",
+            "--callback-event",
+            "failed",
+            "--no-wait-callback",
+            "--client-request-id",
+            "client-probe-1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "confirm_run": True,
+        "api_url": "http://127.0.0.1:18200",
+        "env_file": ".env",
+        "allow_remote_api": False,
+        "service_api_key": "test-token",
+        "caller_id": "cms-test",
+        "timeout_seconds": 30,
+        "poll_interval_seconds": 0.25,
+        "probe_id": "probe-1",
+        "message": "hello",
+        "sleep_seconds": 1.5,
+        "fail": True,
+        "fail_after_seconds": 0.5,
+        "result_payload": None,
+        "result_size_bytes": 0,
+        "expect_status": "failed",
+        "callback_url": "http://127.0.0.1:19000/callback",
+        "local_callback": False,
+        "callback_event": "failed",
+        "wait_callback": False,
+        "client_request_id": "client-probe-1",
+        "json_output": True,
+    }
 
 
 def test_poster_title_image_cli_requires_confirm_cost():
@@ -450,6 +533,7 @@ def test_smoke_public_module_entry_accepts_global_json_before_list():
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert "tagged-text-translation" in {scenario["name"] for scenario in payload["scenarios"]}
+    assert "example-lifecycle-probe" in {scenario["name"] for scenario in payload["scenarios"]}
 
 
 def test_smoke_ready_prints_resolved_context(tmp_path, monkeypatch):
@@ -528,11 +612,19 @@ def test_smoke_list_outputs_standard_scenario_metadata():
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     scenario_names = {scenario["name"] for scenario in payload["scenarios"]}
-    assert {"llm-job-billing", "poster-title-image", "audio-stem-separation", "tagged-text-translation"}.issubset(
-        scenario_names
-    )
+    assert {
+        "example-lifecycle-probe",
+        "llm-job-billing",
+        "poster-title-image",
+        "audio-stem-separation",
+        "tagged-text-translation",
+    }.issubset(scenario_names)
     for scenario in payload["scenarios"]:
         assert {"name", "type", "acceptance_class", "dependencies", "destructive", "supports_resume"} <= set(scenario)
+    probe = next(scenario for scenario in payload["scenarios"] if scenario["name"] == "example-lifecycle-probe")
+    assert {"api", "dispatcher", "taskiq_worker"} <= set(probe["dependencies"])
+    assert probe["conditional_dependencies"] == ["callbacker"]
+    assert probe["contract_roles"] == ["reconciler"]
 
 
 def test_smoke_health_checks_service_health_endpoint(tmp_path, monkeypatch):
@@ -629,6 +721,547 @@ def test_poll_job_returns_data_job_for_legacy_callers(monkeypatch):
     )
 
     assert job == {"job_id": "job-1", "job_status": "succeeded"}
+
+
+def test_example_lifecycle_probe_flow_outputs_json_and_callback_payload(tmp_path, monkeypatch, capsys):
+    clear_api_env(monkeypatch)
+    monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+    monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
+    monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
+    monkeypatch.setattr(llm_job_billing, "ROOT_DIR", tmp_path)
+    append_root_env(
+        tmp_path,
+        "API_HOST=127.0.0.1",
+        "API_PORT=18200",
+        "DISABLE_HTTP_AUTH_HEADER=true",
+        "DISABLE_CALLER_ID_HEADER=true",
+    )
+    captured = {}
+
+    def fake_request_json(url, *, method, headers, payload=None, timeout_seconds=10):
+        captured["url"] = url
+        captured["method"] = method
+        captured["headers"] = headers
+        captured["payload"] = payload
+        return {"code": "0", "data": {"job": {"job_id": "probe-job-1", "job_status": "queued"}}}
+
+    monkeypatch.setattr(llm_job_billing, "request_json", fake_request_json)
+    monkeypatch.setattr(
+        llm_job_billing,
+        "poll_job_envelope",
+        lambda **_kwargs: {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "probe-job-1",
+                    "job_status": "succeeded",
+                    "job_type": "example_lifecycle_probe",
+                    "job_result": {
+                        "probe_id": "probe-json",
+                        "message": "hello",
+                        "requested_sleep_seconds": 0,
+                        "fail": False,
+                        "elapsed_ms": 1,
+                        "worker_observed_at": "2026-08-27T00:00:00+00:00",
+                    },
+                    "callback": {"status": "pending", "attempt": 0},
+                }
+            },
+        },
+    )
+
+    example_lifecycle_probe.run(
+        confirm_run=True,
+        api_url=None,
+        env_file=None,
+        allow_remote_api=False,
+        service_api_key=None,
+        caller_id="smoke-cli",
+        timeout_seconds=1,
+        poll_interval_seconds=0.1,
+        probe_id="probe-json",
+        message="hello",
+        sleep_seconds=0,
+        fail=False,
+        fail_after_seconds=0,
+        result_payload="payload",
+        result_size_bytes=0,
+        expect_status="succeeded",
+        callback_url="http://127.0.0.1:19000/callback",
+        local_callback=False,
+        callback_event="succeeded",
+        wait_callback=False,
+        client_request_id="client-probe-json",
+        json_output=True,
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["scenario"] == "example-lifecycle-probe"
+    assert payload["summary"]["job_status"] == "succeeded"
+    assert payload["summary"]["callback_waited"] is False
+    assert "reconciler" in payload["summary"]["mechanism_evidence"]
+    assert captured["url"] == "http://127.0.0.1:18200/api/v1/ai-jobs/jobs"
+    assert captured["payload"]["job_type"] == "example_lifecycle_probe"
+    assert captured["payload"]["client_request_id"] == "client-probe-json"
+    assert captured["payload"]["job_params"]["result_payload"] == "payload"
+    assert captured["payload"]["callback"] == {
+        "url": "http://127.0.0.1:19000/callback",
+        "events": ["job.succeeded"],
+    }
+
+
+def test_example_lifecycle_probe_callback_poll_waits_until_delivered(monkeypatch):
+    responses = iter(
+        [
+            {
+                "code": "0",
+                "data": {"job": {"job_id": "probe-job-2", "job_status": "succeeded", "callback": {"status": "pending"}}},
+            },
+            {
+                "code": "0",
+                "data": {
+                    "job": {
+                        "job_id": "probe-job-2",
+                        "job_status": "succeeded",
+                        "callback": {"status": "delivered", "attempt": 1},
+                    }
+                },
+            },
+        ]
+    )
+
+    monkeypatch.setattr(llm_job_billing, "request_json", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(example_lifecycle_probe.time, "sleep", lambda _seconds: None)
+
+    envelope = example_lifecycle_probe.poll_callback_envelope(
+        jobs_url="http://127.0.0.1:8100/api/v1/ai-jobs/jobs",
+        job_id="probe-job-2",
+        headers={},
+        timeout_seconds=1,
+        poll_interval_seconds=0.1,
+    )
+
+    assert envelope["data"]["job"]["callback"] == {"status": "delivered", "attempt": 1}
+
+
+def test_example_lifecycle_probe_build_payload_rejects_ambiguous_result_payload():
+    with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
+        example_lifecycle_probe.build_payload(
+            probe_id="probe",
+            message="hello",
+            sleep_seconds=0,
+            fail=False,
+            fail_after_seconds=0,
+            result_payload="payload",
+            result_size_bytes=10,
+            callback_url=None,
+            callback_event="both",
+            client_request_id=None,
+        )
+
+    assert exc_info.value.exit_code == 2
+
+
+def test_example_lifecycle_probe_rejects_local_callback_without_wait():
+    with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
+        example_lifecycle_probe.run(
+            confirm_run=True,
+            api_url=None,
+            env_file=None,
+            allow_remote_api=False,
+            service_api_key=None,
+            caller_id="smoke-cli",
+            timeout_seconds=1,
+            poll_interval_seconds=0.1,
+            probe_id="probe",
+            message="hello",
+            sleep_seconds=0,
+            fail=False,
+            fail_after_seconds=0,
+            result_payload=None,
+            result_size_bytes=0,
+            expect_status="auto",
+            callback_url=None,
+            local_callback=True,
+            callback_event="both",
+            wait_callback=False,
+            client_request_id=None,
+            json_output=True,
+        )
+
+    assert exc_info.value.exit_code == 2
+    assert "--local-callback requires --wait-callback" in str(exc_info.value)
+
+
+def test_example_lifecycle_probe_wraps_local_callback_bind_errors(monkeypatch):
+    context = llm_job_billing.RuntimeContext(
+        app_env={
+            "CALLBACK_SIGNING_SECRET": "test-callback-signing-secret",
+            "DISABLE_HTTP_AUTH_HEADER": "true",
+            "DISABLE_CALLER_ID_HEADER": "true",
+        },
+        summary={
+            "api_url": "http://127.0.0.1:8100",
+            "jobs_url": "http://127.0.0.1:8100/api/v1/ai-jobs/jobs",
+            "ready": True,
+        },
+    )
+
+    def fake_server(*_args, **_kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(llm_job_billing, "resolve_runtime_context", lambda **_kwargs: context)
+    monkeypatch.setattr(callback_capture, "ThreadingHTTPServer", fake_server)
+
+    with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
+        example_lifecycle_probe.run(
+            confirm_run=True,
+            api_url=None,
+            env_file=None,
+            allow_remote_api=False,
+            service_api_key=None,
+            caller_id="smoke-cli",
+            timeout_seconds=1,
+            poll_interval_seconds=0.1,
+            probe_id="probe",
+            message="hello",
+            sleep_seconds=0,
+            fail=False,
+            fail_after_seconds=0,
+            result_payload=None,
+            result_size_bytes=0,
+            expect_status="auto",
+            callback_url=None,
+            local_callback=True,
+            callback_event="both",
+            wait_callback=True,
+            client_request_id=None,
+            json_output=True,
+        )
+
+    assert exc_info.value.exit_code == 4
+    assert "callback capture server failed to bind" in str(exc_info.value)
+
+
+def test_example_lifecycle_probe_local_callback_requires_signing_secret(monkeypatch):
+    monkeypatch.delenv("CALLBACK_SIGNING_SECRET", raising=False)
+    context = llm_job_billing.RuntimeContext(
+        app_env={"DISABLE_HTTP_AUTH_HEADER": "true", "DISABLE_CALLER_ID_HEADER": "true"},
+        summary={
+            "api_url": "http://127.0.0.1:8100",
+            "jobs_url": "http://127.0.0.1:8100/api/v1/ai-jobs/jobs",
+            "ready": True,
+        },
+    )
+    monkeypatch.setattr(llm_job_billing, "resolve_runtime_context", lambda **_kwargs: context)
+
+    with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
+        example_lifecycle_probe.run(
+            confirm_run=True,
+            api_url=None,
+            env_file=None,
+            allow_remote_api=False,
+            service_api_key=None,
+            caller_id="smoke-cli",
+            timeout_seconds=1,
+            poll_interval_seconds=0.1,
+            probe_id="probe",
+            message="hello",
+            sleep_seconds=0,
+            fail=False,
+            fail_after_seconds=0,
+            result_payload=None,
+            result_size_bytes=0,
+            expect_status="auto",
+            callback_url=None,
+            local_callback=True,
+            callback_event="both",
+            wait_callback=True,
+            client_request_id=None,
+            json_output=True,
+        )
+
+    assert exc_info.value.exit_code == 2
+    assert "CALLBACK_SIGNING_SECRET is required" in str(exc_info.value)
+
+
+def test_example_lifecycle_probe_rejects_local_callback_for_non_loopback_api(monkeypatch):
+    context = llm_job_billing.RuntimeContext(
+        app_env={
+            "CALLBACK_SIGNING_SECRET": "test-callback-signing-secret",
+            "DISABLE_HTTP_AUTH_HEADER": "true",
+            "DISABLE_CALLER_ID_HEADER": "true",
+        },
+        summary={
+            "api_url": "https://service.example.com",
+            "jobs_url": "https://service.example.com/api/v1/ai-jobs/jobs",
+            "ready": True,
+        },
+    )
+    monkeypatch.setattr(llm_job_billing, "resolve_runtime_context", lambda **_kwargs: context)
+
+    with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
+        example_lifecycle_probe.run(
+            confirm_run=True,
+            api_url=None,
+            env_file=None,
+            allow_remote_api=True,
+            service_api_key=None,
+            caller_id="smoke-cli",
+            timeout_seconds=1,
+            poll_interval_seconds=0.1,
+            probe_id="probe",
+            message="hello",
+            sleep_seconds=0,
+            fail=False,
+            fail_after_seconds=0,
+            result_payload=None,
+            result_size_bytes=0,
+            expect_status="auto",
+            callback_url=None,
+            local_callback=True,
+            callback_event="both",
+            wait_callback=True,
+            client_request_id=None,
+            json_output=True,
+        )
+
+    assert exc_info.value.exit_code == 2
+    assert "--local-callback requires a loopback API URL" in str(exc_info.value)
+
+
+def test_example_lifecycle_probe_rejects_local_callback_event_mismatch(monkeypatch):
+    context = llm_job_billing.RuntimeContext(
+        app_env={
+            "CALLBACK_SIGNING_SECRET": "test-callback-signing-secret",
+            "DISABLE_HTTP_AUTH_HEADER": "true",
+            "DISABLE_CALLER_ID_HEADER": "true",
+        },
+        summary={
+            "api_url": "http://127.0.0.1:8100",
+            "jobs_url": "http://127.0.0.1:8100/api/v1/ai-jobs/jobs",
+            "ready": True,
+        },
+    )
+    monkeypatch.setattr(llm_job_billing, "resolve_runtime_context", lambda **_kwargs: context)
+
+    class FakeReceiver:
+        url = "http://127.0.0.1:19000/callback"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            return None
+
+    monkeypatch.setattr(example_lifecycle_probe, "_local_callback_server", lambda _context: FakeReceiver())
+
+    with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
+        example_lifecycle_probe.run(
+            confirm_run=True,
+            api_url=None,
+            env_file=None,
+            allow_remote_api=False,
+            service_api_key=None,
+            caller_id="smoke-cli",
+            timeout_seconds=1,
+            poll_interval_seconds=0.1,
+            probe_id="probe",
+            message="hello",
+            sleep_seconds=0,
+            fail=False,
+            fail_after_seconds=0,
+            result_payload=None,
+            result_size_bytes=0,
+            expect_status="succeeded",
+            callback_url=None,
+            local_callback=True,
+            callback_event="failed",
+            wait_callback=True,
+            client_request_id=None,
+            json_output=True,
+        )
+
+    assert exc_info.value.exit_code == 2
+    assert "--callback-event must include the expected terminal job status" in str(exc_info.value)
+
+
+def test_example_lifecycle_probe_local_callback_uses_single_timeout_budget(monkeypatch, capsys):
+    context = llm_job_billing.RuntimeContext(
+        app_env={
+            "CALLBACK_SIGNING_SECRET": "test-callback-signing-secret",
+            "DISABLE_HTTP_AUTH_HEADER": "true",
+            "DISABLE_CALLER_ID_HEADER": "true",
+        },
+        summary={
+            "api_url": "http://127.0.0.1:8100",
+            "jobs_url": "http://127.0.0.1:8100/api/v1/ai-jobs/jobs",
+            "ready": True,
+        },
+    )
+    timeout_values: dict[str, float] = {}
+    monotonic_values = iter([100.0, 101.25, 105.5, 108.0])
+
+    class FakeReceiver:
+        url = "http://127.0.0.1:19000/callback"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            return None
+
+        def wait_for_event(self, _expectation, *, timeout_seconds):
+            timeout_values["receiver"] = timeout_seconds
+            return {
+                "body": {
+                    "event": "job.succeeded",
+                    "job": {"job_id": "probe-job-budget", "job_status": "succeeded"},
+                },
+                "signature": {"checked": True, "valid": True},
+            }
+
+        def snapshot(self):
+            return [{"body": {"event": "job.succeeded"}}]
+
+    def fake_poll_job_envelope(**kwargs):
+        timeout_values["job"] = kwargs["timeout_seconds"]
+        return {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "probe-job-budget",
+                    "job_status": "succeeded",
+                    "job_result": {
+                        "probe_id": "probe",
+                        "message": "hello",
+                        "worker_observed_at": "2026-08-28T00:00:00+00:00",
+                    },
+                    "callback": {"status": "pending", "attempt": 0},
+                }
+            },
+        }
+
+    def fake_poll_callback_envelope(**kwargs):
+        timeout_values["callback"] = kwargs["timeout_seconds"]
+        return {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "probe-job-budget",
+                    "job_status": "succeeded",
+                    "callback": {"status": "delivered", "attempt": 1},
+                }
+            },
+        }
+
+    monkeypatch.setattr(llm_job_billing, "resolve_runtime_context", lambda **_kwargs: context)
+    monkeypatch.setattr(llm_job_billing, "request_json", lambda *_args, **_kwargs: {
+        "code": "0",
+        "data": {"job": {"job_id": "probe-job-budget", "job_status": "queued"}},
+    })
+    monkeypatch.setattr(llm_job_billing, "poll_job_envelope", fake_poll_job_envelope)
+    monkeypatch.setattr(example_lifecycle_probe, "poll_callback_envelope", fake_poll_callback_envelope)
+    monkeypatch.setattr(example_lifecycle_probe, "_local_callback_server", lambda _context: FakeReceiver())
+    monkeypatch.setattr(example_lifecycle_probe.time, "monotonic", lambda: next(monotonic_values))
+
+    example_lifecycle_probe.run(
+        confirm_run=True,
+        api_url=None,
+        env_file=None,
+        allow_remote_api=False,
+        service_api_key=None,
+        caller_id="smoke-cli",
+        timeout_seconds=10,
+        poll_interval_seconds=0.1,
+        probe_id="probe",
+        message="hello",
+        sleep_seconds=0,
+        fail=False,
+        fail_after_seconds=0,
+        result_payload=None,
+        result_size_bytes=0,
+        expect_status="auto",
+        callback_url=None,
+        local_callback=True,
+        callback_event="both",
+        wait_callback=True,
+        client_request_id=None,
+        json_output=True,
+    )
+
+    json.loads(capsys.readouterr().out)
+    assert timeout_values == {
+        "job": pytest.approx(8.75),
+        "callback": pytest.approx(4.5),
+        "receiver": pytest.approx(2.0),
+    }
+
+
+def test_example_lifecycle_probe_forced_failure_requires_expected_error_reason():
+    with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
+        example_lifecycle_probe._assert_terminal_job(
+            {
+                "job_id": "probe-job-3",
+                "job_status": "failed",
+                "job_error": {"reason": "JOB_ATTEMPT_TIMEOUT", "details": {"fault": "forced_failure"}},
+            },
+            expected="failed",
+            probe_id="probe",
+            message="hello",
+            forced_failure=True,
+        )
+
+    assert exc_info.value.exit_code == 1
+    assert "reason mismatch" in str(exc_info.value)
+
+
+def test_example_lifecycle_probe_forced_failure_requires_expected_fault():
+    with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
+        example_lifecycle_probe._assert_terminal_job(
+            {
+                "job_id": "probe-job-4",
+                "job_status": "failed",
+                "job_error": {"reason": "JOB_EXECUTION_FAILED", "details": {"fault": "other"}},
+            },
+            expected="failed",
+            probe_id="probe",
+            message="hello",
+            forced_failure=True,
+        )
+
+    assert exc_info.value.exit_code == 1
+    assert "fault mismatch" in str(exc_info.value)
+
+
+def test_example_lifecycle_probe_build_payload_rejects_invalid_wait_parameters():
+    with pytest.raises(example_lifecycle_probe.FlowError, match="fail-after-seconds requires --fail"):
+        example_lifecycle_probe.build_payload(
+            probe_id="probe",
+            message="hello",
+            sleep_seconds=0,
+            fail=False,
+            fail_after_seconds=1,
+            result_payload=None,
+            result_size_bytes=0,
+            callback_url=None,
+            callback_event="both",
+            client_request_id=None,
+        )
+    with pytest.raises(example_lifecycle_probe.FlowError, match=r"sleep-seconds \+ fail-after-seconds must be <= 600"):
+        example_lifecycle_probe.build_payload(
+            probe_id="probe",
+            message="hello",
+            sleep_seconds=500,
+            fail=True,
+            fail_after_seconds=101,
+            result_payload=None,
+            result_size_bytes=0,
+            callback_url=None,
+            callback_event="both",
+            client_request_id=None,
+        )
 
 
 def test_smoke_failed_terminal_job_uses_standard_exit_code_1(monkeypatch):

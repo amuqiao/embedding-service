@@ -31,6 +31,7 @@ Usage:
   health                  检查服务进程级健康。
   ready                   检查 smoke 运行上下文和必要依赖配置。
   list                    列出当前项目 smoke 场景。
+  example-lifecycle-probe 提交 local/dev 标准探针 Job，验收 api/dispatcher/taskiq_worker；配置 callback 后验收 callbacker。
   llm-job-billing         提交真实 LLM Job，轮询终态并查询 billing。
   llm-job-double-billing  提交两次 LLM 调用 Job，轮询终态并查询汇总 billing。
   tagged-text-translation 提交 tagged_text_translation Job，校验标签和占位符保留；人读输出翻译前后 preview。
@@ -43,6 +44,14 @@ Usage:
   ./scripts/run.sh up dev
 
   ENV_FILE=.env ./scripts/smoke.sh --json list
+
+  ENV_FILE=.env ./scripts/smoke.sh \
+    --json \
+    --timeout 120 \
+    --poll-interval 1 \
+    example-lifecycle-probe \
+    --confirm-run \
+    --local-callback
 
   ENV_FILE=.env ./scripts/smoke.sh \
     --timeout 300 \
