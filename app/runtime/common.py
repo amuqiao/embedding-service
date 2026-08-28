@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import logging
 import sys
-import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -30,6 +29,18 @@ async def run_once_with_session(run_once: RunOnce) -> dict[str, Any]:
         await engine.dispose()
 
 
+async def _run_role_loop(
+    *,
+    role: str,
+    run_once: Callable[[], Awaitable[dict[str, Any]]],
+    interval_seconds: int,
+) -> None:
+    while True:
+        result = await run_once()
+        logger.info("%s_loop_completed result=%s", role, result)
+        await asyncio.sleep(interval_seconds)
+
+
 def run_role_cli(
     *,
     role: str,
@@ -52,7 +63,4 @@ def run_role_cli(
         logger.info("%s_once_completed result=%s", role, result)
         return
 
-    while True:
-        result = asyncio.run(run_once())
-        logger.info("%s_loop_completed result=%s", role, result)
-        time.sleep(args.interval_seconds)
+    asyncio.run(_run_role_loop(role=role, run_once=run_once, interval_seconds=args.interval_seconds))

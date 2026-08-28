@@ -673,6 +673,81 @@ class JobRepo:
         return list(result.scalars().all())
 
     @staticmethod
+    async def find_terminal_attempts_with_unpublished_dispatches(
+        db: AsyncSession,
+        *,
+        limit: int,
+    ) -> list[DispatchOutbox]:
+        result = await db.execute(
+            select(DispatchOutbox)
+            .join(JobAttempt, JobAttempt.id == DispatchOutbox.attempt_id)
+            .join(Job, Job.id == JobAttempt.job_id)
+            .where(
+                Job.deleted_at.is_(None),
+                JobAttempt.status.in_(["succeeded", "failed"]),
+                or_(JobAttempt.failure_phase.is_(None), JobAttempt.failure_phase != "dispatch"),
+                DispatchOutbox.task_name == DISPATCH_TASK_NAME,
+                DispatchOutbox.status.in_(["pending", "retrying", "leased", "dead_letter"]),
+            )
+            .order_by(DispatchOutbox.updated_at.asc())
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def mark_terminal_dispatch_reconciled_published(
+        db: AsyncSession,
+        dispatch_id: uuid.UUID,
+    ) -> bool:
+        result = await db.execute(
+            select(DispatchOutbox, JobAttempt)
+            .join(JobAttempt, JobAttempt.id == DispatchOutbox.attempt_id)
+            .join(Job, Job.id == JobAttempt.job_id)
+            .where(
+                DispatchOutbox.id == dispatch_id,
+                DispatchOutbox.task_name == DISPATCH_TASK_NAME,
+                DispatchOutbox.status.in_(["pending", "retrying", "leased", "dead_letter"]),
+                Job.deleted_at.is_(None),
+                JobAttempt.status.in_(["succeeded", "failed"]),
+                or_(JobAttempt.failure_phase.is_(None), JobAttempt.failure_phase != "dispatch"),
+            )
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        row = result.one_or_none()
+        if row is None:
+            return False
+        dispatch, attempt = row
+        previous = dispatch.status
+        now = datetime.now(timezone.utc)
+        dispatch.status = "published"
+        dispatch.publish_attempts = max(dispatch.publish_attempts or 0, 1)
+        dispatch.next_attempt_at = dispatch.next_attempt_at or now
+        dispatch.lease_token = None
+        dispatch.lease_expires_at = None
+        dispatch.last_error = None
+        dispatch.dead_lettered_at = None
+        dispatch.published_at = dispatch.published_at or attempt.started_at or attempt.finished_at or now
+        dispatch.updated_at = now
+        db.add(
+            JobEvent(
+                job_id=attempt.job_id,
+                attempt_id=dispatch.attempt_id,
+                event_type="dispatch.reconciled_published",
+                from_status=previous,
+                to_status="published",
+                payload={
+                    "dispatch_id": str(dispatch.id),
+                    "task_name": dispatch.task_name,
+                    "attempt_status": attempt.status,
+                },
+            )
+        )
+        await db.flush()
+        return True
+
+    @staticmethod
     async def mark_dead_lettered_dispatch_attempt_failed(
         db: AsyncSession,
         dispatch_id: uuid.UUID,

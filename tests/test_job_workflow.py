@@ -443,10 +443,18 @@ async def test_run_job_attempt_failure_path_passes_policy_retryable(
     monkeypatch.setattr(task_jobs, "deliver_callback_for_job", fake_deliver_callback_for_job)
     monkeypatch.setattr("app.jobs.runner.execute_job", fake_execute_job)
 
-    with pytest.raises(Exception) as exc:
-        await task_jobs.run_job_attempt.original_func(str(attempt_id))
+    result = await task_jobs.run_job_attempt.original_func(str(attempt_id))
 
-    assert exc.value.code == error_code
+    assert result == {
+        "attempt_id": str(attempt_id),
+        "job_id": str(job.id),
+        "status": "failed",
+        "error": {
+            "code": "JOB_EXECUTION_FAILED",
+            "message": "job execution failed",
+            "details": {"internal_reason": error_code},
+        },
+    }
     assert marked["attempt_id"] == attempt_id
     assert marked["lease_token"] == lease_token
     assert marked["error"] == {

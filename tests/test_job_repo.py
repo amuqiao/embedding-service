@@ -1193,6 +1193,97 @@ async def test_find_dead_lettered_pending_dispatches_requires_active_queued_job(
 
 
 @pytest.mark.asyncio
+async def test_find_terminal_attempts_with_unpublished_dispatches_excludes_dispatch_phase_failures():
+    db = _FakeDB()
+    db.results.append(_ScalarListResult([]))
+
+    await JobRepo.find_terminal_attempts_with_unpublished_dispatches(db, limit=10)
+
+    sql = _compile(db.statements[0])
+    assert "job_execution_attempts.status IN" in sql
+    assert "dispatch_outbox.status IN" in sql
+    assert "job_execution_attempts.failure_phase IS NULL" in sql
+    assert "job_execution_attempts.failure_phase !=" in sql
+    assert "dispatch_outbox.task_name =" in sql
+    assert "FOR UPDATE SKIP LOCKED" in sql
+
+
+@pytest.mark.asyncio
+async def test_mark_terminal_dispatch_reconciled_published_clears_retry_state():
+    attempt = _attempt(job_id=uuid.uuid4())
+    attempt.status = "failed"
+    attempt.failure_phase = "execute"
+    attempt.started_at = datetime.now(UTC) - timedelta(seconds=2)
+    attempt.finished_at = datetime.now(UTC) - timedelta(seconds=1)
+    dispatch = DispatchOutbox(
+        id=uuid.uuid4(),
+        attempt_id=attempt.id,
+        event_id="job_attempt:test:dispatch",
+        task_name="jobs.run_attempt",
+        payload={},
+        status="retrying",
+        publish_attempts=0,
+        lease_token=uuid.uuid4(),
+        lease_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        last_error={"code": "TASKIQ_PUBLISH_FAILED"},
+    )
+    db = _FakeDB()
+    db.results.append(_OneRowResult((dispatch, attempt)))
+
+    updated = await JobRepo.mark_terminal_dispatch_reconciled_published(db, dispatch.id)
+
+    assert updated is True
+    assert db.flushed is True
+    assert dispatch.status == "published"
+    assert dispatch.publish_attempts == 1
+    assert dispatch.last_error is None
+    assert dispatch.lease_token is None
+    assert dispatch.lease_expires_at is None
+    assert dispatch.published_at == attempt.started_at
+    event = db.added[-1]
+    assert isinstance(event, JobEvent)
+    assert event.event_type == "dispatch.reconciled_published"
+    assert event.from_status == "retrying"
+    assert event.to_status == "published"
+
+
+@pytest.mark.asyncio
+async def test_mark_terminal_dispatch_reconciled_published_clears_dead_letter_state():
+    attempt = _attempt(job_id=uuid.uuid4())
+    attempt.status = "succeeded"
+    attempt.started_at = datetime.now(UTC) - timedelta(seconds=2)
+    dead_lettered_at = datetime.now(UTC) - timedelta(seconds=1)
+    dispatch = DispatchOutbox(
+        id=uuid.uuid4(),
+        attempt_id=attempt.id,
+        event_id="job_attempt:test:dispatch",
+        task_name="jobs.run_attempt",
+        payload={},
+        status="dead_letter",
+        publish_attempts=12,
+        dead_lettered_at=dead_lettered_at,
+        last_error={"code": "TASKIQ_PUBLISH_FAILED"},
+    )
+    db = _FakeDB()
+    db.results.append(_OneRowResult((dispatch, attempt)))
+
+    updated = await JobRepo.mark_terminal_dispatch_reconciled_published(db, dispatch.id)
+
+    assert updated is True
+    assert db.flushed is True
+    assert dispatch.status == "published"
+    assert dispatch.publish_attempts == 12
+    assert dispatch.last_error is None
+    assert dispatch.dead_lettered_at is None
+    assert dispatch.published_at == attempt.started_at
+    event = db.added[-1]
+    assert isinstance(event, JobEvent)
+    assert event.event_type == "dispatch.reconciled_published"
+    assert event.from_status == "dead_letter"
+    assert event.to_status == "published"
+
+
+@pytest.mark.asyncio
 async def test_mark_dead_lettered_dispatch_attempt_failed_terminalizes_pending_job(monkeypatch):
     error = {
         "code": "DISPATCH_PUBLISH_EXHAUSTED",

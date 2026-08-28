@@ -309,6 +309,12 @@ async def run_job_attempt(attempt_id: str) -> dict[str, Any]:
             if marked and job_id is not None:
                 if workflow_advance is not None:
                     await handle_workflow_advance_result(workflow_advance)
+                return {
+                    "attempt_id": attempt_id,
+                    "job_id": str(job_id),
+                    "status": "failed",
+                    "error": error,
+                }
         raise
 
 

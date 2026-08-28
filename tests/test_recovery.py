@@ -106,6 +106,8 @@ def _patch_common_recovery(monkeypatch, *, due_dispatches=None, stale_attempts=N
     monkeypatch.setattr("app.tasks.recovery.JobRepo.find_active_pending_attempts_missing_dispatch", _no_attempts)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.find_dead_lettered_pending_dispatches", _no_dispatches)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.mark_dead_lettered_dispatch_attempt_failed", _no_jobs)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.find_terminal_attempts_with_unpublished_dispatches", _no_dispatches)
+    monkeypatch.setattr("app.tasks.recovery.JobRepo.mark_terminal_dispatch_reconciled_published", _no_jobs)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.find_terminal_root_jobs_missing_callback_outbox", _no_jobs)
     monkeypatch.setattr("app.tasks.recovery.JobRepo.cleanup_expired_jobs", _cleanup)
     monkeypatch.setattr(
@@ -556,6 +558,49 @@ async def test_recovery_repairs_future_missing_dispatch_without_early_publish(mo
     assert result["dispatch_reconciled"] == 1
     assert result["recovered"] == 0
     assert created == [attempt.id]
+    assert published == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_reconciles_terminal_unpublished_dispatch_without_publishing(monkeypatch):
+    attempt_id = uuid.uuid4()
+    dispatch = DispatchOutbox(
+        id=uuid.uuid4(),
+        attempt_id=attempt_id,
+        event_id=f"job_attempt:{attempt_id}:dispatch",
+        task_name="jobs.run_attempt",
+        payload={"attempt_id": str(attempt_id)},
+        status="retrying",
+        last_error={"code": "TASKIQ_PUBLISH_FAILED"},
+    )
+    reconciled: list[uuid.UUID] = []
+    published: list[uuid.UUID] = []
+
+    async def terminal_dispatches(*_args, **_kwargs):
+        return [dispatch]
+
+    async def mark_reconciled(_db, dispatch_id):
+        reconciled.append(dispatch_id)
+        return True
+
+    async def publish(attempt_id):
+        published.append(attempt_id)
+
+    _patch_common_recovery(monkeypatch)
+    monkeypatch.setattr(
+        "app.tasks.recovery.JobRepo.find_terminal_attempts_with_unpublished_dispatches",
+        terminal_dispatches,
+    )
+    monkeypatch.setattr(
+        "app.tasks.recovery.JobRepo.mark_terminal_dispatch_reconciled_published",
+        mark_reconciled,
+    )
+    monkeypatch.setattr("app.tasks.jobs.publish_job_attempt", publish)
+
+    result = await _run_recovery(_FakeDB())
+
+    assert result["dispatch_reconciled"] == 1
+    assert reconciled == [dispatch.id]
     assert published == []
 
 

@@ -147,6 +147,14 @@ async def _run_recovery(db: AsyncSession) -> dict:
                 dispatch_dead_letter_failed += 1
                 logger.warning("recovery: failed dead-lettered dispatch attempt %s", dispatch.attempt_id)
 
+        terminal_unpublished_dispatches = await JobRepo.find_terminal_attempts_with_unpublished_dispatches(
+            db,
+            limit=settings.job.recovery_batch_size,
+        )
+        for dispatch in terminal_unpublished_dispatches:
+            if await JobRepo.mark_terminal_dispatch_reconciled_published(db, dispatch.id):
+                dispatch_reconciled += 1
+
         terminal_jobs_missing_callback = await JobRepo.find_terminal_root_jobs_missing_callback_outbox(
             db,
             limit=settings.job.recovery_callback_batch_size,

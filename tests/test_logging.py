@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 
@@ -108,6 +109,62 @@ def test_reconciler_main_configures_stdout_logging_before_loop(monkeypatch, isol
     assert isinstance(handler, logging.StreamHandler)
     assert not isinstance(handler, logging.FileHandler)
     assert handler.stream is stream
+
+
+def test_role_loop_uses_one_asyncio_run_for_process_lifetime(monkeypatch, isolated_root_logger):
+    from app.runtime import common
+
+    calls = []
+    run_calls = 0
+    stream = io.StringIO()
+
+    async def run_once():
+        calls.append("once")
+        return {"ok": True}
+
+    def fake_asyncio_run(coro):
+        nonlocal run_calls
+        run_calls += 1
+        coro.close()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(logging_module.sys, "stdout", stream)
+    monkeypatch.setattr(common, "ensure_worker_runtime_initialized", lambda: calls.append("bootstrap"))
+    monkeypatch.setattr(common.sys, "argv", ["python -m app.runtime.dispatcher", "loop", "--interval-seconds", "1"])
+    monkeypatch.setattr(common.asyncio, "run", fake_asyncio_run)
+
+    with pytest.raises(KeyboardInterrupt):
+        common.run_role_cli(role="dispatcher", run_once=run_once, default_interval_seconds=1)
+
+    assert calls == ["bootstrap"]
+    assert run_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_role_loop_runs_repeated_work_in_same_async_loop(monkeypatch, isolated_root_logger):
+    from app.runtime import common
+
+    calls = []
+    sleeps = []
+    configure_logging()
+
+    async def run_once():
+        calls.append(("once", id(asyncio.get_running_loop())))
+        return {"count": len(calls)}
+
+    async def fake_sleep(interval):
+        sleeps.append(interval)
+        if len(sleeps) >= 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(common.asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(KeyboardInterrupt):
+        await common._run_role_loop(role="dispatcher", run_once=run_once, interval_seconds=3)
+
+    assert len(calls) == 2
+    assert calls[0][1] == calls[1][1]
+    assert sleeps == [3, 3]
 
 
 @pytest.mark.asyncio
