@@ -21,7 +21,7 @@ run.sh          日常快捷 recipe
 dev.sh          宿主机 API / worker 生命周期
 verify.sh       一次性验证任务
 deploy.sh       docker compose 部署形态
-k8s.sh          已部署 Pod 内手动运维
+k8s.sh          已部署 Pod 内手动运维入口，具体动作下沉到 scripts/k8s/
 redis.sh        Redis 只读排障事实源
 oss.sh          OSS 配置、URL Ref、连通性和显式上传检查事实源
 load.sh         项目级压测入口
@@ -67,6 +67,7 @@ Triton 直压归属 `triton-bench.sh`；它只直连推理服务，不创建 Fas
 已注册 tool、capability 和 job_type capability 关系归属 `tools.sh registry` 只读查看；当前治理事实见 `docs/current/registry-governance.md`。
 Redis 连接、服务端版本、命令能力、内存、keyspace、Stream 和 broker key 证据归属 `redis.sh`。`k8s.sh`、`jobs.sh` 或业务脚本需要 Redis 证据时只编排或复用该入口，不各自维护 Redis 诊断逻辑。
 OSS 配置摘要、URL Ref、显式远端连通性和显式上传检查归属 `oss.sh`。`verify.sh oss-config` 只是 `oss.sh check` 的验证别名；`k8s.sh check oss --confirm` 只负责 Pod 环境确认和编排 `oss.sh check --remote --confirm`。运维权限不支持 `DeleteObject`，远端连通性检查只执行 `PUT / GET / HEAD`，检查对象会保留在 OSS。
+K8s Pod 内运维归属 `k8s.sh` 入口和 `scripts/k8s/` 下沉实现。`k8s.sh` 只维护 help、参数分发和命令合同，`scripts/k8s/ops.sh` 维护 PostgreSQL / Redis / OSS / dashboard / Alembic 原子动作。
 业务 smoke/E2E 归属 `smoke.sh` 和 `python -m smoke`。它只验证已经运行的服务是否符合 HTTP 合同，负责 health/ready/list、提交场景、轮询终态、断言结果和输出证据；不启动或停止 API/worker，不执行 Alembic migration，不直接查库推进流程，也不替代 `jobs.sh` 排障查询。`smoke.sh` 的公开调用格式统一为 `./scripts/smoke.sh [global options] <scenario> [standard job options] [business options]`；`--base-url`、`--env-file`、`--timeout`、`--poll-interval`、`--output-dir` 和 `--json` 等全局参数放在场景名前，`--confirm-run`、`--confirm-cost`、`--confirm-upload`、`--client-request-id`、`--expect-status`、`--callback-url`、`--local-callback`、`--callback-event`、`--wait-callback/--no-wait-callback` 和 `--callback-timeout-seconds` 等标准参数由支持的 Job 场景复用，业务私有参数只放在对应场景命令后。
 
 ## 入口职责

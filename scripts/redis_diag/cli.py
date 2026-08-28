@@ -439,12 +439,26 @@ def _redis_command_capabilities(client: Any, errors: list[dict[str, str]]) -> li
     for command in STREAM_COMMANDS:
         try:
             raw = client.execute_command("COMMAND", "INFO", command)
-            supported = bool(raw and raw[0])
+            supported = _redis_command_info_supported(command, raw)
             rows.append({"command": command, "supported": supported, "error": None})
         except Exception as exc:
             errors.append({"area": f"command:{command}", "error": f"{type(exc).__name__}: {str(exc)[:500]}"})
             rows.append({"command": command, "supported": None, "error": f"{type(exc).__name__}: {str(exc)[:200]}"})
     return rows
+
+
+def _redis_command_info_supported(command: str, raw: Any) -> bool:
+    if not raw:
+        return False
+    expected = command.lower()
+    if isinstance(raw, dict):
+        for raw_name, info in raw.items():
+            if _decode_redis(raw_name).lower() == expected:
+                return bool(info)
+        return False
+    if isinstance(raw, (list, tuple)):
+        return bool(raw[0]) if raw else False
+    return bool(raw)
 
 
 def redis_payload(

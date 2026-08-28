@@ -108,6 +108,27 @@ def _write_run_script_fixture(tmp_path: Path, *, deploy_body: str, dev_body: str
     return root
 
 
+def _write_k8s_script_fixture(root: Path) -> None:
+    script_dir = root / "scripts"
+    lib_dir = script_dir / "lib"
+    k8s_dir = script_dir / "k8s"
+    lib_dir.mkdir(parents=True, exist_ok=True)
+    k8s_dir.mkdir(parents=True, exist_ok=True)
+    (script_dir / "k8s.sh").write_text(
+        (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (script_dir / "k8s.sh").chmod(0o755)
+    (k8s_dir / "ops.sh").write_text(
+        (ROOT_DIR / "scripts" / "k8s" / "ops.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (lib_dir / "common.sh").write_text(
+        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+
 def test_dev_api_service_command_uses_uvicorn_reload_when_enabled():
     command = _api_service_command(DEV_API_RELOAD="true", WATCHFILES_FORCE_POLLING="true")
 
@@ -1660,9 +1681,12 @@ def test_k8s_cli_help_is_available_without_db():
 
 
 def test_k8s_check_oss_delegates_to_oss_entrypoint():
-    script = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
-    oss_check = script.split("run_check_oss() {", 1)[1].split("\n}\n\nrun_check()", 1)[0]
+    entrypoint = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
+    ops = (ROOT_DIR / "scripts" / "k8s" / "ops.sh").read_text(encoding="utf-8")
+    oss_check = ops.split("run_check_oss() {", 1)[1].split("\n}\n\nrun_check()", 1)[0]
 
+    assert 'source "$ROOT_DIR/scripts/k8s/ops.sh"' in entrypoint
+    assert "run_check_oss() {" not in entrypoint
     assert '"$ROOT_DIR/scripts/oss.sh" check --remote --confirm "$@"' in oss_check
     assert "oss_url_ref_from_output_object" not in oss_check
     assert "OSS_TEST_PUBLIC_URL" not in oss_check
@@ -1671,9 +1695,11 @@ def test_k8s_check_oss_delegates_to_oss_entrypoint():
 
 
 def test_k8s_check_dashboard_runs_read_model_without_default_binding():
-    script = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
-    dashboard_check = script.split("run_check_dashboard() {", 1)[1].split("\n}\n\nrun_check_oss()", 1)[0]
+    entrypoint = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
+    ops = (ROOT_DIR / "scripts" / "k8s" / "ops.sh").read_text(encoding="utf-8")
+    dashboard_check = ops.split("run_check_dashboard() {", 1)[1].split("\n}\n\nrun_check_oss()", 1)[0]
 
+    assert "run_check_dashboard() {" not in entrypoint
     assert "settings.ops_dashboard.enabled" in dashboard_check
     assert "read_model.overview_data" in dashboard_check
     assert "read_model.failures_data" in dashboard_check
@@ -1685,19 +1711,13 @@ def test_k8s_check_dashboard_runs_read_model_without_default_binding():
 
 def test_k8s_check_dashboard_executes_with_current_filter_contract(tmp_path):
     script_dir = tmp_path / "scripts"
-    lib_dir = script_dir / "lib"
     sqlalchemy_dir = tmp_path / "sqlalchemy" / "ext"
     app_core_dir = tmp_path / "app" / "core"
     dashboard_dir = tmp_path / "app" / "ops_dashboard"
-    for directory in [lib_dir, sqlalchemy_dir, app_core_dir, dashboard_dir]:
+    for directory in [sqlalchemy_dir, app_core_dir, dashboard_dir]:
         directory.mkdir(parents=True)
 
-    (script_dir / "k8s.sh").write_text((ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8"), encoding="utf-8")
-    (script_dir / "k8s.sh").chmod(0o755)
-    (lib_dir / "common.sh").write_text(
-        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
+    _write_k8s_script_fixture(tmp_path)
     for package_init in [
         tmp_path / "sqlalchemy" / "__init__.py",
         sqlalchemy_dir / "__init__.py",
@@ -1792,9 +1812,11 @@ async def failures_data(db, filters):
 
 
 def test_k8s_default_check_stays_side_effect_free():
-    script = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
-    default_check = script.split('    "")', 1)[1].split("      ;;\n    postgres)", 1)[0]
+    entrypoint = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
+    ops = (ROOT_DIR / "scripts" / "k8s" / "ops.sh").read_text(encoding="utf-8")
+    default_check = ops.split('    "")', 1)[1].split("      ;;\n    postgres)", 1)[0]
 
+    assert "run_check_postgres() {" not in entrypoint
     assert "run_check_postgres" in default_check
     assert "run_check_redis" in default_check
     assert "run_current" in default_check
@@ -1805,9 +1827,11 @@ def test_k8s_default_check_stays_side_effect_free():
 
 
 def test_k8s_check_redis_delegates_to_redis_entrypoint():
-    script = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
-    redis_check = script.split("run_check_redis() {", 1)[1].split("\n}\n\nrun_check_dashboard()", 1)[0]
+    entrypoint = (ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8")
+    ops = (ROOT_DIR / "scripts" / "k8s" / "ops.sh").read_text(encoding="utf-8")
+    redis_check = ops.split("run_check_redis() {", 1)[1].split("\n}\n\nrun_check_dashboard()", 1)[0]
 
+    assert "run_check_redis() {" not in entrypoint
     assert 'require_redis_url' in redis_check
     assert '"$ROOT_DIR/scripts/redis.sh" check --show-url --no-broker-key --redis-url "$REDIS_URL"' in redis_check
     assert "Redis.from_url" not in redis_check
@@ -1934,13 +1958,10 @@ def test_common_export_env_file_defaults_requires_explicit_missing_env_file(tmp_
 
 def test_k8s_default_check_runs_only_side_effect_free_targets(tmp_path):
     script_dir = tmp_path / "scripts"
-    lib_dir = script_dir / "lib"
     bin_dir = tmp_path / "bin"
-    lib_dir.mkdir(parents=True)
     bin_dir.mkdir()
+    _write_k8s_script_fixture(tmp_path)
     (tmp_path / "calls.log").write_text("", encoding="utf-8")
-    (script_dir / "k8s.sh").write_text((ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8"), encoding="utf-8")
-    (script_dir / "k8s.sh").chmod(0o755)
     (script_dir / "redis.sh").write_text(
         f"""#!/usr/bin/env bash
 printf 'redis.sh %s\\n' "$*" >> {tmp_path / "calls.log"}
@@ -1948,10 +1969,6 @@ printf 'redis.sh %s\\n' "$*" >> {tmp_path / "calls.log"}
         encoding="utf-8",
     )
     (script_dir / "redis.sh").chmod(0o755)
-    (lib_dir / "common.sh").write_text(
-        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
     _write_fake_command(
         bin_dir,
         "python3",
@@ -2003,10 +2020,9 @@ printf 'alembic %s\\n' "$*" >> {tmp_path / "calls.log"}
 
 def test_k8s_default_check_loads_root_env_file_defaults(tmp_path):
     script_dir = tmp_path / "scripts"
-    lib_dir = script_dir / "lib"
     bin_dir = tmp_path / "bin"
-    lib_dir.mkdir(parents=True)
     bin_dir.mkdir()
+    _write_k8s_script_fixture(tmp_path)
     (tmp_path / "calls.log").write_text("", encoding="utf-8")
     (tmp_path / ".env").write_text(
         "\n".join(
@@ -2018,8 +2034,6 @@ def test_k8s_default_check_loads_root_env_file_defaults(tmp_path):
         + "\n",
         encoding="utf-8",
     )
-    (script_dir / "k8s.sh").write_text((ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8"), encoding="utf-8")
-    (script_dir / "k8s.sh").chmod(0o755)
     (script_dir / "redis.sh").write_text(
         f"""#!/usr/bin/env bash
 printf 'redis.sh %s\\n' "$*" >> {tmp_path / "calls.log"}
@@ -2027,10 +2041,6 @@ printf 'redis.sh %s\\n' "$*" >> {tmp_path / "calls.log"}
         encoding="utf-8",
     )
     (script_dir / "redis.sh").chmod(0o755)
-    (lib_dir / "common.sh").write_text(
-        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
     _write_fake_command(
         bin_dir,
         "python3",
@@ -2077,17 +2087,14 @@ printf 'alembic %s\\n' "$*" >> {tmp_path / "calls.log"}
 
 def test_k8s_check_redis_loads_selected_env_file(tmp_path):
     script_dir = tmp_path / "scripts"
-    lib_dir = script_dir / "lib"
     bin_dir = tmp_path / "bin"
     env_dir = tmp_path / "envs"
-    lib_dir.mkdir(parents=True)
     bin_dir.mkdir()
     env_dir.mkdir()
+    _write_k8s_script_fixture(tmp_path)
     env_file = env_dir / "k8s.env"
     env_file.write_text("REDIS_URL=redis://:selected-pass@selected-redis.example:6679/9\n", encoding="utf-8")
     (tmp_path / "calls.log").write_text("", encoding="utf-8")
-    (script_dir / "k8s.sh").write_text((ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8"), encoding="utf-8")
-    (script_dir / "k8s.sh").chmod(0o755)
     (script_dir / "redis.sh").write_text(
         f"""#!/usr/bin/env bash
 printf 'redis.sh %s\\n' "$*" >> {tmp_path / "calls.log"}
@@ -2095,10 +2102,6 @@ printf 'redis.sh %s\\n' "$*" >> {tmp_path / "calls.log"}
         encoding="utf-8",
     )
     (script_dir / "redis.sh").chmod(0o755)
-    (lib_dir / "common.sh").write_text(
-        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
     _write_fake_command(
         bin_dir,
         "python3",
@@ -2133,25 +2136,17 @@ printf 'python3\\n' >> {tmp_path / "calls.log"}
 
 
 def test_k8s_current_loads_selected_env_file_before_database_guard(tmp_path):
-    script_dir = tmp_path / "scripts"
-    lib_dir = script_dir / "lib"
     bin_dir = tmp_path / "bin"
     env_dir = tmp_path / "envs"
-    lib_dir.mkdir(parents=True)
     bin_dir.mkdir()
     env_dir.mkdir()
+    _write_k8s_script_fixture(tmp_path)
     env_file = env_dir / "k8s.env"
     env_file.write_text(
         "DATABASE_URL=postgresql://selected-user:selected-pass@selected-db.example:5432/selected-app\n",
         encoding="utf-8",
     )
     (tmp_path / "calls.log").write_text("", encoding="utf-8")
-    (script_dir / "k8s.sh").write_text((ROOT_DIR / "scripts" / "k8s.sh").read_text(encoding="utf-8"), encoding="utf-8")
-    (script_dir / "k8s.sh").chmod(0o755)
-    (lib_dir / "common.sh").write_text(
-        (ROOT_DIR / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
     _write_fake_command(
         bin_dir,
         "python3",
@@ -4398,6 +4393,16 @@ def test_redis_memory_does_not_require_broker_kind_or_command_capabilities(monke
     assert payload["errors"] == []
 
 
+def test_redis_command_info_supported_accepts_dict_and_list_shapes():
+    from scripts.redis_diag.cli import _redis_command_info_supported
+
+    assert _redis_command_info_supported("XADD", {"xadd": {"name": "xadd"}}) is True
+    assert _redis_command_info_supported("XADD", {"xadd": None}) is False
+    assert _redis_command_info_supported("XADD", {}) is False
+    assert _redis_command_info_supported("XADD", [[b"xadd"]]) is True
+    assert _redis_command_info_supported("XADD", [None]) is False
+
+
 def test_jobs_broker_passes_jobs_config_to_redis_diag(monkeypatch):
     captured = {}
 
@@ -4469,7 +4474,8 @@ def test_redis_payload_reports_memory_capabilities_broker_and_top_keys(monkeypat
             raise AssertionError(section)
 
         def execute_command(self, *_args):
-            return [[b"command"]]
+            command = str(_args[-1]).lower()
+            return {command: {"name": command}}
 
         def dbsize(self):
             return 2

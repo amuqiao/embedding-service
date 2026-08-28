@@ -49,6 +49,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/dev/services.sh" \
     "$ROOT_DIR/scripts/deploy.sh" \
     "$ROOT_DIR/scripts/k8s.sh" \
+    "$ROOT_DIR/scripts/k8s/ops.sh" \
     "$ROOT_DIR/scripts/redis.sh" \
     "$ROOT_DIR/scripts/oss.sh" \
     "$ROOT_DIR/scripts/load.sh" \
@@ -159,8 +160,12 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/deploy.sh" up --help >/dev/null
   "$ROOT_DIR/scripts/deploy.sh" up compose-full --help >/dev/null
   "$ROOT_DIR/scripts/k8s.sh" check --help >/dev/null
+  "$ROOT_DIR/scripts/k8s.sh" check dashboard --help >/dev/null
   "$ROOT_DIR/scripts/k8s.sh" check oss --help >/dev/null
   "$ROOT_DIR/scripts/k8s.sh" check oss --confirm --help >/dev/null
+  "$ROOT_DIR/scripts/k8s.sh" current --help >/dev/null
+  "$ROOT_DIR/scripts/k8s.sh" heads --help >/dev/null
+  "$ROOT_DIR/scripts/k8s.sh" history --help >/dev/null
   "$ROOT_DIR/scripts/k8s.sh" migrate --confirm --help >/dev/null
   "$ROOT_DIR/scripts/redis.sh" check --help >/dev/null
   "$ROOT_DIR/scripts/redis.sh" broker --help >/dev/null

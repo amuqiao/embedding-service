@@ -256,7 +256,7 @@ Job 只读排障由 `jobs.sh` 承接：
 
 `jobs.sh` 只执行只读查询，不创建 Job、不取消、不重试、不补偿、不重放 callback。无参默认输出 Job overview；`guide` 解释系统态、恢复态、运输和运行时、单 Job 轨迹四层排障模型。默认输出面向人读，`--json` 输出纯 JSON，适合 AI、CI 或运维平台解析。已注册 tool、capability 和 job_type capability 关系使用 `./scripts/tools.sh registry` 查看，当前治理事实见 `docs/current/registry-governance.md`。`verify.sh check` 会校验入口 help、子命令 help、Python 语法和测试；help 校验不连接数据库。
 
-脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/run.sh` 只编排日常 recipe，`scripts/dev.sh` 调度 `scripts/dev/` 中的宿主机 API / worker 进程能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/jobs.sh` 调度 `scripts/jobs/` 中的只读 Job 排障能力，`scripts/redis.sh` 调度 `scripts/redis_diag/` 中的 Redis 只读排障能力，`scripts/deploy.sh` 只调度 compose 部署能力，`scripts/k8s.sh` 只提供 Pod 内连接检查和 Alembic 运维入口，`scripts/models.sh` 只管理 `.data/models/` 下的本地模型资产下载、路径和必需文件检查，`scripts/media.sh` 只管理本地音视频素材探测、校验和准备，`scripts/tools.sh` 只提供无默认持久副作用的本地开发辅助工具和只读代码清单查看，`scripts/triton-bench.sh` 只直连 Triton 推理服务做保守阶梯压测。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。本地脚本变量、应用配置和 compose 编排变量统一从根目录 `.env` 或运行时环境读取；不再维护 `scripts/.env`。`dev.sh` 只面向宿主机 API / worker 进程，不做部署、不启动或停止 Docker 依赖、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
+脚本入口采用“中控脚本 + 子目录原子脚本 + 公共库”的结构：`scripts/run.sh` 只编排日常 recipe，`scripts/dev.sh` 调度 `scripts/dev/` 中的宿主机 API / worker 进程能力，`scripts/verify.sh` 调度 `scripts/verify/` 中的一次性验证能力，`scripts/jobs.sh` 调度 `scripts/jobs/` 中的只读 Job 排障能力，`scripts/redis.sh` 调度 `scripts/redis_diag/` 中的 Redis 只读排障能力，`scripts/deploy.sh` 只调度 compose 部署能力，`scripts/k8s.sh` 只维护 Pod 内运维 help 和分发合同，具体 PostgreSQL / Redis / OSS / dashboard / Alembic 动作下沉到 `scripts/k8s/ops.sh`，`scripts/models.sh` 只管理 `.data/models/` 下的本地模型资产下载、路径和必需文件检查，`scripts/media.sh` 只管理本地音视频素材探测、校验和准备，`scripts/tools.sh` 只提供无默认持久副作用的本地开发辅助工具和只读代码清单查看，`scripts/triton-bench.sh` 只直连 Triton 推理服务做保守阶梯压测。公共 shell 能力位于 `scripts/lib/`：`common.sh` 放输出、错误和基础校验，`runtime.sh` 放本地 API / Python venv 等运行时变量，`compose.sh` 放 docker compose 包装。本地脚本变量、应用配置和 compose 编排变量统一从根目录 `.env` 或运行时环境读取；不再维护 `scripts/.env`。`dev.sh` 只面向宿主机 API / worker 进程，不做部署、不启动或停止 Docker 依赖、不重置数据库、不管理其他仓库；当 `.env` 中 `DATABASE_URL` 或 `REDIS_URL` 指向非本地主机时，会拒绝执行生命周期和迁移动作。启动 API 前会检查 `8100` 端口是否已被其他进程占用。
 
 入口脚本约束以 [`scripts/README.md`](scripts/README.md) 和 [`docs/current/script-entrypoint-contract.md`](docs/current/script-entrypoint-contract.md) 为准：
 
@@ -266,7 +266,7 @@ Job 只读排障由 `jobs.sh` 承接：
 - `scripts/dev.sh` 只管理宿主机 API / worker 生命周期和本地开发端口探测；模板级一次性验证放在 `scripts/verify.sh`。
 - 业务/供应商扩展示例放在 `examples/business/`，不进入 `scripts/` 稳定命令面。
 - `scripts/deploy.sh` 只管理 `compose-deps` 和 `compose-full`，不管理 `local` 本地服务生命周期。
-- `scripts/k8s.sh` 只在 K8s Pod 内检查 PostgreSQL / Redis 连接、单独显式检查 OSS、查询或执行 Alembic 迁移，不管理 K8s 资源，不替代发布编排；其中 Redis 检查只编排 `scripts/redis.sh`。
+- `scripts/k8s.sh` 只在 K8s Pod 内提供运维入口合同，具体动作在 `scripts/k8s/ops.sh`；它检查 PostgreSQL / Redis 连接、单独显式检查 OSS、查询或执行 Alembic 迁移，不管理 K8s 资源，不替代发布编排；其中 Redis 检查只编排 `scripts/redis.sh`。
 - `scripts/redis.sh` 是 Redis 只读排障事实源，负责连接、服务端版本、命令能力、内存、keyspace、Stream 和 broker key 证据。
 - `scripts/models.sh` 只管理本地模型资产下载、路径和必需文件检查；不执行模型推理，不自动切换下载源，不删除本地模型。
 - `scripts/media.sh` 只管理本地音视频素材探测、校验和准备；不下载模型、不执行推理、不提交 Job、不上传对象存储。

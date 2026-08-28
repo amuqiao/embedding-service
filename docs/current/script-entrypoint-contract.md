@@ -24,7 +24,8 @@
 
 | 类型 | 当前例子 | 规则 |
 |---|---|---|
-| 纯 shell 手写 help | `run.sh`、`dev.sh`、`verify.sh`、`deploy.sh`、`k8s.sh`、`tools.sh` | 可以手写 `用法`、`命令`、`选项` 和说明区块。 |
+| 纯 shell 手写 help | `run.sh`、`dev.sh`、`verify.sh`、`deploy.sh`、`tools.sh` | 可以手写 `用法`、`命令`、`选项` 和说明区块。 |
+| shell 入口 + 下沉 shell 实现 | `k8s.sh` + `scripts/k8s/ops.sh` | 入口维护 help 和分发合同；下沉文件维护 Pod 内原子动作。 |
 | shell wrapper + Typer CLI | `jobs.sh`、`redis.sh`、`job-ops.sh`、`load.sh` | Typer 自动生成的 `Usage`、`Options`、`Commands` 是命令和参数事实源；手写 epilog 不能再重复一份完整命令目录。 |
 | shell wrapper + Python 参数规范层 + Typer 场景实现 | `smoke.sh` | wrapper help 和 `python -m smoke` 共同定义 `./scripts/smoke.sh [smoke options] <scenario> [scenario options]`。全局 smoke 参数必须在场景名前；场景实现仍复用 Typer 命令函数。 |
 | shell wrapper + 普通 Python / argparse | `oss.sh`、`tools.sh env-url` 这类下沉实现 | 参数事实源以实际执行层为准；wrapper 只在需要统一入口体验时手写薄 help。 |
