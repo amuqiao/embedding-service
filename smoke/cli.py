@@ -316,7 +316,7 @@ AUDIO_STEM_SEPARATION_HELP_EPILOG = """\b
   input_file 必须是 htdemucs-input：WAV、44.1kHz、双声道。
   build-payload 不提交 Job；使用 --input-file 时会先 stage/upload 输入音频来生成 URL Ref。
   run 会真实提交 Job、等待终态，并可下载四条 stem。
-  --env-file 沿用 smoke 既有配置入口；运行时环境变量仍优先于 env 文件。
+  --env-file 沿用 smoke 既有配置入口；选择 profile 后优先于本机同名环境变量。
   本地文件会先 stage/upload 成 input_audio URL Ref，Job 本身仍按 public_url 读取输入，不直接接收本地文件路径。
   本地 STORAGE_BACKEND=local 只适合 public_url 已能被 API/worker 读取的环境；远端测试优先使用 STORAGE_BACKEND=aliyun_oss + --confirm-upload。
 """

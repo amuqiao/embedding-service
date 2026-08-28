@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from ipaddress import ip_address
+import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -42,6 +43,14 @@ def require_api_url(api_url: str, *, allow_remote_api: bool = False) -> str:
 def resolved_api_url(api_url: str | None, app_env: dict[str, str], *, allow_remote_api: bool = False) -> str:
     if api_url:
         return require_api_url(api_url.rstrip("/"), allow_remote_api=allow_remote_api)
+    if env_runtime.env_file_overrides_runtime(app_env):
+        configured_from_file = app_env.get("API_URL")
+        if configured_from_file:
+            return require_api_url(configured_from_file.rstrip("/"), allow_remote_api=allow_remote_api)
+        if app_env.get("API_HOST") is not None or app_env.get("API_PORT") is not None:
+            host = env_runtime.env_value("API_HOST", app_env) or "127.0.0.1"
+            port = env_runtime.env_value("API_PORT", app_env) or "8100"
+            return require_api_url(f"http://{host}:{port}", allow_remote_api=allow_remote_api)
     configured = env_runtime.env_value("API_URL", app_env)
     if configured:
         return require_api_url(configured.rstrip("/"), allow_remote_api=allow_remote_api)
@@ -57,7 +66,7 @@ def build_headers(app_env: dict[str, str], *, caller_id: str, service_api_key: s
         if not token or token.startswith("<"):
             raise FlowError(
                 "SERVICE_API_KEY is required unless DISABLE_HTTP_AUTH_HEADER=true; "
-                "set SERVICE_API_KEY in the shell/env file or pass --service-api-key",
+                "set SERVICE_API_KEY in the smoke profile/runtime env or pass --service-api-key",
                 exit_code=2,
             )
         headers["Authorization"] = f"Bearer {token}"
@@ -78,7 +87,7 @@ def resolve_runtime_context(
     env_path = env_runtime.resolve_env_file_path(env_file, root_dir=root_dir)
     app_env = env_runtime.load_app_env(env_file, root_dir=root_dir)
     base_url = resolved_api_url(api_url, app_env, allow_remote_api=allow_remote_api)
-    api_url_source = "cli" if api_url else env_runtime.env_source("API_URL", app_env)
+    api_url_source = "cli" if api_url else _api_url_source(app_env)
     if api_url_source == "missing":
         api_url_source = "derived_from_api_host_port"
     auth_enabled = not env_runtime.bool_enabled(env_runtime.env_value("DISABLE_HTTP_AUTH_HEADER", app_env))
@@ -87,19 +96,35 @@ def resolve_runtime_context(
     problems: list[str] = []
     token = service_api_key if service_api_key is not None else env_runtime.env_value("SERVICE_API_KEY", app_env)
     if auth_enabled and (not token or token.startswith("<")):
-        problems.append("SERVICE_API_KEY is required unless DISABLE_HTTP_AUTH_HEADER=true")
+        problems.append(
+            "SERVICE_API_KEY is required unless DISABLE_HTTP_AUTH_HEADER=true; "
+            "set SERVICE_API_KEY in the smoke profile/runtime env or pass --service-api-key"
+        )
     summary = {
         "ready": not problems,
         "problems": problems,
         "env_file": str(env_path),
         "env_file_exists": env_path.is_file(),
+        "env_file_source": env_runtime.configured_env_file_source(env_file),
+        "env_file_overrides_runtime": env_runtime.env_file_overrides_runtime(app_env),
         "api_url": base_url,
         "api_url_source": api_url_source,
         "allow_remote_api": allow_remote_api,
         "auth_header_enabled": auth_enabled,
         "service_api_key_source": token_source if auth_enabled else "disabled",
         "service_api_key_present": (service_api_key is not None or env_runtime.env_value("SERVICE_API_KEY", app_env) is not None),
+        "service_api_key_env_file_present": app_env.get("SERVICE_API_KEY") is not None,
+        "service_api_key_runtime_present": os.environ.get("SERVICE_API_KEY") is not None,
         "caller_id_header_enabled": caller_header_enabled,
         "caller_id": caller_id if caller_header_enabled else "-",
     }
     return RuntimeContext(app_env=app_env, summary=summary)
+
+
+def _api_url_source(app_env: dict[str, str]) -> str:
+    if env_runtime.env_file_overrides_runtime(app_env):
+        if app_env.get("API_URL") is not None:
+            return "env_file"
+        if app_env.get("API_HOST") is not None or app_env.get("API_PORT") is not None:
+            return "derived_from_api_host_port"
+    return env_runtime.env_source("API_URL", app_env)

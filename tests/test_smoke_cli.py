@@ -3,6 +3,7 @@ import io
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PIL import Image
@@ -630,7 +631,11 @@ def test_smoke_ready_prints_resolved_context(tmp_path, monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["api_url"] == "http://test.example.com"
     assert payload["api_url_source"] == "env_file"
+    assert payload["env_file_source"] == "cli"
+    assert payload["env_file_overrides_runtime"] is True
     assert payload["service_api_key_source"] == "env_file"
+    assert payload["service_api_key_env_file_present"] is True
+    assert payload["service_api_key_runtime_present"] is False
     assert payload["caller_id"] == "default"
     assert "jobs_url" not in payload
     assert "storage_backend" not in payload
@@ -638,6 +643,268 @@ def test_smoke_ready_prints_resolved_context(tmp_path, monkeypatch):
     assert payload["ready"] is True
     assert payload["problems"] == []
     assert payload["ready_response"] == {"status": "ok", "db": "ok", "redis": "ok"}
+
+
+def test_smoke_health_env_file_overrides_runtime_api_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("API_URL", "http://runtime.example.com")
+    monkeypatch.setenv("SERVICE_API_KEY", "runtime-token")
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(url, **_kwargs):
+        captured["url"] = url
+        return {"status": "ok"}
+
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
+    env_dir = tmp_path / "env_test"
+    env_dir.mkdir()
+    (env_dir / ".env").write_text(
+        "API_HOST=127.0.0.1\nAPI_PORT=18210\nSERVICE_API_KEY=file-token\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["--env-file", "env_test/.env", "--json", "health"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert captured["url"] == "http://127.0.0.1:18210/health"
+    assert payload["base_url"] == "http://127.0.0.1:18210"
+    assert payload["ready"] is True
+
+
+def test_smoke_ready_env_file_overrides_runtime_auth_and_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("API_URL", "http://runtime.example.com")
+    monkeypatch.setenv("SERVICE_API_KEY", "runtime-token")
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(url, **_kwargs):
+        captured["url"] = url
+        return {"status": "ok", "db": "ok", "redis": "ok"}
+
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
+    env_dir = tmp_path / "env_test"
+    env_dir.mkdir()
+    (env_dir / ".env").write_text(
+        "API_URL=http://env-file.example.com\nSERVICE_API_KEY=file-token\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--env-file",
+            "env_test/.env",
+            "--allow-remote-api",
+            "--json",
+            "ready",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert captured["url"] == "http://env-file.example.com/healthz"
+    assert payload["api_url"] == "http://env-file.example.com"
+    assert payload["api_url_source"] == "env_file"
+    assert payload["service_api_key_source"] == "env_file"
+    assert payload["service_api_key_env_file_present"] is True
+    assert payload["service_api_key_runtime_present"] is True
+    assert payload["env_file_overrides_runtime"] is True
+
+
+def test_smoke_ready_env_file_host_port_override_runtime_api_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("API_URL", "http://runtime.example.com")
+    monkeypatch.setenv("SERVICE_API_KEY", "runtime-token")
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(url, **_kwargs):
+        captured["url"] = url
+        return {"status": "ok", "db": "ok", "redis": "ok"}
+
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
+    env_dir = tmp_path / "env_test"
+    env_dir.mkdir()
+    (env_dir / ".env").write_text(
+        "API_HOST=127.0.0.1\nAPI_PORT=18210\nSERVICE_API_KEY=file-token\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--env-file",
+            "env_test/.env",
+            "--json",
+            "ready",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert captured["url"] == "http://127.0.0.1:18210/healthz"
+    assert payload["api_url"] == "http://127.0.0.1:18210"
+    assert payload["api_url_source"] == "derived_from_api_host_port"
+    assert payload["service_api_key_source"] == "env_file"
+    assert payload["env_file_overrides_runtime"] is True
+
+
+@pytest.mark.parametrize(
+    ("runtime_host", "runtime_port", "env_file_content", "expected_url"),
+    [
+        (
+            "runtime-host.example.com",
+            "19191",
+            "API_PORT=18210\nSERVICE_API_KEY=file-token\n",
+            "http://runtime-host.example.com:18210",
+        ),
+        (
+            "127.0.0.1",
+            "19191",
+            "API_HOST=env-file.example.com\nSERVICE_API_KEY=file-token\n",
+            "http://env-file.example.com:19191",
+        ),
+    ],
+)
+def test_smoke_ready_env_file_partial_host_port_falls_back_to_runtime_env(
+    tmp_path,
+    monkeypatch,
+    runtime_host,
+    runtime_port,
+    env_file_content,
+    expected_url,
+):
+    monkeypatch.setenv("API_HOST", runtime_host)
+    monkeypatch.setenv("API_PORT", runtime_port)
+    monkeypatch.setenv("SERVICE_API_KEY", "runtime-token")
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(url, **_kwargs):
+        captured["url"] = url
+        return {"status": "ok", "db": "ok", "redis": "ok"}
+
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
+    env_dir = tmp_path / "env_test"
+    env_dir.mkdir()
+    (env_dir / ".env").write_text(env_file_content, encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "--env-file",
+            "env_test/.env",
+            "--allow-remote-api",
+            "--json",
+            "ready",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert captured["url"] == f"{expected_url}/healthz"
+    assert payload["api_url"] == expected_url
+    assert payload["api_url_source"] == "derived_from_api_host_port"
+    assert payload["service_api_key_source"] == "env_file"
+    assert payload["env_file_overrides_runtime"] is True
+
+
+def test_smoke_ready_cli_service_key_overrides_env_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("SERVICE_API_KEY", "runtime-token")
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(http_runtime, "request_json", lambda *_args, **_kwargs: {"status": "ok", "db": "ok", "redis": "ok"})
+    env_dir = tmp_path / "env_test"
+    env_dir.mkdir()
+    (env_dir / ".env").write_text(
+        "API_URL=http://env-file.example.com\nSERVICE_API_KEY=file-token\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--env-file",
+            "env_test/.env",
+            "--allow-remote-api",
+            "--service-api-key",
+            "cli-token",
+            "--json",
+            "ready",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["service_api_key_source"] == "cli"
+    assert payload["service_api_key_env_file_present"] is True
+    assert payload["service_api_key_runtime_present"] is True
+    assert payload["env_file_overrides_runtime"] is True
+
+
+def test_smoke_ready_env_file_profile_does_not_leak_between_invocations(tmp_path, monkeypatch):
+    monkeypatch.setenv("API_URL", "http://runtime.example.com")
+    monkeypatch.setenv("SERVICE_API_KEY", "runtime-token")
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
+    captured_urls: list[str] = []
+
+    def fake_request_json(url, **_kwargs):
+        captured_urls.append(url)
+        return {"status": "ok", "db": "ok", "redis": "ok"}
+
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
+    env_dir = tmp_path / "env_test"
+    env_dir.mkdir()
+    (env_dir / ".env").write_text(
+        "API_URL=http://env-file.example.com\nSERVICE_API_KEY=file-token\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        "API_URL=http://default-file.example.com\nSERVICE_API_KEY=default-file-token\n",
+        encoding="utf-8",
+    )
+
+    first = runner.invoke(
+        app,
+        [
+            "--env-file",
+            "env_test/.env",
+            "--allow-remote-api",
+            "--json",
+            "ready",
+        ],
+    )
+    second = runner.invoke(app, ["--allow-remote-api", "--json", "ready"])
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    assert captured_urls == ["http://env-file.example.com/healthz", "http://runtime.example.com/healthz"]
+    assert json.loads(first.stdout)["env_file_overrides_runtime"] is True
+    assert json.loads(second.stdout)["env_file_overrides_runtime"] is False
+    assert json.loads(second.stdout)["api_url_source"] == "runtime_env"
+
+
+def test_smoke_runtime_context_uses_env_file_profile_priority(tmp_path, monkeypatch):
+    monkeypatch.setenv("API_URL", "http://runtime.example.com")
+    monkeypatch.setenv("SERVICE_API_KEY", "runtime-token")
+    env_dir = tmp_path / "env_test"
+    env_dir.mkdir()
+    (env_dir / ".env").write_text(
+        "API_URL=http://env-file.example.com\nSERVICE_API_KEY=file-token\n",
+        encoding="utf-8",
+    )
+
+    context = service_runtime.resolve_runtime_context(
+        env_file="env_test/.env",
+        api_url=None,
+        allow_remote_api=True,
+        caller_id="smoke-cli",
+        root_dir=tmp_path,
+    )
+
+    assert context.summary["api_url"] == "http://env-file.example.com"
+    assert context.summary["api_url_source"] == "env_file"
+    assert context.summary["service_api_key_source"] == "env_file"
+    assert context.summary["env_file_overrides_runtime"] is True
 
 
 def test_smoke_ready_rejects_missing_service_api_key(tmp_path, monkeypatch):
@@ -651,7 +918,8 @@ def test_smoke_ready_rejects_missing_service_api_key(tmp_path, monkeypatch):
     assert result.exit_code == 2
     payload = json.loads(result.stdout)
     assert payload["ready"] is False
-    assert payload["problems"] == ["SERVICE_API_KEY is required unless DISABLE_HTTP_AUTH_HEADER=true"]
+    assert len(payload["problems"]) == 1
+    assert "SERVICE_API_KEY is required unless DISABLE_HTTP_AUTH_HEADER=true" in payload["problems"][0]
 
 
 def test_smoke_list_outputs_standard_scenario_metadata():
@@ -2384,6 +2652,35 @@ def test_smoke_env_value_prefers_runtime_env(monkeypatch):
     value = env_runtime.env_value("SERVICE_API_KEY", {"SERVICE_API_KEY": "file-token"})
 
     assert value == "runtime-token"
+    assert env_runtime.env_source("SERVICE_API_KEY", {"SERVICE_API_KEY": "file-token"}) == "runtime_env"
+
+
+def test_smoke_env_value_prefers_env_file_when_profile_override_is_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("SERVICE_API_KEY", "runtime-token")
+    env_dir = tmp_path / "env_test"
+    env_dir.mkdir()
+    (env_dir / ".env").write_text("SERVICE_API_KEY=file-token\n", encoding="utf-8")
+
+    app_env = env_runtime.load_app_env("env_test/.env", root_dir=tmp_path)
+
+    value = env_runtime.env_value("SERVICE_API_KEY", app_env)
+
+    assert value == "file-token"
+    assert env_runtime.env_source("SERVICE_API_KEY", app_env) == "env_file"
+
+
+def test_smoke_env_file_profile_falls_back_to_runtime_for_missing_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("SERVICE_API_KEY", "runtime-token")
+    env_dir = tmp_path / "env_test"
+    env_dir.mkdir()
+    (env_dir / ".env").write_text("API_URL=http://env-file.example.com\n", encoding="utf-8")
+
+    app_env = env_runtime.load_app_env("env_test/.env", root_dir=tmp_path)
+
+    value = env_runtime.env_value("SERVICE_API_KEY", app_env)
+
+    assert value == "runtime-token"
+    assert env_runtime.env_source("SERVICE_API_KEY", app_env) == "runtime_env"
 
 
 def test_smoke_resolves_api_url_from_root_env(monkeypatch):

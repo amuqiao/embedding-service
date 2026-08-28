@@ -9,6 +9,21 @@ from smoke.harness.errors import FlowError
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
 
+class AppEnv(dict[str, str]):
+    def __init__(
+        self,
+        values: dict[str, str],
+        *,
+        profile_selected: bool,
+        profile_source: str,
+        path: Path,
+    ) -> None:
+        super().__init__(values)
+        self.profile_selected = profile_selected
+        self.profile_source = profile_source
+        self.path = path
+
+
 def load_env_file(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
@@ -28,6 +43,18 @@ def configured_env_file(env_file: str | None = None) -> str | None:
     return os.environ.get("ENV_FILE")
 
 
+def configured_env_file_source(env_file: str | None = None) -> str:
+    if env_file is not None:
+        return "cli"
+    if os.environ.get("ENV_FILE") is not None:
+        return "runtime_env"
+    return "default"
+
+
+def env_file_overrides_runtime(*files: dict[str, str]) -> bool:
+    return any(isinstance(values, AppEnv) and values.profile_selected for values in files)
+
+
 def resolve_env_file_path(env_file: str | None = None, *, root_dir: Path | None = None) -> Path:
     base_dir = root_dir or ROOT_DIR
     selected = configured_env_file(env_file)
@@ -39,14 +66,23 @@ def resolve_env_file_path(env_file: str | None = None, *, root_dir: Path | None 
     return base_dir / path
 
 
-def load_app_env(env_file: str | None = None, *, root_dir: Path | None = None) -> dict[str, str]:
+def load_app_env(env_file: str | None = None, *, root_dir: Path | None = None) -> AppEnv:
     path = resolve_env_file_path(env_file, root_dir=root_dir)
     if configured_env_file(env_file) is not None and not path.is_file():
         raise FlowError(f"env file not found: {path}", exit_code=2)
-    return load_env_file(path)
+    return AppEnv(
+        load_env_file(path),
+        profile_selected=configured_env_file(env_file) is not None,
+        profile_source=configured_env_file_source(env_file),
+        path=path,
+    )
 
 
 def env_value(name: str, *files: dict[str, str]) -> str | None:
+    if env_file_overrides_runtime(*files):
+        for values in files:
+            if values.get(name) is not None:
+                return values[name]
     if os.environ.get(name) is not None:
         return os.environ[name]
     for values in files:
@@ -56,6 +92,10 @@ def env_value(name: str, *files: dict[str, str]) -> str | None:
 
 
 def env_source(name: str, *files: dict[str, str]) -> str:
+    if env_file_overrides_runtime(*files):
+        for values in files:
+            if values.get(name) is not None:
+                return "env_file"
     if os.environ.get(name) is not None:
         return "runtime_env"
     for values in files:

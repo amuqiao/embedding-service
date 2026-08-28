@@ -49,6 +49,17 @@ ENV_FILE=.env uv run python -m smoke [global options] <scenario> [standard job o
 
 Smoke 全局选项统一放在场景命令前，例如 `--base-url`、`--env-file`、`--allow-remote-api`、`--service-api-key`、`--caller-id`、`--timeout`、`--poll-interval`、`--output-dir` 和 `--json`。
 
+`--env-file` 和 `ENV_FILE` 表示本次 smoke 选择的 profile。选择 profile 后，同名配置按以下顺序取值：
+
+```text
+显式 CLI 参数（例如 --service-api-key / --base-url）
+  > smoke profile 文件（--env-file 或 ENV_FILE）
+  > 本机进程环境变量
+  > 应用默认值
+```
+
+`ready` 会输出 `env_file_overrides_runtime`、`api_url_source`、`service_api_key_source`、`service_api_key_env_file_present` 和 `service_api_key_runtime_present`，用于区分“远端服务鉴权配置错误”和“本机 smoke 客户端带错 token”。
+
 标准 Job 参数由支持的 Job 场景复用，例如 `--confirm-run`、`--confirm-cost`、`--confirm-upload`、`--client-request-id` 和 `--expect-status`。
 
 标准 Callback 参数由支持 callback 的 Job 场景复用，例如 `--callback-url`、`--local-callback`、`--callback-event`、`--wait-callback/--no-wait-callback` 和 `--callback-timeout-seconds`。

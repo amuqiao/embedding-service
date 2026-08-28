@@ -21,9 +21,9 @@ Usage:
 
 通用参数:
   --base-url <url>        显式覆盖服务 HTTP base URL；不传时由 API_URL / API_HOST:API_PORT 推导。
-  --env-file <path>      显式加载 env 文件；也可通过 ENV_FILE 指定。
+  --env-file <path>      显式加载 smoke profile；优先于本机同名环境变量。也可通过 ENV_FILE 指定。
   --allow-remote-api      允许 --base-url 或 API_URL 指向非本机地址。
-  --service-api-key <key> 覆盖 SERVICE_API_KEY；共享环境优先用环境变量注入。
+  --service-api-key <key> 显式覆盖 SERVICE_API_KEY；优先级高于 smoke profile 和本机环境变量。
   --caller-id <id>        X-AI-Service-Caller-ID。
   --timeout <seconds>    场景最大等待时间。
   --poll-interval <sec>  轮询间隔。
@@ -105,6 +105,27 @@ case "${1:-}" in
     exit 0
     ;;
 esac
+
+selected_env_file="${ENV_FILE:-}"
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    --env-file)
+      if (( i + 1 < ${#args[@]} )); then
+        selected_env_file="${args[$((i + 1))]}"
+      fi
+      break
+      ;;
+    --env-file=*)
+      selected_env_file="${args[$i]#--env-file=}"
+      break
+      ;;
+  esac
+done
+
+if [[ -n "$selected_env_file" ]]; then
+  export ENV_FILE="$selected_env_file"
+fi
 
 require_project_python
 PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" PYTHONUNBUFFERED=1 \

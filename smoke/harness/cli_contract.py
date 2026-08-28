@@ -34,7 +34,7 @@ BaseUrlOption = Annotated[
 ]
 EnvFileOption = Annotated[
     str | None,
-    typer.Option("--env-file", help="显式配置文件路径；默认读取仓库根目录 .env，运行时环境变量优先。"),
+    typer.Option("--env-file", help="显式 smoke profile 文件路径；选择后优先于本机同名环境变量。"),
 ]
 AllowRemoteApiOption = Annotated[
     bool,
@@ -42,7 +42,7 @@ AllowRemoteApiOption = Annotated[
 ]
 ServiceApiKeyOption = Annotated[
     str | None,
-    typer.Option("--service-api-key", help="覆盖 SERVICE_API_KEY，作为 Authorization: Bearer token 发送。"),
+    typer.Option("--service-api-key", help="显式覆盖 SERVICE_API_KEY，作为 Authorization: Bearer token 发送。"),
 ]
 CallerIdOption = Annotated[
     str,
