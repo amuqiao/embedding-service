@@ -172,6 +172,60 @@ def test_ai_models_reads_env_file_variable(tmp_path):
     assert data["providers"][0]["model_count"] == 3
 
 
+def test_ai_explicit_env_file_ignores_shell_provider_override(tmp_path, monkeypatch):
+    from scripts.ai import cli as ai_cli
+
+    env_file = _write_dashscope_env(tmp_path, "http://file-config.example")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "shell-key")
+    monkeypatch.setenv("DASHSCOPE_BASE_URL", "http://shell-config.example/compatible-mode/v1")
+
+    values, loaded_path = ai_cli._load_env_values(str(env_file))
+
+    assert loaded_path == env_file
+    assert values["DASHSCOPE_API_KEY"] == "dashscope-test-key"
+    assert values["DASHSCOPE_BASE_URL"] == "http://file-config.example/compatible-mode/v1"
+
+
+def test_ai_env_file_variable_ignores_shell_provider_override(tmp_path, monkeypatch):
+    from scripts.ai import cli as ai_cli
+
+    env_file = _write_dashscope_env(tmp_path, "http://env-file-config.example")
+    monkeypatch.setenv("ENV_FILE", str(env_file))
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "shell-key")
+    monkeypatch.setenv("DASHSCOPE_BASE_URL", "http://shell-config.example/compatible-mode/v1")
+
+    values, loaded_path = ai_cli._load_env_values(None)
+
+    assert loaded_path == env_file
+    assert values["DASHSCOPE_API_KEY"] == "dashscope-test-key"
+    assert values["DASHSCOPE_BASE_URL"] == "http://env-file-config.example/compatible-mode/v1"
+
+
+def test_ai_default_env_allows_shell_provider_override(tmp_path, monkeypatch):
+    from scripts.ai import cli as ai_cli
+
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "DASHSCOPE_API_KEY=file-key",
+                "DASHSCOPE_BASE_URL=http://file-config.example/compatible-mode/v1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ai_cli, "ROOT_DIR", tmp_path)
+    monkeypatch.delenv("ENV_FILE", raising=False)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "shell-key")
+    monkeypatch.setenv("DASHSCOPE_BASE_URL", "http://shell-config.example/compatible-mode/v1")
+
+    values, loaded_path = ai_cli._load_env_values(None)
+
+    assert loaded_path == tmp_path / ".env"
+    assert values["DASHSCOPE_API_KEY"] == "shell-key"
+    assert values["DASHSCOPE_BASE_URL"] == "http://shell-config.example/compatible-mode/v1"
+
+
 def test_ai_models_auto_selects_configured_providers(tmp_path):
     server = _run_server()
     try:

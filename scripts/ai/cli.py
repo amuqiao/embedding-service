@@ -75,12 +75,31 @@ def _read_env_file(path: Path, *, required: bool) -> dict[str, str]:
     return {key: value for key, value in values.items() if key and value is not None}
 
 
+def _selected_env_file_value(env_file: str | None) -> tuple[str, bool]:
+    if env_file is not None:
+        selected = env_file.strip()
+        if not selected:
+            raise AiCliError("--env-file must not be empty", exit_code=2)
+        return selected, True
+
+    if "ENV_FILE" in os.environ:
+        selected = os.environ["ENV_FILE"].strip()
+        if not selected:
+            raise AiCliError("ENV_FILE must not be empty", exit_code=2)
+        return selected, True
+
+    return ".env", False
+
+
 def _load_env_values(env_file: str | None) -> tuple[dict[str, str], Path | None]:
-    selected_value = (env_file or os.environ.get("ENV_FILE") or ".env").strip()
+    selected_value, explicit_env_file = _selected_env_file_value(env_file)
     selected_path = _resolve_repo_path(selected_value)
 
     values: dict[str, str] = {}
     values.update(_read_env_file(selected_path, required=True))
+    if explicit_env_file:
+        return values, selected_path
+
     provider_env_keys = {
         key
         for definition in _provider_definitions().values()
@@ -260,7 +279,8 @@ def build_parser() -> argparse.ArgumentParser:
 配置与环境变量:
   DashScope 使用 DASHSCOPE_API_KEY / DASHSCOPE_BASE_URL。
   OpenAI 使用 OPENAI_API_KEY / OPENAI_BASE_URL；OPENAI_BASE_URL 为空时使用 https://api.openai.com/v1。
-  进程环境变量优先于 env 文件；--env-file 优先于 ENV_FILE。
+  显式指定 --env-file 或 ENV_FILE 时，以指定文件为准。
+  未显式指定配置文件时，读取 .env，并允许进程环境变量覆盖同名 provider 配置。
 
 常用示例:
   ./scripts/ai.sh models
