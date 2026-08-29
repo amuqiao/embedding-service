@@ -34,6 +34,7 @@
 | [`runbooks/job/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/job/MAX_ACTIVE_JOBS%20估算与生产调优.md) | `MAX_ACTIVE_JOBS` 估算、K8s 生产调优顺序和 PostgreSQL/Redis 瓶颈判断；不是压测执行手册 |
 | [`runbooks/ops/lifespan.md`](runbooks/ops/lifespan.md) | API、worker、recovery 生命周期与运行期资源放置边界 |
 | [`runbooks/ops/local-postgres-database-name.md`](runbooks/ops/local-postgres-database-name.md) | 本地项目数据库名变更后，PostgreSQL volume 旧库与 `.env` 新库不一致的排障和修复 |
+| [`runbooks/ops/trae-python-venv-auto-activation.md`](runbooks/ops/trae-python-venv-auto-activation.md) | Trae 新建终端无法自动激活项目 `.venv` 的复盘、用户级配置和项目级绕过配置 |
 | [`runbooks/ops/remote-test-env-fastapi-redis-taskiq.md`](runbooks/ops/remote-test-env-fastapi-redis-taskiq.md) | 远端测试环境 FastAPI 依赖漂移、Redis 5 和 Taskiq broker 排障记录 |
 | [`api/service-contract.md`](api/service-contract.md) | 当前 HTTP envelope、Job、Callback、Billing、认证和公开 route 合同 |
 | [`api/extension-guide.md`](api/extension-guide.md) | 新增 `job_type`、HTTP 接口、模型、Prompt 和对象存储产物的接入入口 |
@@ -67,6 +68,7 @@
 | 在开发服务器验证 `audio_stem_separation` | [`runbooks/audio/audio-stem-separation-dev-server-runbook.md`](runbooks/audio/audio-stem-separation-dev-server-runbook.md) | 自动下载模型、生产部署、K8s 资源管理、模型推理代码 |
 | 压测 `audio_stem_separation_triton` smoke | [`runbooks/audio/audio-stem-separation-triton-smoke-benchmark.md`](runbooks/audio/audio-stem-separation-triton-smoke-benchmark.md) | Triton model repository 部署、生产容量承诺、旧本地 ONNX Job 验证；文内 baseline 只作复现对比样本 |
 | 排查标题图生成链路 | [`runbooks/标题生成链路.md`](runbooks/标题生成链路.md) | smoke 执行步骤、完整 API 字段合同 |
+| 处理本地编辑器 Python `.venv` 识别问题 | [`runbooks/ops/trae-python-venv-auto-activation.md`](runbooks/ops/trae-python-venv-auto-activation.md) | 通用 IDE 教程、Python 依赖治理、容器/Pod 运行时排障、业务 Job 合同 |
 | 处理运行形态问题 | [`runbooks/ops/compose-full-dev-operations.md`](runbooks/ops/compose-full-dev-operations.md)、[`runbooks/ops/lifespan.md`](runbooks/ops/lifespan.md)、[`runbooks/ops/remote-test-env-fastapi-redis-taskiq.md`](runbooks/ops/remote-test-env-fastapi-redis-taskiq.md)、[`runbooks/ops/local-postgres-database-name.md`](runbooks/ops/local-postgres-database-name.md) | 业务 Job 合同或压测报告 |
 
 ## 分层规则
