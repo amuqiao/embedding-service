@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# ai.sh - 云模型厂商可用性和远端模型列表检查入口
+#
+# 帮助：本脚本只负责定位 Python 并转发参数；帮助信息集中维护在 scripts/ai/cli.py。
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/common.sh"
+
+exec_project_python_module scripts.ai.cli "$@"

@@ -3,7 +3,6 @@ from __future__ import annotations
 from app.ai.providers.base import ProviderDefinition, ProviderRuntimeConfig
 from app.ai.providers.dashscope.provider import PROVIDER as DASHSCOPE_PROVIDER
 from app.ai.providers.openai.provider import PROVIDER as OPENAI_PROVIDER
-from app.core.config import settings
 
 _PROVIDERS: dict[str, ProviderDefinition] = {
     OPENAI_PROVIDER.name: OPENAI_PROVIDER,
@@ -27,7 +26,12 @@ def require_provider_definition(provider: str) -> ProviderDefinition:
 
 
 def provider_runtime_config(provider: str, *, settings_obj=None) -> ProviderRuntimeConfig:
-    runtime_settings = settings if settings_obj is None else settings_obj
+    if settings_obj is None:
+        from app.core.config import settings
+
+        runtime_settings = settings
+    else:
+        runtime_settings = settings_obj
     definition = require_provider_definition(provider)
     api_key = _settings_env_value(runtime_settings, definition.api_key_env)
     base_url = ""

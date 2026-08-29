@@ -56,7 +56,7 @@ run_script_syntax() {
     "$ROOT_DIR/scripts/triton-bench.sh" \
     "$ROOT_DIR/scripts/jobs.sh" \
     "$ROOT_DIR/scripts/smoke.sh" \
-    "$ROOT_DIR/scripts/ai-providers.sh" \
+    "$ROOT_DIR/scripts/ai.sh" \
     "$ROOT_DIR/scripts/models.sh" \
     "$ROOT_DIR/scripts/media.sh" \
     "$ROOT_DIR/scripts/tools.sh" \
@@ -130,8 +130,8 @@ run_cli_smoke() {
   event "OK" "jobs.sh" "help"
   "$ROOT_DIR/scripts/smoke.sh" --help >/dev/null
   event "OK" "smoke.sh" "help"
-  "$ROOT_DIR/scripts/ai-providers.sh" --help >/dev/null
-  event "OK" "ai-providers.sh" "help"
+  "$ROOT_DIR/scripts/ai.sh" --help >/dev/null
+  event "OK" "ai.sh" "help"
   assert_generated_entrypoint_contract "load.sh" "$ROOT_DIR/scripts/load.sh" \
     guide cases list profiles init smoke run ui report pressure drain
   event "OK" "load.sh" "help"
@@ -212,9 +212,7 @@ run_cli_smoke() {
   "$ROOT_DIR/scripts/smoke.sh" health --help >/dev/null
   "$ROOT_DIR/scripts/smoke.sh" ready --help >/dev/null
   "$ROOT_DIR/scripts/smoke.sh" list --help >/dev/null
-  "$ROOT_DIR/scripts/ai-providers.sh" check --help >/dev/null
-  "$ROOT_DIR/scripts/ai-providers.sh" models --help >/dev/null
-  "$ROOT_DIR/scripts/ai-providers.sh" resolve --help >/dev/null
+  "$ROOT_DIR/scripts/ai.sh" models --help >/dev/null
   "$ROOT_DIR/scripts/smoke.sh" llm-job-billing --confirm-cost --help >/dev/null
   "$ROOT_DIR/scripts/smoke.sh" tagged-text-translation --confirm-cost --help >/dev/null
   "$ROOT_DIR/scripts/smoke.sh" oss-upload-image --confirm-upload --help >/dev/null
@@ -276,8 +274,8 @@ run_python_syntax() {
     "$ROOT_DIR/scripts/redis_diag/cli.py" \
     "$ROOT_DIR/scripts/models/__init__.py" \
     "$ROOT_DIR/scripts/models/inspect_onnx.py" \
-    "$ROOT_DIR/scripts/ai_providers/__init__.py" \
-    "$ROOT_DIR/scripts/ai_providers/cli.py" \
+    "$ROOT_DIR/scripts/ai/__init__.py" \
+    "$ROOT_DIR/scripts/ai/cli.py" \
     "$ROOT_DIR/smoke/__init__.py" \
     "$ROOT_DIR/smoke/__main__.py" \
     "$ROOT_DIR/smoke/cli.py" \
@@ -321,7 +319,7 @@ run_python_syntax() {
   event "OK" "jobs/*.py" "py_compile"
   event "OK" "redis_diag/*.py" "py_compile"
   event "OK" "models/*.py" "py_compile"
-  event "OK" "ai_providers/*.py" "py_compile"
+  event "OK" "ai/*.py" "py_compile"
   event "OK" "smoke/*.py" "py_compile"
   event "OK" "media/*.py" "py_compile"
   event "OK" "tools/*.py" "py_compile"

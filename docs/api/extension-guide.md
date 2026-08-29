@@ -111,7 +111,7 @@ profile manifest 是压测合同的机器可读投影。它应能说明 case、p
 9. 已有 provider/adapter 支持的新模型优先只修改 `models.yaml` 和 `pricing.yaml`；新 provider 或新调用协议再新增 provider/adapter 注册。
 10. `provider_model` 是 provider 原始模型名；`adapter_model` 是传给 adapter 的模型标识。使用 LiteLLM adapter 时，`adapter_model` 通常是 `openai/<provider_model>`。
 11. 确保 `pricing_ref` 存在且与模型配置匹配。
-12. 运行 `./scripts/ai-providers.sh check` 和 registry 测试，确保 provider、adapter、pricing 和 job model policy 一致。
+12. 运行 `./scripts/ai.sh models <provider>` 验证模型厂商 API Key 和远端模型列表；运行 `./scripts/verify.sh check` 确保 provider、adapter、pricing 和 job model policy 一致。
 
 Provider 密钥来自环境变量，不写入 YAML 或文档示例。
 
