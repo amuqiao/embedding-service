@@ -27,6 +27,7 @@ from smoke.harness.cli_contract import (
     ServiceApiKeyOption,
     TimeoutOption,
 )
+from smoke.jobs import cli_contract as job_cli_contract
 
 
 DEFAULT_AUDIO_STEM_JOB_TYPE = "audio_stem_separation"
@@ -205,6 +206,34 @@ EXAMPLE_LIFECYCLE_PROBE_HELP_EPILOG = """\b
   本场景使用 visibility=demo 的 example_lifecycle_probe 标准 Job，仅用于 local/dev 平台验收，不调用真实模型、不产生模型费用。
   --local-callback 只适合本机 API/worker 运行形态；远端或容器内 callbacker 无法访问调用方的 127.0.0.1。
   普通成功链路不能证明 reconciler 被触发；输出会把 reconciler 标记为兜底收敛合同角色。
+"""
+
+EXAMPLE_RECONCILER_PROBE_HELP_EPILOG = """\b
+常用示例：
+  # 验证 api -> dispatcher -> taskiq_worker -> reconciler -> callbacker 全链路。
+  ./scripts/smoke.sh --json --timeout 120 --poll-interval 1 \\
+    example-reconciler-probe \\
+    --confirm-run \\
+    --confirm-fault-injection \\
+    --local-callback
+
+\b
+  # 验证失败终态缺失 callback_outbox 时也能兜底创建并投递 failed callback。
+  ./scripts/smoke.sh --json --timeout 120 --poll-interval 1 \\
+    example-reconciler-probe \\
+    --confirm-run \\
+    --confirm-fault-injection \\
+    --fail \\
+    --fail-after-seconds 1 \\
+    --expect-status failed \\
+    --local-callback
+
+\b
+说明：
+  本场景使用 visibility=demo 的 example_lifecycle_probe 标准 Job，仅用于 local/dev 平台验收，不调用真实模型、不产生模型费用。
+  本场景会先创建一个未配置 callback 的 Job，等待它终态后，再通过受保护的 DB fault injection 写入 callback_url 但不创建 callback_outbox。
+  只有真实 reconciler 扫描到“终态 Job 缺失 callback_outbox”并创建 outbox 后，callbacker 才能投递到 receiver。
+  必须同时传入 --confirm-run 和 --confirm-fault-injection；非 local/dev APP_ENV 或非 loopback API 会拒绝执行。
 """
 
 LLM_JOB_BILLING_HELP_EPILOG = """\b
@@ -400,12 +429,14 @@ HELP_EPILOG = """\b
   ./scripts/smoke.sh health
   ./scripts/smoke.sh ready
   ./scripts/smoke.sh --json --timeout 120 example-lifecycle-probe --confirm-run --local-callback
+  ./scripts/smoke.sh --json --timeout 120 example-reconciler-probe --confirm-run --confirm-fault-injection --local-callback
   ./scripts/smoke.sh <command> -h
 
 \b
 扩展规范：
   新增 Job smoke 时，命令函数只声明标准参数和业务参数；Job context、Job 轮询和 Job 标准参数放在 smoke/jobs。
   跨项目通用能力放在 smoke/harness：env、HTTP、service runtime、callback receiver、CLI contract。
+  平台故障注入能力只放在 smoke/jobs，并必须由专用 platform_acceptance 场景显式确认后调用。
   新增业务 flow 放在 smoke/flows/<domain>/，只实现 payload 构造、业务断言和业务证据。
 
 \b
@@ -418,7 +449,8 @@ HELP_EPILOG = """\b
   非本机 --base-url 必须显式传入 --allow-remote-api。
   远端测试 OSS 配置优先通过 --env-file 指向测试环境配置文件。
   --service-api-key 会出现在 shell history 和进程参数中；共享机器或 CI 优先通过 SERVICE_API_KEY 环境变量注入。
-  只通过公开 HTTP API 创建 Job、轮询状态和查询 billing，不直接改数据库，不重试历史 Job。
+  普通业务场景只通过公开 HTTP API 创建 Job、轮询状态和查询 billing，不直接改数据库，不重试历史 Job。
+  platform_acceptance 故障注入场景只允许 local/dev，并且必须显式确认。
 
 \b
 Exit Codes:
@@ -668,6 +700,92 @@ def example_lifecycle_probe_command(
             json_output=options.json_output,
         )
     except example_lifecycle_probe.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+
+
+@app.command(
+    "example-reconciler-probe",
+    help="提交 example_lifecycle_probe 并注入 callback_outbox 缺失故障，验收 reconciler 兜底收敛。",
+    epilog=EXAMPLE_RECONCILER_PROBE_HELP_EPILOG,
+)
+def example_reconciler_probe_command(
+    ctx: typer.Context,
+    confirm_run: ConfirmRunOption = False,
+    confirm_fault_injection: job_cli_contract.ConfirmFaultInjectionOption = False,
+    probe_id: Annotated[
+        str,
+        typer.Option("--probe-id", help="写入 Job 参数和结果的探针 ID。"),
+    ] = "reconciler",
+    message: Annotated[
+        str,
+        typer.Option("--message", help="写入 Job 参数和结果的探针消息。"),
+    ] = "reconciler probe",
+    sleep_seconds: Annotated[
+        float,
+        typer.Option("--sleep-seconds", min=0, max=600, help="模拟 Job 执行耗时秒数。"),
+    ] = 0,
+    fail: Annotated[
+        bool,
+        typer.Option("--fail", help="让 Job 执行失败，用于验证失败终态的 reconciler callback 兜底。"),
+    ] = False,
+    fail_after_seconds: Annotated[
+        float,
+        typer.Option("--fail-after-seconds", min=0, max=600, help="失败前模拟等待秒数，仅在 --fail 时生效。"),
+    ] = 0,
+    result_payload: Annotated[
+        str | None,
+        typer.Option("--result-payload", help="成功结果中的自定义 payload，不能与 --result-size-bytes 同时使用。"),
+    ] = None,
+    result_size_bytes: Annotated[
+        int,
+        typer.Option("--result-size-bytes", min=0, max=65536, help="成功结果中生成固定大小 payload 字符串。"),
+    ] = 0,
+    expect_status: ExpectStatusOption = "auto",
+    local_callback: LocalCallbackOption = False,
+    callback_event: CallbackEventOption = "both",
+    callback_timeout_seconds: CallbackTimeoutOption = None,
+    client_request_id: ClientRequestIdOption = None,
+) -> None:
+    from smoke.flows.examples import reconciler_probe as example_reconciler_probe
+    from smoke.jobs import cli_contract as job_cli_contract
+
+    _validate_global_options(ctx, "example-reconciler-probe", cli_contract.GLOBAL_CONTEXT_OPTIONS)
+    options = _smoke_options(ctx)
+    job_options = job_cli_contract.job_smoke_options(
+        confirm_run=confirm_run,
+        client_request_id=client_request_id,
+        expect_status=expect_status,
+    )
+    callback_options = cli_contract.callback_smoke_options(
+        callback_url=None,
+        local_callback=local_callback,
+        callback_event=callback_event,
+        wait_callback=True,
+        callback_timeout_seconds=callback_timeout_seconds,
+    )
+    try:
+        example_reconciler_probe.run(
+            job_options=job_options,
+            callback_options=callback_options,
+            confirm_fault_injection=confirm_fault_injection,
+            api_url=options.api_url,
+            env_file=options.env_file,
+            allow_remote_api=options.allow_remote_api,
+            service_api_key=options.service_api_key,
+            caller_id=options.caller_id,
+            timeout_seconds=options.timeout_seconds,
+            poll_interval_seconds=options.poll_interval_seconds,
+            probe_id=probe_id,
+            message=message,
+            sleep_seconds=sleep_seconds,
+            fail=fail,
+            fail_after_seconds=fail_after_seconds,
+            result_payload=result_payload,
+            result_size_bytes=result_size_bytes,
+            json_output=options.json_output,
+        )
+    except example_reconciler_probe.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(exc.exit_code) from exc
 

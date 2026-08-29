@@ -34,6 +34,15 @@ SCENARIOS = [
         standard_option_groups=["job", "callback"],
     ),
     SmokeScenario(
+        name="example-reconciler-probe",
+        type="workflow",
+        acceptance_class="platform_acceptance",
+        dependencies=["api", "dispatcher", "taskiq_worker", "reconciler", "callbacker", "db", "redis"],
+        entrypoints=["example-reconciler-probe"],
+        destructive=True,
+        standard_option_groups=["job", "callback", "fault-injection"],
+    ),
+    SmokeScenario(
         name="llm-job-billing",
         type="workflow",
         acceptance_class="business_e2e",

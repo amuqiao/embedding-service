@@ -25,6 +25,10 @@ ConfirmUploadOption = Annotated[
     bool,
     typer.Option("--confirm-upload", help="确认本命令可能上传本地文件到对象存储。"),
 ]
+ConfirmFaultInjectionOption = Annotated[
+    bool,
+    typer.Option("--confirm-fault-injection", help="确认本命令会为 local/dev 平台验收写入可恢复的故障状态。"),
+]
 ClientRequestIdOption = Annotated[
     str | None,
     typer.Option("--client-request-id", help="显式 client_request_id；默认由场景自动生成。"),

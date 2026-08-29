@@ -17,7 +17,8 @@ Usage:
 不负责:
   不启动或停止 API、worker、PostgreSQL、Redis、Triton 或模型服务。
   不执行 Alembic migration。
-  不直接查库推进流程或替代 jobs.sh / job-ops.sh 排障查询。
+  普通业务 smoke 不直接查库推进流程，也不替代 jobs.sh / job-ops.sh 排障查询。
+  platform_acceptance 故障注入场景只允许 local/dev，并且必须显式确认。
 
 通用参数:
   --base-url <url>        显式覆盖服务 HTTP base URL；不传时由 API_URL / API_HOST:API_PORT 推导。
@@ -46,11 +47,16 @@ Usage:
   --callback-timeout-seconds <seconds>
                           等待 callback 的最长秒数；默认使用场景剩余 timeout。
 
+平台故障注入参数:
+  --confirm-fault-injection
+                          确认 local/dev 平台验收场景会写入可恢复 DB 漂移；普通业务场景不使用。
+
 命令:
   health                  检查服务进程级健康。
   ready                   检查 smoke 服务运行上下文和 /healthz。
   list                    列出当前项目 smoke 场景。
   example-lifecycle-probe 提交 local/dev 标准探针 Job，验收 api/dispatcher/taskiq_worker；配置 callback 后验收 callbacker。
+  example-reconciler-probe 提交 local/dev 标准探针 Job，注入 callback_outbox 缺失故障，验收 reconciler/callbacker。
   llm-job-billing         提交真实 LLM Job，轮询终态并查询 billing。
   llm-job-double-billing  提交两次 LLM 调用 Job，轮询终态并查询汇总 billing。
   tagged-text-translation 提交 tagged_text_translation Job，校验标签和占位符保留；人读输出翻译前后 preview。
@@ -70,6 +76,15 @@ Usage:
     --poll-interval 1 \
     example-lifecycle-probe \
     --confirm-run \
+    --local-callback
+
+  ENV_FILE=.env ./scripts/smoke.sh \
+    --json \
+    --timeout 120 \
+    --poll-interval 1 \
+    example-reconciler-probe \
+    --confirm-run \
+    --confirm-fault-injection \
     --local-callback
 
   ./scripts/smoke.sh <command> -h

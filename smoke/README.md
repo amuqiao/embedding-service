@@ -64,17 +64,26 @@ Smoke 全局选项统一放在场景命令前，例如 `--base-url`、`--env-fil
 
 标准 Callback 参数由支持 callback 的 Job 场景复用，例如 `--callback-url`、`--local-callback`、`--callback-event`、`--wait-callback/--no-wait-callback` 和 `--callback-timeout-seconds`。
 
+平台故障注入参数只允许专用 `platform_acceptance` 场景使用，例如 `--confirm-fault-injection`。普通业务 smoke 不直接改数据库。
+
 ## 场景
 
 当前场景以 `python -m smoke --json list` 为事实源；其中 `entrypoints` 是可直接执行的入口。业务 Job 场景会真实提交 Job、等待终态并查询结果证据；provider probe/helper 必须显式确认费用或上传副作用。
 
 `example-lifecycle-probe` 使用 `visibility=demo` 的标准探针 Job，仅用于 `local` / `dev` 平台链路验收；它不调用真实模型，不产生模型费用。Job 样板代码在 `app/jobs/types/example_lifecycle_probe/`，smoke 样板代码在 `smoke/flows/examples/lifecycle_probe.py`。配置 `--local-callback` 时可以验证 callbacker 投递；普通成功链路不会证明 reconciler 被触发。
 
+`example-reconciler-probe` 使用同一个标准探针 Job，但会在 Job 终态后注入“有 callback_url 但缺失 callback_outbox”的 local/dev 数据漂移，用来验收真实 `reconciler` 创建 callback outbox，再由真实 `callbacker` 投递到 receiver。该场景必须显式传入 `--confirm-run` 和 `--confirm-fault-injection`，只允许 loopback API 与 `APP_ENV=local|dev`。
+
 常用场景：
 
 ```bash
 ENV_FILE=.env ./scripts/smoke.sh --json example-lifecycle-probe \
   --confirm-run \
+  --local-callback
+
+ENV_FILE=.env ./scripts/smoke.sh --json --timeout 120 --poll-interval 1 example-reconciler-probe \
+  --confirm-run \
+  --confirm-fault-injection \
   --local-callback
 
 ENV_FILE=.env ./scripts/smoke.sh --timeout 180 llm-job-billing --confirm-cost
@@ -148,6 +157,8 @@ smoke/flows/<domain>/<business>.py
 ```
 
 `example-lifecycle-probe` 是标准参考：它演示了标准业务包注册、`api -> dispatcher -> taskiq_worker` 验收，以及配置 callback 后的 `callback_outbox -> callbacker -> receiver -> callback.status=delivered` 验收。
+
+`example-reconciler-probe` 是平台可靠性参考：它演示了如何把故障注入逻辑隔离在 `smoke/jobs`，业务 flow 只声明要制造的状态漂移和验收断言。该场景用于验证 `reconciler -> callback_outbox -> callbacker`，不作为普通业务 smoke 模板。
 
 ## 跨项目复用
 

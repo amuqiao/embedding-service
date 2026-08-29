@@ -19,6 +19,7 @@ from smoke.flows.llm import billing as llm_job_billing
 from smoke.flows.oss import image_upload as oss_image_upload
 from smoke.flows.translation import tagged_text_translation
 from smoke.flows.examples import lifecycle_probe as example_lifecycle_probe
+from smoke.flows.examples import reconciler_probe as example_reconciler_probe
 from smoke.harness import callback_capture
 from smoke.harness import cli_contract
 from smoke.harness import env_runtime
@@ -26,6 +27,7 @@ from smoke.harness import http_runtime
 from smoke.harness import service_runtime
 from smoke.harness.errors import FlowError
 from smoke.jobs import cli_contract as job_cli_contract
+from smoke.jobs import reconciler_faults
 from smoke.jobs import runtime as job_runtime
 
 
@@ -236,6 +238,370 @@ def test_example_lifecycle_probe_cli_forwards_options(monkeypatch):
         "result_size_bytes": 0,
         "json_output": True,
     }
+
+
+def test_example_reconciler_probe_cli_requires_confirm_run():
+    result = runner.invoke(app, ["example-reconciler-probe"])
+
+    assert result.exit_code == 2
+    assert "example reconciler probe smoke requires --confirm-run" in result.stderr
+
+
+def test_example_reconciler_probe_cli_requires_confirm_fault_injection():
+    result = runner.invoke(app, ["example-reconciler-probe", "--confirm-run", "--local-callback"])
+
+    assert result.exit_code == 2
+    assert "example reconciler probe smoke requires --confirm-fault-injection" in result.stderr
+
+
+def test_example_reconciler_probe_cli_forwards_options(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(example_reconciler_probe, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "--base-url",
+            "http://127.0.0.1:18200",
+            "--env-file",
+            ".env",
+            "--service-api-key",
+            "test-token",
+            "--caller-id",
+            "cms-test",
+            "--timeout",
+            "30",
+            "--poll-interval",
+            "0.25",
+            "--json",
+            "example-reconciler-probe",
+            "--confirm-run",
+            "--confirm-fault-injection",
+            "--probe-id",
+            "reconcile-1",
+            "--message",
+            "hello",
+            "--sleep-seconds",
+            "1.5",
+            "--fail",
+            "--fail-after-seconds",
+            "0.5",
+            "--expect-status",
+            "failed",
+            "--local-callback",
+            "--callback-event",
+            "failed",
+            "--callback-timeout-seconds",
+            "7",
+            "--client-request-id",
+            "client-reconcile-1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "job_options": job_cli_contract.JobSmokeOptions(
+            confirm_run=True,
+            client_request_id="client-reconcile-1",
+            expect_status="failed",
+        ),
+        "callback_options": cli_contract.CallbackSmokeOptions(
+            callback_url=None,
+            local_callback=True,
+            callback_event="failed",
+            wait_callback=True,
+            callback_timeout_seconds=7,
+        ),
+        "confirm_fault_injection": True,
+        "api_url": "http://127.0.0.1:18200",
+        "env_file": ".env",
+        "allow_remote_api": False,
+        "service_api_key": "test-token",
+        "caller_id": "cms-test",
+        "timeout_seconds": 30,
+        "poll_interval_seconds": 0.25,
+        "probe_id": "reconcile-1",
+        "message": "hello",
+        "sleep_seconds": 1.5,
+        "fail": True,
+        "fail_after_seconds": 0.5,
+        "result_payload": None,
+        "result_size_bytes": 0,
+        "json_output": True,
+    }
+
+
+def test_reconciler_fault_injection_rejects_release_app_env():
+    with pytest.raises(FlowError, match="only allowed for APP_ENV"):
+        reconciler_faults.assert_local_fault_injection_app_env("test")
+
+
+def test_reconciler_fault_terminal_callback_event_type_requires_terminal_status():
+    with pytest.raises(FlowError, match="requires terminal job status"):
+        reconciler_faults.terminal_callback_event_type("running")
+
+
+def test_reconciler_fault_database_url_uses_selected_profile(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://runtime/runtime")
+    app_env = env_runtime.AppEnv(
+        {"DATABASE_URL": "postgresql+asyncpg://file/file", "DB_SSL": "true"},
+        profile_selected=True,
+        profile_source="cli",
+        path=tmp_path / ".env.test",
+    )
+
+    assert reconciler_faults.database_url_from_app_env(app_env) == "postgresql+asyncpg://file/file"
+    assert reconciler_faults.database_ssl_from_app_env(app_env) is True
+
+
+def test_example_reconciler_probe_requires_local_callback(monkeypatch):
+    context = service_runtime.RuntimeContext(
+        app_env=env_runtime.AppEnv(
+            {
+                "APP_ENV": "local",
+                "DATABASE_URL": "postgresql+asyncpg://localhost/test",
+                "CALLBACK_SIGNING_SECRET": "test-callback-signing-secret",
+                "DISABLE_HTTP_AUTH_HEADER": "true",
+                "DISABLE_CALLER_ID_HEADER": "true",
+            },
+            profile_selected=True,
+            profile_source="cli",
+            path=Path(".env.test"),
+        ),
+        summary={
+            "api_url": "http://127.0.0.1:8100",
+            "jobs_url": "http://127.0.0.1:8100/api/v1/ai-jobs/jobs",
+            "ready": True,
+        },
+    )
+    monkeypatch.setattr(job_runtime, "resolve_job_context", lambda **_kwargs: context)
+
+    with pytest.raises(FlowError, match="requires --local-callback"):
+        example_reconciler_probe.run(
+            job_options=_job_options(),
+            callback_options=_callback_options(),
+            confirm_fault_injection=True,
+            api_url=None,
+            env_file=None,
+            allow_remote_api=False,
+            service_api_key=None,
+            caller_id="smoke-cli",
+            timeout_seconds=10,
+            poll_interval_seconds=0.1,
+            probe_id="probe",
+            message="hello",
+            sleep_seconds=0,
+            fail=False,
+            fail_after_seconds=0,
+            result_payload=None,
+            result_size_bytes=0,
+            json_output=True,
+        )
+
+
+def test_example_reconciler_probe_rejects_remote_api(monkeypatch):
+    context = service_runtime.RuntimeContext(
+        app_env={
+            "APP_ENV": "local",
+            "DATABASE_URL": "postgresql+asyncpg://localhost/test",
+            "CALLBACK_SIGNING_SECRET": "test-callback-signing-secret",
+            "DISABLE_HTTP_AUTH_HEADER": "true",
+            "DISABLE_CALLER_ID_HEADER": "true",
+        },
+        summary={
+            "api_url": "http://remote.example.com",
+            "jobs_url": "http://remote.example.com/api/v1/ai-jobs/jobs",
+            "ready": True,
+        },
+    )
+    monkeypatch.setattr(job_runtime, "resolve_job_context", lambda **_kwargs: context)
+
+    with pytest.raises(FlowError, match="requires a loopback API URL"):
+        example_reconciler_probe.run(
+            job_options=_job_options(),
+            callback_options=_callback_options(local_callback=True),
+            confirm_fault_injection=True,
+            api_url=None,
+            env_file=None,
+            allow_remote_api=True,
+            service_api_key=None,
+            caller_id="smoke-cli",
+            timeout_seconds=10,
+            poll_interval_seconds=0.1,
+            probe_id="probe",
+            message="hello",
+            sleep_seconds=0,
+            fail=False,
+            fail_after_seconds=0,
+            result_payload=None,
+            result_size_bytes=0,
+            json_output=True,
+        )
+
+
+def test_example_reconciler_probe_flow_injects_gap_then_waits_for_callback(monkeypatch, capsys):
+    context = service_runtime.RuntimeContext(
+        app_env=env_runtime.AppEnv(
+            {
+                "APP_ENV": "local",
+                "DATABASE_URL": "postgresql+asyncpg://localhost/test",
+                "CALLBACK_SIGNING_SECRET": "test-callback-signing-secret",
+                "DISABLE_HTTP_AUTH_HEADER": "true",
+                "DISABLE_CALLER_ID_HEADER": "true",
+            },
+            profile_selected=True,
+            profile_source="cli",
+            path=Path(".env.test"),
+        ),
+        summary={
+            "api_url": "http://127.0.0.1:8100",
+            "jobs_url": "http://127.0.0.1:8100/api/v1/ai-jobs/jobs",
+            "ready": True,
+        },
+    )
+    calls: list[str] = []
+
+    class FakeReceiver:
+        url = "http://127.0.0.1:19000/callback"
+
+        def __enter__(self):
+            calls.append("receiver.enter")
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            calls.append("receiver.exit")
+            return None
+
+        def wait_for_event(self, _expectation, *, timeout_seconds):
+            calls.append("receiver.wait")
+            assert timeout_seconds > 0
+            return {
+                "body": {
+                    "event": "job.succeeded",
+                    "job": {"job_id": "probe-job-reconciler", "job_status": "succeeded"},
+                },
+                "signature": {"checked": True, "valid": True},
+            }
+
+        def snapshot(self):
+            return [{"body": {"event": "job.succeeded"}}]
+
+    def fake_request_json(*_args, **kwargs):
+        calls.append("create")
+        payload = kwargs["payload"]
+        assert "callback" not in payload
+        return {
+            "code": "0",
+            "data": {"job": {"job_id": "probe-job-reconciler", "job_status": "queued"}},
+        }
+
+    def fake_poll_job_envelope(**_kwargs):
+        calls.append("poll-terminal")
+        return {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "probe-job-reconciler",
+                    "job_status": "succeeded",
+                    "job_result": {
+                        "probe_id": "probe",
+                        "message": "hello",
+                        "worker_observed_at": "2026-08-28T00:00:00+00:00",
+                    },
+                    "callback": {"status": "not_configured", "attempt": 0},
+                }
+            },
+        }
+
+    def fake_inject_missing_callback_outbox(**kwargs):
+        calls.append("inject")
+        assert kwargs["database_url"] == "postgresql+asyncpg://localhost/test"
+        assert kwargs["database_ssl"] is False
+        assert kwargs["job_id"] == "probe-job-reconciler"
+        assert kwargs["callback_url"] == "http://127.0.0.1:19000/callback"
+        assert kwargs["callback_events"] == ["job.succeeded", "job.failed"]
+        return reconciler_faults.CallbackGapInjection(
+            job_id="probe-job-reconciler",
+            job_status="succeeded",
+            callback_event_type="job.succeeded",
+            callback_url="http://127.0.0.1:19000/callback",
+            injected_at="2026-08-28T00:00:00+00:00",
+        )
+
+    def fake_wait_for_callback_outbox(**kwargs):
+        calls.append("wait-outbox")
+        assert kwargs["database_url"] == "postgresql+asyncpg://localhost/test"
+        assert kwargs["database_ssl"] is False
+        assert kwargs["callback_event_type"] == "job.succeeded"
+        return {
+            "callback_outbox_id": "callback-outbox-1",
+            "event_id": "event-1",
+            "event_type": "job.succeeded",
+            "status": "pending",
+            "delivery_attempts": 0,
+        }
+
+    def fake_poll_callback_envelope(**_kwargs):
+        calls.append("poll-callback")
+        return {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "probe-job-reconciler",
+                    "job_status": "succeeded",
+                    "callback": {"status": "delivered", "attempt": 1},
+                }
+            },
+        }
+
+    monkeypatch.setattr(job_runtime, "resolve_job_context", lambda **_kwargs: context)
+    monkeypatch.setattr(http_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(job_runtime, "poll_job_envelope", fake_poll_job_envelope)
+    monkeypatch.setattr(example_lifecycle_probe, "local_callback_server", lambda _context: FakeReceiver())
+    monkeypatch.setattr(reconciler_faults, "inject_missing_callback_outbox", fake_inject_missing_callback_outbox)
+    monkeypatch.setattr(reconciler_faults, "wait_for_callback_outbox", fake_wait_for_callback_outbox)
+    monkeypatch.setattr(reconciler_faults, "callback_outbox_evidence", lambda **_kwargs: None)
+    monkeypatch.setattr(example_lifecycle_probe, "poll_callback_envelope", fake_poll_callback_envelope)
+
+    example_reconciler_probe.run(
+        job_options=_job_options(),
+        callback_options=_callback_options(local_callback=True),
+        confirm_fault_injection=True,
+        api_url=None,
+        env_file=None,
+        allow_remote_api=False,
+        service_api_key=None,
+        caller_id="smoke-cli",
+        timeout_seconds=10,
+        poll_interval_seconds=0.1,
+        probe_id="probe",
+        message="hello",
+        sleep_seconds=0,
+        fail=False,
+        fail_after_seconds=0,
+        result_payload=None,
+        result_size_bytes=0,
+        json_output=True,
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["summary"]["fault_injection"]["kind"] == "terminal_callback_outbox_missing"
+    assert payload["summary"]["callback_status"] == "delivered"
+    assert calls == [
+        "receiver.enter",
+        "create",
+        "poll-terminal",
+        "inject",
+        "wait-outbox",
+        "poll-callback",
+        "receiver.wait",
+        "receiver.exit",
+    ]
 
 
 def test_poster_title_image_cli_requires_confirm_cost():
@@ -962,6 +1328,15 @@ def test_smoke_list_outputs_standard_scenario_metadata():
     assert probe["conditional_dependencies"] == ["callbacker"]
     assert probe["contract_roles"] == ["reconciler"]
     assert probe["standard_option_groups"] == ["job", "callback"]
+    reconciler_probe = next(
+        scenario for scenario in payload["scenarios"] if scenario["name"] == "example-reconciler-probe"
+    )
+    assert reconciler_probe["destructive"] is True
+    assert {"api", "dispatcher", "taskiq_worker", "reconciler", "callbacker", "db", "redis"} <= set(
+        reconciler_probe["dependencies"]
+    )
+    assert reconciler_probe["entrypoints"] == ["example-reconciler-probe"]
+    assert reconciler_probe["standard_option_groups"] == ["job", "callback", "fault-injection"]
     audio = next(scenario for scenario in payload["scenarios"] if scenario["name"] == "audio-stem-separation")
     assert audio["entrypoints"] == ["audio-stem-separation run"]
 
@@ -1396,7 +1771,7 @@ def test_example_lifecycle_probe_rejects_local_callback_event_mismatch(monkeypat
         def __exit__(self, _exc_type, _exc, _tb):
             return None
 
-    monkeypatch.setattr(example_lifecycle_probe, "_local_callback_server", lambda _context: FakeReceiver())
+    monkeypatch.setattr(example_lifecycle_probe, "local_callback_server", lambda _context: FakeReceiver())
 
     with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
         example_lifecycle_probe.run(
@@ -1499,7 +1874,7 @@ def test_example_lifecycle_probe_local_callback_uses_single_timeout_budget(monke
     })
     monkeypatch.setattr(job_runtime, "poll_job_envelope", fake_poll_job_envelope)
     monkeypatch.setattr(example_lifecycle_probe, "poll_callback_envelope", fake_poll_callback_envelope)
-    monkeypatch.setattr(example_lifecycle_probe, "_local_callback_server", lambda _context: FakeReceiver())
+    monkeypatch.setattr(example_lifecycle_probe, "local_callback_server", lambda _context: FakeReceiver())
     monkeypatch.setattr(example_lifecycle_probe.time, "monotonic", lambda: next(monotonic_values))
 
     example_lifecycle_probe.run(
@@ -1532,7 +1907,7 @@ def test_example_lifecycle_probe_local_callback_uses_single_timeout_budget(monke
 
 def test_example_lifecycle_probe_forced_failure_requires_expected_error_reason():
     with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
-        example_lifecycle_probe._assert_terminal_job(
+        example_lifecycle_probe.assert_terminal_job(
             {
                 "job_id": "probe-job-3",
                 "job_status": "failed",
@@ -1550,7 +1925,7 @@ def test_example_lifecycle_probe_forced_failure_requires_expected_error_reason()
 
 def test_example_lifecycle_probe_forced_failure_requires_expected_fault():
     with pytest.raises(example_lifecycle_probe.FlowError) as exc_info:
-        example_lifecycle_probe._assert_terminal_job(
+        example_lifecycle_probe.assert_terminal_job(
             {
                 "job_id": "probe-job-4",
                 "job_status": "failed",

@@ -86,7 +86,7 @@ def build_payload(
     return payload
 
 
-def _callback_status(job: dict[str, Any]) -> str | None:
+def callback_status(job: dict[str, Any]) -> str | None:
     callback = job.get("callback")
     if not isinstance(callback, dict):
         return None
@@ -94,7 +94,7 @@ def _callback_status(job: dict[str, Any]) -> str | None:
     return str(status) if status is not None else None
 
 
-def _callback_attempt(job: dict[str, Any]) -> int | None:
+def callback_attempt(job: dict[str, Any]) -> int | None:
     callback = job.get("callback")
     if not isinstance(callback, dict):
         return None
@@ -115,7 +115,7 @@ def poll_callback_envelope(
     while time.monotonic() < deadline:
         last_envelope = http_runtime.request_json(f"{jobs_url}/{job_id}", method="GET", headers=headers)
         job = http_runtime.data_object(last_envelope, "job")
-        status = _callback_status(job)
+        status = callback_status(job)
         if status == "delivered":
             return last_envelope
         if status == "failed":
@@ -127,7 +127,7 @@ def poll_callback_envelope(
     )
 
 
-def _assert_terminal_job(
+def assert_terminal_job(
     job: dict[str, Any],
     *,
     expected: str,
@@ -168,12 +168,12 @@ def _assert_terminal_job(
         raise FlowError("result missing worker_observed_at", exit_code=1)
 
 
-def _is_loopback_api(api_url: str) -> bool:
+def is_loopback_api(api_url: str) -> bool:
     host = urlparse(api_url).hostname
     return host in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
 
 
-def _local_callback_server(context: service_runtime.RuntimeContext) -> callback_capture.CallbackCaptureServer:
+def local_callback_server(context: service_runtime.RuntimeContext) -> callback_capture.CallbackCaptureServer:
     signing_secret = env_runtime.env_value("CALLBACK_SIGNING_SECRET", context.app_env)
     if not signing_secret:
         raise FlowError("CALLBACK_SIGNING_SECRET is required for --local-callback signature verification", exit_code=2)
@@ -184,21 +184,21 @@ def _local_callback_server(context: service_runtime.RuntimeContext) -> callback_
     )
 
 
-def _remaining_timeout_seconds(deadline: float, *, timeout_seconds: int) -> float:
+def remaining_timeout_seconds(deadline: float, *, timeout_seconds: int) -> float:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise FlowError(f"example lifecycle probe timed out after {timeout_seconds}s", exit_code=5)
     return remaining
 
 
-def _remaining_callback_timeout_seconds(
+def remaining_callback_timeout_seconds(
     deadline: float,
     *,
     timeout_seconds: int,
     callback_timeout_seconds: int | None,
 ) -> float:
     return cli_contract.callback_timeout_budget(
-        remaining_seconds=_remaining_timeout_seconds(deadline, timeout_seconds=timeout_seconds),
+        remaining_seconds=remaining_timeout_seconds(deadline, timeout_seconds=timeout_seconds),
         callback_timeout_seconds=callback_timeout_seconds,
     )
 
@@ -220,8 +220,8 @@ def _summary(
         "job_status": observed_job.get("job_status"),
         "expected_status": expected,
         "probe_id": probe_id,
-        "callback_status": _callback_status(observed_job),
-        "callback_attempt": _callback_attempt(observed_job),
+        "callback_status": callback_status(observed_job),
+        "callback_attempt": callback_attempt(observed_job),
         "callback_waited": callback_waited,
         "mechanism_evidence": {
             "api": "create-job HTTP response returned job_id",
@@ -268,12 +268,12 @@ def run(
         caller_id=caller_id,
         service_api_key=service_api_key,
     )
-    if callback_options.local_callback and not _is_loopback_api(str(context.summary["api_url"])):
+    if callback_options.local_callback and not is_loopback_api(str(context.summary["api_url"])):
         raise FlowError("--local-callback requires a loopback API URL", exit_code=2)
 
     jobs_url = str(context.summary["jobs_url"])
     headers = service_runtime.build_headers(context.app_env, caller_id=caller_id, service_api_key=service_api_key)
-    receiver_context = _local_callback_server(context) if callback_options.local_callback else nullcontext(None)
+    receiver_context = local_callback_server(context) if callback_options.local_callback else nullcontext(None)
     capture_event = None
     deadline = time.monotonic() + timeout_seconds
     try:
@@ -304,11 +304,11 @@ def run(
                 jobs_url=jobs_url,
                 job_id=job_id,
                 headers=headers,
-                timeout_seconds=_remaining_timeout_seconds(deadline, timeout_seconds=timeout_seconds),
+                timeout_seconds=remaining_timeout_seconds(deadline, timeout_seconds=timeout_seconds),
                 poll_interval_seconds=poll_interval_seconds,
             )
             terminal_job = http_runtime.data_object(get_job_envelope, "job")
-            _assert_terminal_job(
+            assert_terminal_job(
                 terminal_job,
                 expected=expected,
                 probe_id=probe_id,
@@ -324,7 +324,7 @@ def run(
                     jobs_url=jobs_url,
                     job_id=job_id,
                     headers=headers,
-                    timeout_seconds=_remaining_callback_timeout_seconds(
+                    timeout_seconds=remaining_callback_timeout_seconds(
                         deadline,
                         timeout_seconds=timeout_seconds,
                         callback_timeout_seconds=callback_options.callback_timeout_seconds,
@@ -339,7 +339,7 @@ def run(
                             event=f"job.{expected}",
                             job_status=expected,
                         ),
-                        timeout_seconds=_remaining_callback_timeout_seconds(
+                        timeout_seconds=remaining_callback_timeout_seconds(
                             deadline,
                             timeout_seconds=timeout_seconds,
                             callback_timeout_seconds=callback_options.callback_timeout_seconds,

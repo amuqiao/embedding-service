@@ -341,7 +341,7 @@ job_execution_attempts = 某条 Job 的一次执行尝试
 
 `visibility` 决定外部提交准入：`APP_ENV=local/dev` 允许外部提交 `public` 和 `demo`；`APP_ENV=test/prd` 只允许外部提交 `public`；`internal` 只供服务内部 workflow child 使用，任何环境都不能被外部直接提交。
 
-`example_*` 是模板内置示例 family，作为低副作用 Job 合同参考和默认压测目标。它们统一标记为 `visibility="demo"`，不调用 LLM、不访问对象存储、不发起外部 HTTP，也不写真实业务副作用。其中 `example_lifecycle_probe` 是标准业务包样板，允许 callback，用于验收 `api -> dispatcher -> taskiq_worker -> callbacker` 链路；其他普通 example job 默认 `allow_callback=False`。正式业务可以参考它们的 schema、executor、registry 和 workflow definition 组织方式，但不继承它们的 `job_type`、结果 schema 或压测参数。
+`example_*` 是模板内置示例 family，作为低副作用 Job 合同参考和默认压测目标。它们统一标记为 `visibility="demo"`，不调用 LLM、不访问对象存储、不发起外部 HTTP，也不写真实业务副作用。其中 `example_lifecycle_probe` 是标准业务包样板，允许 callback，用于验收 `api -> dispatcher -> taskiq_worker -> callbacker` 链路；`example-reconciler-probe` smoke 会使用同一个 Job 在 local/dev 下显式注入“终态 Job 缺失 callback_outbox”的可恢复漂移，用于验收 `reconciler -> callbacker` 兜底链路。其他普通 example job 默认 `allow_callback=False`。正式业务可以参考它们的 schema、executor、registry 和 workflow definition 组织方式，但不继承它们的 `job_type`、结果 schema、故障注入逻辑或压测参数。
 
 `tagged_text_translation` 是当前 public root Job。它复用统一 Job 创建、查询、Callback 和 billing 链路，由 root Job 自己执行 custom executor，不创建 workflow child。执行器通过文本模型完成批量带标签文案翻译，并在公开结果中返回与请求 item 一一对应的 `items[]`。
 
