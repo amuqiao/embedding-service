@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.integrations.ai_adapters.base import (
+from app.ai.adapters.base import (
+    EmbeddingAdapter,
     ImageGenerationAdapter,
     MultimodalTextGenerationAdapter,
     TextGenerationAdapter,
 )
-from app.integrations.ai_adapters.litellm_adapter import LiteLLMAdapter
-from app.integrations.ai_adapters.openai_images_adapter import OpenAIImagesAdapter
-from app.integrations.ai_adapters.openai_responses_adapter import OpenAIResponsesAdapter
+from app.ai.adapters.litellm_adapter import LiteLLMAdapter
+from app.ai.adapters.openai_compatible_embeddings_adapter import OpenAICompatibleEmbeddingsAdapter
+from app.ai.adapters.openai_images_adapter import OpenAIImagesAdapter
+from app.ai.adapters.openai_responses_adapter import OpenAIResponsesAdapter
 
 
 @dataclass(frozen=True)
@@ -18,10 +20,12 @@ class AdapterRegistration:
     text_generation_adapter: TextGenerationAdapter | None = None
     multimodal_text_generation_adapter: MultimodalTextGenerationAdapter | None = None
     image_generation_adapter: ImageGenerationAdapter | None = None
+    embedding_adapter: EmbeddingAdapter | None = None
 
 
 _OPENAI_RESPONSES_ADAPTER = OpenAIResponsesAdapter()
 _OPENAI_IMAGES_ADAPTER = OpenAIImagesAdapter()
+_OPENAI_COMPATIBLE_EMBEDDINGS_ADAPTER = OpenAICompatibleEmbeddingsAdapter()
 
 _ADAPTERS: dict[str, AdapterRegistration] = {
     "litellm": AdapterRegistration(
@@ -38,6 +42,10 @@ _ADAPTERS: dict[str, AdapterRegistration] = {
     "openai_images": AdapterRegistration(
         name="openai_images",
         image_generation_adapter=_OPENAI_IMAGES_ADAPTER,
+    ),
+    "openai_compatible_embeddings": AdapterRegistration(
+        name="openai_compatible_embeddings",
+        embedding_adapter=_OPENAI_COMPATIBLE_EMBEDDINGS_ADAPTER,
     ),
 }
 
@@ -84,6 +92,20 @@ def require_image_generation_adapter(adapter_name: str) -> ImageGenerationAdapte
     return adapter
 
 
+def get_embedding_adapter(adapter_name: str) -> EmbeddingAdapter | None:
+    registration = _ADAPTERS.get(adapter_name)
+    if registration is None:
+        return None
+    return registration.embedding_adapter
+
+
+def require_embedding_adapter(adapter_name: str) -> EmbeddingAdapter:
+    adapter = get_embedding_adapter(adapter_name)
+    if adapter is None:
+        raise RuntimeError(f"embedding adapter not found: {adapter_name}")
+    return adapter
+
+
 def validate_model_adapter(adapter_name: str) -> None:
     if adapter_name not in _ADAPTERS:
         raise RuntimeError(f"model adapter not found: {adapter_name}")
@@ -105,3 +127,9 @@ def validate_multimodal_text_generation_adapter(adapter_name: str) -> None:
     validate_model_adapter(adapter_name)
     if get_multimodal_text_generation_adapter(adapter_name) is None:
         raise RuntimeError(f"multimodal text generation adapter not found: {adapter_name}")
+
+
+def validate_embedding_adapter(adapter_name: str) -> None:
+    validate_model_adapter(adapter_name)
+    if get_embedding_adapter(adapter_name) is None:
+        raise RuntimeError(f"embedding adapter not found: {adapter_name}")

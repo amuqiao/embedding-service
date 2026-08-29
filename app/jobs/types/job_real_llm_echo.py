@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.ai.capabilities import TEXT_GENERATION
+from app.ai.resolver import resolve_route_config_hash
 from app.core.exceptions import AppError
 from app.jobs.base import JobExecutor, PromptSpec
 from app.jobs.registry import register_job_type
@@ -45,7 +47,14 @@ class JobRealLlmEchoJob(JobExecutor):
                 }
             ]
         }
-        return JobRealLlmEchoRuntimeFields(model_id=params.model_id, prompt_payload=prompt_payload).model_dump()
+        return JobRealLlmEchoRuntimeFields(
+            model_id=params.model_id,
+            model_route_config_hash=resolve_route_config_hash(
+                capability=TEXT_GENERATION,
+                requested_model_id=params.model_id,
+            ),
+            prompt_payload=prompt_payload,
+        ).model_dump()
 
     def parse_output(self, text: str) -> JobResult:
         try:

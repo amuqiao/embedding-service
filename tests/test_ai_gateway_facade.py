@@ -6,8 +6,8 @@ import pytest
 
 from app.core.exceptions import AppError
 from app.core.error_registry import get_error_spec
-from app.core.pricing_registry import CallPrice, ImagePrice, ImageTokenPrice, TokenPrice
-from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
+from app.ai.adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
+from app.ai.pricing.registry import CallPrice, ImagePrice, ImageTokenPrice, TokenPrice
 from app.services import ai_capability_kernel
 from app.services import ai_gateway_facade
 
@@ -61,7 +61,7 @@ def _image_model() -> SimpleNamespace:
     return SimpleNamespace(
         id="custom-image-model",
         model_type="image",
-        adapter="litellm",
+        adapter="openai_images",
         provider="openai",
         provider_model="custom-image-model",
         adapter_model="openai/custom-image-model",
@@ -126,7 +126,7 @@ def test_model_gate_rejects_multimodal_text_without_supported_media_type(monkeyp
             "input_media_types": ("text/plain",),
         }
     )
-    monkeypatch.setattr(ai_capability_kernel, "require_enabled_text_model", lambda _model_id: model)
+    monkeypatch.setattr(ai_capability_kernel, "get_enabled_model", lambda _model_id: model)
 
     with pytest.raises(AppError) as exc:
         ai_capability_kernel.ModelGate().resolve_multimodal_text(
@@ -288,9 +288,9 @@ async def test_provider_gateway_builds_image_generation_request_from_model(monke
 
 
 @pytest.mark.asyncio
-async def test_generate_image_with_ledger_includes_image_adapter_in_hash_and_provider_call(monkeypatch):
+async def test_generate_image_with_ledger_uses_catalog_route_adapter_in_hash_and_provider_call(monkeypatch):
     session_factory = _FakeSessionFactory()
-    call_ids = [uuid.uuid4(), uuid.uuid4()]
+    call_id = uuid.uuid4()
     pending_calls: list[dict] = []
     provider_calls: list[str | None] = []
     price = ImagePrice(
@@ -306,7 +306,7 @@ async def test_generate_image_with_ledger_includes_image_adapter_in_hash_and_pro
 
     async def fake_create_pending(*_args, **kwargs):
         pending_calls.append(kwargs)
-        return SimpleNamespace(id=call_ids[len(pending_calls) - 1])
+        return SimpleNamespace(id=call_id)
 
     async def fake_generate_image(_model, *, image_adapter=None, **_kwargs):
         provider_calls.append(image_adapter)
@@ -339,11 +339,43 @@ async def test_generate_image_with_ledger_includes_image_adapter_in_hash_and_pro
         job_type="poster_title_image_generate_item",
         ledger_session_factory=session_factory,
     )
-    await ai_gateway_facade.generate_image_with_ledger(**common_kwargs, image_adapter="openai_responses")
     await ai_gateway_facade.generate_image_with_ledger(**common_kwargs, image_adapter="openai_images")
 
-    assert provider_calls == ["openai_responses", "openai_images"]
-    assert pending_calls[0]["request_hash"] != pending_calls[1]["request_hash"]
+    assert provider_calls == ["openai_images"]
+    assert pending_calls[0]["model_id"] == "custom-image-model"
+    assert pending_calls[0]["provider"] == "openai"
+    assert pending_calls[0]["provider_model"] == "custom-image-model"
+    assert pending_calls[0]["request_hash"].startswith("sha256:")
+
+
+@pytest.mark.asyncio
+async def test_generate_image_with_ledger_rejects_image_adapter_mismatch(monkeypatch):
+    session_factory = _FakeSessionFactory()
+
+    monkeypatch.setattr(ai_capability_kernel, "require_enabled_image_model", lambda _model_id: _image_model())
+
+    with pytest.raises(AppError) as exc:
+        await ai_gateway_facade.generate_image_with_ledger(
+            caller_id="caller-1",
+            scope_type="job",
+            scope_id="00000000-0000-0000-0000-000000000001",
+            operation="poster_title_image.generate_title",
+            model_id="custom-image-model",
+            image_adapter="openai_responses",
+            response_model="gpt-5.5",
+            prompt="draw",
+            reference_images=[ImageInput(data=b"image", content_type="image/png", detail="low")],
+            size="auto",
+            quality="high",
+            background="auto",
+            output_format="png",
+            job_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+            attempt_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+            job_type="poster_title_image_generate_item",
+            ledger_session_factory=session_factory,
+        )
+
+    assert exc.value.code == "MODEL_NOT_AVAILABLE"
 
 
 @pytest.mark.asyncio

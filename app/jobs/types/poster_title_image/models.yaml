@@ -1,13 +1,19 @@
 version: poster_title_image.models.v1
 job_type: poster_title_image
-public_model_selection:
-  request_field: "job_params.items[].model_id"
-  default_model_id: gpt-image-2
-  allowed_model_ids:
-    - gpt-image-2
-internal_models:
+model_slots:
+  generation:
+    visibility: public
+    request_field: "job_params.items[].model_id"
+    default_model_id: gpt-image-2
+    allowed_model_ids:
+      - gpt-image-2
+    required_capabilities:
+      - image_generation
+      - image_edit
   style_probe:
-    model_id: gpt-5.5
-generation:
-# openai_images,openai_responses
-  image_adapter: openai_images
+    visibility: internal
+    default_model_id: gpt-5.5
+    allowed_model_ids:
+      - gpt-5.5
+    required_capabilities:
+      - multimodal_text_generation

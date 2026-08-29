@@ -6,6 +6,7 @@ from typing import Any
 from smoke.harness import formatters
 from smoke.harness import env_runtime
 from smoke.harness import http_runtime
+from smoke.harness import model_catalog
 from smoke.harness import service_runtime
 from smoke.harness.errors import FlowError
 from smoke.jobs import runtime as job_runtime
@@ -110,7 +111,10 @@ def run(
         service_api_key=service_api_key,
     )
     app_env = context.app_env
-    selected_model = model_id or env_runtime.env_value("DEFAULT_MODEL_ID", app_env) or "gpt-5.5"
+    if model_id:
+        selected_model = model_id
+    else:
+        selected_model = model_catalog.default_model_id(app_env, "text_generation")
     jobs_url = str(context.summary["jobs_url"])
     headers = service_runtime.build_headers(app_env, caller_id=caller_id, service_api_key=service_api_key)
 

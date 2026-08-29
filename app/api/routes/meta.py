@@ -4,7 +4,7 @@ from app.api.operations import OperationID, operation_path, operation_route_kwar
 from app.core.security import require_service_auth
 from app.core.exceptions import ValidationAppError
 from app.core.language_catalog import list_languages_response
-from app.core.model_registry import list_models_response
+from app.ai.catalog.registry import list_models_response
 from app.core.prompt_templates import DEFAULT_PROMPT_TEMPLATE_JOB_TYPE, list_prompt_templates
 from app.jobs import registry as job_registry
 

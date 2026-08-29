@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from smoke.cli import app
 from app.integrations.aliyun_oss import AliyunOSSConfig
-from app.integrations.ai_adapters.base import ImageGenerationResult
+from app.ai.adapters.base import ImageGenerationResult
 from smoke.flows.audio import stem_separation as audio_stem_separation
 from smoke.flows.image import adapter_probe as adapter_image_probe
 from smoke.flows.image import poster_title_image
@@ -87,6 +87,23 @@ def append_root_env(root: Path, *lines: str) -> None:
     prefix = existing.rstrip("\n")
     suffix = "\n".join(lines)
     env_path.write_text(f"{prefix}\n{suffix}\n" if prefix else f"{suffix}\n", encoding="utf-8")
+
+
+def write_smoke_model_catalog(root: Path, *, default_model_id: str = "gpt-5.4-mini") -> Path:
+    path = root / "models.yaml"
+    path.write_text(
+        "\n".join(
+            [
+                'version: "2"',
+                "default_model_ids:",
+                f"  text_generation: {default_model_id}",
+                "models: []",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def _job_options(
@@ -2040,13 +2057,21 @@ def test_adapter_image_probe_collects_adapter_errors(monkeypatch, capsys, tmp_pa
             [
                 "version: test",
                 "job_type: poster_title_image",
-                "public_model_selection:",
-                "  default_model_id: gpt-image-from-config",
-                "internal_models:",
+                "model_slots:",
+                "  generation:",
+                "    visibility: public",
+                "    default_model_id: gpt-image-from-config",
+                "    allowed_model_ids:",
+                "      - gpt-image-from-config",
+                "    required_capabilities:",
+                "      - image_generation",
                 "  style_probe:",
-                "    model_id: gpt-response-from-config",
-                "generation:",
-                "  image_adapter: openai_responses",
+                "    visibility: internal",
+                "    default_model_id: gpt-response-from-config",
+                "    allowed_model_ids:",
+                "      - gpt-response-from-config",
+                "    required_capabilities:",
+                "      - multimodal_text_generation",
             ]
         ),
         encoding="utf-8",
@@ -2070,6 +2095,7 @@ def test_adapter_image_probe_collects_adapter_errors(monkeypatch, capsys, tmp_pa
             "gpt-response-from-config": "provider-response-from-config",
         }[model_id],
     )
+    monkeypatch.setattr(adapter_image_probe, "_generation_adapter_for_model_id", lambda _model_id: "openai_responses")
     monkeypatch.setattr(adapter_image_probe, "_run_adapter", fake_run_adapter)
 
     with pytest.raises(adapter_image_probe.FlowError, match="one or more image adapters failed") as exc_info:
@@ -2729,14 +2755,15 @@ def test_smoke_accepts_loopback_ip_url():
 
 def test_smoke_run_uses_http_job_and_billing_flow(tmp_path, monkeypatch):
     clear_api_env(monkeypatch)
-    monkeypatch.delenv("DEFAULT_MODEL_ID", raising=False)
+    monkeypatch.delenv("MODEL_CONFIG_PATH", raising=False)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
 
+    write_smoke_model_catalog(tmp_path, default_model_id="gpt-5.4-mini")
     app_env = tmp_path / ".env"
     app_env.write_text(
-        "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=false\nDEFAULT_MODEL_ID=gpt-5.4-mini\n",
+        "DISABLE_HTTP_AUTH_HEADER=true\nDISABLE_CALLER_ID_HEADER=false\nMODEL_CONFIG_PATH=models.yaml\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
@@ -2801,12 +2828,13 @@ def test_smoke_run_uses_http_job_and_billing_flow(tmp_path, monkeypatch):
 
 
 def test_smoke_run_uses_env_file_for_remote_api_and_service_key(tmp_path, monkeypatch):
-    monkeypatch.delenv("DEFAULT_MODEL_ID", raising=False)
+    monkeypatch.delenv("MODEL_CONFIG_PATH", raising=False)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
 
     monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
+    write_smoke_model_catalog(tmp_path, default_model_id="gpt-5.4-mini")
     env_dir = tmp_path / "env_test"
     env_dir.mkdir()
     (env_dir / ".env").write_text(
@@ -2816,7 +2844,7 @@ def test_smoke_run_uses_env_file_for_remote_api_and_service_key(tmp_path, monkey
                 "SERVICE_API_KEY=file-secret",
                 "DISABLE_HTTP_AUTH_HEADER=false",
                 "DISABLE_CALLER_ID_HEADER=false",
-                "DEFAULT_MODEL_ID=gpt-5.4-mini",
+                "MODEL_CONFIG_PATH=models.yaml",
             ]
         ),
         encoding="utf-8",
@@ -3530,12 +3558,13 @@ def test_audio_stem_separation_run_keeps_staged_input_when_create_response_is_un
 
 
 def test_smoke_run_uses_double_job_type(tmp_path, monkeypatch):
-    monkeypatch.delenv("DEFAULT_MODEL_ID", raising=False)
+    monkeypatch.delenv("MODEL_CONFIG_PATH", raising=False)
     monkeypatch.delenv("DISABLE_HTTP_AUTH_HEADER", raising=False)
     monkeypatch.delenv("DISABLE_CALLER_ID_HEADER", raising=False)
     monkeypatch.delenv("SERVICE_API_KEY", raising=False)
     monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
-    (tmp_path / ".env").write_text("DISABLE_HTTP_AUTH_HEADER=true\nDEFAULT_MODEL_ID=gpt-5.4-mini\n", encoding="utf-8")
+    write_smoke_model_catalog(tmp_path, default_model_id="gpt-5.4-mini")
+    (tmp_path / ".env").write_text("DISABLE_HTTP_AUTH_HEADER=true\nMODEL_CONFIG_PATH=models.yaml\n", encoding="utf-8")
     append_root_env(tmp_path, "API_PORT=18200")
     calls = []
 

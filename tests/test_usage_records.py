@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.core.usage_records import (
+from app.ai.usage.records import (
     AudioUsageRecord,
     ImageUsageRecord,
     TextUsageRecord,

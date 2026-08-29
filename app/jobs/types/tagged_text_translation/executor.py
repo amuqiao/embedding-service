@@ -8,6 +8,9 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.ai.capabilities import TEXT_GENERATION
+from app.ai.catalog.registry import default_model_id
+from app.ai.resolver import resolve_route_config_hash
 from app.core.exceptions import AppError, ValidationAppError
 from app.core.language_catalog import supported_language_codes
 from app.jobs.base import JobExecutor
@@ -257,7 +260,14 @@ class TaggedTextTranslationJob(JobExecutor):
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         TaggedTextTranslationParams.model_validate(job_params)
-        return TaggedTextTranslationRuntimeFields(model_id=settings.registry.default_model_id).model_dump(
+        model_id = default_model_id(TEXT_GENERATION)
+        return TaggedTextTranslationRuntimeFields(
+            model_id=model_id,
+            model_route_config_hash=resolve_route_config_hash(
+                capability=TEXT_GENERATION,
+                requested_model_id=model_id,
+            ),
+        ).model_dump(
             by_alias=True,
             exclude_none=True,
         )

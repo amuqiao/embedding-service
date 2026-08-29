@@ -29,6 +29,7 @@ triton-bench.sh Triton 推理服务直压入口
 jobs.sh         Job 只读查询与排障
 job-ops.sh      Job 写操作运维入口
 smoke.sh       标准业务 smoke/E2E 验证入口
+ai-providers.sh 云模型 provider、AI catalog 和 resolver 只读诊断入口
 models.sh       本地模型资产下载、路径和必需文件检查
 media.sh        本地音视频素材探测、校验和准备
 tools.sh        无默认持久副作用的本地开发辅助工具和只读代码清单查看
@@ -57,11 +58,13 @@ tools.sh        无默认持久副作用的本地开发辅助工具和只读代�
 | Job 只读状态、attempt、callback、timeline、broker/runtime 证据 | `jobs.sh` | `job-ops.sh` |
 | Job 重放、软删除、恢复等写操作 | `job-ops.sh`，且必须显式 `--confirm` | `jobs.sh` |
 | 真实业务 HTTP 合同验证 | `smoke.sh` | `verify.sh` |
+| 云模型 provider 配置、模型 catalog、resolver 路由诊断 | `ai-providers.sh` | `models.sh` / `smoke.sh` / `tools.sh` |
 | 模型资产下载、路径和必需文件检查 | `models.sh` | `tools.sh` |
 | 本地素材探测、校验和准备 | `media.sh` | `models.sh` / `smoke.sh` |
 | 小型无默认持久副作用工具 | `tools.sh` | 业务或运维入口 |
 
 模型权重这类会写入 `.data/models/`、可能访问远端但不执行真实推理的本地资产准备，归属 `models.sh`，不放入默认无持久副作用的 `tools.sh`。
+云模型 provider 凭证摘要、全局模型 catalog 和 capability route 解析归属 `ai-providers.sh`。它默认不访问远端 provider、不产生费用、不提交 Job；真实业务链路验收仍归 `smoke.sh`。
 音视频素材探测、转码准备和业务输入格式校验归属 `media.sh`；它只处理本地素材文件，不下载模型、不执行推理、不提交 Job、不上传对象存储。
 Triton 直压归属 `triton-bench.sh`；它只直连推理服务，不创建 FastAPI Job，不访问 DB/Redis/OSS，不触发 callback，不替代 `load.sh` 的业务链路压测。
 已注册 tool、capability 和 job_type capability 关系归属 `tools.sh registry` 只读查看；当前治理事实见 `docs/current/registry-governance.md`。

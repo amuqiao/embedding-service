@@ -1,20 +1,14 @@
 # Top-level fields are runtime service configuration. Caller-facing metadata lives under public
 # and is the only source used by GET /models.
-version: "1"
+version: "2"
+default_model_ids:
+  text_generation: gpt-5.5
+  multimodal_text_generation: gpt-5.5
+  image_generation: gpt-image-2
+  image_edit: gpt-image-2
 models:
   - id: gpt-5.5
-    adapter: litellm
-    provider: openai
-    provider_model: gpt-5.5
-    adapter_model: openai/gpt-5.5
-    pricing_ref: openai:gpt-5.5@2026-06-23
     enabled: true
-    requires_env:
-      - OPENAI_API_KEY
-    generation:
-      temperature: 1.0
-      num_retries: 0
-      drop_params: true
     public:
       name: GPT-5.5
       provider: openai
@@ -36,19 +30,31 @@ models:
         supports_image_generation_tool: true
       parameters: []
       notes: Default high-capability text generation model.
+    execution:
+      routes:
+        text_generation:
+          adapter: litellm
+          provider: openai
+          provider_model: gpt-5.5
+          adapter_model: openai/gpt-5.5
+          pricing_ref: openai:gpt-5.5@2026-06-23
+          requires_env:
+            - OPENAI_API_KEY
+          generation:
+            temperature: 1.0
+            num_retries: 0
+            drop_params: true
+        multimodal_text_generation:
+          adapter: openai_responses
+          provider: openai
+          provider_model: gpt-5.5
+          adapter_model: gpt-5.5
+          pricing_ref: openai:gpt-5.5@2026-06-23
+          requires_env:
+            - OPENAI_API_KEY
+
   - id: gpt-5.4
-    adapter: litellm
-    provider: openai
-    provider_model: gpt-5.4
-    adapter_model: openai/gpt-5.4
-    pricing_ref: openai:gpt-5.4@2026-06-23
     enabled: true
-    requires_env:
-      - OPENAI_API_KEY
-    generation:
-      temperature: 0.7
-      num_retries: 0
-      drop_params: true
     public:
       name: GPT-5.4
       provider: openai
@@ -64,20 +70,24 @@ models:
       features:
         supports_json_output: true
       parameters: []
-      notes: ''
+      notes: ""
+    execution:
+      routes:
+        text_generation:
+          adapter: litellm
+          provider: openai
+          provider_model: gpt-5.4
+          adapter_model: openai/gpt-5.4
+          pricing_ref: openai:gpt-5.4@2026-06-23
+          requires_env:
+            - OPENAI_API_KEY
+          generation:
+            temperature: 0.7
+            num_retries: 0
+            drop_params: true
+
   - id: gpt-5.4-mini
-    adapter: litellm
-    provider: openai
-    provider_model: gpt-5.4-mini
-    adapter_model: openai/gpt-5.4-mini
-    pricing_ref: openai:gpt-5.4-mini@2026-06-23
     enabled: true
-    requires_env:
-      - OPENAI_API_KEY
-    generation:
-      temperature: 0.7
-      num_retries: 0
-      drop_params: true
     public:
       name: GPT-5.4 mini
       provider: openai
@@ -93,20 +103,24 @@ models:
       features:
         supports_json_output: true
       parameters: []
-      notes: ''
+      notes: ""
+    execution:
+      routes:
+        text_generation:
+          adapter: litellm
+          provider: openai
+          provider_model: gpt-5.4-mini
+          adapter_model: openai/gpt-5.4-mini
+          pricing_ref: openai:gpt-5.4-mini@2026-06-23
+          requires_env:
+            - OPENAI_API_KEY
+          generation:
+            temperature: 0.7
+            num_retries: 0
+            drop_params: true
+
   - id: gpt-5.4-nano
-    adapter: litellm
-    provider: openai
-    provider_model: gpt-5.4-nano
-    adapter_model: openai/gpt-5.4-nano
-    pricing_ref: openai:gpt-5.4-nano@2026-06-23
     enabled: true
-    requires_env:
-      - OPENAI_API_KEY
-    generation:
-      temperature: 0.7
-      num_retries: 0
-      drop_params: true
     public:
       name: GPT-5.4 nano
       provider: openai
@@ -122,20 +136,24 @@ models:
       features:
         supports_json_output: true
       parameters: []
-      notes: ''
+      notes: ""
+    execution:
+      routes:
+        text_generation:
+          adapter: litellm
+          provider: openai
+          provider_model: gpt-5.4-nano
+          adapter_model: openai/gpt-5.4-nano
+          pricing_ref: openai:gpt-5.4-nano@2026-06-23
+          requires_env:
+            - OPENAI_API_KEY
+          generation:
+            temperature: 0.7
+            num_retries: 0
+            drop_params: true
+
   - id: gpt-4o
-    adapter: litellm
-    provider: openai
-    provider_model: gpt-4o
-    adapter_model: openai/gpt-4o
-    pricing_ref: openai:gpt-4o@2026-06-23
     enabled: true
-    requires_env:
-      - OPENAI_API_KEY
-    generation:
-      temperature: 0.7
-      num_retries: 0
-      drop_params: true
     public:
       name: GPT-4o
       provider: openai
@@ -156,19 +174,31 @@ models:
         supports_json_output: true
       parameters: []
       notes: Compatibility model; default is gpt-5.5.
+    execution:
+      routes:
+        text_generation:
+          adapter: litellm
+          provider: openai
+          provider_model: gpt-4o
+          adapter_model: openai/gpt-4o
+          pricing_ref: openai:gpt-4o@2026-06-23
+          requires_env:
+            - OPENAI_API_KEY
+          generation:
+            temperature: 0.7
+            num_retries: 0
+            drop_params: true
+        multimodal_text_generation:
+          adapter: openai_responses
+          provider: openai
+          provider_model: gpt-4o
+          adapter_model: gpt-4o
+          pricing_ref: openai:gpt-4o@2026-06-23
+          requires_env:
+            - OPENAI_API_KEY
+
   - id: gpt-4o-mini
-    adapter: litellm
-    provider: openai
-    provider_model: gpt-4o-mini
-    adapter_model: openai/gpt-4o-mini
-    pricing_ref: openai:gpt-4o-mini@2026-06-23
     enabled: true
-    requires_env:
-      - OPENAI_API_KEY
-    generation:
-      temperature: 0.7
-      num_retries: 0
-      drop_params: true
     public:
       name: GPT-4o mini
       provider: openai
@@ -185,19 +215,23 @@ models:
         supports_json_output: true
       parameters: []
       notes: Compatibility model; default is gpt-5.5.
+    execution:
+      routes:
+        text_generation:
+          adapter: litellm
+          provider: openai
+          provider_model: gpt-4o-mini
+          adapter_model: openai/gpt-4o-mini
+          pricing_ref: openai:gpt-4o-mini@2026-06-23
+          requires_env:
+            - OPENAI_API_KEY
+          generation:
+            temperature: 0.7
+            num_retries: 0
+            drop_params: true
+
   - id: gpt-4.1
-    adapter: litellm
-    provider: openai
-    provider_model: gpt-4.1
-    adapter_model: openai/gpt-4.1
-    pricing_ref: openai:gpt-4.1@2026-06-23
     enabled: true
-    requires_env:
-      - OPENAI_API_KEY
-    generation:
-      temperature: 0.7
-      num_retries: 0
-      drop_params: true
     public:
       name: GPT-4.1
       provider: openai
@@ -214,15 +248,23 @@ models:
         supports_json_output: true
       parameters: []
       notes: Compatibility model; default is gpt-5.5.
+    execution:
+      routes:
+        text_generation:
+          adapter: litellm
+          provider: openai
+          provider_model: gpt-4.1
+          adapter_model: openai/gpt-4.1
+          pricing_ref: openai:gpt-4.1@2026-06-23
+          requires_env:
+            - OPENAI_API_KEY
+          generation:
+            temperature: 0.7
+            num_retries: 0
+            drop_params: true
+
   - id: gpt-image-2
-    adapter: litellm
-    provider: openai
-    provider_model: gpt-image-2
-    adapter_model: openai/gpt-image-2
-    pricing_ref: openai:gpt-image-2@2026-07-02
     enabled: true
-    requires_env:
-      - OPENAI_API_KEY
     public:
       name: gpt-image-2
       provider: openai
@@ -289,4 +331,22 @@ models:
             - jpeg
             - webp
           default: png
-      notes: ''
+      notes: ""
+    execution:
+      routes:
+        image_generation:
+          adapter: openai_images
+          provider: openai
+          provider_model: gpt-image-2
+          adapter_model: gpt-image-2
+          pricing_ref: openai:gpt-image-2@2026-07-02
+          requires_env:
+            - OPENAI_API_KEY
+        image_edit:
+          adapter: openai_images
+          provider: openai
+          provider_model: gpt-image-2
+          adapter_model: gpt-image-2
+          pricing_ref: openai:gpt-image-2@2026-07-02
+          requires_env:
+            - OPENAI_API_KEY

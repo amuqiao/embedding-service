@@ -66,6 +66,22 @@ class ImageGenerationResult:
     usage: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class EmbeddingRequest:
+    adapter_model: str
+    input_texts: list[str]
+    timeout_seconds: int
+    api_key: str | None
+    api_base: str | None
+    dimensions: int | None = None
+
+
+@dataclass
+class EmbeddingResult:
+    vectors: list[list[float]]
+    usage: dict[str, Any] | None = None
+
+
 class TextGenerationAdapter(Protocol):
     async def generate_text(self, request: TextGenerationRequest) -> TextGenerationResult:
         """Generate text for a normalized provider request."""
@@ -79,3 +95,8 @@ class MultimodalTextGenerationAdapter(Protocol):
 class ImageGenerationAdapter(Protocol):
     async def generate_image(self, request: ImageGenerationRequest) -> ImageGenerationResult:
         """Generate or edit an image for a normalized provider request."""
+
+
+class EmbeddingAdapter(Protocol):
+    async def embed(self, request: EmbeddingRequest) -> EmbeddingResult:
+        """Generate embeddings for normalized text inputs."""

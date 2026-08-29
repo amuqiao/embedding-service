@@ -10,9 +10,10 @@ from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.language_catalog import require_supported_language
 from app.core.logging import LogEvent, log_event
-from app.core.model_registry import get_enabled_model
+from app.ai.capabilities import IMAGE_EDIT, MULTIMODAL_TEXT_GENERATION
+from app.ai.resolver import resolve_model, resolve_route_config_hash
 from app.core.prompt_templates import get_prompt_block_default
-from app.integrations.ai_adapters.base import ImageInput
+from app.ai.adapters.base import ImageInput
 from app.integrations.image import (
     POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
     POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES,
@@ -28,7 +29,6 @@ from app.jobs.base import ExecutionRetryPolicy, JobExecutor, JobRetryPolicy
 from app.jobs.model_selection import (
     poster_title_image_generation_allowed_model_ids,
     poster_title_image_generation_default_model_id,
-    poster_title_image_generation_image_adapter,
     poster_title_image_style_probe_model_id,
 )
 from app.jobs.registry import register_job_type
@@ -141,10 +141,24 @@ Scale: Render the title LARGE — main-title proportions. The text block must fi
 
 
 def _style_probe_provider_model(model_id: str) -> str:
-    model = get_enabled_model(model_id)
-    if model is None:
-        raise AppError("MODEL_NOT_AVAILABLE", f"模型不可用: {model_id}")
-    return model.provider_model
+    return resolve_model(
+        capability=MULTIMODAL_TEXT_GENERATION,
+        requested_model_id=model_id,
+    ).resolved_model.provider_model
+
+
+def _style_probe_route_config_hash(model_id: str) -> str:
+    return resolve_route_config_hash(
+        capability=MULTIMODAL_TEXT_GENERATION,
+        requested_model_id=model_id,
+    )
+
+
+def _generation_route_config_hash(model_id: str) -> str:
+    return resolve_route_config_hash(
+        capability=IMAGE_EDIT,
+        requested_model_id=model_id,
+    )
 
 
 def _style_probe_model_id_for_reference(reference_image: ImageInput, *, model_id: str, image_adapter: str) -> str:
@@ -264,8 +278,12 @@ def _generation_allowed_model_ids() -> tuple[str, ...]:
     return poster_title_image_generation_allowed_model_ids()
 
 
-def _image_adapter() -> str:
-    return poster_title_image_generation_image_adapter()
+def _image_adapter(model_id: str | None = None) -> str:
+    generation_model_id = model_id or _generation_default_model_id()
+    return resolve_model(
+        capability=IMAGE_EDIT,
+        requested_model_id=generation_model_id,
+    ).resolved_model.adapter
 
 
 def _max_workflow_nodes() -> int:
@@ -554,10 +572,14 @@ class PosterTitleImageJob(JobExecutor):
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = PosterTitleImageParams.model_validate(job_params)
-        image_adapter = _image_adapter()
+        style_probe_model_id = _style_probe_model_id()
+        generation_model_id = _generation_model_id_from_params(params)
+        image_adapter = _image_adapter(generation_model_id)
         return PosterTitleImageRuntimeFields(
-            style_probe_model_id=_style_probe_model_id(),
-            generation_model_id=_generation_model_id_from_params(params),
+            style_probe_model_id=style_probe_model_id,
+            style_probe_route_config_hash=_style_probe_route_config_hash(style_probe_model_id),
+            generation_model_id=generation_model_id,
+            generation_route_config_hash=_generation_route_config_hash(generation_model_id),
             image_adapter=image_adapter,
         ).model_dump(by_alias=True, exclude_none=True)
 
@@ -589,7 +611,7 @@ class PosterTitleImageJob(JobExecutor):
                     "allowed_model_ids": list(allowed_model_ids),
                 },
             )
-        image_adapter = _image_adapter()
+        image_adapter = _image_adapter(generation_model_id)
         IMAGE_MODEL_GATE.resolve(generation_model_id, require_edit=True)
         for item in params.items:
             require_supported_language(item.language)
@@ -635,6 +657,7 @@ class PosterTitleImageStyleProbeJob(JobExecutor):
         params = PosterTitleImageStyleProbeParams.model_validate(job_params)
         return PosterTitleImageStyleProbeRuntimeFields(
             style_probe_model_id=params.style_probe_model_id,
+            style_probe_route_config_hash=_style_probe_route_config_hash(params.style_probe_model_id),
             image_adapter=params.image_adapter,
         ).model_dump(by_alias=True, exclude_none=True)
 
@@ -704,10 +727,14 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
 
     def runtime_job_fields(self, job_params: dict[str, Any]) -> dict[str, Any]:
         params = PosterTitleImageGenerateItemParams.model_validate(job_params)
+        generation_model_id = params.item.model_id or _generation_default_model_id()
+        image_adapter = _image_adapter(generation_model_id)
         return PosterTitleImageGenerateItemRuntimeFields(
-            generation_model_id=params.item.model_id or _generation_default_model_id(),
+            generation_model_id=generation_model_id,
+            generation_route_config_hash=_generation_route_config_hash(generation_model_id),
             style_probe_model_id=params.style_probe_model_id,
-            image_adapter=params.image_adapter,
+            style_probe_route_config_hash=_style_probe_route_config_hash(params.style_probe_model_id),
+            image_adapter=image_adapter,
         ).model_dump(by_alias=True, exclude_none=True)
 
     async def _execute(self, job: Job, db: AsyncSession) -> dict[str, Any] | None:

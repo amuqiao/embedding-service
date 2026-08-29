@@ -148,7 +148,7 @@ Rules:
 
 CPP 可以调用 `GET /api/v1/ai-jobs/models?job_type=poster_title_image` 渲染标题图任务可选模型。该接口响应结构仍是共享 `ModelsResponse`，但 `data.default_model_id` 和 `data.models[]` 会按 `poster_title_image` 的任务级模型配置过滤。
 
-本文不定义 `/models` 的响应结构；该接口的权威合同以 [`service-contract.md`](service-contract.md) 为准。`poster_title_image` 首版允许调用方传入 `items[].model_id`，但必须命中 `app/jobs/types/poster_title_image/models.yaml` 中的 `public_model_selection.allowed_model_ids`。
+本文不定义 `/models` 的响应结构；该接口的权威合同以 [`service-contract.md`](service-contract.md) 为准。`poster_title_image` 允许调用方传入 `items[].model_id`，但必须命中 `app/jobs/types/poster_title_image/models.yaml` 中 public `generation` slot 的 `allowed_model_ids`。
 
 ## 2. Shared Language Catalog
 

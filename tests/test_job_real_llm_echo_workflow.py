@@ -13,6 +13,8 @@ from app.schemas.jobs import CreateJobRequest, JobRealLlmDoubleEchoParams, JobRe
 from app.services.job_runtime import payload_hash
 from app.services.jobs import validate_create_contract
 
+ROUTE_HASH = "sha256:" + "a" * 64
+
 
 class _FakeDB:
     def __init__(self):
@@ -51,8 +53,9 @@ def _business_attempt(job: Job, *, lease_token: uuid.UUID | None = None) -> tupl
     return attempt, token
 
 
-def test_job_real_llm_echo_builds_model_runtime_fields():
+def test_job_real_llm_echo_builds_model_runtime_fields(monkeypatch):
     handler = JobRealLlmEchoJob()
+    monkeypatch.setattr("app.jobs.types.job_real_llm_echo.resolve_route_config_hash", lambda **_kwargs: ROUTE_HASH)
 
     runtime_fields = handler.runtime_job_fields(
         {
@@ -63,6 +66,7 @@ def test_job_real_llm_echo_builds_model_runtime_fields():
     )
 
     assert runtime_fields["model_id"] == "gpt-5.4-mini"
+    assert runtime_fields["model_route_config_hash"] == ROUTE_HASH
     assert runtime_fields["prompt_payload"]["blocks"][0]["key"] == "user"
     assert "只输出一个 JSON object" in runtime_fields["prompt_payload"]["blocks"][0]["content"]
 
@@ -91,8 +95,9 @@ def test_job_real_llm_double_echo_rejects_large_inline_input():
     assert "source.inline.text must be at most 4096 bytes" in str(exc.value)
 
 
-def test_job_real_llm_double_echo_builds_runtime_fields():
+def test_job_real_llm_double_echo_builds_runtime_fields(monkeypatch):
     handler = JobRealLlmDoubleEchoJob()
+    monkeypatch.setattr("app.jobs.types.job_real_llm_double_echo.resolve_route_config_hash", lambda **_kwargs: ROUTE_HASH)
 
     runtime_fields = handler.runtime_job_fields(
         {
@@ -104,6 +109,7 @@ def test_job_real_llm_double_echo_builds_runtime_fields():
     )
 
     assert runtime_fields["model_id"] == "gpt-5.4-mini"
+    assert runtime_fields["model_route_config_hash"] == ROUTE_HASH
     assert runtime_fields["first_prompt_payload"]["blocks"][0]["content"] == "first"
     assert runtime_fields["second_prompt_payload"]["blocks"][0]["content"] == "second"
 
@@ -179,6 +185,7 @@ def _running_real_llm_job() -> Job:
                 "job_params_hash": payload_hash(params),
                 "runtime_fields": {
                     "model_id": "gpt-5.4-mini",
+                    "model_route_config_hash": ROUTE_HASH,
                     "prompt_payload": {"blocks": [{"key": "user", "role": "user", "content": "reply"}]},
                     "_system": {"trigger_request_id": "req-real-1"},
                 },
@@ -216,6 +223,7 @@ def _running_real_llm_double_job() -> Job:
     job.runtime_ref["payload"]["job_params_hash"] = payload_hash(params)
     job.runtime_ref["payload"]["runtime_fields"] = {
         "model_id": "gpt-5.4-mini",
+        "model_route_config_hash": ROUTE_HASH,
         "first_prompt_payload": {"blocks": [{"key": "user", "role": "user", "content": "first"}]},
         "second_prompt_payload": {"blocks": [{"key": "user", "role": "user", "content": "second"}]},
         "_system": {"trigger_request_id": "req-real-double-1"},

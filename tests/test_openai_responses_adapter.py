@@ -2,11 +2,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.integrations.ai_adapters import openai_images_adapter
-from app.integrations.ai_adapters import openai_responses_adapter
-from app.integrations.ai_adapters.base import ImageGenerationRequest, ImageInput, MultimodalTextGenerationRequest
-from app.integrations.ai_adapters.openai_images_adapter import OpenAIImagesAdapter
-from app.integrations.ai_adapters.openai_responses_adapter import OpenAIResponsesAdapter
+from app.ai.adapters import openai_images_adapter
+from app.ai.adapters import openai_responses_adapter
+from app.ai.adapters.base import ImageGenerationRequest, ImageInput, MultimodalTextGenerationRequest
+from app.ai.adapters.openai_images_adapter import OpenAIImagesAdapter
+from app.ai.adapters.openai_responses_adapter import OpenAIResponsesAdapter
 
 
 @pytest.mark.asyncio

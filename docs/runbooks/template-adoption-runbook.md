@@ -64,7 +64,7 @@ fastapi_best_ai_architecture
 
 - 安全和调用方边界：`SERVICE_API_KEY`、`DISABLE_HTTP_AUTH_HEADER`、`DISABLE_CALLER_ID_HEADER`、`ALLOWED_ORIGINS`、`CALLBACK_SIGNING_SECRET`、`ALLOW_INSECURE_CALLBACKS`
 - 容量和 worker 参数：`DB_POOL_SIZE`、`DB_MAX_OVERFLOW`、`WORKER_CONCURRENCY`、`MAX_ACTIVE_JOBS`
-- 模型、Prompt 和价格配置：`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`DEFAULT_MODEL_ID`、`MODEL_CONFIG_PATH`、`PROMPT_CONFIG_PATH`、`PRICING_CONFIG_PATH`
+- 模型、Prompt 和价格配置：`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`MODEL_CONFIG_PATH`、`PROMPT_CONFIG_PATH`、`PRICING_CONFIG_PATH`
 - 具体业务能力配置：所有只针对某个 `job_type` 的模型、限制、输入白名单或业务参数
 
 使用 `poster_title_image`、`audio_stem_separation` 或 `audio_stem_separation_triton` 时，还要确认对应模型配置、输入 OSS 白名单、模型资产目录或 Triton endpoint。

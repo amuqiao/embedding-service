@@ -1,6 +1,6 @@
 # AI Capability Governance Plan
 
-本文规划本服务下一阶段 AI 能力治理架构。它描述目标结构、配置边界、注册机制和迁移路径；当前已实现事实仍以 [`../current/ai-capability.md`](../current/ai-capability.md) 为准。
+本文规划本服务 AI 能力治理架构的剩余演进。当前已落地事实以 [`../current/ai-capability.md`](../current/ai-capability.md) 为准；本文只保留仍需扩展、验证或继续下沉的设计边界。
 
 ## 目标模型
 
@@ -17,24 +17,24 @@ AI 能力不应由每个业务 Job 自己拼接。业务 Job 只声明自己需�
 
 ## Current Baseline
 
-- 全局模型目录当前由 `app/core/models.yaml` 和 `app/core/model_registry.py` 管理。
+- 全局模型目录已由 `app/ai/catalog/models.yaml` 和 `app/ai/catalog/registry.py` 管理。
 - 当前模型目录支持 `text`、`image`、`audio`、`video` 粗分类，以及 `text_generation`、`multimodal_text_generation`、`image_generation`、`image_edit` 等 capability。
 - 当前 AI 调用入口是 `app/services/ai_gateway_facade.py`，包含文本、带图文本和图片生成的 ledger path。
 - 当前 AI kernel 在 `app/services/ai_capability_kernel.py`，包含模型准入、provider 调用编排、usage normalizer、pricing resolver 和 ledger writer。
-- 当前 adapter registry 在 `app/integrations/ai_adapters/`，内置 `litellm`、`openai_responses` 和 `openai_images`。
+- 当前 adapter registry 在 `app/ai/adapters/`，内置 `litellm`、`openai_responses`、`openai_images` 和 `openai_compatible_embeddings`。
 - 当前 LiteLLM 文本调用在 `app/integrations/ai_gateway.py`。
-- 当前业务级模型配置雏形在 `app/jobs/types/<job_type>/models.yaml`，例如 `poster_title_image` 定义公开可选模型、内部 style probe 模型和图片 adapter。
-- 当前配置层只有 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`DEFAULT_MODEL_ID`、`MODEL_CONFIG_PATH` 和 `PRICING_CONFIG_PATH` 等通用入口；没有独立 DashScope provider 配置。
-- 当前 `scripts/models.sh` 管本地模型资产下载、校验和 ONNX inspect；`scripts/smoke.sh` 管 Job/API/worker/callbacker E2E；还没有独立的云模型厂商诊断脚本。
+- 当前业务级模型配置在 `app/jobs/types/<job_type>/models.yaml`，`poster_title_image` 已使用通用 `model_slots` 声明公开 generation slot 和内部 style_probe slot；最终 provider/adapter route 归全局 catalog。
+- 当前配置层保留 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`MODEL_CONFIG_PATH` 和 `PRICING_CONFIG_PATH`；默认模型和启停不再放入 `.env`。
+- 当前 `scripts/models.sh` 管本地模型资产下载、校验和 ONNX inspect；`scripts/smoke.sh` 管 Job/API/worker/callbacker E2E；`scripts/ai-providers.sh` 管云模型 provider、catalog 和 resolver 离线诊断。
 
 ## Remaining Gaps
 
-- Provider 概念没有独立注册层，OpenAI、DashScope、自建 OpenAI-compatible 网关等厂商差异还没有稳定边界。
-- Adapter 和 provider 边界容易混淆；`OpenAI-compatible` 是调用协议形态，不应替代真实 `provider=dashscope` 或 `provider=openai`。
-- 当前全局模型配置偏向“一个模型一个 provider/adapter”，还不能清楚表达同一模型在不同 capability 下使用不同 execution route。
-- 全局模型启用、业务 Job 可用模型、当前环境凭证可执行性三层控制还没有统一 resolver。
-- 业务级 `models.yaml` 当前偏向 `poster_title_image`，还不是所有 Job 都可复用的通用模型策略配置。
-- 缺少标准 `scripts/ai-providers.sh` 入口来独立检查 provider 配置、列出本地支持模型、查询 live models 和执行最小 probe。
+- Provider 概念已有独立注册层，但 live models 和真实最小 probe 还只保留 CLI 合同位置，尚未实现远端调用。
+- Adapter 和 provider 边界已经拆开，后续新增 provider-specific 错误映射和 live probe 时需要继续保持该边界。
+- 全局模型配置已支持 `execution.routes.<capability>`，后续需要在真实 DashScope text / embeddings 接入时补足样例、pricing 和验证。
+- 全局模型启用、业务 Job 可用模型、当前环境凭证可执行性已有统一 resolver，后续应继续把新业务接入该入口。
+- 业务级 `models.yaml` 已支持通用 `model_slots`，但当前只有 `poster_title_image` 真正使用业务级模型策略。
+- `scripts/ai-providers.sh` 已支持 `check`、`models` 和 `resolve` 离线诊断；`live-models/probe` 的远端调用仍待后续实现。
 - 缺少 embedding/vector 这类非生成能力的统一 capability、request/result、usage 和 pricing 扩展位置。
 - API 与 worker 多实例运行时如果配置不一致，可能出现 API 接受某个模型而 worker 执行时拒绝的漂移风险；需要启动校验和可诊断输出。
 
@@ -51,7 +51,7 @@ AI 能力不应由每个业务 Job 自己拼接。业务 Job 只声明自己需�
 
 ## 目标目录结构
 
-目标结构按职责收口到 `app/ai/`，再由现有 service、route、job 和脚本调用。迁移完成前，当前 `app/core/*`、`app/services/*` 和 `app/integrations/*` 可作为旧位置逐步搬迁或包装，不要求一次性重命名。
+目标结构按职责收口到 `app/ai/`，再由现有 service、route、job 和脚本调用。第一阶段已经完成 catalog、pricing、usage、adapter、provider、policy 和 resolver 的主入口收口；`app/services/ai_capability_kernel.py` 仍保留为当前 ledger path 的执行组件。
 
 ```text
 app/ai/
@@ -126,9 +126,9 @@ scripts/ai-providers.sh
 
 ### 全局模型目录
 
-全局模型目录是本服务支持模型的代码级事实源。目标位置为 `app/ai/catalog/models.yaml`；迁移期可以继续通过 `MODEL_CONFIG_PATH` 指向当前 `app/core/models.yaml`。
+全局模型目录是本服务支持模型的代码级事实源。当前位置为 `app/ai/catalog/models.yaml`，仍可通过 `MODEL_CONFIG_PATH` 显式选择其他 catalog 文件。
 
-建议从当前 v1 结构演进到 v2 结构：公共投影仍放在 `public`，执行细节统一放入 `execution.routes.<capability>`。这样一个模型可以同时支持文本生成、带图文本、图片生成或向量能力，每个 capability 都有清楚的 provider/adapter 路由。
+当前全局模型目录使用 v2 结构：公共投影放在 `public`，执行细节统一放入 `execution.routes.<capability>`。这样一个模型可以同时支持文本生成、带图文本、图片生成或向量能力，每个 capability 都有清楚的 provider/adapter 路由。
 
 ```yaml
 version: "2"
@@ -277,7 +277,7 @@ MODEL_CALL_TIMEOUT_SECONDS=300
 
 业务模型策略放在 `app/jobs/types/<job_type>/models.yaml`。没有该文件时，Job 使用全局模型列表兜底，并按 executor 声明的 capability 自动过滤。
 
-推荐从单一 `public_model_selection` 演进到通用 `model_slots`：
+业务模型策略当前使用通用 `model_slots`：
 
 ```yaml
 version: tagged_text_translation.models.v1
@@ -506,7 +506,7 @@ scripts/ai-providers.sh
 
 ## 脚本 Harness 规划
 
-新增脚本建议命名为 `scripts/ai-providers.sh`，定位为云模型厂商诊断入口。
+`scripts/ai-providers.sh` 是云模型厂商诊断入口。
 
 它不替代：
 
@@ -514,7 +514,7 @@ scripts/ai-providers.sh
 - `scripts/smoke.sh`：Job/API/worker/callbacker E2E。
 - `scripts/tools.sh registry`：本地代码注册事实查看。
 
-建议命令：
+当前已实现命令：
 
 ```text
 check
@@ -523,11 +523,15 @@ check
 models
   列出本服务本地声明支持的模型，支持 --provider、--capability、--job-type、--json。
 
-live-models
-  访问厂商接口，列出当前凭据在 provider 侧实际可见模型；默认需要显式 --confirm-network。
-
 resolve
   输入 job_type、slot、capability 和可选 model_id，输出最终 ResolvedModel。
+```
+
+后续可扩展命令：
+
+```text
+live-models
+  访问厂商接口，列出当前凭据在 provider 侧实际可见模型；默认需要显式 --confirm-network。
 
 probe
   做一次最小真实调用，必须要求 --confirm-cost；embedding probe 只返回维度、数量和 usage 摘要，不打印完整向量。
@@ -628,16 +632,12 @@ DB overlay 的表结构不在本文定案；只有触发上述条件后，才单
 
 ## Planned Work
 
-1. 新建 `app/ai/` package，把现有 AI 概念按 provider、adapter、catalog、policy、gateway、usage、pricing 分层收口。
-2. 保留当前行为不变，先通过 wrapper 迁移入口：旧 `app/services/ai_gateway_facade.py` 可委托到 `app/ai/gateway.py`。
-3. 把 `app/core/models.yaml`、`app/core/model_registry.py` 迁移或包装为 `app/ai/catalog`。
-4. 把 `app/integrations/ai_adapters/` 迁移或包装为 `app/ai/adapters`。
-5. 新增 provider registry，先注册 OpenAI，再接入 DashScope。
-6. 将 `app/jobs/model_selection.py` 演进为通用 `app/ai/policy/job_models.py`，支持 `model_slots`。
-7. 新增 `scripts/ai-providers.sh` 和 `scripts/ai_providers/cli.py`。
-8. 保持 prompt registry 现状，但在 AI registry 校验中继续验证模型、prompt、pricing 和 job policy 不漂移。
-9. 新增 embedding request/result、adapter、usage normalizer 和 pricing rule 后，再接通 DashScope 向量模型。
-10. 扩展 `verify.sh check`，让 provider、adapter、catalog、pricing、job policy 的不一致在本地验证阶段 fail-fast。
+1. 为 provider registry 补充 provider-specific 错误映射、live models 和最小 probe；远端调用必须要求显式网络或成本确认。
+2. 接入真实 DashScope text 模型样例，补齐对应 `models.yaml` route、`pricing.yaml` 和 provider probe 验证。
+3. 将 `embeddings` capability 从 catalog/adapter 占位推进到真实 gateway 方法、usage normalizer、pricing 计算和 DashScope 向量模型调用。
+4. 扩展 `scripts/ai-providers.sh live-models/probe`；`probe` 不打印完整 prompt、完整向量、图片 base64 或 provider raw 大响应。
+5. 增强 API/worker 多实例配置漂移诊断，把有效 `route_config_hash`、catalog 路径和 pricing 路径输出到可观测日志或诊断命令。
+6. 保持 prompt registry 现状，但继续在 `verify.sh check` 中验证模型、prompt、pricing 和 job policy 不漂移。
 
 ## Acceptance
 
@@ -646,7 +646,7 @@ DB overlay 的表结构不在本文定案；只有触发上述条件后，才单
 - 新增 DashScope 向量模型通过 `embeddings` capability 接入，业务不直接读取 DashScope env 或 SDK。
 - `GET /models` 和 `GET /models?job_type=<job_type>` 返回的模型与 worker 实际可执行模型一致。
 - API 创建 Job 和 worker 执行 Job 使用同一 resolver 规则，不出现 API 接受、worker 拒绝的配置漂移。
-- `scripts/ai-providers.sh check/models/resolve/probe` 能独立定位 provider 配置、模型目录、live provider 和最小调用问题。
+- 当前 `scripts/ai-providers.sh check/models/resolve` 能独立定位 provider 配置、模型目录和 resolver 问题；后续 `live-models/probe` 再覆盖 provider 真实连通和最小调用。
 - 缺 provider、缺 adapter、缺 required env、缺 pricing、job policy 引用不存在模型、capability 不匹配时，验证命令 fail-fast。
 - Provider 调用失败不会被记录成 0 成本成功；usage/pricing 缺失继续按失败处理。
 

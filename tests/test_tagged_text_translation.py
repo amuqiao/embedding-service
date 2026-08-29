@@ -189,7 +189,9 @@ def test_tagged_text_translation_create_contract_preserves_config_limit_error_co
     assert exc.value.details["field"] == "job_params.items[0].text"
 
 
-def test_tagged_text_translation_runtime_fields_omit_empty_system():
+def test_tagged_text_translation_runtime_fields_omit_empty_system(monkeypatch):
+    route_hash = "sha256:" + "a" * 64
+    monkeypatch.setattr("app.jobs.types.tagged_text_translation.executor.resolve_route_config_hash", lambda **_kwargs: route_hash)
     fields = TaggedTextTranslationJob().runtime_job_fields(
         {
             "target_language": "zh",
@@ -200,6 +202,7 @@ def test_tagged_text_translation_runtime_fields_omit_empty_system():
     assert fields["operation"] == "tagged_text_translation"
     assert isinstance(fields["model_id"], str)
     assert fields["model_id"]
+    assert fields["model_route_config_hash"] == route_hash
     assert "system" not in fields
     assert "_system" not in fields
 
@@ -392,7 +395,14 @@ async def test_tagged_text_translation_executor_calls_text_ledger(monkeypatch):
         "target_language": "zh",
         "items": [{"id": "title", "text": "<span>Hello {user_name}</span>"}],
     }
-    job = _job(params, {"operation": "tagged_text_translation", "model_id": "gpt-5.5"})
+    job = _job(
+        params,
+        {
+            "operation": "tagged_text_translation",
+            "model_id": "gpt-5.5",
+            "model_route_config_hash": "sha256:" + "a" * 64,
+        },
+    )
     captured = {}
 
     async def fake_generate_text_with_ledger(**kwargs):

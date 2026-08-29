@@ -1626,7 +1626,7 @@ def test_worker_registration_validates_job_type_registry(monkeypatch):
     monkeypatch.setattr("app.jobs.types.register.register_all_job_types", lambda: calls.setdefault("jobs", True))
     monkeypatch.setattr("app.core.error_registry.freeze_error_registry", lambda: calls.setdefault("errors", True))
     monkeypatch.setattr("app.core.registry_checks.validate_all_registries", lambda: calls.setdefault("registry", True))
-    monkeypatch.setattr("app.core.model_registry.validate_model_catalog", lambda: calls.setdefault("models", True))
+    monkeypatch.setattr("app.ai.catalog.registry.validate_model_catalog", lambda: calls.setdefault("models", True))
 
     task_jobs._ensure_workflows_registered()
 
@@ -1683,7 +1683,7 @@ def test_worker_startup_validates_model_catalog(monkeypatch):
     def fake_validate_model_catalog():
         called["model_catalog"] = True
 
-    monkeypatch.setattr("app.core.model_registry.validate_model_catalog", fake_validate_model_catalog)
+    monkeypatch.setattr("app.ai.catalog.registry.validate_model_catalog", fake_validate_model_catalog)
 
     task_jobs._ensure_workflows_registered()
 

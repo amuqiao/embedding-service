@@ -5,7 +5,7 @@ import pytest
 from app.core import config as config_module
 from app.core.config import Settings
 from app.core.exceptions import ValidationAppError
-from app.core import model_registry
+from app.ai.catalog import registry as model_registry
 from app.integrations import ai_gateway
 from app.jobs import model_selection
 
@@ -50,7 +50,6 @@ class _SettingsProxy:
 
     def __getattr__(self, name: str):
         legacy = {
-            "DEFAULT_MODEL_ID": self.registry.default_model_id,
             "OPENAI_API_KEY": self.ai_provider.openai_api_key_value,
             "model_config_path": self.registry.model_config_path,
         }
@@ -151,6 +150,11 @@ def _write_model_config(path, requires_env: str = "OPENAI_API_KEY") -> None:
     path.write_text(
         f"""\
 version: "1"
+default_model_ids:
+  text_generation: custom-model
+  image_generation: custom-image-model
+  image_edit: custom-image-model
+  multimodal_text_generation: custom-style-probe-model
 models:
   - id: custom-model
     adapter: litellm
@@ -195,16 +199,23 @@ def _write_job_model_selection(root, job_type: str = "poster_title_image") -> No
         f"""\
 version: {job_type}.models.v1
 job_type: {job_type}
-public_model_selection:
-  request_field: "job_params.items[].model_id"
-  default_model_id: custom-image-model
-  allowed_model_ids:
-    - custom-image-model
-internal_models:
+model_slots:
+  generation:
+    visibility: public
+    request_field: "job_params.items[].model_id"
+    default_model_id: custom-image-model
+    allowed_model_ids:
+      - custom-image-model
+    required_capabilities:
+      - image_generation
+      - image_edit
   style_probe:
-    model_id: custom-style-probe-model
-generation:
-  image_adapter: openai_responses
+    visibility: internal
+    default_model_id: custom-style-probe-model
+    allowed_model_ids:
+      - custom-style-probe-model
+    required_capabilities:
+      - multimodal_text_generation
 """,
         encoding="utf-8",
     )
@@ -221,7 +232,6 @@ def test_model_registry_loads_available_models_from_yaml(tmp_path, monkeypatch):
     _write_model_config(config_path)
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -254,7 +264,6 @@ def test_model_registry_public_projection_is_decoupled_from_runtime_config(tmp_p
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -272,7 +281,6 @@ def test_model_registry_exposes_billing_capability_when_enabled(tmp_path, monkey
     _write_model_config(config_path)
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
         BILLING_ENABLED="false",
         MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY="true",
@@ -289,16 +297,31 @@ def test_model_registry_hides_models_when_required_env_is_missing(tmp_path, monk
     config_path = tmp_path / "models.yaml"
     _write_model_config(config_path, requires_env="OPENAI_API_KEY")
     test_settings = _build_settings(
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
         OPENAI_API_KEY="",
     )
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
 
-    response = model_registry.list_models_response()
+    with pytest.raises(RuntimeError, match="global text_generation default_model_id is not available"):
+        model_registry.list_models_response()
 
-    assert response.models == []
+
+def test_model_registry_rejects_job_default_when_route_env_is_missing(tmp_path, monkeypatch):
+    config_path = tmp_path / "models.yaml"
+    _write_model_config(config_path)
+    job_model_root = tmp_path / "job-types"
+    _write_job_model_selection(job_model_root)
+    test_settings = _build_settings(
+        OPENAI_API_KEY="test-key",
+        MODEL_CONFIG_PATH=str(config_path),
+    )
+    monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
+    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
+    _patch_job_types(monkeypatch, ["poster_title_image"])
+
+    with pytest.raises(RuntimeError, match="job_type poster_title_image default_model_id is not available"):
+        model_registry.list_models_response(job_type="poster_title_image")
 
 
 def test_model_registry_rejects_invalid_model_config(tmp_path, monkeypatch):
@@ -308,7 +331,6 @@ def test_model_registry_rejects_invalid_model_config(tmp_path, monkeypatch):
     config_path.write_text("version: '1'\nmodels:\n  - id: broken\n", encoding="utf-8")
     test_settings = _SettingsProxy(_build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(valid_config_path),
     ))
     test_settings.registry = SimpleNamespace(
@@ -334,7 +356,6 @@ def test_model_registry_validate_catalog_rejects_pricing_mismatch(tmp_path, monk
     )
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -370,7 +391,6 @@ def test_model_registry_exposes_public_model_parameters(tmp_path, monkeypatch):
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -413,7 +433,6 @@ def test_model_registry_compares_select_values_by_json_type(tmp_path, monkeypatc
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -430,6 +449,9 @@ def test_model_registry_supports_image_model_type_public_catalog(tmp_path, monke
     config_path.write_text(
         """\
 version: "1"
+default_model_ids:
+  text_generation: custom-style-probe-model
+  image_generation: image-model
 models:
   - id: image-model
     adapter: litellm
@@ -475,12 +497,11 @@ models:
       notes: ""
     requires_env:
       - OPENAI_API_KEY
-""" + _poster_hidden_model_config(),
+""" + _poster_hidden_model_config().replace("TEST_POSTER_MODEL_KEY", "OPENAI_API_KEY"),
         encoding="utf-8",
     )
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="image-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -507,7 +528,6 @@ def test_model_registry_filters_by_job_type_model_selection(tmp_path, monkeypatc
     _write_job_model_selection(job_model_root)
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -527,7 +547,6 @@ def test_model_registry_uses_global_models_for_job_type_without_model_selection(
     job_model_root.mkdir()
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -547,7 +566,6 @@ def test_model_registry_requires_poster_title_image_model_selection_config(tmp_p
     job_model_root.mkdir()
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -566,7 +584,6 @@ def test_model_registry_skips_disabled_job_type_model_selection_config(tmp_path,
     job_model_root.mkdir()
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -577,52 +594,31 @@ def test_model_registry_skips_disabled_job_type_model_selection_config(tmp_path,
     model_registry.validate_model_catalog()
 
 
-@pytest.mark.parametrize("image_adapter", ["missing-image-adapter", "litellm"])
-def test_model_registry_validates_poster_title_image_generation_image_adapter(tmp_path, monkeypatch, image_adapter):
-    config_path = tmp_path / "models.yaml"
-    _write_model_config(config_path)
-    job_model_root = tmp_path / "job-types"
-    _write_job_model_selection(job_model_root)
-    job_config_path = job_model_root / "poster_title_image" / "models.yaml"
-    job_config_path.write_text(
-        job_config_path.read_text(encoding="utf-8").replace(
-            "image_adapter: openai_responses",
-            f"image_adapter: {image_adapter}",
-        ),
-        encoding="utf-8",
-    )
-    test_settings = _build_settings(
-        OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
-        MODEL_CONFIG_PATH=str(config_path),
-    )
-    monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
-    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
-    _patch_job_types(monkeypatch, ["poster_title_image"])
-    monkeypatch.setattr(model_registry, "validate_price_matches_model", lambda **_kwargs: None)
-
-    with pytest.raises(RuntimeError, match="generation.image_adapter must be one of"):
-        model_registry.validate_model_catalog()
-
-
-def test_poster_title_image_model_selection_reads_generation_image_adapter(tmp_path, monkeypatch):
+def test_poster_title_image_model_selection_reads_model_slots(tmp_path, monkeypatch):
     job_model_root = tmp_path / "job-types"
     _write_job_model_selection(job_model_root)
     monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
 
     selection = model_selection.get_poster_title_image_model_selection()
 
-    assert selection.image_generation_adapter == "openai_responses"
+    assert selection.generation_slot.default_model_id == "custom-image-model"
+    assert selection.style_probe_model_id == "custom-style-probe-model"
 
 
 def test_model_registry_requires_openai_images_for_poster_title_image_token_pricing(tmp_path, monkeypatch):
     config_path = tmp_path / "models.yaml"
     _write_model_config(config_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "adapter: openai_images",
+            "adapter: openai_responses",
+        ),
+        encoding="utf-8",
+    )
     job_model_root = tmp_path / "job-types"
     _write_job_model_selection(job_model_root)
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -631,7 +627,7 @@ def test_model_registry_requires_openai_images_for_poster_title_image_token_pric
     monkeypatch.setattr(model_registry, "validate_price_matches_model", lambda **_kwargs: None)
     monkeypatch.setattr(model_registry, "require_price", lambda _pricing_ref: SimpleNamespace(pricing_type="per_image_token"))
 
-    with pytest.raises(RuntimeError, match="per_image_token pricing requires openai_images"):
+    with pytest.raises(RuntimeError, match="per_image_token pricing requires openai_images route adapter"):
         model_registry.validate_model_catalog()
 
 
@@ -640,7 +636,6 @@ def test_model_registry_rejects_unknown_job_type(tmp_path, monkeypatch):
     _write_model_config(config_path)
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -655,7 +650,6 @@ def test_model_registry_rejects_disabled_job_type(tmp_path, monkeypatch):
     _write_model_config(config_path)
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -691,7 +685,6 @@ def test_model_registry_model_type_does_not_constrain_capabilities_or_output_med
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -818,7 +811,6 @@ def test_model_registry_rejects_invalid_public_parameters(tmp_path, monkeypatch,
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -850,7 +842,6 @@ def test_model_registry_rejects_invalid_model_type_contract(tmp_path, monkeypatc
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -870,7 +861,6 @@ def test_model_registry_validate_catalog_rejects_unknown_adapter(tmp_path, monke
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -907,7 +897,6 @@ def test_model_registry_rejects_invalid_capability_or_media_contract(tmp_path, m
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
@@ -938,7 +927,6 @@ def test_model_registry_rejects_missing_capability_or_media_contract(tmp_path, m
     config_path.write_text(config_text, encoding="utf-8")
     test_settings = _build_settings(
         OPENAI_API_KEY="test-key",
-        DEFAULT_MODEL_ID="custom-model",
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))

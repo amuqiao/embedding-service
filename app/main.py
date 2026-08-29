@@ -273,7 +273,7 @@ def bootstrap_runtime() -> None:
     freeze_error_registry()
     freeze_tool_registry()
     freeze_capability_registry()
-    from app.core.model_registry import validate_model_catalog
+    from app.ai.catalog.registry import validate_model_catalog
 
     validate_model_catalog()
     configure_logging()

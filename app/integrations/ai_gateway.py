@@ -4,7 +4,7 @@ from typing import Any
 
 import litellm
 
-from app.integrations.ai_adapters.base import TextGenerationResult
+from app.ai.adapters.base import TextGenerationResult
 
 
 @dataclass(frozen=True)

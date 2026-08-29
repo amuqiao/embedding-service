@@ -6,7 +6,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from app.integrations.ai_adapters.base import ImageGenerationRequest, ImageGenerationResult
+from app.ai.adapters.base import ImageGenerationRequest, ImageGenerationResult
 
 
 def _client(

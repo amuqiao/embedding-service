@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.core.pricing_registry import (
+from app.ai.pricing.registry import (
     CallPrice,
     ImagePrice,
     ImageTokenPrice,
@@ -12,7 +12,7 @@ from app.core.pricing_registry import (
     calculate_cost,
     calculate_token_cost,
 )
-from app.core.usage_records import AudioUsageRecord, ImageUsageRecord, TextUsageRecord, VideoUsageRecord
+from app.ai.usage.records import AudioUsageRecord, ImageUsageRecord, TextUsageRecord, VideoUsageRecord
 
 
 def test_per_token_cost_uses_decimal_cached_price_and_eight_decimal_places():

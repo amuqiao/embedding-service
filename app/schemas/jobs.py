@@ -392,6 +392,7 @@ class JobRealLlmEchoParams(StrictBaseModel):
 
 class JobRealLlmEchoRuntimeFields(StrictBaseModel):
     model_id: str
+    model_route_config_hash: str = Field(min_length=71, max_length=71, pattern=HASH_RE.pattern)
     prompt_payload: dict[str, Any]
 
 
@@ -407,6 +408,7 @@ class JobRealLlmDoubleEchoParams(JobRealLlmEchoParams):
 
 class JobRealLlmDoubleEchoRuntimeFields(StrictBaseModel):
     model_id: str
+    model_route_config_hash: str = Field(min_length=71, max_length=71, pattern=HASH_RE.pattern)
     first_prompt_payload: dict[str, Any]
     second_prompt_payload: dict[str, Any]
 
@@ -458,6 +460,7 @@ class TaggedTextTranslationParams(StrictBaseModel):
 class TaggedTextTranslationRuntimeFields(RuntimeFieldsBase):
     operation: Literal["tagged_text_translation"] = "tagged_text_translation"
     model_id: str = Field(min_length=1, max_length=128)
+    model_route_config_hash: str = Field(min_length=71, max_length=71, pattern=HASH_RE.pattern)
 
 
 class TaggedTextTranslationCharCount(StrictBaseModel):
@@ -832,7 +835,9 @@ class AudioStemSeparationTritonResult(StrictBaseModel):
 class PosterTitleImageRuntimeFields(RuntimeFieldsBase):
     operation: Literal["poster_title_image"] = "poster_title_image"
     style_probe_model_id: str = Field(min_length=1, max_length=128)
+    style_probe_route_config_hash: str = Field(min_length=71, max_length=71, pattern=HASH_RE.pattern)
     generation_model_id: str = Field(min_length=1, max_length=128)
+    generation_route_config_hash: str = Field(min_length=71, max_length=71, pattern=HASH_RE.pattern)
     image_adapter: str = Field(min_length=1, max_length=128)
 
 
@@ -847,6 +852,7 @@ class PosterTitleImageStyleProbeParams(StrictBaseModel):
 class PosterTitleImageStyleProbeRuntimeFields(RuntimeFieldsBase):
     operation: Literal["poster_title_image_style_probe"] = "poster_title_image_style_probe"
     style_probe_model_id: str = Field(min_length=1, max_length=128)
+    style_probe_route_config_hash: str = Field(min_length=71, max_length=71, pattern=HASH_RE.pattern)
     image_adapter: str = Field(min_length=1, max_length=128)
 
 
@@ -871,7 +877,9 @@ class PosterTitleImageGenerateItemParams(StrictBaseModel):
 class PosterTitleImageGenerateItemRuntimeFields(RuntimeFieldsBase):
     operation: Literal["poster_title_image_generate_item"] = "poster_title_image_generate_item"
     generation_model_id: str = Field(min_length=1, max_length=128)
+    generation_route_config_hash: str = Field(min_length=71, max_length=71, pattern=HASH_RE.pattern)
     style_probe_model_id: str = Field(min_length=1, max_length=128)
+    style_probe_route_config_hash: str = Field(min_length=71, max_length=71, pattern=HASH_RE.pattern)
     image_adapter: str = Field(min_length=1, max_length=128)
 
 

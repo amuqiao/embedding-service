@@ -70,7 +70,7 @@
 ./scripts/k8s.sh --help
 ```
 
-`scripts/` 维护 15 类稳定入口，职责互不重叠：`run.sh` 日常快捷 recipe、`dev.sh` 本地宿主机进程生命周期、`verify.sh` 一次性验证、`deploy.sh` compose 部署形态、`k8s.sh` 已部署 Pod 内手动运维、`redis.sh` Redis 只读排障事实源、`oss.sh` OSS 配置、URL Ref、连通性和显式上传检查事实源、`load.sh` 项目级压测入口、`triton-bench.sh` Triton 推理服务直压入口、`jobs.sh` Job 只读查询与排障、`job-ops.sh` Job 写操作运维入口、`smoke.sh` 标准业务 smoke/E2E 验证入口、`models.sh` 本地模型资产下载与必需文件检查、`media.sh` 本地音视频素材探测、校验和准备、`tools.sh` 无默认持久副作用的本地开发辅助工具和只读代码清单查看。完整命令以各脚本 `-h` 输出和 `scripts/README.md` 为准。
+`scripts/` 维护 16 类稳定入口，职责互不重叠：`run.sh` 日常快捷 recipe、`dev.sh` 本地宿主机进程生命周期、`verify.sh` 一次性验证、`deploy.sh` compose 部署形态、`k8s.sh` 已部署 Pod 内手动运维、`redis.sh` Redis 只读排障事实源、`oss.sh` OSS 配置、URL Ref、连通性和显式上传检查事实源、`load.sh` 项目级压测入口、`triton-bench.sh` Triton 推理服务直压入口、`jobs.sh` Job 只读查询与排障、`job-ops.sh` Job 写操作运维入口、`smoke.sh` 标准业务 smoke/E2E 验证入口、`models.sh` 本地模型资产下载与必需文件检查、`media.sh` 本地音视频素材探测、校验和准备、`ai-providers.sh` 云模型 provider、AI catalog 和 resolver 只读诊断入口、`tools.sh` 无默认持久副作用的本地开发辅助工具和只读代码清单查看。完整命令以各脚本 `-h` 输出和 `scripts/README.md` 为准。
 
 `start`、`stop`、`restart`、`status` 支持指定服务：
 

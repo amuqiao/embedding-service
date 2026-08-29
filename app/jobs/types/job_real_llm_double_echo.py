@@ -4,6 +4,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.capabilities import TEXT_GENERATION
+from app.ai.resolver import resolve_route_config_hash
 from app.core.exceptions import AppError
 from app.jobs.base import JobExecutor, PromptSpec
 from app.jobs.registry import register_job_type
@@ -73,6 +75,10 @@ class JobRealLlmDoubleEchoJob(JobExecutor):
         params = JobRealLlmDoubleEchoParams.model_validate(job_params)
         return JobRealLlmDoubleEchoRuntimeFields(
             model_id=params.model_id,
+            model_route_config_hash=resolve_route_config_hash(
+                capability=TEXT_GENERATION,
+                requested_model_id=params.model_id,
+            ),
             first_prompt_payload=_prompt_payload(params.first_instruction),
             second_prompt_payload=_prompt_payload(params.second_instruction),
         ).model_dump()

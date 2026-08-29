@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from app.integrations.ai_adapters.base import ImageGenerationRequest, ImageInput, ImageGenerationResult
+from app.ai.adapters.base import ImageGenerationRequest, ImageInput, ImageGenerationResult
 from smoke.harness import formatters
 from smoke.flows.oss import image_upload as oss_image_upload
 from smoke.harness import env_runtime
@@ -44,11 +44,11 @@ def load_models_config(models_config: str | None) -> dict[str, Any]:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise FlowError(f"{path} must be a YAML object", exit_code=2)
-    configured_adapter = _required_str(data, ("generation", "image_adapter"), source=path)
+    provider_model = _required_str(data, ("model_slots", "generation", "default_model_id"), source=path)
+    response_model = _required_str(data, ("model_slots", "style_probe", "default_model_id"), source=path)
+    configured_adapter = _generation_adapter_for_model_id(provider_model)
     if configured_adapter not in ADAPTERS:
-        raise FlowError(f"{path} generation.image_adapter must be one of: {', '.join(ADAPTERS)}", exit_code=2)
-    provider_model = _required_str(data, ("public_model_selection", "default_model_id"), source=path)
-    response_model = _required_str(data, ("internal_models", "style_probe", "model_id"), source=path)
+        raise FlowError(f"{provider_model} image route adapter must be one of: {', '.join(ADAPTERS)}", exit_code=2)
     adapter_order = [configured_adapter, *(adapter for adapter in ADAPTERS if adapter != configured_adapter)]
     return {
         "path": str(path),
@@ -59,13 +59,30 @@ def load_models_config(models_config: str | None) -> dict[str, Any]:
     }
 
 
-def _provider_model_for_model_id(model_id: str) -> str:
-    from app.core.model_registry import get_enabled_model
+def _generation_adapter_for_model_id(model_id: str) -> str:
+    from app.ai.capabilities import IMAGE_EDIT
+    from app.ai.resolver import resolve_model
 
-    model = get_enabled_model(model_id)
-    if model is None:
-        raise FlowError(f"model id is not enabled in app/core/models.yaml: {model_id}", exit_code=2)
-    return model.provider_model
+    try:
+        return resolve_model(
+            capability=IMAGE_EDIT,
+            requested_model_id=model_id,
+        ).resolved_model.adapter
+    except Exception as exc:
+        raise FlowError(f"model route is not available in app/ai/catalog/models.yaml: {model_id}", exit_code=2) from exc
+
+
+def _provider_model_for_model_id(model_id: str) -> str:
+    from app.ai.capabilities import MULTIMODAL_TEXT_GENERATION
+    from app.ai.resolver import resolve_model
+
+    try:
+        return resolve_model(
+            capability=MULTIMODAL_TEXT_GENERATION,
+            requested_model_id=model_id,
+        ).resolved_model.provider_model
+    except Exception as exc:
+        raise FlowError(f"model route is not available in app/ai/catalog/models.yaml: {model_id}", exit_code=2) from exc
 
 
 def _required_openai_api_key(app_env: dict[str, str]) -> str:
@@ -138,7 +155,7 @@ def _error_payload(adapter_name: str, exc: Exception) -> dict[str, Any]:
 
 
 async def _run_adapter(adapter_name: str, request: ImageGenerationRequest) -> dict[str, Any]:
-    from app.integrations.ai_adapters.registry import require_image_generation_adapter
+    from app.ai.adapters.registry import require_image_generation_adapter
 
     adapter = require_image_generation_adapter(adapter_name)
     result = await adapter.generate_image(request)

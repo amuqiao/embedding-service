@@ -142,7 +142,7 @@ def test_template_identity_defaults_and_overrides():
 
 def test_poster_title_image_model_config_defaults_and_overrides():
     default_settings = _build_settings()
-    assert default_settings.registry.model_config_path_raw == "app/core/models.yaml"
+    assert default_settings.registry.model_config_path_raw == "app/ai/catalog/models.yaml"
     assert default_settings.registry.prompt_config_path_raw == "app/core/prompts.yaml"
 
 

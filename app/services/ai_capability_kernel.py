@@ -7,14 +7,21 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from app.core.ai_capabilities import ResolvedModel
+from app.ai.capabilities import (
+    IMAGE_EDIT,
+    IMAGE_GENERATION,
+    MULTIMODAL_TEXT_GENERATION,
+    TEXT_GENERATION,
+    ResolvedModel,
+)
+from app.ai.providers.registry import provider_runtime_config
 from app.core.config import settings
 from app.core.exceptions import AppError, ValidationAppError
-from app.core.model_registry import TextModel, get_enabled_model
-from app.core.pricing_registry import calculate_cost as calculate_usage_cost
-from app.core.pricing_registry import TokenPrice, require_price, validate_price_matches_model
-from app.core.usage_records import ImageUsageRecord, TextUsageRecord, UsageRecord, normalize_text_usage
-from app.integrations.ai_adapters.base import (
+from app.ai.catalog.registry import ModelExecutionRoute, TextModel, get_enabled_model, route_is_available
+from app.ai.pricing.registry import calculate_cost as calculate_usage_cost
+from app.ai.pricing.registry import TokenPrice, require_price, validate_price_matches_model
+from app.ai.usage.records import ImageUsageRecord, TextUsageRecord, UsageRecord, normalize_text_usage
+from app.ai.adapters.base import (
     ImageGenerationRequest,
     ImageGenerationResult,
     ImageInput,
@@ -22,7 +29,7 @@ from app.integrations.ai_adapters.base import (
     TextGenerationRequest,
     TextGenerationResult,
 )
-from app.integrations.ai_adapters.registry import (
+from app.ai.adapters.registry import (
     require_image_generation_adapter,
     require_multimodal_text_generation_adapter,
     require_text_generation_adapter,
@@ -35,7 +42,49 @@ KNOWN_SCOPE_TYPES = {"job", "sync_api", "internal", "batch"}
 @dataclass(frozen=True)
 class ModelGateResult:
     model: TextModel
+    route: ModelExecutionRoute
     resolved_model: ResolvedModel
+
+
+def _route_for(model: TextModel, capability: str) -> ModelExecutionRoute:
+    if hasattr(model, "route_for"):
+        return model.route_for(capability)
+    return ModelExecutionRoute(
+        capability=capability,
+        adapter=model.adapter,
+        provider=model.provider,
+        provider_model=model.provider_model,
+        adapter_model=model.adapter_model,
+        pricing_ref=model.pricing_ref,
+        requires_env=tuple(getattr(model, "requires_env", ())),
+        generation={
+            "temperature": getattr(model, "temperature"),
+            "num_retries": getattr(model, "num_retries"),
+            "drop_params": getattr(model, "drop_params"),
+        }
+        if capability == TEXT_GENERATION
+        else None,
+        embedding=None,
+        config_hash="sha256:test",
+    )
+
+
+def _resolved_model(model: TextModel, route: ModelExecutionRoute) -> ResolvedModel:
+    return ResolvedModel(
+        model_id=model.id,
+        capability=route.capability,
+        provider=route.provider,
+        adapter=route.adapter,
+        provider_model=route.provider_model,
+        adapter_model=route.adapter_model,
+        pricing_ref=route.pricing_ref,
+        route_config_hash=route.config_hash,
+    )
+
+
+def _require_available_route(model: TextModel, route: ModelExecutionRoute) -> None:
+    if not route_is_available(route):
+        raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型能力 route 缺少必要运行环境: {model.id}/{route.capability}")
 
 
 def json_bytes(value: Any) -> bytes:
@@ -141,11 +190,13 @@ def require_enabled_text_model(model_id: str) -> TextModel:
         raise RuntimeError(f"model {model_id} requires model_type")
     if model.model_type != "text":
         raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不支持文本生成: {model_id}")
+    route = _route_for(model, TEXT_GENERATION)
+    _require_available_route(model, route)
     validate_price_matches_model(
-        pricing_ref=model.pricing_ref,
+        pricing_ref=route.pricing_ref,
         model_id=model.id,
-        provider=model.provider,
-        provider_model=model.provider_model,
+        provider=route.provider,
+        provider_model=route.provider_model,
     )
     return model
 
@@ -158,34 +209,30 @@ def require_enabled_image_model(model_id: str) -> TextModel:
         raise RuntimeError(f"model {model_id} requires model_type")
     if model.model_type != "image":
         raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不支持图片生成: {model_id}")
-    validate_price_matches_model(
-        pricing_ref=model.pricing_ref,
-        model_id=model.id,
-        provider=model.provider,
-        provider_model=model.provider_model,
-    )
     return model
 
 
 class ModelGate:
     def resolve(self, model_id: str) -> ModelGateResult:
         model = require_enabled_text_model(model_id)
-        if "text_generation" not in model.capabilities:
+        if TEXT_GENERATION not in model.capabilities:
             raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不支持文本生成: {model_id}")
+        route = _route_for(model, TEXT_GENERATION)
         return ModelGateResult(
             model=model,
-            resolved_model=ResolvedModel(
-                model_id=model.id,
-                provider=model.provider,
-                provider_model=model.provider_model,
-                adapter_model=model.adapter_model,
-                pricing_ref=model.pricing_ref,
-            ),
+            route=route,
+            resolved_model=_resolved_model(model, route),
         )
 
     def resolve_multimodal_text(self, model_id: str, *, required_media_types: set[str]) -> ModelGateResult:
-        model = require_enabled_text_model(model_id)
-        if "multimodal_text_generation" not in model.capabilities:
+        model = get_enabled_model(model_id)
+        if model is None:
+            raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不可用: {model_id}")
+        if not hasattr(model, "model_type"):
+            raise RuntimeError(f"model {model_id} requires model_type")
+        if model.model_type != "text":
+            raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不支持文本生成: {model_id}")
+        if MULTIMODAL_TEXT_GENERATION not in model.capabilities:
             raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不支持多模态文本生成: {model_id}")
         missing_media_types = sorted(required_media_types - set(model.input_media_types))
         if missing_media_types:
@@ -193,51 +240,51 @@ class ModelGate:
                 "MODEL_NOT_AVAILABLE",
                 f"模型不支持输入媒体类型: {', '.join(missing_media_types)}",
             )
+        route = _route_for(model, MULTIMODAL_TEXT_GENERATION)
+        _require_available_route(model, route)
         return ModelGateResult(
             model=model,
-            resolved_model=ResolvedModel(
-                model_id=model.id,
-                provider=model.provider,
-                provider_model=model.provider_model,
-                adapter_model=model.adapter_model,
-                pricing_ref=model.pricing_ref,
-            ),
+            route=route,
+            resolved_model=_resolved_model(model, route),
         )
 
 
 class ImageModelGate:
     def resolve(self, model_id: str, *, require_edit: bool) -> ModelGateResult:
         model = require_enabled_image_model(model_id)
-        required_capability = "image_edit" if require_edit else "image_generation"
+        required_capability = IMAGE_EDIT if require_edit else IMAGE_GENERATION
         if required_capability not in model.capabilities:
             raise ValidationAppError("MODEL_NOT_AVAILABLE", f"模型不支持图片生成能力: {model_id}")
+        route = _route_for(model, required_capability)
+        _require_available_route(model, route)
         return ModelGateResult(
             model=model,
-            resolved_model=ResolvedModel(
-                model_id=model.id,
-                provider=model.provider,
-                provider_model=model.provider_model,
-                adapter_model=model.adapter_model,
-                pricing_ref=model.pricing_ref,
-            ),
+            route=route,
+            resolved_model=_resolved_model(model, route),
         )
 
 
 class ProviderGateway:
     async def generate_text(self, model: TextModel, messages: list[dict[str, str]]) -> TextGenerationResult:
-        if model.temperature is None or model.num_retries is None or model.drop_params is None:
+        route = _route_for(model, TEXT_GENERATION)
+        generation = route.generation or {}
+        temperature = generation.get("temperature")
+        num_retries = generation.get("num_retries")
+        drop_params = generation.get("drop_params")
+        if temperature is None or num_retries is None or drop_params is None:
             raise RuntimeError(f"text model {model.id} requires generation config")
-        adapter = require_text_generation_adapter(model.adapter)
+        provider_config = provider_runtime_config(route.provider, settings_obj=settings)
+        adapter = require_text_generation_adapter(route.adapter)
         return await adapter.generate_text(
             TextGenerationRequest(
-                adapter_model=model.adapter_model,
+                adapter_model=route.adapter_model,
                 messages=messages,
-                temperature=model.temperature,
+                temperature=float(temperature),
                 timeout_seconds=settings.ai_provider.model_call_timeout_seconds,
-                api_key=settings.ai_provider.openai_api_key_value or None,
-                api_base=settings.ai_provider.openai_base_url or None,
-                num_retries=model.num_retries,
-                drop_params=model.drop_params,
+                api_key=provider_config.api_key or None,
+                api_base=provider_config.base_url or None,
+                num_retries=int(num_retries),
+                drop_params=bool(drop_params),
             )
         )
 
@@ -248,16 +295,18 @@ class ProviderGateway:
         prompt: str,
         reference_images: list[ImageInput],
     ) -> TextGenerationResult:
-        adapter = require_multimodal_text_generation_adapter(model.adapter)
+        route = _route_for(model, MULTIMODAL_TEXT_GENERATION)
+        provider_config = provider_runtime_config(route.provider, settings_obj=settings)
+        adapter = require_multimodal_text_generation_adapter(route.adapter)
         return await adapter.generate_text_with_images(
             MultimodalTextGenerationRequest(
-                adapter_model=model.adapter_model,
-                provider_model=model.provider_model,
+                adapter_model=route.adapter_model,
+                provider_model=route.provider_model,
                 prompt=prompt,
                 reference_images=reference_images,
                 timeout_seconds=settings.ai_provider.model_call_timeout_seconds,
-                api_key=settings.ai_provider.openai_api_key_value or None,
-                api_base=settings.ai_provider.openai_base_url or None,
+                api_key=provider_config.api_key or None,
+                api_base=provider_config.base_url or None,
             )
         )
 
@@ -274,11 +323,19 @@ class ProviderGateway:
         background: str,
         output_format: str,
     ) -> ImageGenerationResult:
-        adapter = require_image_generation_adapter(image_adapter or model.adapter)
+        capability = IMAGE_EDIT if reference_images else IMAGE_GENERATION
+        route = _route_for(model, capability)
+        if image_adapter is not None and image_adapter != route.adapter:
+            raise ValidationAppError(
+                "MODEL_NOT_AVAILABLE",
+                f"image adapter does not match model route: {image_adapter} != {route.adapter}",
+            )
+        provider_config = provider_runtime_config(route.provider, settings_obj=settings)
+        adapter = require_image_generation_adapter(route.adapter)
         return await adapter.generate_image(
             ImageGenerationRequest(
-                adapter_model=model.adapter_model,
-                provider_model=model.provider_model,
+                adapter_model=route.adapter_model,
+                provider_model=route.provider_model,
                 response_model=response_model,
                 prompt=prompt,
                 reference_images=reference_images,
@@ -287,8 +344,8 @@ class ProviderGateway:
                 background=background,
                 output_format=output_format,
                 timeout_seconds=settings.ai_provider.model_call_timeout_seconds,
-                api_key=settings.ai_provider.openai_api_key_value or None,
-                api_base=settings.ai_provider.openai_base_url or None,
+                api_key=provider_config.api_key or None,
+                api_base=provider_config.base_url or None,
             )
         )
 

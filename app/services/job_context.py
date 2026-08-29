@@ -2,7 +2,7 @@ import json
 import re
 from typing import Any
 
-from app.integrations.ai_adapters.base import TextGenerationResult
+from app.ai.adapters.base import TextGenerationResult
 from app.models.job import Job
 from app.services.job_runtime import prompt_payload_from_job
 

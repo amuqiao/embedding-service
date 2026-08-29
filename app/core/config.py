@@ -70,7 +70,8 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "OSS_PUBLIC_ENDPOINT": ("storage", "oss_public_endpoint"),
     "OPENAI_API_KEY": ("ai_provider", "openai_api_key"),
     "OPENAI_BASE_URL": ("ai_provider", "openai_base_url"),
-    "DEFAULT_MODEL_ID": ("registry", "default_model_id"),
+    "DASHSCOPE_API_KEY": ("ai_provider", "dashscope_api_key"),
+    "DASHSCOPE_BASE_URL": ("ai_provider", "dashscope_base_url"),
     "MODEL_CONFIG_PATH": ("registry", "model_config_path_raw"),
     "MODEL_CALL_TIMEOUT_SECONDS": ("ai_provider", "model_call_timeout_seconds"),
     "BILLING_ENABLED": ("billing", "enabled"),
@@ -105,7 +106,7 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
 }
 
 APPLICATION_ENV_KEYS = frozenset(APPLICATION_ENV_FIELD_MAP)
-REMOVED_APPLICATION_ENV_KEYS = frozenset({"OPS_DASHBOARD_MOCK_DATA_ENABLED"})
+REMOVED_APPLICATION_ENV_KEYS = frozenset({"DEFAULT_MODEL_ID", "OPS_DASHBOARD_MOCK_DATA_ENABLED"})
 LAUNCHER_ENV_KEYS: frozenset[str] = frozenset(
     {
         "API_HOST",
@@ -440,6 +441,8 @@ class CallbackSettings(ConfigSection):
 class AIProviderSettings(ConfigSection):
     openai_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
     openai_base_url: str = ""
+    dashscope_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model_call_timeout_seconds: int = 300
 
     @model_validator(mode="after")
@@ -452,10 +455,13 @@ class AIProviderSettings(ConfigSection):
     def openai_api_key_value(self) -> str:
         return self.openai_api_key.get_secret_value()
 
+    @property
+    def dashscope_api_key_value(self) -> str:
+        return self.dashscope_api_key.get_secret_value()
+
 
 class RegistrySettings(ConfigSection):
-    default_model_id: str = "gpt-5.5"
-    model_config_path_raw: str = "app/core/models.yaml"
+    model_config_path_raw: str = "app/ai/catalog/models.yaml"
     prompt_config_path_raw: str = "app/core/prompts.yaml"
 
     @property
@@ -470,7 +476,7 @@ class RegistrySettings(ConfigSection):
 class BillingSettings(ConfigSection):
     enabled: bool = True
     model_catalog_expose_billing_capability: bool = False
-    pricing_config_path_raw: str = "app/core/pricing.yaml"
+    pricing_config_path_raw: str = "app/ai/pricing/pricing.yaml"
 
     @field_validator("enabled", "model_catalog_expose_billing_capability", mode="before")
     @classmethod
@@ -820,6 +826,12 @@ class Settings(BaseSettings):
     def application_env_value(self, name: str) -> str:
         if name == "OPENAI_API_KEY":
             return self.ai_provider.openai_api_key_value
+        if name == "OPENAI_BASE_URL":
+            return self.ai_provider.openai_base_url
+        if name == "DASHSCOPE_API_KEY":
+            return self.ai_provider.dashscope_api_key_value
+        if name == "DASHSCOPE_BASE_URL":
+            return self.ai_provider.dashscope_base_url
         raise RuntimeError(f"unsupported model requires_env key: {name}")
 
     def _validate_registry_files(self) -> None:
@@ -838,17 +850,21 @@ class Settings(BaseSettings):
             raise ValueError(f"model config is invalid YAML: {model_path}") from exc
         if not isinstance(raw, dict) or not isinstance(raw.get("models"), list):
             raise ValueError("model config models must be a YAML list")
-        enabled_models = {
+        enabled_model_ids = {
             item.get("id"): item
             for item in raw["models"]
             if isinstance(item, dict) and item.get("enabled") is True and isinstance(item.get("id"), str)
         }
-        required_enabled_models = {
-            "DEFAULT_MODEL_ID": self.registry.default_model_id,
-        }
-        for env_name, model_id in required_enabled_models.items():
-            if model_id not in enabled_models:
-                raise ValueError(f"{env_name} must exist in enabled model config: {model_id}")
+        default_model_ids = raw.get("default_model_ids")
+        if not isinstance(default_model_ids, dict) or not default_model_ids:
+            raise ValueError("model config default_model_ids must be a non-empty YAML object")
+        for capability, model_id in default_model_ids.items():
+            if not isinstance(capability, str) or not capability.strip():
+                raise ValueError("model config default_model_ids keys must be non-empty strings")
+            if not isinstance(model_id, str) or not model_id.strip():
+                raise ValueError(f"model config default_model_ids.{capability} must be a non-empty string")
+            if model_id not in enabled_model_ids:
+                raise ValueError(f"model config default_model_ids.{capability} must reference an enabled model: {model_id}")
 
 
 @lru_cache

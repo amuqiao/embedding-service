@@ -28,7 +28,7 @@
 | shell 入口 + 下沉 shell 实现 | `k8s.sh` + `scripts/k8s/ops.sh` | 入口维护 help 和分发合同；下沉文件维护 Pod 内原子动作。 |
 | shell wrapper + Typer CLI | `jobs.sh`、`redis.sh`、`job-ops.sh`、`load.sh` | Typer 自动生成的 `Usage`、`Options`、`Commands` 是命令和参数事实源；手写 epilog 不能再重复一份完整命令目录。 |
 | shell wrapper + Python 参数规范层 + Typer 场景实现 | `smoke.sh` | wrapper help 和 `python -m smoke` 共同定义 `./scripts/smoke.sh [smoke options] <scenario> [scenario options]`。全局 smoke 参数必须在场景名前；场景实现仍复用 Typer 命令函数。 |
-| shell wrapper + 普通 Python / argparse | `oss.sh`、`tools.sh env-url` 这类下沉实现 | 参数事实源以实际执行层为准；wrapper 只在需要统一入口体验时手写薄 help。 |
+| shell wrapper + 普通 Python / argparse | `oss.sh`、`ai-providers.sh`、`tools.sh env-url` 这类下沉实现 | 参数事实源以实际执行层为准；wrapper 只在需要统一入口体验时手写薄 help。 |
 
 如果 CLI 框架已经生成 `Commands`，手写区不要再出现“命令说明”“命令列表”“子命令索引”等全量目录。需要帮助选择命令时，写“常用示例”“默认行为”或“排障路径”，不要按命令名逐个复述。
 

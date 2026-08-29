@@ -280,8 +280,8 @@ ADAPTER_IMAGE_PROBE_HELP_EPILOG = """\b
 \b
 用途：
   直接调用本仓库封装的 openai_images 与 openai_responses 两个 image adapter。
-  每次执行都会调用两个 adapter；generation.image_adapter 指定的 adapter 会排第一，另一个 adapter 排第二。
-  默认从 poster_title_image models.yaml 读取 generation.image_adapter、default_model_id 和 style_probe model；可用 --models-config 指定配置文件。
+  每次执行都会调用两个 adapter；全局 catalog 中图片模型 route 的 adapter 会排第一，另一个 adapter 排第二。
+  默认从 poster_title_image models.yaml 读取 generation/style_probe model slot；可用 --models-config 指定配置文件。
   输出 adapter 返回的 usage（SDK 返回时包含 provider_usage）、revised_prompt、图片数量，以及每张图片的 sha256 和 size_bytes。
   不经过服务 HTTP Job，不查询 billing，不打印图片二进制。
 """
@@ -678,7 +678,7 @@ def llm_job_billing_command(
     confirm_cost: ConfirmCostOption = False,
     model_id: Annotated[
         str | None,
-        typer.Option("--model-id", help="模型 ID；默认使用 DEFAULT_MODEL_ID。"),
+        typer.Option("--model-id", help="模型 ID；默认读取 models.yaml default_model_ids.text_generation。"),
     ] = None,
     input_text: Annotated[
         str,
@@ -727,7 +727,7 @@ def llm_job_double_billing_command(
     confirm_cost: ConfirmCostOption = False,
     model_id: Annotated[
         str | None,
-        typer.Option("--model-id", help="模型 ID；默认使用 DEFAULT_MODEL_ID。"),
+        typer.Option("--model-id", help="模型 ID；默认读取 models.yaml default_model_ids.text_generation。"),
     ] = None,
     input_text: Annotated[
         str,
@@ -1090,11 +1090,11 @@ def adapter_image_probe_command(
     ] = None,
     provider_model: Annotated[
         str | None,
-        typer.Option("--provider-model", help="覆盖图片生成 provider model；默认读取 models.yaml public_model_selection.default_model_id。"),
+        typer.Option("--provider-model", help="覆盖图片生成 provider model；默认读取 models.yaml model_slots.generation.default_model_id。"),
     ] = None,
     response_model: Annotated[
         str | None,
-        typer.Option("--response-model", help="覆盖 openai_responses adapter 的 response model；默认读取 models.yaml internal_models.style_probe.model_id。"),
+        typer.Option("--response-model", help="覆盖 openai_responses adapter 的 response model；默认读取 models.yaml model_slots.style_probe.default_model_id。"),
     ] = None,
     size: Annotated[
         str,

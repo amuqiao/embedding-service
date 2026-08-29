@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from app.core import pricing_registry
+from app.ai.pricing import registry as pricing_registry
 from app.services import billing as billing_service
 from app.services.billing import build_scope_billing_envelope, job_usage_from_billing
 

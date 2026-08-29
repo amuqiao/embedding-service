@@ -195,7 +195,7 @@ GET /api/v1/ai-jobs/languages
 GET /api/v1/ai-jobs/prompt-templates?job_type=poster_title_image
 ```
 
-模型运行时配置来自 `MODEL_CONFIG_PATH`，但 `GET /models` 只返回其中 `public` 块声明的调用方可见投影。顶层 `adapter`、`provider_model`、`adapter_model`、`pricing_ref`、`requires_env` 和 `generation` 等运行时字段不属于 `/models` 合同，更新这些字段不应改变调用方看到的模型信息。
+模型运行时配置来自 `MODEL_CONFIG_PATH`，默认文件是 `app/ai/catalog/models.yaml`。`GET /models` 只返回其中 `public` 块声明的调用方可见投影。`execution.routes` 下的 `adapter`、`provider_model`、`adapter_model`、`pricing_ref`、`requires_env` 和 `generation` 等运行时字段不属于 `/models` 合同，更新这些字段不应改变调用方看到的模型信息。
 
 `GET /models` 未传 `job_type` 时返回服务级公开模型投影；传入 `job_type` 时，如果该 `job_type` 目录下存在 `models.yaml`，响应会按该任务允许调用方选择的模型列表过滤同一套公开投影。没有 `models.yaml` 的已启用 `job_type` 使用服务级公开模型投影；未知或未启用 `job_type` 返回 `INVALID_JOB_TYPE`。
 
@@ -238,7 +238,7 @@ HttpEnvelope[ModelsResponse]
   data.cost_estimate_available?
 ```
 
-未传 `job_type` 时，`data.default_model_id` 是服务级默认模型；传入 `job_type` 且存在任务级 `models.yaml` 时，`data.default_model_id` 是该任务的 `public_model_selection.default_model_id`，`data.models[]` 只包含该任务 `public_model_selection.allowed_model_ids` 中当前可用模型的公开投影。任务级 `internal_models` 不进入响应。
+未传 `job_type` 时，`data.default_model_id` 来自全局 `default_model_ids.text_generation`；传入 `job_type` 且存在任务级 `models.yaml` 时，`data.default_model_id` 是该任务 public model slot 的 `default_model_id`，`data.models[]` 只包含该 public slot `allowed_model_ids` 中当前可用模型的公开投影。任务级 internal slot 不进入响应。
 
 `ModelsResponse` 的稳定骨架是 `default_model_id` 和 `models[]`。服务可以新增可选字段或新增 `models[]` 内的公开能力值；删除字段、重命名字段、改变字段类型、把内部运行时字段加入响应，或把公开字段改为 provider 原始配置，都属于 breaking change。
 

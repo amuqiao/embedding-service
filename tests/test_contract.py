@@ -941,7 +941,7 @@ def test_prompt_templates_route_rejects_job_type_without_public_template(monkeyp
     assert body["data"] is None
 
 
-def test_models_route_exposes_public_model_selection_metadata(monkeypatch):
+def test_models_route_exposes_public_model_slot_metadata(monkeypatch):
     from starlette.testclient import TestClient
     from app.api.routes import meta as meta_routes
 

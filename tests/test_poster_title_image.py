@@ -11,7 +11,7 @@ from PIL import Image
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.logging import LogEvent
-from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
+from app.ai.adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
 from app.integrations.image import (
     POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
     POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES,
@@ -42,6 +42,8 @@ from app.schemas.jobs import (
 from app.services.billing import job_cost_from_billing
 from app.services.job_runtime import build_runtime_snapshot, payload_hash, write_runtime_json
 from app.services.ai_capability_kernel import ModelGate
+
+ROUTE_HASH = "sha256:" + "a" * 64
 
 
 def _poster_job_settings(
@@ -282,13 +284,16 @@ def test_poster_title_image_params_apply_delivery_contract_constraints():
         PosterTitleImageParams.model_validate(invalid)
 
 
-def test_poster_title_image_runtime_fields_preserve_system_alias():
+def test_poster_title_image_runtime_fields_preserve_system_alias(monkeypatch):
     from app.jobs.types.poster_title_image import (
         PosterTitleImageGenerateItemJob,
         PosterTitleImageJoinJob,
         PosterTitleImageStyleProbeJob,
     )
 
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._image_adapter", lambda _model_id=None: "openai_responses")
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_route_config_hash", lambda _model_id: ROUTE_HASH)
+    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._generation_route_config_hash", lambda _model_id: ROUTE_HASH)
     ref = _url_ref("reference/title.png", b"x")
     item = _params(ref)["items"][0]
     style_probe_params = {
@@ -607,9 +612,13 @@ def test_poster_title_image_create_request_does_not_require_runtime_prompt_paylo
     assert runtime_fields == {
         "operation": "poster_title_image",
         "style_probe_model_id": "gpt-5.5",
+        "style_probe_route_config_hash": runtime_fields["style_probe_route_config_hash"],
         "generation_model_id": "gpt-image-2",
+        "generation_route_config_hash": runtime_fields["generation_route_config_hash"],
         "image_adapter": "openai_images",
     }
+    assert runtime_fields["style_probe_route_config_hash"].startswith("sha256:")
+    assert runtime_fields["generation_route_config_hash"].startswith("sha256:")
 
 
 def test_poster_title_image_model_options_accept_catalog_sizes():
@@ -860,8 +869,8 @@ def test_poster_title_image_response_model_requires_image_generation_tool(monkey
         lambda: "gpt-4o",
     )
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.poster_title_image_generation_image_adapter",
-        lambda: "openai_responses",
+        "app.jobs.types.poster_title_image.executor._image_adapter",
+        lambda _model_id=None: "openai_responses",
     )
 
     with pytest.raises(AppError, match="image_generation tool"):
@@ -876,8 +885,8 @@ def test_poster_title_image_images_adapter_does_not_require_image_generation_too
         lambda: "gpt-4o",
     )
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.poster_title_image_generation_image_adapter",
-        lambda: "openai_images",
+        "app.jobs.types.poster_title_image.executor._image_adapter",
+        lambda _model_id=None: "openai_images",
     )
 
     _validate_style_probe_model(required_media_types={"image/png"})
@@ -1166,8 +1175,8 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor.output_target_from_job", lambda _job: output_target)
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_provider_model", lambda _model_id: "gpt-5.5")
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.poster_title_image_generation_image_adapter",
-        lambda: "openai_images",
+        "app.jobs.types.poster_title_image.executor._image_adapter",
+        lambda _model_id=None: "openai_images",
     )
     monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
     monkeypatch.setattr(
@@ -1207,7 +1216,9 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
             runtime_fields={
                 "operation": "poster_title_image_generate_item",
                 "generation_model_id": "gpt-image-2",
+                "generation_route_config_hash": ROUTE_HASH,
                 "style_probe_model_id": "gpt-5.5",
+                "style_probe_route_config_hash": ROUTE_HASH,
                 "image_adapter": "openai_images",
                 "_system": {"trigger_request_id": "req-generate-1"},
             },
@@ -1386,7 +1397,9 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
             runtime_fields={
                 "operation": "poster_title_image_generate_item",
                 "generation_model_id": "gpt-image-2",
+                "generation_route_config_hash": ROUTE_HASH,
                 "style_probe_model_id": "gpt-5.5",
+                "style_probe_route_config_hash": ROUTE_HASH,
                 "image_adapter": "openai_responses",
             },
             output_target=output_target,
@@ -2003,6 +2016,7 @@ async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, 
             runtime_fields={
                 "operation": "poster_title_image_style_probe",
                 "style_probe_model_id": "gpt-5.5",
+                "style_probe_route_config_hash": ROUTE_HASH,
                 "image_adapter": "openai_responses",
                 "_system": {"trigger_request_id": "req-probe-1"},
             },

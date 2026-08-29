@@ -7,7 +7,7 @@ from typing import Any
 
 from app.core.database import get_session_factory
 from app.core.exceptions import AppError
-from app.integrations.ai_adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
+from app.ai.adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
 from app.services import ai_capability_kernel as kernel
 
 
@@ -85,7 +85,18 @@ async def generate_text_with_ledger(
     model = gate_result.model
     resolved_model = gate_result.resolved_model
     price = TYPED_PRICING_RESOLVER.require_rule(resolved_model.pricing_ref)
-    request_hash, input_size_bytes = kernel.hash_payload({"model_id": model_id, "messages": messages})
+    request_hash, input_size_bytes = kernel.hash_payload(
+        {
+            "model_id": model_id,
+            "capability": resolved_model.capability,
+            "provider": resolved_model.provider,
+            "adapter": resolved_model.adapter,
+            "provider_model": resolved_model.provider_model,
+            "adapter_model": resolved_model.adapter_model,
+            "route_config_hash": resolved_model.route_config_hash,
+            "messages": messages,
+        }
+    )
     call_id = await USAGE_LEDGER_WRITER.create_pending(
         ledger_session_factory,
         caller_id=caller_id,
@@ -213,6 +224,12 @@ async def generate_text_with_images_with_ledger(
     request_hash, input_size_bytes = kernel.hash_payload(
         {
             "model_id": model_id,
+            "capability": resolved_model.capability,
+            "provider": resolved_model.provider,
+            "adapter": resolved_model.adapter,
+            "provider_model": resolved_model.provider_model,
+            "adapter_model": resolved_model.adapter_model,
+            "route_config_hash": resolved_model.route_config_hash,
             "prompt": prompt,
             "reference_images": [
                 {
@@ -355,11 +372,27 @@ async def generate_image_with_ledger(
     gate_result = IMAGE_MODEL_GATE.resolve(model_id, require_edit=bool(reference_images))
     model = gate_result.model
     resolved_model = gate_result.resolved_model
+    if image_adapter is not None and image_adapter != resolved_model.adapter:
+        raise AppError(
+            "MODEL_NOT_AVAILABLE",
+            "image adapter does not match model route",
+            details={
+                "model_id": resolved_model.model_id,
+                "capability": resolved_model.capability,
+                "image_adapter": image_adapter,
+                "route_adapter": resolved_model.adapter,
+            },
+        )
     price = TYPED_PRICING_RESOLVER.require_rule(resolved_model.pricing_ref)
     request_hash, input_size_bytes = kernel.hash_payload(
         {
             "model_id": model_id,
-            "image_adapter": image_adapter or model.adapter,
+            "capability": resolved_model.capability,
+            "provider": resolved_model.provider,
+            "adapter": resolved_model.adapter,
+            "provider_model": resolved_model.provider_model,
+            "adapter_model": resolved_model.adapter_model,
+            "route_config_hash": resolved_model.route_config_hash,
             "response_model": response_model,
             "prompt": prompt,
             "reference_images": [
@@ -404,7 +437,7 @@ async def generate_image_with_ledger(
     try:
         result = await PROVIDER_GATEWAY.generate_image(
             model,
-            image_adapter=image_adapter,
+            image_adapter=resolved_model.adapter,
             response_model=response_model,
             prompt=prompt,
             reference_images=reference_images,

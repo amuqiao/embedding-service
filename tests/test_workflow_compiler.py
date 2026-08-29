@@ -335,8 +335,8 @@ def test_poster_title_image_workflow_freezes_image_adapter_in_child_params(monke
     workflow_registry.clear_for_tests()
     register_all_job_types()
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.poster_title_image_generation_image_adapter",
-        lambda: "openai_images",
+        "app.jobs.types.poster_title_image.executor._image_adapter",
+        lambda _model_id=None: "openai_images",
     )
     ref = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/a.png",

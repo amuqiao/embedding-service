@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import AppError, NotFoundAppError
-from app.core.pricing_registry import MONEY_QUANT, default_currency
+from app.ai.pricing.registry import MONEY_QUANT, default_currency
 from app.models.ai_call_log import AiCallLog
 from app.repositories.ai_call_log_repo import AiCallLogRepo
 from app.repositories.job_repo import JobRepo

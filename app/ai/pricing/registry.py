@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 
 from app.core.config import settings
-from app.core.usage_records import AudioUsageRecord, ImageUsageRecord, TextUsageRecord, UsageRecord, VideoUsageRecord
+from app.ai.usage.records import AudioUsageRecord, ImageUsageRecord, TextUsageRecord, UsageRecord, VideoUsageRecord
 
 MONEY_QUANT = Decimal("0.00000001")
 ONE_MILLION = Decimal("1000000")

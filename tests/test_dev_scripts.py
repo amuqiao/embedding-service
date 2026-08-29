@@ -6158,7 +6158,6 @@ def _release_env_file_content(*, storage_backend: str = "aliyun_oss") -> str:
         "CALLBACK_SIGNING_SECRET=release-callback-secret-32-bytes",
         "ALLOW_INSECURE_CALLBACKS=false",
         f"STORAGE_BACKEND={storage_backend}",
-        "DEFAULT_MODEL_ID=gpt-5.5",
     ]
     if storage_backend == "aliyun_oss":
         lines.extend(
@@ -6228,7 +6227,6 @@ def test_env_config_check_env_file_validation_ignores_root_dotenv(tmp_path):
                 "OSS_ACCESS_KEY_ID=access-key-id",
                 "OSS_ACCESS_KEY_SECRET=access-key-secret",
                 "OSS_PROJECT_ROOT=project/root",
-                "DEFAULT_MODEL_ID=gpt-5.5",
             ]
         )
         + "\n",
