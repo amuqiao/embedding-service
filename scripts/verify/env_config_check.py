@@ -12,7 +12,6 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -22,82 +21,27 @@ SERVICE_EXAMPLE_PATH = ROOT_DIR / ".env.example"
 KEY_PATTERN = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 APP_ENV_VALUES = ("local", "dev", "test", "prd")
 
-
-@dataclass(frozen=True)
-class EnvKeyManifest:
-    launcher_keys: frozenset[str]
-    deprecated_keys: frozenset[str]
-    derived_keys: frozenset[str]
-
-
-ENV_KEY_MANIFEST = EnvKeyManifest(
-    launcher_keys=frozenset(
-        {
-            "API_HOST",
-            "API_PORT",
-            "API_HOST_PORT",
-            "COMPOSE_PROJECT_NAME",
-            "POSTGRES_DB",
-            "POSTGRES_HOST_PORT",
-            "REDIS_HOST_PORT",
-            "WORKER_CONCURRENCY",
-            "WORKER_LOGLEVEL",
-        }
-    ),
-    deprecated_keys=frozenset(
-        {
-            "CALLBACK_DELIVERY_WINDOW_BUFFER_SECONDS",
-            "DB_POOL_RECYCLE",
-            "ENABLE_MOCK_INTERFACES",
-            "JOB_MAX_EXECUTION_ATTEMPTS",
-            "JOB_RECOVERY_BATCH_SIZE",
-            "JOB_RECOVERY_CALLBACK_BATCH_SIZE",
-            "JOB_RECOVERY_INTERVAL_SECONDS",
-            "JOB_STALE_RUNNING_BUFFER_SECONDS",
-            "MODEL_CALL_MAX_RETRIES",
-            "SHORT_DRAMA_RS_API_KEY",
-            "SHORT_DRAMA_RS_BASE_URL",
-            "SHORT_DRAMA_RS_RESULT_MOCK_ENABLED",
-            "SHORT_DRAMA_RS_RESULT_RESPONSE_FIXTURE_PATH",
-            "SHORT_DRAMA_RS_RESULT_SINK",
-            "SHORT_DRAMA_RS_SCHEMA_FIXTURE_PATH",
-            "SHORT_DRAMA_RS_SCHEMA_MOCK_ENABLED",
-            "SHORT_DRAMA_RS_SCHEMA_SOURCE",
-            "SHORT_DRAMA_RS_TAG_SCHEMA_VERSION",
-            "SHORT_DRAMA_RS_TIMEOUT_SECONDS",
-            "TASKIQ_MAX_RETRIES",
-            "TASKIQ_RETRY_DELAY",
-            "WORKER_RECOVERY_LOOP",
-        }
-    ),
-    derived_keys=frozenset(
-        {
-            "CALLBACK_DELIVERY_TIMEOUT_SECONDS",
-            "JOB_STALE_RUNNING_SECONDS",
-            "OSS_ENDPOINT_STYLE",
-            "OSS_SCHEME",
-            "SYNC_DATABASE_URL",
-            "WORKER_HARD_TIME_LIMIT",
-            "WORKER_SOFT_TIME_LIMIT",
-        }
-    ),
-)
-
 def constant_keys_from_config(name: str) -> frozenset[str]:
     module = ast.parse(CONFIG_PATH.read_text(encoding="utf-8"))
     for node in module.body:
-        if not isinstance(node, ast.AnnAssign):
-            continue
-        if not isinstance(node.target, ast.Name) or node.target.id != name:
-            continue
-        if node.value is None:
-            break
-        if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id == "frozenset":
-            if len(node.value.args) != 1:
-                raise RuntimeError(f"{name} frozenset must have exactly one argument: {CONFIG_PATH}")
-            value = ast.literal_eval(node.value.args[0])
+        if isinstance(node, ast.AnnAssign):
+            target = node.target
+            value_node = node.value
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            value_node = node.value
         else:
-            value = ast.literal_eval(node.value)
+            continue
+        if not isinstance(target, ast.Name) or target.id != name:
+            continue
+        if value_node is None:
+            break
+        if isinstance(value_node, ast.Call) and isinstance(value_node.func, ast.Name) and value_node.func.id == "frozenset":
+            if len(value_node.args) != 1:
+                raise RuntimeError(f"{name} frozenset must have exactly one argument: {CONFIG_PATH}")
+            value = ast.literal_eval(value_node.args[0])
+        else:
+            value = ast.literal_eval(value_node)
         if isinstance(value, dict):
             if not all(isinstance(key, str) for key in value):
                 raise RuntimeError(f"{name} must be a string-keyed dict: {CONFIG_PATH}")
@@ -113,8 +57,8 @@ def constant_keys_from_config(name: str) -> frozenset[str]:
 APPLICATION_ENV_KEYS = constant_keys_from_config("APPLICATION_ENV_FIELD_MAP")
 LAUNCHER_ENV_KEYS = constant_keys_from_config("LAUNCHER_ENV_KEYS")
 ROOT_ENV_KEYS = APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS
-DEPRECATED_KEYS = ENV_KEY_MANIFEST.deprecated_keys
-DERIVED_ENV_KEYS = ENV_KEY_MANIFEST.derived_keys
+DEPRECATED_KEYS = constant_keys_from_config("DEPRECATED_ENV_KEYS")
+DERIVED_ENV_KEYS = constant_keys_from_config("DERIVED_ENV_KEYS")
 
 
 def _key_set(path: Path) -> frozenset[str]:
@@ -141,7 +85,7 @@ def parse_keys(path: Path) -> list[tuple[int, str]]:
     return keys
 
 
-def check_file(path: Path, manifest: EnvKeyManifest = ENV_KEY_MANIFEST) -> list[str]:
+def check_file(path: Path) -> list[str]:
     # File-level checks enforce the root env config boundary before Settings loads.
     issues: list[str] = []
     allowed_keys = allowed_keys_for_file(path)
@@ -149,9 +93,9 @@ def check_file(path: Path, manifest: EnvKeyManifest = ENV_KEY_MANIFEST) -> list[
         normalized_key = key.upper()
         if key != normalized_key:
             issues.append(f"{path}:{line_no}: config key must be uppercase: {key}")
-        elif normalized_key in manifest.deprecated_keys:
+        elif normalized_key in DEPRECATED_KEYS:
             issues.append(f"{path}:{line_no}: deprecated or unsupported config key: {key}")
-        elif normalized_key in manifest.derived_keys:
+        elif normalized_key in DERIVED_ENV_KEYS:
             issues.append(f"{path}:{line_no}: derived config key must not be set in env: {key}")
         elif normalized_key in ROOT_ENV_KEYS and normalized_key not in allowed_keys:
             issues.append(f"{path}:{line_no}: root env key is missing from .env.example: {key}")

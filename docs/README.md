@@ -7,6 +7,7 @@
 | 文档 | 用途 |
 |---|---|
 | [`current/architecture.md`](current/architecture.md) | 当前服务边界、模块职责、运行形态、AI gateway/billing 边界和验证基线 |
+| [`current/configuration.md`](current/configuration.md) | 当前 `.env.example`、`.env`、Settings、launcher key、derived key、deprecated key 和 env-config 验证边界 |
 | [`current/ai-capability.md`](current/ai-capability.md) | 当前 AI 调用入口、model/prompt/pricing registry、AI kernel 组件和文本/图片 provider path |
 | [`current/ai-billing.md`](current/ai-billing.md) | 当前 AI call ledger、usage/cost 事实源、Job billing 聚合和非资金账本边界 |
 | [`current/job-kernel.md`](current/job-kernel.md) | 当前 Job、幂等键、Attempt、Dispatch outbox、Callback outbox、root/child lineage 和表设计边界 |

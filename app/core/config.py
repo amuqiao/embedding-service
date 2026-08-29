@@ -297,7 +297,7 @@ class DatabaseSettings(ConfigSection):
         if self.max_overflow < 0:
             raise ValueError("DB_MAX_OVERFLOW must be greater than or equal to 0")
         if self.pool_recycle <= 0:
-            raise ValueError("DB_POOL_RECYCLE must be greater than 0")
+            raise ValueError("database.pool_recycle must be greater than 0")
         return self
 
     @property
@@ -693,9 +693,9 @@ class JobSettings(ConfigSection):
             "OSS_INPUT_MAX_BYTES": self.oss_input_max_bytes,
             "job.orphan_timeout_seconds": self.orphan_timeout_seconds,
             "job.dispatch_max_publish_attempts": self.dispatch_max_publish_attempts,
-            "JOB_RECOVERY_INTERVAL_SECONDS": self.recovery_interval_seconds,
-            "JOB_RECOVERY_BATCH_SIZE": self.recovery_batch_size,
-            "JOB_RECOVERY_CALLBACK_BATCH_SIZE": self.recovery_callback_batch_size,
+            "job.recovery_interval_seconds": self.recovery_interval_seconds,
+            "job.recovery_batch_size": self.recovery_batch_size,
+            "job.recovery_callback_batch_size": self.recovery_callback_batch_size,
         }
         for name, value in positive_fields.items():
             if value <= 0:

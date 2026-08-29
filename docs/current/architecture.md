@@ -119,7 +119,9 @@ AI billing 当前事实见 [`ai-billing.md`](ai-billing.md)。`GET /jobs/{job_id
 
 ## 配置边界
 
-配置项表达稳定控制意图，不暴露底层派生值。典型入口：
+配置当前事实以 [`configuration.md`](configuration.md) 为准。配置项表达稳定控制意图，不暴露底层派生值。`.env.example` 是可提交配置模板，`.env` 是本地私有实例配置；`Settings` 只消费 application key，脚本和 compose 使用 launcher key，derived / deprecated key 写入 env 文件会被 `env-config` 拒绝。
+
+典型 application key：
 
 - `APP_ENV`
 - `SERVICE_API_PREFIX`
@@ -136,9 +138,7 @@ AI billing 当前事实见 [`ai-billing.md`](ai-billing.md)。`GET /jobs/{job_id
 - `BILLING_ENABLED`
 - `CALLBACK_SIGNING_SECRET`
 
-`APP_ENV` 允许 `local`、`dev`、`test` 和 `prd`。它是配置安全规则开关，不是 API/worker 生命周期开关，也不是自动选择 env 文件的开关。`test/prd` 是发布模式，启动时使用同一套生产级校验：不能关闭 HTTP 鉴权或 caller header，不能允许 insecure callback，不能使用本地对象存储，且必须提供非占位的服务密钥和 Callback 签名密钥。`TASKIQ_BROKER_KIND` 可显式选择 `redis_stream` 或 `redis_list`；`redis_stream` 需要 Redis 6.2+ 的 `XAUTOCLAIM` 命令，Redis 5 环境应使用 `redis_list`。
-
-配置文件选择是显式行为：本地和 compose 入口默认使用 `ENV_FILE=.env`；需要使用 `.env.dev`、`.env.test` 或 `.env.prd` 时，必须显式设置 `ENV_FILE`，或由平台直接注入环境变量。`APP_ENV` 只参与安全校验，不参与 env 文件选择。
+`APP_ENV` 允许 `local`、`dev`、`test` 和 `prd`。它是配置安全规则开关，不是 API/worker 生命周期开关，也不是自动选择 env 文件的开关。`test/prd` 是发布模式，启动时使用同一套生产级校验。配置文件选择是显式行为：本地和 compose 入口默认使用 `ENV_FILE=.env`；需要使用 `.env.dev`、`.env.test` 或 `.env.prd` 时，必须显式设置 `ENV_FILE`，或由平台直接注入环境变量。
 
 ## 验证基线
 

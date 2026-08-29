@@ -12,6 +12,7 @@ from app.core.config import (
 )
 from scripts.verify.env_config_check import (
     APPLICATION_ENV_KEYS,
+    DEPRECATED_KEYS,
     DERIVED_ENV_KEYS,
     LAUNCHER_ENV_KEYS,
     _key_set,
@@ -667,6 +668,43 @@ def test_settings_source_rejects_removed_application_env_key_from_process_env(mo
 def test_env_config_examples_match_declared_manifests():
     assert _key_set(config_module.ROOT_DIR / ".env.example") == APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS
     assert check_example_alignment() == []
+
+
+def test_env_config_check_uses_config_key_manifests():
+    assert APPLICATION_ENV_KEYS == config_module.APPLICATION_ENV_KEYS
+    assert LAUNCHER_ENV_KEYS == config_module.LAUNCHER_ENV_KEYS
+    assert DERIVED_ENV_KEYS == config_module.DERIVED_ENV_KEYS
+    assert DEPRECATED_KEYS == config_module.DEPRECATED_ENV_KEYS
+
+
+def test_internal_database_setting_error_does_not_look_like_env_key():
+    values = _settings_kwargs()
+    nested: dict[str, dict[str, object]] = {}
+    for env_key, value in values.items():
+        config_module._assign_nested(nested, config_module.APPLICATION_ENV_FIELD_MAP[env_key], value)
+    nested["database"]["pool_recycle"] = 0
+
+    with pytest.raises(ValidationError) as exc:
+        Settings(**nested)
+
+    message = str(exc.value)
+    assert "database.pool_recycle must be greater than 0" in message
+    assert "DB_POOL_RECYCLE" not in message
+
+
+def test_internal_job_recovery_setting_error_does_not_look_like_env_key():
+    values = _settings_kwargs()
+    nested: dict[str, dict[str, object]] = {}
+    for env_key, value in values.items():
+        config_module._assign_nested(nested, config_module.APPLICATION_ENV_FIELD_MAP[env_key], value)
+    nested["job"] = {"recovery_interval_seconds": 0}
+
+    with pytest.raises(ValidationError) as exc:
+        Settings(**nested)
+
+    message = str(exc.value)
+    assert "job.recovery_interval_seconds must be greater than 0" in message
+    assert "JOB_RECOVERY_INTERVAL_SECONDS" not in message
 
 
 def test_env_config_check_allows_launcher_keys_in_root_env(tmp_path):
