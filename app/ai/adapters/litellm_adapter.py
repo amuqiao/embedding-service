@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.ai.adapters.base import TextGenerationRequest, TextGenerationResult
-from app.integrations.ai_gateway import LiteLLMTextGenerationRequest, generate_text
+from app.ai.adapters.litellm_client import LiteLLMTextGenerationRequest, generate_text
 
 
 class LiteLLMAdapter:

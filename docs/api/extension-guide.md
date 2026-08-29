@@ -30,7 +30,7 @@
 2. 在 `app/jobs/types/<job_type>/` 中实现 `JobExecutor`。正式业务使用包目录，至少保留 `executor.py`、`register.py` 和 `__init__.py`，按需增加 `errors.py`、`prompts.yaml`、`models.yaml` 或 `model_asset.yaml` 等业务内聚文件；极小 demo 才允许继续使用单文件并在文件内声明 `PACKAGE`。
 3. 在 executor 上使用 `@register_job_type` 标记源码准入，并声明稳定 `name`、`visibility`、`role`、`params_schema`、`runtime_fields_schema_name`、`canonical_result_schema`、`public_result_schema`、`retry_policy`、`allowed_capability_refs` 和 side-effect 元数据。`JobTypeSpec` 是代码级事实源；不要只在文档里描述这些字段。
 4. 在业务包 `register.py` 中声明 `PACKAGE = JobTypePackage(...)`，并由 `register_job_package(register)` 注册本包 executor、errors 和 workflow definition。中心 `app/jobs/types/register.py` 只维护 `JOB_TYPE_PACKAGE_MODULES` 显式清单，不直接 import 业务 executor。
-5. 如需模型调用，通过 `app/services/ai_gateway_facade.py` 进入，不直接调用 provider adapter。
+5. 如需模型调用，通过 `app/ai/gateway.py` 进入，不直接调用 provider adapter。
 6. 如需大输入或大结果，使用 runtime ref、result ref 和对象存储边界，不把大 payload 直接塞进 Job response。
 7. 补充 schema、registry、workflow 和 contract 测试。
 

@@ -41,7 +41,7 @@ from app.schemas.jobs import (
 )
 from app.services.billing import job_cost_from_billing
 from app.services.job_runtime import build_runtime_snapshot, payload_hash, write_runtime_json
-from app.services.ai_capability_kernel import ModelGate
+from app.ai.kernel import ModelGate
 
 ROUTE_HASH = "sha256:" + "a" * 64
 
@@ -848,7 +848,7 @@ def test_poster_title_image_create_request_rejects_unavailable_configured_genera
 
 
 def test_style_probe_response_model_supports_reference_image_input():
-    from app.jobs.model_selection import poster_title_image_style_probe_model_id
+    from app.ai.policy.job_models import poster_title_image_style_probe_model_id
 
     model_id = poster_title_image_style_probe_model_id()
     result = ModelGate().resolve_multimodal_text(

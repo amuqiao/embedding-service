@@ -16,7 +16,7 @@ from app.schemas.jobs import (
     JobRealLlmDoubleEchoResult,
     JobRealLlmDoubleEchoRuntimeFields,
 )
-from app.services.ai_gateway_facade import generate_text_with_ledger
+from app.ai.gateway import generate_text_with_ledger
 from app.services.job_runtime import ai_billing_scope_id_from_job, runtime_fields_from_job
 from app.services.jobs import _load_input_text, trigger_request_id_from_job
 

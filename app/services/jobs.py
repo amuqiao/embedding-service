@@ -19,7 +19,7 @@ from app.models.job import Job
 from app.repositories.job_repo import JobRepo
 from app.schemas.errors import JobErrorDetail
 from app.schemas.jobs import CreateJobRequest, CreateJobResponse, JobResult, JobStatusResponse
-from app.services.ai_capability_kernel import require_enabled_text_model
+from app.ai.kernel import require_enabled_text_model
 from app.services.billing import get_scope_billing, job_cost_from_billing, job_usage_from_billing
 from app.services.job_runtime import (
     build_runtime_snapshot,

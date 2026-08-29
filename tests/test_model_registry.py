@@ -6,8 +6,8 @@ from app.core import config as config_module
 from app.core.config import Settings
 from app.core.exceptions import ValidationAppError
 from app.ai.catalog import registry as model_registry
-from app.integrations import ai_gateway
-from app.jobs import model_selection
+from app.ai.adapters import litellm_client as ai_gateway
+from app.ai.policy import job_models
 
 
 def _settings_kwargs(**overrides):
@@ -224,7 +224,7 @@ model_slots:
 def _use_empty_job_model_selection_root(tmp_path, monkeypatch) -> None:
     root = tmp_path / "empty-job-models"
     root.mkdir()
-    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", root)
+    monkeypatch.setattr(job_models, "JOB_MODEL_CONFIG_ROOT", root)
 
 
 def test_model_registry_loads_available_models_from_yaml(tmp_path, monkeypatch):
@@ -317,7 +317,7 @@ def test_model_registry_rejects_job_default_when_route_env_is_missing(tmp_path, 
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
-    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
+    monkeypatch.setattr(job_models, "JOB_MODEL_CONFIG_ROOT", job_model_root)
     _patch_job_types(monkeypatch, ["poster_title_image"])
 
     with pytest.raises(RuntimeError, match="job_type poster_title_image default_model_id is not available"):
@@ -531,7 +531,7 @@ def test_model_registry_filters_by_job_type_model_selection(tmp_path, monkeypatc
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
-    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
+    monkeypatch.setattr(job_models, "JOB_MODEL_CONFIG_ROOT", job_model_root)
     _patch_job_types(monkeypatch, ["poster_title_image"])
 
     response = model_registry.list_models_response(job_type="poster_title_image")
@@ -550,7 +550,7 @@ def test_model_registry_uses_global_models_for_job_type_without_model_selection(
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
-    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
+    monkeypatch.setattr(job_models, "JOB_MODEL_CONFIG_ROOT", job_model_root)
     _patch_job_types(monkeypatch, ["test.echo"])
 
     response = model_registry.list_models_response(job_type="test.echo")
@@ -569,7 +569,7 @@ def test_model_registry_requires_poster_title_image_model_selection_config(tmp_p
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
-    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
+    monkeypatch.setattr(job_models, "JOB_MODEL_CONFIG_ROOT", job_model_root)
     _patch_job_types(monkeypatch, ["poster_title_image"])
     monkeypatch.setattr(model_registry, "validate_price_matches_model", lambda **_kwargs: None)
 
@@ -587,7 +587,7 @@ def test_model_registry_skips_disabled_job_type_model_selection_config(tmp_path,
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
-    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
+    monkeypatch.setattr(job_models, "JOB_MODEL_CONFIG_ROOT", job_model_root)
     _patch_job_types(monkeypatch, ["poster_title_image"], enabled=[])
     monkeypatch.setattr(model_registry, "validate_price_matches_model", lambda **_kwargs: None)
 
@@ -597,9 +597,9 @@ def test_model_registry_skips_disabled_job_type_model_selection_config(tmp_path,
 def test_poster_title_image_model_selection_reads_model_slots(tmp_path, monkeypatch):
     job_model_root = tmp_path / "job-types"
     _write_job_model_selection(job_model_root)
-    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
+    monkeypatch.setattr(job_models, "JOB_MODEL_CONFIG_ROOT", job_model_root)
 
-    selection = model_selection.get_poster_title_image_model_selection()
+    selection = job_models.get_poster_title_image_model_selection()
 
     assert selection.generation_slot.default_model_id == "custom-image-model"
     assert selection.style_probe_model_id == "custom-style-probe-model"
@@ -622,7 +622,7 @@ def test_model_registry_requires_openai_images_for_poster_title_image_token_pric
         MODEL_CONFIG_PATH=str(config_path),
     )
     monkeypatch.setattr(model_registry, "settings", _SettingsProxy(test_settings))
-    monkeypatch.setattr(model_selection, "JOB_MODEL_CONFIG_ROOT", job_model_root)
+    monkeypatch.setattr(job_models, "JOB_MODEL_CONFIG_ROOT", job_model_root)
     _patch_job_types(monkeypatch, ["poster_title_image"])
     monkeypatch.setattr(model_registry, "validate_price_matches_model", lambda **_kwargs: None)
     monkeypatch.setattr(model_registry, "require_price", lambda _pricing_ref: SimpleNamespace(pricing_type="per_image_token"))

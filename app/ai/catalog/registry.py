@@ -687,14 +687,14 @@ def _job_type_exists(job_type: str) -> bool:
 
 
 def _job_scoped_models(models: list[ModelCatalogEntry], job_type: str) -> tuple[PublicModelSlotView, list[ModelCatalogEntry]]:
-    from app.jobs import model_selection
+    from app.ai.policy import job_models
 
     normalized_job_type = job_type.strip()
     if not normalized_job_type:
         raise ValidationAppError("INVALID_JOB_TYPE", "job_type must be a non-empty string")
     if not _job_type_exists(normalized_job_type):
         raise ValidationAppError("INVALID_JOB_TYPE", f"不支持的 job_type: {normalized_job_type}")
-    if not model_selection.has_model_selection_config(normalized_job_type):
+    if not job_models.has_model_selection_config(normalized_job_type):
         capability = _default_job_capability(normalized_job_type)
         return (
             PublicModelSlotView(
@@ -705,7 +705,7 @@ def _job_scoped_models(models: list[ModelCatalogEntry], job_type: str) -> tuple[
             models_for_capability(models, capability),
         )
 
-    selection = model_selection.get_public_model_slot(normalized_job_type)
+    selection = job_models.get_public_model_slot(normalized_job_type)
     model_by_id = {model.id: model for model in models}
     selected_models = [
         model_by_id[model_id]
@@ -798,22 +798,22 @@ def _default_job_capability(job_type: str) -> str:
 
 
 def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry]) -> None:
-    from app.jobs import model_selection
+    from app.ai.policy import job_models
     from app.jobs import registry as job_registry
 
     registered_job_types = set(job_registry.all_job_types())
     enabled_job_types = set(job_registry.enabled_job_types())
-    poster_job_type = model_selection.POSTER_TITLE_IMAGE_JOB_TYPE
-    if poster_job_type in enabled_job_types and not model_selection.has_model_selection_config(poster_job_type):
+    poster_job_type = job_models.POSTER_TITLE_IMAGE_JOB_TYPE
+    if poster_job_type in enabled_job_types and not job_models.has_model_selection_config(poster_job_type):
         raise RuntimeError("poster_title_image requires app/jobs/types/poster_title_image/models.yaml")
     model_by_id = {model.id: model for model in enabled_models}
-    for path in sorted(model_selection.JOB_MODEL_CONFIG_ROOT.glob(f"*/{model_selection.JOB_MODEL_CONFIG_FILENAME}")):
+    for path in sorted(job_models.JOB_MODEL_CONFIG_ROOT.glob(f"*/{job_models.JOB_MODEL_CONFIG_FILENAME}")):
         job_type = path.parent.name
         if registered_job_types and job_type not in registered_job_types:
             raise RuntimeError(f"job model selection config references unknown job_type: {job_type}")
         if job_type not in enabled_job_types:
             continue
-        policy = model_selection.get_job_model_policy(job_type)
+        policy = job_models.get_job_model_policy(job_type)
         for slot in policy.slots.values():
             missing_model_ids = sorted(set(slot.allowed_model_ids) - set(model_by_id))
             if missing_model_ids:
@@ -829,12 +829,12 @@ def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry
                     )
 
     if (
-        model_selection.POSTER_TITLE_IMAGE_JOB_TYPE in enabled_job_types
-        and model_selection.has_model_selection_config(model_selection.POSTER_TITLE_IMAGE_JOB_TYPE)
+        job_models.POSTER_TITLE_IMAGE_JOB_TYPE in enabled_job_types
+        and job_models.has_model_selection_config(job_models.POSTER_TITLE_IMAGE_JOB_TYPE)
     ):
         from app.integrations.image import POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES
 
-        poster_selection = model_selection.get_poster_title_image_model_selection()
+        poster_selection = job_models.get_poster_title_image_model_selection()
         for model_id in poster_selection.generation_slot.allowed_model_ids:
             generation_model = model_by_id[model_id]
             generation_route = generation_model.route_for(IMAGE_EDIT)

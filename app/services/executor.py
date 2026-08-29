@@ -2,7 +2,7 @@ import logging
 import uuid
 
 from app.core.exceptions import AppError
-from app.services.ai_gateway_facade import generate_text_with_ledger
+from app.ai.gateway import generate_text_with_ledger
 from app.core.prompt_templates import get_output_contract, get_system_prompt
 from app.schemas.jobs import JobResult
 

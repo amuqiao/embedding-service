@@ -91,7 +91,7 @@ billing 模块只消费标准化后的 `usage_units` 和已经冻结的 `cost_am
 
 - `tests/test_billing_service.py`
 - `tests/test_billing_route_contract.py`
-- `tests/test_ai_gateway_facade.py`
+- `tests/test_ai_gateway.py`
 - `tests/test_ai_call_log_repo.py`
 - `tests/test_recovery.py`
 - `./scripts/verify.sh check`

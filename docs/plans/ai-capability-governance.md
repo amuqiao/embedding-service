@@ -19,10 +19,10 @@ AI 能力不应由每个业务 Job 自己拼接。业务 Job 只声明自己需�
 
 - 全局模型目录已由 `app/ai/catalog/models.yaml` 和 `app/ai/catalog/registry.py` 管理。
 - 当前模型目录支持 `text`、`image`、`audio`、`video` 粗分类，以及 `text_generation`、`multimodal_text_generation`、`image_generation`、`image_edit` 等 capability。
-- 当前 AI 调用入口是 `app/services/ai_gateway_facade.py`，包含文本、带图文本和图片生成的 ledger path。
-- 当前 AI kernel 在 `app/services/ai_capability_kernel.py`，包含模型准入、provider 调用编排、usage normalizer、pricing resolver 和 ledger writer。
+- 当前 AI 调用入口是 `app/ai/gateway.py`，包含文本、带图文本和图片生成的 ledger path。
+- 当前 AI kernel 在 `app/ai/kernel.py`，包含模型准入、provider 调用编排、usage normalizer、pricing resolver 和 ledger writer。
 - 当前 adapter registry 在 `app/ai/adapters/`，内置 `litellm`、`openai_responses`、`openai_images` 和 `openai_compatible_embeddings`。
-- 当前 LiteLLM 文本调用在 `app/integrations/ai_gateway.py`。
+- 当前 LiteLLM 文本调用在 `app/ai/adapters/litellm_client.py`。
 - 当前业务级模型配置在 `app/jobs/types/<job_type>/models.yaml`，`poster_title_image` 已使用通用 `model_slots` 声明公开 generation slot 和内部 style_probe slot；最终 provider/adapter route 归全局 catalog。
 - 当前配置层保留 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`MODEL_CONFIG_PATH` 和 `PRICING_CONFIG_PATH`；默认模型和启停不再放入 `.env`。
 - 当前 `scripts/models.sh` 管本地模型资产下载、校验和 ONNX inspect；`scripts/smoke.sh` 管 Job/API/worker/callbacker E2E；`scripts/ai-providers.sh` 管云模型 provider、catalog 和 resolver 离线诊断。
@@ -51,7 +51,7 @@ AI 能力不应由每个业务 Job 自己拼接。业务 Job 只声明自己需�
 
 ## 目标目录结构
 
-目标结构按职责收口到 `app/ai/`，再由现有 service、route、job 和脚本调用。第一阶段已经完成 catalog、pricing、usage、adapter、provider、policy 和 resolver 的主入口收口；`app/services/ai_capability_kernel.py` 仍保留为当前 ledger path 的执行组件。
+目标结构按职责收口到 `app/ai/`，再由现有 service、route、job 和脚本调用。第一阶段已经完成 catalog、pricing、usage、adapter、provider、policy、resolver、gateway 和 kernel 的主入口收口。
 
 ```text
 app/ai/

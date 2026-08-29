@@ -22,7 +22,7 @@ from app.services.job_runtime import (
     workflow_plan_from_job,
 )
 from app.services.jobs import _active_job_capacity_available, _requires_text_generation_model, _validate_prompt
-from app.services.ai_capability_kernel import require_enabled_text_model
+from app.ai.kernel import require_enabled_text_model
 from app.workflows.base import FAILURE_POLICIES
 
 

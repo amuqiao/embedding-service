@@ -4,12 +4,12 @@
 
 ## 当前行为
 
-- 当前稳定 AI 调用入口是 `app/ai/gateway.py` 和 `app/services/ai_gateway_facade.py` 的 `generate_text_with_ledger()`、`generate_text_with_images_with_ledger()` 和 `generate_image_with_ledger()`。
+- 当前稳定 AI 调用入口是 `app/ai/gateway.py` 的 `generate_text_with_ledger()`、`generate_text_with_images_with_ledger()` 和 `generate_image_with_ledger()`。
 - 当前真实 provider path 覆盖文本生成、带参考图文本生成，以及 `poster_title_image` 使用的图片生成；内置真实 LLM 示例 `job_real_llm_echo`、`job_real_llm_double_echo` 和 public `tagged_text_translation` 通过文本入口调用模型。
-- `app/services/ai_capability_kernel.py` 承载当前 AI kernel 组件：`ModelGate`、`ProviderGateway`、`UsageNormalizer`、`TypedPricingResolver` 和 `UsageLedgerWriter`。
+- `app/ai/kernel.py` 承载当前 AI kernel 组件：`ModelGate`、`ProviderGateway`、`UsageNormalizer`、`TypedPricingResolver` 和 `UsageLedgerWriter`。
 - `app/ai/adapters/` 承载模型调用 adapter registry；当前内置 `litellm`、`openai_responses`、`openai_images` 和 `openai_compatible_embeddings` adapter。
 - `app/ai/providers/` 承载 provider registry；当前注册 `openai` 和 `dashscope`。provider 负责凭证、base URL 和诊断摘要，adapter 只负责调用协议。
-- `app/integrations/ai_gateway.py` 是当前 LiteLLM 文本调用实现，返回 `TextGenerationResult` 和 provider usage，不写数据库、不改 Job 状态、不生成 billing 响应。
+- `app/ai/adapters/litellm_client.py` 是当前 LiteLLM 文本调用实现，返回 `TextGenerationResult` 和 provider usage，不写数据库、不改 Job 状态、不生成 billing 响应。
 - `app/ai/usage/records.py` 已有 `TextUsageRecord`、`ImageUsageRecord`、`AudioUsageRecord` 和 `VideoUsageRecord` 类型；当前文本和图片 provider path 会产生真实 provider usage record，audio / video 仍只有基础类型。
 
 ## Runtime Path
@@ -84,13 +84,13 @@ Prompt 目录由 `PROMPT_CONFIG_PATH` 指向的基础配置和 `app/jobs/types/*
 | 层 | 当前职责 |
 |---|---|
 | `app/jobs/` | 业务 `job_type` 声明模型 slot、构造 messages、消费 provider result |
-| `app/ai/gateway.py` / `app/services/ai_gateway_facade.py` | 对业务 Job 暴露稳定 AI 调用 facade |
-| `app/services/ai_capability_kernel.py` | 模型准入、provider 调用编排、usage 标准化、pricing 计算和 ledger 写入组件 |
+| `app/ai/gateway.py` | 对业务 Job 暴露稳定 AI 调用入口 |
+| `app/ai/kernel.py` | 模型准入、provider 调用编排、usage 标准化、pricing 计算和 ledger 写入组件 |
 | `app/ai/catalog/` | 模型目录加载、公开模型列表、默认模型和模型配置校验 |
 | `app/ai/policy/` | 业务 `job_type` 模型策略和 slot 读取 |
 | `app/ai/providers/` | provider 注册、凭证/base URL 解析和诊断摘要 |
 | `app/ai/adapters/` | 模型调用 adapter registry 和具体调用协议 adapter |
-| `app/integrations/ai_gateway.py` | 当前 LiteLLM 文本调用实现 |
+| `app/ai/adapters/litellm_client.py` | 当前 LiteLLM 文本调用实现 |
 | `app/ai/pricing/` | typed pricing rule 加载、匹配校验和成本估算 |
 | `app/ai/usage/` | 内部 typed usage record |
 
@@ -110,7 +110,7 @@ Prompt 目录由 `PROMPT_CONFIG_PATH` 指向的基础配置和 `app/jobs/types/*
 
 ## 验证
 
-- `tests/test_ai_gateway_facade.py`
+- `tests/test_ai_gateway.py`
 - `tests/test_model_registry.py`
 - `tests/test_pricing_registry.py`
 - `tests/test_usage_records.py`

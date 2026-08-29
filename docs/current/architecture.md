@@ -77,7 +77,7 @@ API 进程的 PostgreSQL async engine 和 session factory 由 FastAPI lifespan �
 | Job extension | `app/jobs/`、`app/services/job_runtime.py`、`app/services/executor.py` | `job_type` 注册、运行时快照、executor 执行和结果投影 |
 | Capability / Tool registry | `app/capabilities/`、`app/tools/`、`app/core/registries/`、`app/core/registry_checks.py` | `Job Type -> Capability -> Tool` 代码注册、ref 校验、graph 校验和启动期 fail-fast |
 | Workflow | `app/workflows/`、`app/jobs/types/examples.py` | DAG-lite root/child 编排、ready child 创建、child terminal 后推进和 root 汇总 |
-| AI gateway | `app/services/ai_gateway_facade.py`、`app/services/ai_capability_kernel.py`、`app/integrations/ai_gateway.py` | 模型启用校验、provider 调用、AI call ledger、usage 和 cost 记录 |
+| AI gateway | `app/ai/gateway.py`、`app/ai/kernel.py`、`app/ai/adapters/litellm_client.py` | 模型启用校验、provider 调用、AI call ledger、usage 和 cost 记录 |
 | Billing | `app/services/billing.py`、`app/schemas/billing.py` | 从 `ai_call_ledger_entries` 聚合 Job scope billing read model |
 
 ## 请求与响应边界
@@ -113,7 +113,7 @@ Callback 是服务主动向调用方发送的终态事件，不套 HTTP response
 
 ## AI Gateway 与 Billing
 
-AI 调用当前事实见 [`ai-capability.md`](ai-capability.md)。当前稳定入口是 `app/services/ai_gateway_facade.py`，已覆盖文本生成、带参考图文本生成和 `poster_title_image` 使用的图片生成；audio / video provider path 和 workflow node 级成本归因不是当前事实。
+AI 调用当前事实见 [`ai-capability.md`](ai-capability.md)。当前稳定入口是 `app/ai/gateway.py`，已覆盖文本生成、带参考图文本生成和 `poster_title_image` 使用的图片生成；audio / video provider path 和 workflow node 级成本归因不是当前事实。
 
 AI billing 当前事实见 [`ai-billing.md`](ai-billing.md)。`GET /jobs/{job_id}/billing` 从 `ai_call_ledger_entries` 聚合 Job scope billing；workflow child AI 调用使用 root Job scope 聚合到 root billing。`ai_call_ledger_entries` 是 AI provider call usage / cost estimate 事实源，不是资金账本。
 

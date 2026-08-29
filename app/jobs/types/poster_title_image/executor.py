@@ -26,7 +26,7 @@ from app.integrations.storage import storage
 from app.jobs.payload_adapters.http_url_input import read_http_url_bytes
 from app.jobs.payload_adapters.oss_url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
 from app.jobs.base import ExecutionRetryPolicy, JobExecutor, JobRetryPolicy
-from app.jobs.model_selection import (
+from app.ai.policy.job_models import (
     poster_title_image_generation_allowed_model_ids,
     poster_title_image_generation_default_model_id,
     poster_title_image_style_probe_model_id,
@@ -58,8 +58,8 @@ from app.schemas.jobs import (
     PosterTitleImageStyleProbeResult,
     PosterTitleImageStyleProbeRuntimeFields,
 )
-from app.services.ai_capability_kernel import ImageModelGate, ModelGate
-from app.services.ai_gateway_facade import generate_image_with_ledger, generate_text_with_images_with_ledger
+from app.ai.kernel import ImageModelGate, ModelGate
+from app.ai.gateway import generate_image_with_ledger, generate_text_with_images_with_ledger
 from app.services.job_runtime import (
     ai_billing_scope_id_from_job,
     job_params_from_job,
