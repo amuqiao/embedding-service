@@ -234,6 +234,8 @@ storage_context = ObjectStorageAdapterContext.from_config(
             "access_key_id": "...",
             "access_key_secret": "...",
             "key_prefix": "jobs/audio-stem",
+            "endpoint": "oss-cn-hangzhou.aliyuncs.com",
+            "endpoint_style": "virtual_host",
             "public_base_url": "https://cdn.example.com",
         },
     ),

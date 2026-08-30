@@ -36,7 +36,7 @@ usage() {
   Requires: Bash, Python；check、current、heads、history 和 migrate 还需要 Alembic。
   必须在 K8s Pod 内执行，且环境变量 KUBERNETES_SERVICE_HOST 必须存在。
   check 会打印完整 DATABASE_URL / REDIS_URL、编码密码和解码密码，输出包含敏感信息。
-  check oss 会向 OSS 写入、读取、HEAD 一个临时对象并打印 URL Ref；默认不打印 OSS secret。
+  check oss 会向对象存储写入、读取、HEAD 一个临时对象并打印对象信息；默认不打印 OSS secret。
   check / current / heads / history / migrate 必须可通过环境变量、ENV_FILE 或根目录 .env 读取 DATABASE_URL。
 
 命令：
@@ -52,7 +52,7 @@ usage() {
   help                显示帮助。
 
 输出：
-  stdout: 连接串解析结果、连通性证据、dashboard read model 结果、Alembic 输出和 OSS URL Ref。
+  stdout: 连接串解析结果、连通性证据、dashboard read model 结果、Alembic 输出和对象存储对象信息。
   stderr: 非 Pod 环境、缺少依赖、缺少配置、连接失败或迁移失败详情。
 
 副作用与保护边界：

@@ -257,6 +257,8 @@ storage_context = ObjectStorageAdapterContext.from_config(
             "access_key_id": "...",
             "access_key_secret": "...",
             "key_prefix": "jobs/example",
+            "endpoint": "oss-cn-hangzhou.aliyuncs.com",
+            "endpoint_style": "virtual_host",
             "public_base_url": "https://cdn.example.com",
         },
     )
@@ -299,7 +301,7 @@ provider builder 必须遵守：
 
 | provider | 用途 | 关键配置 |
 |---|---|---|
-| `aliyun_oss` | Aliyun OSS 读写 | `bucket`、`region`、`access_key_id`、`access_key_secret` |
+| `aliyun_oss` | Aliyun OSS 读写 | `bucket`、`region`、`access_key_id`、`access_key_secret`，可选 `key_prefix`、`endpoint`、`endpoint_style`、`public_base_url`、`scheme`、`timeout_seconds` |
 | `local` | 本地开发和测试 | `root`，可选 `bucket`、`region`、`public_base_url` |
 
 未来接入 S3、COS、MinIO 或其他对象存储时，优先新增 provider，不改变业务 adapter 和读取 spec。

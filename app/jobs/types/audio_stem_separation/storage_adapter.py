@@ -201,6 +201,7 @@ def _repository_config(*, settings: Any, bucket: str, region: str) -> ObjectStor
                 "access_key_secret": settings.storage.oss_access_key_secret_value,
                 "key_prefix": settings.storage.oss_project_root,
                 "endpoint": settings.storage.oss_endpoint,
+                "endpoint_style": settings.storage.oss_endpoint_style,
                 "public_base_url": _public_base_url(settings.storage.oss_public_endpoint),
                 "scheme": settings.storage.oss_scheme,
             },

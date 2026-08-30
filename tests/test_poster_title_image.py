@@ -84,6 +84,7 @@ def _storage_settings(
         oss_access_key_secret_value="",
         oss_project_root="",
         oss_endpoint="",
+        oss_endpoint_style="virtual_host",
         oss_scheme="https",
     )
 
@@ -99,6 +100,7 @@ def test_poster_storage_adapter_uses_settings_oss_endpoint_for_aliyun_config():
         oss_access_key_secret_value="secret",
         oss_project_root="project-a",
         oss_endpoint="oss-cn-hangzhou.aliyuncs.com",
+        oss_endpoint_style="virtual_host",
         oss_scheme="https",
     )
 
@@ -106,6 +108,7 @@ def test_poster_storage_adapter_uses_settings_oss_endpoint_for_aliyun_config():
 
     assert config.provider == "aliyun_oss"
     assert config.options["endpoint"] == "oss-cn-hangzhou.aliyuncs.com"
+    assert config.options["endpoint_style"] == "virtual_host"
 
 
 class _FakePosterStorageAdapter:

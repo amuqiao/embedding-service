@@ -2331,10 +2331,15 @@ def test_oss_cli_help_is_available_without_env_file():
     assert "对象存储能力事实源" in result.stdout
     assert "check" in result.stdout
     assert "upload-image" in result.stdout
+    assert "保护边界" in result.stdout
+    assert "常用示例" in result.stdout
     assert "--remote" in check_help.stdout
     assert "--confirm" in check_help.stdout
     assert "默认只检查配置" in check_help.stdout
+    assert "副作用与保护边界" in check_help.stdout
+    assert "常用示例" in check_help.stdout
     assert "--confirm-upload" in upload_help.stdout
+    assert "不生成 signed_url" in upload_help.stdout
 
 
 def test_tools_cli_help_is_available_without_env_file():

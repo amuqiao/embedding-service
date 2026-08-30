@@ -340,10 +340,11 @@ Pod 入口会编排对象存储事实源：
 ./scripts/oss.sh check --remote --confirm
 ```
 
-当前检查要求 `PUT / GET / HEAD` 成功，不要求 `DeleteObject` 权限。输出会包含测试对象的 URL Ref 字段：
+当前检查要求 `PUT / GET / HEAD` 成功，不要求 `DeleteObject` 权限。输出会包含测试对象信息和可用时的 `public_url`：
 
 ```text
-[OK] url-ref: public_url=... internal_url=...
+[OK] remote: key=... bytes=... sha256=... retained=true
+[OK] object: public_url=...
 ```
 
 检查对象会保留在 OSS，需要按输出 key 手动清理或配置生命周期规则清理。

@@ -40,6 +40,7 @@ class AliyunOSSConfig:
     access_key_secret: str
     key_prefix: str = ""
     endpoint: str = ""
+    endpoint_style: str = "virtual_host"
     public_base_url: str = ""
     scheme: str = "https"
     timeout_seconds: float = 20
@@ -50,6 +51,7 @@ class AliyunOSSConfig:
         object.__setattr__(self, "access_key_id", _required_str(self.access_key_id, "access_key_id"))
         object.__setattr__(self, "access_key_secret", _required_str(self.access_key_secret, "access_key_secret"))
         object.__setattr__(self, "endpoint", _endpoint(self.endpoint))
+        object.__setattr__(self, "endpoint_style", _endpoint_style(self.endpoint_style))
         object.__setattr__(self, "scheme", _scheme(self.scheme))
         object.__setattr__(self, "timeout_seconds", _positive_float(self.timeout_seconds, "timeout_seconds"))
         if self.key_prefix:
@@ -125,6 +127,8 @@ class AliyunOSSRepository(ObjectStorageRepository):
         base = self.config.public_base_url.strip().rstrip("/")
         if base:
             return f"{base}/{encoded_key}"
+        if self.config.endpoint_style == "custom_domain":
+            return f"{self.config.scheme}://{self.config.normalized_endpoint}/{encoded_key}"
         return f"{self.config.scheme}://{self.config.bucket}.{self.config.normalized_endpoint}/{encoded_key}"
 
     def _request(
@@ -168,6 +172,8 @@ class AliyunOSSRepository(ObjectStorageRepository):
 
     def _object_url(self, object_key: str) -> str:
         encoded_key = quote(object_key, safe="/")
+        if self.config.endpoint_style == "custom_domain":
+            return f"{self.config.scheme}://{self.config.normalized_endpoint}/{encoded_key}"
         return f"{self.config.scheme}://{self.config.bucket}.{self.config.normalized_endpoint}/{encoded_key}"
 
     def _sign_headers(
@@ -241,6 +247,13 @@ def _scheme(value: Any) -> str:
     if scheme not in {"http", "https"}:
         raise ObjectStorageValidationError("scheme must be http or https")
     return scheme
+
+
+def _endpoint_style(value: Any) -> str:
+    endpoint_style = _required_str(value, "endpoint_style")
+    if endpoint_style not in {"virtual_host", "custom_domain"}:
+        raise ObjectStorageValidationError("endpoint_style must be virtual_host or custom_domain")
+    return endpoint_style
 
 
 def _positive_float(value: Any, field: str) -> float:
