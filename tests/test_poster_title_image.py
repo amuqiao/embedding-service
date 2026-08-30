@@ -33,6 +33,7 @@ from app.jobs.types.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_REFERENCE_INVALID,
 )
 from app.jobs.types.poster_title_image import storage_adapter as poster_storage_adapter
+from app.jobs.types.poster_title_image.storage_policy import PosterTitleImageStoragePolicy
 from app.jobs.types.poster_title_image.storage_adapter import PosterTitleImageStorageAdapter
 from app.models.job import Job
 from app.schemas.billing import BillingEnvelope
@@ -54,15 +55,11 @@ def _poster_job_settings(
     *,
     max_items: int = 50,
     max_draw_count: int = 4,
-    allowed_oss_buckets: tuple[str, ...] = ("local-dev",),
-    allowed_oss_regions: tuple[str, ...] = ("local",),
 ) -> SimpleNamespace:
     return SimpleNamespace(
         poster_title_image=SimpleNamespace(
             max_items=max_items,
             max_draw_count=max_draw_count,
-            allowed_oss_buckets=allowed_oss_buckets,
-            allowed_oss_regions=allowed_oss_regions,
         )
     )
 
@@ -86,6 +83,17 @@ def _storage_settings(
         oss_endpoint="",
         oss_endpoint_style="virtual_host",
         oss_scheme="https",
+    )
+
+
+def _patch_poster_executor_settings(monkeypatch, *, storage: SimpleNamespace | None = None) -> None:
+    monkeypatch.setattr(
+        "app.jobs.types.poster_title_image.executor.settings",
+        SimpleNamespace(
+            job=_poster_job_settings(),
+            registry=settings.registry,
+            storage=storage or _storage_settings(),
+        ),
     )
 
 
@@ -254,11 +262,11 @@ def _transparent_palette_png_bytes() -> bytes:
 
 
 def _allowed_reference_bucket() -> str:
-    return settings.job.poster_title_image.allowed_oss_buckets[0]
+    return "local-dev"
 
 
 def _allowed_reference_region() -> str:
-    return settings.job.poster_title_image.allowed_oss_regions[0]
+    return "local"
 
 
 def _url_ref(
@@ -689,16 +697,13 @@ def test_poster_title_image_accepts_configured_reference_oss_allowlist(monkeypat
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
-            job=_poster_job_settings(
-                allowed_oss_buckets=("cpp-rs-dev",),
-                allowed_oss_regions=("ap-southeast-1",),
-            ),
+            job=_poster_job_settings(),
             registry=SimpleNamespace(
                 poster_title_image_style_probe_model_id="gpt-5.5",
                 poster_title_image_generation_default_model_id="gpt-image-2",
                 poster_title_image_generation_allowed_model_ids=("gpt-image-2",),
             ),
-            storage=_storage_settings(),
+            storage=_storage_settings(bucket="cpp-rs-dev", region="ap-southeast-1"),
         ),
     )
     params = _params(
@@ -737,10 +742,11 @@ def test_poster_title_image_rejects_reference_oss_outside_allowlist(ref):
     assert exc.value.details["source_reason"] == "INVALID_INPUT"
 
 
-def test_poster_title_image_create_request_does_not_require_runtime_prompt_payload():
+def test_poster_title_image_create_request_does_not_require_runtime_prompt_payload(monkeypatch):
     from app.jobs.types.register import register_all_job_types
     from app.services.jobs import _validate_create_request
 
+    _patch_poster_executor_settings(monkeypatch)
     register_all_job_types()
     handler, job_params, runtime_fields = _validate_create_request(
         CreateJobRequest(
@@ -782,10 +788,11 @@ def test_poster_title_image_model_options_accept_catalog_sizes():
         assert validated.items[0].model_options.size == size
 
 
-def test_poster_title_image_create_request_preserves_title_text_line_break():
+def test_poster_title_image_create_request_preserves_title_text_line_break(monkeypatch):
     from app.jobs.types.register import register_all_job_types
     from app.services.jobs import _validate_create_request
 
+    _patch_poster_executor_settings(monkeypatch)
     register_all_job_types()
     params = _params(_url_ref("reference/title.png", b"x"))
     params["items"][0]["title_text"] = "AI美术封面2\nhuanghang"
@@ -900,10 +907,11 @@ def test_poster_title_image_create_request_rejects_prompt_override_line_break_co
     assert exc.value.message == "job_params does not match job_type schema"
 
 
-def test_poster_title_image_create_request_accepts_shared_language_outside_legacy_subset():
+def test_poster_title_image_create_request_accepts_shared_language_outside_legacy_subset(monkeypatch):
     from app.jobs.types.register import register_all_job_types
     from app.services.jobs import _validate_create_request
 
+    _patch_poster_executor_settings(monkeypatch)
     register_all_job_types()
     params = _params(_url_ref("reference/title.png", b"x"))
     params["items"][0]["language"] = "en"
@@ -920,10 +928,11 @@ def test_poster_title_image_create_request_accepts_shared_language_outside_legac
     assert runtime_fields["operation"] == "poster_title_image"
 
 
-def test_poster_title_image_create_request_accepts_allowed_caller_model_id():
+def test_poster_title_image_create_request_accepts_allowed_caller_model_id(monkeypatch):
     from app.jobs.types.register import register_all_job_types
     from app.services.jobs import _validate_create_request
 
+    _patch_poster_executor_settings(monkeypatch)
     register_all_job_types()
     handler, job_params, runtime_fields = _validate_create_request(
         CreateJobRequest(
@@ -1132,10 +1141,7 @@ def test_poster_title_image_reference_read_uses_public_url_not_output_storage(mo
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
-            job=_poster_job_settings(
-                allowed_oss_buckets=("cpp-rs-dev",),
-                allowed_oss_regions=("ap-southeast-1",),
-            ),
+            job=_poster_job_settings(),
             storage=_storage_settings(),
         ),
     )
@@ -1159,10 +1165,7 @@ def test_poster_title_image_reference_accepts_configured_cdn_public_url(monkeypa
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor.settings",
         SimpleNamespace(
-            job=_poster_job_settings(
-                allowed_oss_buckets=("cpp-rs-dev",),
-                allowed_oss_regions=("ap-southeast-1",),
-            ),
+            job=_poster_job_settings(),
             storage=_storage_settings(
                 public_endpoint="aigc-datas.epubgame.com",
                 bucket="cpp-rs-dev",
@@ -1235,6 +1238,73 @@ def test_poster_title_image_storage_adapter_writes_to_runtime_output_target(tmp_
         "content_type": "image/png",
         "sha256": hashlib.sha256(data).hexdigest(),
     }
+
+
+def test_poster_title_image_storage_policy_overrides_output_namespace(tmp_path):
+    adapter = PosterTitleImageStorageAdapter.from_settings(
+        SimpleNamespace(
+            job=_poster_job_settings(),
+            storage=_storage_settings(root=tmp_path),
+        ),
+        storage_policy=PosterTitleImageStoragePolicy(output_namespace="custom-poster"),
+    )
+    data = _png_bytes()
+    root_id = uuid.uuid4()
+    job = Job(
+        id=uuid.uuid4(),
+        caller_id="caller-1",
+        client_request_id=None,
+        job_type="poster_title_image_generate_item",
+        status="running",
+        root_job_id=root_id,
+        **_job_params_fields({"item": "es"}),
+        runtime_ref=_runtime_ref(
+            job_type="poster_title_image_generate_item",
+            params={"item": "es"},
+            runtime_fields={"operation": "poster_title_image_generate_item"},
+            output_target={
+                "type": "oss_prefix",
+                "oss_bucket": "local-dev",
+                "oss_region": "local",
+                "oss_prefix": "ai-jobs/job-1/",
+            },
+        ),
+        created_at=datetime.now(timezone.utc),
+    )
+
+    adapter.write_title_layer(
+        job=job,
+        item_id="es",
+        image_index=1,
+        data=data,
+        content_disposition='attachment; filename="title.png"',
+    )
+
+    expected_key = f"ai-jobs/job-1/custom-poster/{root_id}/es/title-layer.png"
+    assert (tmp_path / "local-dev" / expected_key).read_bytes() == data
+
+
+def test_poster_title_image_storage_policy_overrides_reference_allowlist(tmp_path):
+    adapter = PosterTitleImageStorageAdapter.from_settings(
+        SimpleNamespace(
+            job=_poster_job_settings(),
+            storage=_storage_settings(root=tmp_path, bucket="default-bucket", region="cn-hangzhou"),
+        ),
+        storage_policy=PosterTitleImageStoragePolicy(
+            output_namespace="poster-title",
+            allowed_input_buckets=("cpp-rs-dev",),
+            allowed_input_regions=("ap-southeast-1",),
+        ),
+    )
+    allowed = _url_ref("reference/title.png", b"x", bucket="cpp-rs-dev", region="ap-southeast-1")
+    blocked = _url_ref("reference/title.png", b"x", bucket="default-bucket", region="cn-hangzhou")
+
+    adapter.validate_reference_ref_payload(allowed)
+    with pytest.raises(AppError) as exc:
+        adapter.validate_reference_ref_payload(blocked)
+
+    assert exc.value.code == POSTER_TITLE_IMAGE_REFERENCE_INVALID
+    assert exc.value.details["source_reason"] == "INVALID_INPUT"
 
 
 def test_validate_image_bytes_rejects_oversized_dimensions():

@@ -92,10 +92,6 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH": ("job", "tagged_text_translation", "max_total_text_length"),
     "POSTER_TITLE_IMAGE_MAX_ITEMS": ("job", "poster_title_image", "max_items"),
     "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": ("job", "poster_title_image", "max_draw_count"),
-    "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS": ("job", "poster_title_image", "allowed_oss_buckets_raw"),
-    "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS": ("job", "poster_title_image", "allowed_oss_regions_raw"),
-    "AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS": ("job", "audio_stem_separation", "allowed_oss_buckets_raw"),
-    "AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS": ("job", "audio_stem_separation", "allowed_oss_regions_raw"),
     "AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER": ("job", "audio_stem_separation", "execution_provider"),
     "HTDEMUCS_MODEL_DIR": ("job", "audio_stem_separation", "htdemucs_model_dir_raw"),
     "AUDIO_STEM_TRITON_URL": ("job", "audio_stem_triton", "url"),
@@ -108,7 +104,17 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
 }
 
 APPLICATION_ENV_KEYS = frozenset(APPLICATION_ENV_FIELD_MAP)
-REMOVED_APPLICATION_ENV_KEYS = frozenset({"DEFAULT_MODEL_ID", "OPS_DASHBOARD_MOCK_DATA_ENABLED"})
+_REMOVED_JOB_TYPE_OSS_ENV_KEYS = frozenset(
+    {
+        "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
+        "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
+        "AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
+        "AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
+    }
+)
+REMOVED_APPLICATION_ENV_KEYS = frozenset(
+    {"DEFAULT_MODEL_ID", "OPS_DASHBOARD_MOCK_DATA_ENABLED"} | _REMOVED_JOB_TYPE_OSS_ENV_KEYS
+)
 LAUNCHER_ENV_KEYS: frozenset[str] = frozenset(
     {
         "API_HOST",
@@ -138,6 +144,10 @@ DEPRECATED_ENV_KEYS = frozenset(
         "CALLBACK_DELIVERY_WINDOW_BUFFER_SECONDS",
         "DB_POOL_RECYCLE",
         "ENABLE_MOCK_INTERFACES",
+        "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
+        "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
+        "AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
+        "AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
         "JOB_MAX_EXECUTION_ATTEMPTS",
         "JOB_RECOVERY_BATCH_SIZE",
         "JOB_RECOVERY_CALLBACK_BATCH_SIZE",
@@ -572,8 +582,6 @@ class TaggedTextTranslationJobSettings(ConfigSection):
 class PosterTitleImageJobSettings(ConfigSection):
     max_items: int = 50
     max_draw_count: int = 4
-    allowed_oss_buckets_raw: str = "local-dev"
-    allowed_oss_regions_raw: str = "local"
 
     @model_validator(mode="after")
     def validate_poster_title_image(self) -> "PosterTitleImageJobSettings":
@@ -586,66 +594,20 @@ class PosterTitleImageJobSettings(ConfigSection):
                 raise ValueError(f"{name} must be greater than 0")
         if self.max_draw_count > 4:
             raise ValueError("POSTER_TITLE_IMAGE_MAX_DRAW_COUNT must be less than or equal to 4")
-        _comma_separated_non_empty_values(
-            self.allowed_oss_buckets_raw,
-            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
-        )
-        _comma_separated_non_empty_values(
-            self.allowed_oss_regions_raw,
-            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
-        )
         return self
-
-    @property
-    def allowed_oss_buckets(self) -> tuple[str, ...]:
-        return _comma_separated_non_empty_values(
-            self.allowed_oss_buckets_raw,
-            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
-        )
-
-    @property
-    def allowed_oss_regions(self) -> tuple[str, ...]:
-        return _comma_separated_non_empty_values(
-            self.allowed_oss_regions_raw,
-            env_name="POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
-        )
 
 
 class AudioStemSeparationJobSettings(ConfigSection):
-    allowed_oss_buckets_raw: str = "local-dev"
-    allowed_oss_regions_raw: str = "local"
     execution_provider: str = "cpu"
     htdemucs_model_dir_raw: str = ".data/models/htdemucs-ft"
 
     @model_validator(mode="after")
     def validate_audio_stem_separation(self) -> "AudioStemSeparationJobSettings":
-        _comma_separated_non_empty_values(
-            self.allowed_oss_buckets_raw,
-            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
-        )
-        _comma_separated_non_empty_values(
-            self.allowed_oss_regions_raw,
-            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
-        )
         if self.execution_provider not in {"auto", "cpu", "cuda"}:
             raise ValueError("AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER must be auto, cpu, or cuda")
         if not self.htdemucs_model_dir_raw.strip():
             raise ValueError("HTDEMUCS_MODEL_DIR must not be empty")
         return self
-
-    @property
-    def allowed_oss_buckets(self) -> tuple[str, ...]:
-        return _comma_separated_non_empty_values(
-            self.allowed_oss_buckets_raw,
-            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
-        )
-
-    @property
-    def allowed_oss_regions(self) -> tuple[str, ...]:
-        return _comma_separated_non_empty_values(
-            self.allowed_oss_regions_raw,
-            env_name="AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
-        )
 
     @property
     def htdemucs_model_dir(self) -> Path:

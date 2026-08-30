@@ -146,7 +146,7 @@
 - 有联动关系的值必须由代码派生，并在启动时做 fail-fast 校验。
 - 新增或暴露配置项前，必须确认真实生效、默认值合理、非法值会报错、安全边界不会被 silent fallback 绕过。
 - 修改配置项时必须同步检查 `app/core/config.py`、`.env.example`、部署文档和相关测试。
-- OSS 接入规则：配置提供事实，job type adapter 提供 payload，`app/object_storage` 只做通用读写。
+- OSS 接入规则：`.env` 只放默认 OSS 事实，job type `storage_policy.py` 放业务策略，job adapter 合成 `app/object_storage` payload。
 - 脚本类配置文件选择遵循：显式 `--env-file` 或 `ENV_FILE` 表示指定配置文件为事实源，脚本不得再用当前 shell 同名环境变量覆盖该文件；只有默认读取 `.env` 时，才允许当前 shell 环境变量覆盖 `.env`，用于本地临时调试。
 - Job type 治理遵循：代码注册全集，运行时启用子集，pytest 默认验证全集，smoke 场景列表展示支持全集，执行时按当前启用子集 fail-fast。`ENABLED_JOB_TYPES` 只表示当前服务实例允许运行和外部创建的 job type，不用于裁剪代码注册事实。
 

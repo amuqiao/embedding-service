@@ -21,6 +21,7 @@ from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_RUNTIME_UNAVA
 from app.jobs.types.audio_stem_separation_triton import executor as triton_executor
 from app.jobs.types.audio_stem_separation_triton import storage_adapter as triton_storage_adapter
 from app.jobs.types.audio_stem_separation_triton.storage_adapter import AudioStemSeparationTritonStorageAdapter
+from app.jobs.types.audio_stem_separation_triton.storage_policy import AudioStemSeparationTritonStoragePolicy
 from app.jobs.types.register import register_all_job_types
 from app.models.job import Job
 from app.schemas.jobs import AudioStemSeparationTritonParams, AudioStemSeparationTritonResult
@@ -132,10 +133,6 @@ def _job(*, params: dict, output_prefix: str = "outputs") -> Job:
 class FakeSettings:
     class Job:
         oss_input_max_bytes = 5_242_880
-        audio_stem_separation = SimpleNamespace(
-            allowed_oss_buckets=("local-dev",),
-            allowed_oss_regions=("local",),
-        )
         audio_stem_triton = SimpleNamespace(
             url="localhost:8000",
             token_value="token",
@@ -391,7 +388,6 @@ def test_audio_stem_separation_triton_normalizes_and_rejects_disallowed_input_re
     fake_settings = FakeSettings()
     monkeypatch.setattr(audio_executor, "settings", fake_settings)
     monkeypatch.setattr(triton_executor, "settings", fake_settings)
-    monkeypatch.setattr(audio_stem_shared, "settings", fake_settings)
     handler = _handler()
     ref = _url_ref("input.wav", b"audio")
 
@@ -411,7 +407,6 @@ def test_audio_stem_separation_triton_normalizes_and_rejects_disallowed_input_re
 
 def test_audio_stem_separation_triton_runtime_fields_reflect_model_asset(monkeypatch):
     monkeypatch.setattr(triton_executor, "settings", FakeSettings())
-    monkeypatch.setattr(audio_stem_shared, "settings", FakeSettings())
     handler = _handler()
     ref = _url_ref("input.wav", b"audio")
     fields = handler.runtime_job_fields({"input_audio": ref})
@@ -456,6 +451,26 @@ def test_audio_stem_separation_triton_storage_adapter_writes_to_runtime_output_t
         "content_type": "audio/wav",
         "sha256": hashlib.sha256(data).hexdigest(),
     }
+
+
+def test_audio_stem_separation_triton_storage_policy_overrides_output_namespace(tmp_path):
+    adapter = AudioStemSeparationTritonStorageAdapter.from_settings(
+        _local_adapter_settings(tmp_path),
+        storage_policy=AudioStemSeparationTritonStoragePolicy(output_namespace="custom-triton-audio"),
+    )
+    params = {"input_audio": _url_ref("input.wav", b"audio")}
+    job = _job(params=params)
+    data = b"wav-bytes"
+
+    adapter.write_stem(
+        job=job,
+        stem="vocals",
+        data=data,
+        content_disposition='attachment; filename="vocals.wav"',
+    )
+
+    expected_key = f"outputs/custom-triton-audio/{job.id}/vocals.wav"
+    assert (tmp_path / "local-dev" / expected_key).read_bytes() == data
 
 
 def test_audio_stem_separation_triton_runner_calls_each_remote_model_and_preserves_edges():

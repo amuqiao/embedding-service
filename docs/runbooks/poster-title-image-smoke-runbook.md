@@ -464,10 +464,15 @@ test -f /mnt/app/jobs/payload_adapters/oss_url_ref.py && echo "has oss_url_ref a
 ```bash
 python - <<'PY'
 from app.core.config import settings
+from app.jobs.types.poster_title_image.storage_policy import (
+    STORAGE_POLICY,
+    allowed_input_buckets,
+    allowed_input_regions,
+)
 
 print("OSS_PUBLIC_ENDPOINT=", repr(settings.storage.oss_public_endpoint))
-print("allowed_buckets=", settings.job.poster_title_image.allowed_oss_buckets)
-print("allowed_regions=", settings.job.poster_title_image.allowed_oss_regions)
+print("allowed_buckets=", allowed_input_buckets(STORAGE_POLICY, settings))
+print("allowed_regions=", allowed_input_regions(STORAGE_POLICY, settings))
 PY
 ```
 
@@ -475,8 +480,7 @@ PY
 
 - 没有 `oss_url_ref.py`：远端 API 镜像代码没更新。
 - `OSS_PUBLIC_ENDPOINT` 为空：远端没有注入 CDN 域名配置。
-- `allowed_buckets` 缺 `aigc-datas`：远端白名单没更新。
-- `allowed_regions` 缺 `us-west-1`：远端白名单没更新。
+- `allowed_buckets` / `allowed_regions` 不符合预期：检查远端镜像内 `poster_title_image/storage_policy.py` 或默认 OSS 配置。
 
 如果 `public_url` 是 CDN 域名，远端服务端必须支持 `OSS_PUBLIC_ENDPOINT`，否则会把 CDN 地址当成普通 OSS public endpoint 解析并拒绝。
 

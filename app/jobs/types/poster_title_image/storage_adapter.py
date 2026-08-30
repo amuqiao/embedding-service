@@ -32,25 +32,43 @@ from app.schemas.jobs import PosterTitleImageReferenceImage
 from app.services.job_runtime import output_target_from_job
 
 from .errors import POSTER_TITLE_IMAGE_REFERENCE_INVALID
+from .storage_policy import (
+    STORAGE_POLICY,
+    PosterTitleImageStoragePolicy,
+    allowed_input_buckets,
+    allowed_input_regions,
+)
 
 
 class PosterTitleImageStorageAdapter(BaseObjectStorageAdapter):
-    def __init__(self, *args: Any, settings: Any = app_settings, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        settings: Any = app_settings,
+        storage_policy: PosterTitleImageStoragePolicy = STORAGE_POLICY,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._settings = settings
+        self._storage_policy = storage_policy
 
     @classmethod
-    def from_settings(cls, settings: Any = app_settings) -> PosterTitleImageStorageAdapter:
+    def from_settings(
+        cls,
+        settings: Any = app_settings,
+        storage_policy: PosterTitleImageStoragePolicy = STORAGE_POLICY,
+    ) -> PosterTitleImageStorageAdapter:
         repository_config = _repository_config_from_settings(settings)
         return cls(
             ObjectStorageAdapterContext.from_config(repository_config=repository_config),
             public_url_reader=PublicUrlReader(
                 PublicUrlConfig(
-                    allowed_hosts=_reference_allowed_hosts(settings),
+                    allowed_hosts=_reference_allowed_hosts(settings, storage_policy=storage_policy),
                     max_bytes_ceiling=POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES,
                 )
             ),
             settings=settings,
+            storage_policy=storage_policy,
         )
 
     def validate_reference_ref_payload(self, reference_image: Any) -> None:
@@ -58,8 +76,8 @@ class PosterTitleImageStorageAdapter(BaseObjectStorageAdapter):
             _canonical_ref_from_oss_url_ref(
                 _payload(reference_image),
                 settings=self._settings,
-                allowed_buckets=self._settings.job.poster_title_image.allowed_oss_buckets,
-                allowed_regions=self._settings.job.poster_title_image.allowed_oss_regions,
+                allowed_buckets=allowed_input_buckets(self._storage_policy, self._settings),
+                allowed_regions=allowed_input_regions(self._storage_policy, self._settings),
                 allowed_content_types=POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
             )
         except AppError as exc:
@@ -72,8 +90,8 @@ class PosterTitleImageStorageAdapter(BaseObjectStorageAdapter):
             ref = _canonical_ref_from_oss_url_ref(
                 payload,
                 settings=self._settings,
-                allowed_buckets=self._settings.job.poster_title_image.allowed_oss_buckets,
-                allowed_regions=self._settings.job.poster_title_image.allowed_oss_regions,
+                allowed_buckets=allowed_input_buckets(self._storage_policy, self._settings),
+                allowed_regions=allowed_input_regions(self._storage_policy, self._settings),
                 allowed_content_types=POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
             )
             data = self.read_public_url(
@@ -106,7 +124,13 @@ class PosterTitleImageStorageAdapter(BaseObjectStorageAdapter):
         content_disposition: str,
     ) -> dict[str, dict[str, str | int]]:
         output_target = output_target_from_job(job)
-        key = _output_key_for_item_id(output_target, job=job, item_id=item_id, image_index=image_index)
+        key = _output_key_for_item_id(
+            output_target,
+            job=job,
+            item_id=item_id,
+            image_index=image_index,
+            storage_policy=self._storage_policy,
+        )
         try:
             written = _write_output_bytes(
                 settings=self._settings,
@@ -227,10 +251,10 @@ def _write_output_bytes(
     )
 
 
-def _reference_allowed_hosts(settings: Any) -> tuple[str, ...]:
+def _reference_allowed_hosts(settings: Any, *, storage_policy: PosterTitleImageStoragePolicy) -> tuple[str, ...]:
     hosts: set[str] = set()
-    for bucket in settings.job.poster_title_image.allowed_oss_buckets:
-        for region in settings.job.poster_title_image.allowed_oss_regions:
+    for bucket in allowed_input_buckets(storage_policy, settings):
+        for region in allowed_input_regions(storage_policy, settings):
             hosts.add(f"{bucket}.oss-{region}.aliyuncs.com")
     public_endpoint = _normalize_public_endpoint(settings.storage.oss_public_endpoint or None)
     if public_endpoint:
@@ -313,10 +337,17 @@ def _parse_public_endpoint_key(url: str, *, public_endpoint: str) -> str:
     return key
 
 
-def _output_key_for_item_id(output_target: Mapping[str, Any], *, job: Job, item_id: str, image_index: int) -> str:
+def _output_key_for_item_id(
+    output_target: Mapping[str, Any],
+    *,
+    job: Job,
+    item_id: str,
+    image_index: int,
+    storage_policy: PosterTitleImageStoragePolicy,
+) -> str:
     prefix = str(output_target["oss_prefix"]).strip("/")
     filename = "title-layer.png" if image_index == 1 else f"title-layer-{image_index}.png"
-    key = f"poster-title/{job.root_job_id or job.id}/{item_id}/{filename}"
+    key = f"{storage_policy.output_namespace}/{job.root_job_id or job.id}/{item_id}/{filename}"
     return f"{prefix}/{key}" if prefix else key
 
 

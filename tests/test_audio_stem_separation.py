@@ -19,6 +19,7 @@ from app.jobs.types.audio_stem_separation import storage_adapter as audio_storag
 from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
 from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_RUNTIME_UNAVAILABLE
 from app.jobs.types.audio_stem_separation.storage_adapter import AudioStemSeparationStorageAdapter
+from app.jobs.types.audio_stem_separation.storage_policy import AudioStemSeparationStoragePolicy
 from app.jobs.types.register import register_all_job_types
 from app.models.job import Job
 from app.schemas.jobs import AudioStemSeparationParams
@@ -143,11 +144,7 @@ def _job(*, params: dict, output_prefix: str = "outputs") -> Job:
 class FakeSettings:
     class Job:
         oss_input_max_bytes = 5_242_880
-        audio_stem_separation = SimpleNamespace(
-            allowed_oss_buckets=("local-dev",),
-            allowed_oss_regions=("local",),
-            execution_provider="cpu",
-        )
+        audio_stem_separation = SimpleNamespace(execution_provider="cpu")
 
     class Storage:
         backend = "local"
@@ -336,7 +333,6 @@ def test_audio_stem_separation_params_contract_accepts_supported_audio_refs():
 
 def test_audio_stem_separation_normalizes_and_rejects_disallowed_input_ref(monkeypatch):
     monkeypatch.setattr(audio_executor, "settings", FakeSettings())
-    monkeypatch.setattr(audio_stem_shared, "settings", FakeSettings())
     handler = _handler()
     ref = _url_ref("input.wav", b"audio")
 
@@ -356,7 +352,6 @@ def test_audio_stem_separation_normalizes_and_rejects_disallowed_input_ref(monke
 
 def test_audio_stem_separation_runtime_fields_reflect_model_asset(monkeypatch):
     monkeypatch.setattr(audio_executor, "settings", FakeSettings())
-    monkeypatch.setattr(audio_stem_shared, "settings", FakeSettings())
     handler = _handler()
     ref = _url_ref("input.wav", b"audio")
     fields = handler.runtime_job_fields({"input_audio": ref})
@@ -400,6 +395,26 @@ def test_audio_stem_separation_storage_adapter_writes_to_runtime_output_target(t
         "content_type": "audio/wav",
         "sha256": hashlib.sha256(data).hexdigest(),
     }
+
+
+def test_audio_stem_separation_storage_policy_overrides_output_namespace(tmp_path):
+    adapter = AudioStemSeparationStorageAdapter.from_settings(
+        _local_adapter_settings(tmp_path),
+        storage_policy=AudioStemSeparationStoragePolicy(output_namespace="custom-audio"),
+    )
+    params = {"input_audio": _url_ref("input.wav", b"audio")}
+    job = _job(params=params)
+    data = b"wav-bytes"
+
+    adapter.write_stem(
+        job=job,
+        stem="vocals",
+        data=data,
+        content_disposition='attachment; filename="vocals.wav"',
+    )
+
+    expected_key = f"outputs/custom-audio/{job.id}/vocals.wav"
+    assert (tmp_path / "local-dev" / expected_key).read_bytes() == data
 
 
 def test_audio_stem_separation_runner_uses_minimal_segments_and_preserves_edges():

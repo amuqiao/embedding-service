@@ -33,21 +33,41 @@ from app.services.job_runtime import output_target_from_job
 from app.tools.media_audio import decode_normalize_audio
 
 from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
+from .storage_policy import (
+    STORAGE_POLICY,
+    AudioStemSeparationTritonStoragePolicy,
+    allowed_input_buckets,
+    allowed_input_regions,
+    input_max_bytes,
+)
 
 
 class AudioStemSeparationTritonStorageAdapter(BaseObjectStorageAdapter):
-    def __init__(self, *args: Any, repository_provider: str, settings: Any = app_settings, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        repository_provider: str,
+        settings: Any = app_settings,
+        storage_policy: AudioStemSeparationTritonStoragePolicy = STORAGE_POLICY,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._repository_provider = repository_provider
         self._settings = settings
+        self._storage_policy = storage_policy
 
     @classmethod
-    def from_settings(cls, settings: Any = app_settings) -> AudioStemSeparationTritonStorageAdapter:
+    def from_settings(
+        cls,
+        settings: Any = app_settings,
+        storage_policy: AudioStemSeparationTritonStoragePolicy = STORAGE_POLICY,
+    ) -> AudioStemSeparationTritonStorageAdapter:
         repository_config = _repository_config_from_settings(settings)
         return cls.from_config(
             repository_config=repository_config,
             repository_provider=repository_config.provider,
             settings=settings,
+            storage_policy=storage_policy,
         )
 
     @classmethod
@@ -57,11 +77,13 @@ class AudioStemSeparationTritonStorageAdapter(BaseObjectStorageAdapter):
         repository_config: ObjectStorageConfig,
         repository_provider: str | None = None,
         settings: Any = app_settings,
+        storage_policy: AudioStemSeparationTritonStoragePolicy = STORAGE_POLICY,
     ) -> AudioStemSeparationTritonStorageAdapter:
         return cls(
             ObjectStorageAdapterContext.from_config(repository_config=repository_config),
             repository_provider=repository_provider or repository_config.provider,
             settings=settings,
+            storage_policy=storage_policy,
         )
 
     def build_audio_input_plan(
@@ -70,7 +92,7 @@ class AudioStemSeparationTritonStorageAdapter(BaseObjectStorageAdapter):
         *,
         max_duration_seconds: float | None,
     ) -> dict:
-        ref = _canonical_input_ref(input_audio, settings=self._settings)
+        ref = _canonical_input_ref(input_audio, settings=self._settings, storage_policy=self._storage_policy)
         plan = AudioInputPlanSnapshot(
             source=CanonicalObjectRefSnapshot(
                 provider=ref["provider"],
@@ -80,7 +102,7 @@ class AudioStemSeparationTritonStorageAdapter(BaseObjectStorageAdapter):
                 content_type=ref["content_type"],
                 content_hash=f"sha256:{ref['sha256']}",
             ),
-            fetch=MediaFetchSpec(max_bytes=self._settings.job.oss_input_max_bytes),
+            fetch=MediaFetchSpec(max_bytes=input_max_bytes(self._storage_policy, self._settings)),
             decode=AudioDecodeNormalizeSpec(source_content_type=ref["content_type"]),
             max_duration_seconds=max_duration_seconds,
         )
@@ -98,8 +120,13 @@ class AudioStemSeparationTritonStorageAdapter(BaseObjectStorageAdapter):
                         region=source.region,
                         key=source.key,
                     ),
-                    integrity=ExpectedObjectIntegrity(sha256=source.content_hash),
-                    policy=ObjectReadPolicy(verify_sha256=True, max_bytes=snapshot.fetch.max_bytes),
+                    integrity=ExpectedObjectIntegrity(
+                        sha256=source.content_hash if self._storage_policy.verify_input_sha256 else None
+                    ),
+                    policy=ObjectReadPolicy(
+                        verify_sha256=self._storage_policy.verify_input_sha256,
+                        max_bytes=snapshot.fetch.max_bytes,
+                    ),
                 )
             )
         except ObjectStorageNotFoundError as exc:
@@ -129,7 +156,7 @@ class AudioStemSeparationTritonStorageAdapter(BaseObjectStorageAdapter):
 
     def write_stem(self, *, job: Job, stem: str, data: bytes, content_disposition: str) -> dict[str, str]:
         output_target = output_target_from_job(job)
-        key = _output_key(output_target, job=job, stem=stem)
+        key = _output_key(output_target, job=job, stem=stem, storage_policy=self._storage_policy)
         try:
             written = _write_output_bytes(
                 settings=self._settings,
@@ -229,14 +256,19 @@ def _write_output_bytes(
     )
 
 
-def _canonical_input_ref(input_audio: AudioStemSeparationInputObject, *, settings: Any) -> dict[str, str]:
+def _canonical_input_ref(
+    input_audio: AudioStemSeparationInputObject,
+    *,
+    settings: Any,
+    storage_policy: AudioStemSeparationTritonStoragePolicy = STORAGE_POLICY,
+) -> dict[str, str]:
     try:
         payload = input_audio.model_dump()
         ref = _canonical_ref_from_oss_url_ref(
             payload,
             settings=settings,
-            allowed_buckets=settings.job.audio_stem_separation.allowed_oss_buckets,
-            allowed_regions=settings.job.audio_stem_separation.allowed_oss_regions,
+            allowed_buckets=allowed_input_buckets(storage_policy, settings),
+            allowed_regions=allowed_input_regions(storage_policy, settings),
             allowed_content_types=AUDIO_INPUT_CONTENT_TYPES,
         )
     except AppError as exc:
@@ -323,9 +355,15 @@ def _parse_public_endpoint_key(url: str, *, public_endpoint: str) -> str:
     return key
 
 
-def _output_key(output_target: Mapping[str, Any], *, job: Job, stem: str) -> str:
+def _output_key(
+    output_target: Mapping[str, Any],
+    *,
+    job: Job,
+    stem: str,
+    storage_policy: AudioStemSeparationTritonStoragePolicy,
+) -> str:
     prefix = str(output_target["oss_prefix"]).strip("/")
-    key = f"audio-stem-separation-triton/{job.id}/{stem}.wav"
+    key = f"{storage_policy.output_namespace}/{job.id}/{stem}.wav"
     return f"{prefix}/{key}" if prefix else key
 
 

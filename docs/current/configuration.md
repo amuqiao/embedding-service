@@ -145,9 +145,11 @@ Deprecated key 是已经移除或明确不支持的旧配置。当前禁用清�
 
 ### OSS 配置语义
 
-OSS 配置提供连接与命名空间事实，job type adapter 基于业务语义组装 `app/object_storage` 的 config/spec/payload；`app/object_storage` 不读取 env、不拼业务路径。
+`.env` 只提供默认 OSS 连接与命名空间事实；job type 的 `storage_policy.py` 提供可选 OSS 业务策略，job adapter 负责合成 `app/object_storage` 的 config/spec/payload。
 
 `OSS_BUCKET`、`OSS_REGION`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET` 和 `OSS_PROJECT_ROOT` 是 `aliyun_oss` 后端的必需输入；`OSS_OUTPUT_PREFIX` 是 Job runtime 的输出前缀；`OSS_PUBLIC_ENDPOINT` 只用于对外 `public_url` 投影。
+
+job type `storage_policy.py` 的 OSS 策略按字段生效：未显式配置的字段继承默认 OSS 配置，已显式配置的字段以 job type policy 为准。
 
 `OSS_ENDPOINT` 是服务端读写 OSS 的高级 API endpoint 覆盖项，通常留空。留空时由 `OSS_REGION` 派生为 `oss-<region>.aliyuncs.com`；配置 `OSS_PUBLIC_ENDPOINT` 不会改变服务端 OSS API endpoint。只有服务端读写也必须走自定义域名或代理时，才同时配置 `OSS_ENDPOINT`。
 

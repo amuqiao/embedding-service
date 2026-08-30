@@ -345,7 +345,7 @@ job_execution_attempts = 某条 Job 的一次执行尝试
 
 `tagged_text_translation` 是当前 public root Job。它复用统一 Job 创建、查询、Callback 和 billing 链路，由 root Job 自己执行 custom executor，不创建 workflow child。执行器通过文本模型完成批量带标签文案翻译，并在公开结果中返回与请求 item 一一对应的 `items[]`。
 
-`audio_stem_separation` 和 `audio_stem_separation_triton` 当前都标记为 `visibility="demo"`，用于本地和开发环境验证音乐源分离真实模型链路；它们不是模板 smoke 示例。前者加载本地 ONNX 权重，后者调用 Triton HTTP endpoint，二者都会读取 OSS 音频输入，经 `media.audio_input:2` 规范化为 44.1kHz stereo canonical audio 后写出四条 WAV 音频 stem，因此使用前必须配置输入来源白名单、`ffmpeg` 和对应模型运行环境。
+`audio_stem_separation` 和 `audio_stem_separation_triton` 当前都标记为 `visibility="demo"`，用于本地和开发环境验证音乐源分离真实模型链路；它们不是模板 smoke 示例。前者加载本地 ONNX 权重，后者调用 Triton HTTP endpoint，二者都会读取 OSS 音频输入，经 `media.audio_input:2` 规范化为 44.1kHz stereo canonical audio 后写出四条 WAV 音频 stem，因此使用前必须配置默认 OSS 连接、job type `storage_policy.py`、`ffmpeg` 和对应模型运行环境。
 
 ### Workflow Lineage
 
@@ -752,16 +752,15 @@ job_audit_events         排障时间线，不参与状态推进
 | `ENABLED_JOB_TYPES` | 当前服务实例启用的外部 root `job_type` allowlist；为空表示运行期启用全部静态注册 job type，外部入口仍按 `APP_ENV` 过滤，显式配置时 workflow 内部 child job type 由 `WorkflowDefinition.runtime_job_type_dependencies` 补齐 |
 | `TAGGED_TEXT_TRANSLATION_MAX_ITEMS` / `TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH` / `TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH` | `tagged_text_translation` 的单 Job item 数量、单条原始 `text` 字符数和单 Job 原始文本总字符数上限；字符数按 Unicode code point 计算，缺省时使用代码默认值，并受 schema 或 schema 派生硬上限保护 |
 | `POSTER_TITLE_IMAGE_MAX_ITEMS` / `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` | `poster_title_image` 的批量数量和单 item 出图数量上限 |
-| `POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS` / `POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS` | `poster_title_image` 参考图输入 OSS 来源白名单 |
-| `AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS` / `AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS` | `audio_stem_separation` / `audio_stem_separation_triton` 输入音频 OSS 来源白名单 |
-
-缩小 `ENABLED_JOB_TYPES` 会阻止未启用 `job_type` 的 running Job 继续执行；发布或切流前应先 drain 对应未完成 Job，或保持旧 `job_type` 启用到存量 Job 结束。
+| job type `storage_policy.py` | job type 的 OSS 输入来源、输出 namespace、校验和读取策略；不通过 `.env` 暴露业务 OSS 白名单 |
 | `AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER` | `audio_stem_separation` 的 ONNX Runtime provider 模式：`auto` 有 CUDA 用 CUDA 否则 CPU，`cpu` 强制 CPU，`cuda` 强制 CUDA 且不可用时失败 |
 | `HTDEMUCS_MODEL_DIR` | `audio_stem_separation` 使用的 htdemucs-ft ONNX required 模型目录 |
 | `AUDIO_STEM_TRITON_URL` | `audio_stem_separation_triton` 调用的 Triton HTTP endpoint；按 `tritonclient` 约定不包含 `http://` 或 `https://` |
 | `AUDIO_STEM_TRITON_TOKEN` | `audio_stem_separation_triton` 调用 EAS/Triton 服务时使用的 Authorization Token |
 | `AUDIO_STEM_TRITON_MODEL_VERSION` | `audio_stem_separation_triton` 请求的 Triton 模型版本目录，默认 `1` |
 | `AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS` | `audio_stem_separation_triton` 单次 Triton infer HTTP 请求超时秒数 |
+
+缩小 `ENABLED_JOB_TYPES` 会阻止未启用 `job_type` 的 running Job 继续执行；发布或切流前应先 drain 对应未完成 Job，或保持旧 `job_type` 启用到存量 Job 结束。
 
 `audio_stem_separation` 的本地 ONNX Runtime 依赖位于 `audio-separation` extra。CPU 运行环境使用 `uv sync --extra audio-separation` 安装 CPU 版 `onnxruntime`；`AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER=cuda` 只表示运行期必须选择 `CUDAExecutionProvider`，部署镜像或虚拟环境仍需安装 GPU 版 ONNX Runtime，并确保 Pod/容器能看到 NVIDIA GPU。
 

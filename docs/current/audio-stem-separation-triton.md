@@ -56,7 +56,7 @@ POST /jobs audio_stem_separation_triton
 
 - 输入音频来自 OSS 引用。
 - 当前支持 `audio/wav`、`audio/x-wav`、`audio/mpeg` 和 `audio/mp3` 输入；执行期统一规范化为当前模型需要的 44.1kHz stereo canonical audio。
-- 输入大小、时长和来源白名单由 schema、配置和 capability 校验共同约束。
+- 输入大小、时长和来源约束由 schema、job type `storage_policy.py`、默认 OSS 配置和 capability 校验共同约束。
 
 当前输出边界：
 
@@ -91,7 +91,7 @@ Triton 推理失败、输出形状不符合预期或 stem 无法写入对象存�
 | `AUDIO_STEM_TRITON_MODEL_NAME` | Triton model name |
 | `AUDIO_STEM_TRITON_MODEL_VERSION` | 可选 model version |
 | `AUDIO_STEM_TRITON_TOKEN` | 可选鉴权 token，以 `Authorization` header 传给 Triton client |
-| `AUDIO_STEM_ALLOWED_OSS_BUCKETS` / `AUDIO_STEM_ALLOWED_OSS_REGIONS` | 输入来源白名单 |
+| `storage_policy.py` | 输入来源、输出 namespace、校验和读取策略 |
 | `OSS_*` | 输出 artifact 写入对象存储 |
 
 token 不应写入 result、runtime fields 或日志。Triton endpoint 是运行环境依赖，不能通过 silent fallback 改为本地模型路径。

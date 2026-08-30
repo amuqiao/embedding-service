@@ -254,38 +254,23 @@ def test_poster_title_image_max_items_config_defaults_and_overrides():
         _build_settings(POSTER_TITLE_IMAGE_MAX_ITEMS=0)
 
 
-def test_poster_title_image_oss_allowlist_config_defaults_and_overrides():
-    default_settings = _build_settings()
-    assert default_settings.job.poster_title_image.allowed_oss_buckets == ("local-dev",)
-    assert default_settings.job.poster_title_image.allowed_oss_regions == ("local",)
-
-    custom_settings = _build_settings(
-        POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS="cpp-rs-dev, cpp-rs-prod,cpp-rs-dev",
-        POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS="ap-southeast-1,cn-shanghai",
-    )
-
-    assert custom_settings.job.poster_title_image.allowed_oss_buckets == ("cpp-rs-dev", "cpp-rs-prod")
-    assert custom_settings.job.poster_title_image.allowed_oss_regions == ("ap-southeast-1", "cn-shanghai")
-
-
 @pytest.mark.parametrize(
-    ("key", "value"),
+    "key",
     [
-        ("POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS", ""),
-        ("POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS", "cpp-rs-dev,,cpp-rs-prod"),
-        ("POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS", ""),
-        ("POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS", "ap-southeast-1,"),
+        "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
+        "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
+        "AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
+        "AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
     ],
 )
-def test_poster_title_image_oss_allowlist_rejects_empty_values(key, value):
-    with pytest.raises(ValidationError, match=key):
-        _build_settings(**{key: value})
+def test_business_oss_allowlist_env_keys_are_not_settings_keys(key):
+    assert key not in config_module.APPLICATION_ENV_FIELD_MAP
+    assert key in config_module.REMOVED_APPLICATION_ENV_KEYS
+    assert key in config_module.DEPRECATED_ENV_KEYS
 
 
 def test_audio_stem_separation_config_defaults_and_overrides():
     default_settings = _build_settings()
-    assert default_settings.job.audio_stem_separation.allowed_oss_buckets == ("local-dev",)
-    assert default_settings.job.audio_stem_separation.allowed_oss_regions == ("local",)
     assert default_settings.job.audio_stem_separation.execution_provider == "cpu"
     assert default_settings.job.audio_stem_separation.htdemucs_model_dir == config_module.ROOT_DIR / ".data/models/htdemucs-ft"
     assert default_settings.job.audio_stem_triton.url == ""
@@ -294,8 +279,6 @@ def test_audio_stem_separation_config_defaults_and_overrides():
     assert default_settings.job.audio_stem_triton.request_timeout_seconds == 300
 
     custom_settings = _build_settings(
-        AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS="audio-dev, audio-prod,audio-dev",
-        AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS="local,cn-shanghai",
         AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER="cuda",
         HTDEMUCS_MODEL_DIR="/tmp/htdemucs-ft",
         AUDIO_STEM_TRITON_URL="service.cn-hangzhou.pai-eas.aliyuncs.com/api/predict/audio_stem_triton",
@@ -304,8 +287,6 @@ def test_audio_stem_separation_config_defaults_and_overrides():
         AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS=120,
     )
 
-    assert custom_settings.job.audio_stem_separation.allowed_oss_buckets == ("audio-dev", "audio-prod")
-    assert custom_settings.job.audio_stem_separation.allowed_oss_regions == ("local", "cn-shanghai")
     assert custom_settings.job.audio_stem_separation.execution_provider == "cuda"
     assert str(custom_settings.job.audio_stem_separation.htdemucs_model_dir) == "/tmp/htdemucs-ft"
     assert custom_settings.job.audio_stem_triton.url == "service.cn-hangzhou.pai-eas.aliyuncs.com/api/predict/audio_stem_triton"
@@ -317,10 +298,6 @@ def test_audio_stem_separation_config_defaults_and_overrides():
 @pytest.mark.parametrize(
     ("key", "value"),
     [
-        ("AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS", ""),
-        ("AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS", "audio-dev,,audio-prod"),
-        ("AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS", ""),
-        ("AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS", "local,"),
         ("AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER", "gpu"),
         ("HTDEMUCS_MODEL_DIR", ""),
         ("AUDIO_STEM_TRITON_URL", "http://service.cn-hangzhou.pai-eas.aliyuncs.com/api/predict/audio_stem_triton"),
@@ -677,6 +654,25 @@ def test_settings_source_rejects_removed_application_env_key_from_dotenv(monkeyp
         config_module._flat_env_settings_source()
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
+        "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
+        "AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
+        "AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
+    ],
+)
+def test_settings_source_rejects_removed_business_oss_env_key_from_dotenv(monkeypatch, tmp_path, key):
+    (tmp_path / ".env").write_text(f"{key}=local-dev\n", encoding="utf-8")
+    monkeypatch.setattr(config_module, "ROOT_DIR", tmp_path)
+    monkeypatch.delenv("ENV_FILE", raising=False)
+    monkeypatch.delenv(key, raising=False)
+
+    with pytest.raises(ValueError, match=f"unsupported keys .*{key}"):
+        config_module._flat_env_settings_source()
+
+
 def test_settings_source_rejects_removed_application_env_key_from_process_env(monkeypatch, tmp_path):
     (tmp_path / ".env").write_text("", encoding="utf-8")
     monkeypatch.setattr(config_module, "ROOT_DIR", tmp_path)
@@ -684,6 +680,25 @@ def test_settings_source_rejects_removed_application_env_key_from_process_env(mo
     monkeypatch.setenv("OPS_DASHBOARD_MOCK_DATA_ENABLED", "true")
 
     with pytest.raises(ValueError, match="unsupported keys in process environment: OPS_DASHBOARD_MOCK_DATA_ENABLED"):
+        config_module._flat_env_settings_source()
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
+        "POSTER_TITLE_IMAGE_ALLOWED_OSS_REGIONS",
+        "AUDIO_STEM_SEPARATION_ALLOWED_OSS_BUCKETS",
+        "AUDIO_STEM_SEPARATION_ALLOWED_OSS_REGIONS",
+    ],
+)
+def test_settings_source_rejects_removed_business_oss_env_key_from_process_env(monkeypatch, tmp_path, key):
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    monkeypatch.setattr(config_module, "ROOT_DIR", tmp_path)
+    monkeypatch.delenv("ENV_FILE", raising=False)
+    monkeypatch.setenv(key, "local-dev")
+
+    with pytest.raises(ValueError, match=f"unsupported keys in process environment: {key}"):
         config_module._flat_env_settings_source()
 
 

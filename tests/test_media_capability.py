@@ -10,7 +10,7 @@ from app.capabilities.media import audio_input
 from app.tools import media_audio
 from app.core.exceptions import AppError
 from app.integrations.object_storage import bare_sha256, sha256_digest
-from app.jobs.types import audio_stem_shared
+from app.jobs.types.audio_stem_separation.storage_adapter import AudioStemSeparationStorageAdapter
 from app.schemas.jobs import AudioStemSeparationInputObject
 
 
@@ -26,25 +26,31 @@ def _url_ref(key: str, data: bytes, *, content_type: str = "audio/wav") -> dict:
 class FakeSettings:
     class Job:
         oss_input_max_bytes = 5_242_880
-        audio_stem_separation = SimpleNamespace(
-            allowed_oss_buckets=("local-dev",),
-            allowed_oss_regions=("local",),
-        )
 
     class Storage:
+        backend = "local"
+        local_object_storage_path = "storage/objects"
         oss_public_endpoint = ""
         oss_bucket = ""
         oss_region = ""
+        oss_access_key_id = ""
+        oss_access_key_secret_value = ""
+        oss_project_root = ""
+        oss_endpoint = ""
+        oss_endpoint_style = "virtual_host"
+        oss_scheme = "https"
 
     job = Job()
     storage = Storage()
 
 
 def test_audio_input_plan_freezes_canonical_source_and_decode_policy(monkeypatch):
-    monkeypatch.setattr(audio_stem_shared, "settings", FakeSettings())
     ref = AudioStemSeparationInputObject.model_validate(_url_ref("input.mp3", b"audio", content_type="audio/mpeg"))
 
-    plan = audio_stem_shared.build_audio_input_plan(ref, max_duration_seconds=10)
+    plan = AudioStemSeparationStorageAdapter.from_settings(FakeSettings()).build_audio_input_plan(
+        ref,
+        max_duration_seconds=10,
+    )
 
     assert plan == {
         "capability_ref": "media.audio_input:2",
@@ -75,7 +81,6 @@ def test_audio_input_plan_freezes_canonical_source_and_decode_policy(monkeypatch
 
 
 def test_audio_input_plan_rejects_disallowed_bucket(monkeypatch):
-    monkeypatch.setattr(audio_stem_shared, "settings", FakeSettings())
     blocked = _url_ref("input.wav", b"audio") | {
         "public_url": "https://other-bucket.oss-local.aliyuncs.com/input.wav",
         "internal_url": "https://other-bucket.oss-local-internal.aliyuncs.com/input.wav",
@@ -83,7 +88,10 @@ def test_audio_input_plan_rejects_disallowed_bucket(monkeypatch):
     ref = AudioStemSeparationInputObject.model_validate(blocked)
 
     with pytest.raises(AppError) as exc_info:
-        audio_stem_shared.build_audio_input_plan(ref, max_duration_seconds=None)
+        AudioStemSeparationStorageAdapter.from_settings(FakeSettings()).build_audio_input_plan(
+            ref,
+            max_duration_seconds=None,
+        )
 
     assert exc_info.value.code == "AUDIO_STEM_INPUT_INVALID"
 
