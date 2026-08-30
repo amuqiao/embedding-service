@@ -47,6 +47,8 @@
 | [`plans/ops-dashboard-post-mvp.md`](plans/ops-dashboard-post-mvp.md) | `ops_dashboard` MVP 后的表格可用性、长窗口分析、Job Trace 可视化、环境诊断和安全边界后续优化计划 |
 | [`plans/job-observability-governance.md`](plans/job-observability-governance.md) | Job 日志、stage、adapter、链路 ID 和新 `job_type` 观测接入标准的治理计划；完成后沉淀到 current/API 文档 |
 | [`plans/ai-capability-governance.md`](plans/ai-capability-governance.md) | AI provider、adapter、model catalog、Job 模型策略、provider 诊断脚本和未来 DashScope 向量模型接入的目标架构规划；不是当前事实源 |
+| [`plans/image-search-tongyi-pgvector-architecture.md`](plans/image-search-tongyi-pgvector-architecture.md) | 以图搜图采用通义多模态向量 API、pgvector 和本项目 Job 架构的实现方案、计划接口和验收标准 |
+| [`plans/asset-image-tagging-job-architecture.md`](plans/asset-image-tagging-job-architecture.md) | 图片打标作为独立 `asset_image_tagging` Job 的架构计划，明确它与以图搜图/pgvector 检索是不同需求 |
 | [`plans/ai-capability-long-term.md`](plans/ai-capability-long-term.md) | AI provider、正式业务 `job_type`、usage normalizer、cost attribution 和 billing read model 的 trigger-based 长期计划 |
 | [`plans/workflow-kernel-long-term.md`](plans/workflow-kernel-long-term.md) | Job 内部 workflow kernel 从模板能力走向正式业务 `job_type` 前的 trigger-based 长期计划 |
 | [`plans/job-platform-orchestration-options.md`](plans/job-platform-orchestration-options.md) | 未来公共 Job Platform 是否支持 DAG-lite 编排的两种微服务拆分方案比较、接入示例和推荐边界 |
