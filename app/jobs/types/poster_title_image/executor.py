@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from typing import Any
@@ -15,16 +16,8 @@ from app.ai.resolver import resolve_model, resolve_route_config_hash
 from app.core.prompt_templates import get_prompt_block_default
 from app.ai.adapters.base import ImageInput
 from app.integrations.image import (
-    POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
-    POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES,
-    POSTER_TITLE_IMAGE_REFERENCE_POLICY,
     transparent_title_layer_from_green_screen_bytes,
-    validate_image_bytes,
 )
-from app.integrations.object_storage import sha256_digest
-from app.integrations.storage import storage
-from app.jobs.payload_adapters.http_url_input import read_http_url_bytes
-from app.jobs.payload_adapters.oss_url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
 from app.jobs.base import ExecutionRetryPolicy, JobExecutor, JobRetryPolicy
 from app.ai.policy.job_models import (
     poster_title_image_generation_allowed_model_ids,
@@ -37,6 +30,7 @@ from app.jobs.types.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
     POSTER_TITLE_IMAGE_REFERENCE_INVALID,
 )
+from app.jobs.types.poster_title_image.storage_adapter import PosterTitleImageStorageAdapter
 from app.models.job import Job
 from app.schemas.jobs import (
     POSTER_TITLE_IMAGE_MAX_TITLE_LINES,
@@ -63,7 +57,6 @@ from app.ai.gateway import generate_image_with_ledger, generate_text_with_images
 from app.services.job_runtime import (
     ai_billing_scope_id_from_job,
     job_params_from_job,
-    output_target_from_job,
     runtime_fields_from_job,
 )
 from app.services.jobs import trigger_request_id_from_job
@@ -97,7 +90,6 @@ POSTER_TITLE_IMAGE_PROVIDER_BACKGROUND = "auto"
 IMAGE_MODEL_GATE = ImageModelGate()
 STYLE_PROBE_MODEL_GATE = ModelGate()
 _WORKFLOW_DEFINITION: WorkflowDefinition | None = None
-_REFERENCE_INVALID_SOURCE_ERROR_CODES = frozenset({"INVALID_INPUT", "INPUT_HASH_MISMATCH", "INPUT_TOO_LARGE"})
 POSTER_TITLE_IMAGE_LOG_EVENTS = (
     LogEvent.POSTER_TITLE_IMAGE_STYLE_PROBE_COMPLETED,
     LogEvent.POSTER_TITLE_IMAGE_OBJECT_STORED,
@@ -182,64 +174,16 @@ def _validate_style_probe_model(
         raise AppError("MODEL_NOT_AVAILABLE", f"模型不支持 image_generation tool 调用: {model_id}")
 
 
-def _reference_invalid_error(exc: AppError) -> AppError:
-    details = {"source_reason": exc.code}
-    if exc.details:
-        details.update(exc.details)
-    return AppError(
-        POSTER_TITLE_IMAGE_REFERENCE_INVALID,
-        "poster_title_image reference image is invalid",
-        details=details,
-    )
-
-
-def _raise_reference_invalid_if_applicable(exc: AppError) -> None:
-    if exc.code in _REFERENCE_INVALID_SOURCE_ERROR_CODES:
-        raise _reference_invalid_error(exc) from exc
+def _storage_adapter() -> PosterTitleImageStorageAdapter:
+    return PosterTitleImageStorageAdapter.from_settings(settings)
 
 
 def _validate_reference_ref_payload(reference_image: Any) -> None:
-    try:
-        canonical_ref_from_oss_url_ref(
-            reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image,
-            allowed_buckets=settings.job.poster_title_image.allowed_oss_buckets,
-            allowed_regions=settings.job.poster_title_image.allowed_oss_regions,
-            allowed_content_types=POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
-            public_endpoint=settings.storage.oss_public_endpoint or None,
-            public_endpoint_bucket=getattr(settings.storage, "oss_bucket", "") or None,
-            public_endpoint_region=getattr(settings.storage, "oss_region", "") or None,
-        )
-    except AppError as exc:
-        _raise_reference_invalid_if_applicable(exc)
-        raise
+    _storage_adapter().validate_reference_ref_payload(reference_image)
 
 
 def _load_reference_image_from_ref(reference_image: Any) -> ImageInput:
-    payload = reference_image.model_dump() if hasattr(reference_image, "model_dump") else reference_image
-    try:
-        ref = canonical_ref_from_oss_url_ref(
-            payload,
-            allowed_buckets=settings.job.poster_title_image.allowed_oss_buckets,
-            allowed_regions=settings.job.poster_title_image.allowed_oss_regions,
-            allowed_content_types=POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
-            public_endpoint=settings.storage.oss_public_endpoint or None,
-            public_endpoint_bucket=getattr(settings.storage, "oss_bucket", "") or None,
-            public_endpoint_region=getattr(settings.storage, "oss_region", "") or None,
-        )
-    except AppError as exc:
-        _raise_reference_invalid_if_applicable(exc)
-        raise
-    try:
-        data = read_http_url_bytes(str(payload["public_url"]).strip(), max_bytes=POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES)
-        if sha256_digest(data) != ref.content_hash:
-            raise AppError("INPUT_HASH_MISMATCH", "reference image sha256 mismatch")
-        if ref.content_type is None:
-            raise AppError("INVALID_INPUT", "reference image content_type is required")
-        validate_image_bytes(data, content_type=ref.content_type, policy=POSTER_TITLE_IMAGE_REFERENCE_POLICY)
-    except AppError as exc:
-        _raise_reference_invalid_if_applicable(exc)
-        raise
-    return ImageInput(data=data, content_type=ref.content_type, detail="high")
+    return _storage_adapter().load_reference_image_from_ref(reference_image)
 
 
 def _load_reference_image(item: PosterTitleImageItemParams) -> ImageInput:
@@ -408,14 +352,6 @@ def _line_break_rules(title_text: str) -> str:
     )
 
 
-def _output_key_for_item_id(job: Job, item_id: str, image_index: int) -> str:
-    output_target = output_target_from_job(job)
-    prefix = output_target["oss_prefix"].strip("/")
-    filename = "title-layer.png" if image_index == 1 else f"title-layer-{image_index}.png"
-    key = f"poster-title/{job.root_job_id or job.id}/{item_id}/{filename}"
-    return f"{prefix}/{key}" if prefix else key
-
-
 def _download_filename_for_item_id(job: Job, item_id: str, image_index: int) -> str:
     image_suffix = "" if image_index == 1 else f"-{image_index}"
     return f"poster-title-{job.root_job_id or job.id}-{item_id}{image_suffix}.png"
@@ -462,7 +398,7 @@ def _style_probe_node_key(index: int) -> str:
 
 def _item_node_key(item_id: str) -> str:
     suffix = _safe_node_suffix(item_id)[:40]
-    digest = sha256_digest(item_id.encode("utf-8"))[:16]
+    digest = hashlib.sha256(item_id.encode("utf-8")).hexdigest()[:16]
     return f"item.{suffix}.{digest}"
 
 
@@ -746,7 +682,6 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
         request_id = trigger_request_id_from_job(job)
         log_request_id = request_id or "-"
         ai_scope_id = ai_billing_scope_id_from_job(job)
-        output_target = output_target_from_job(job)
         runtime_fields = PosterTitleImageGenerateItemRuntimeFields.model_validate(runtime_fields_from_job(job))
         generation_model_id = runtime_fields.generation_model_id
         image_adapter = runtime_fields.image_adapter
@@ -795,17 +730,16 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
             if len(generated.images) != 1:
                 raise AppError("MODEL_OUTPUT_INVALID", "image provider returned unexpected image count")
             title_layer = transparent_title_layer_from_green_screen_bytes(generated.images[0])
-            key = _output_key_for_item_id(job, item.item_id, image_index)
-            written = storage.write_bytes(
-                bucket=output_target["oss_bucket"],
-                region=output_target["oss_region"],
-                key=key,
+            stored = _storage_adapter().write_title_layer(
+                job=job,
+                item_id=item.item_id,
+                image_index=image_index,
                 data=title_layer.data,
-                content_type="image/png",
                 content_disposition=_attachment_content_disposition(
                     _download_filename_for_item_id(job, item.item_id, image_index)
                 ),
             )
+            written = stored["written"]
             log_event(
                 logger,
                 logging.INFO,
@@ -827,14 +761,7 @@ class PosterTitleImageGenerateItemJob(JobExecutor):
                 content_hash=written["content_hash"],
                 bytes=len(title_layer.data),
             )
-            obj = oss_url_ref_from_output_object(
-                bucket=str(written["oss_bucket"]),
-                region=str(written["oss_region"]),
-                key=str(written["oss_key"]),
-                content_type="image/png",
-                content_hash=str(written["content_hash"]),
-                public_endpoint=settings.storage.oss_public_endpoint or None,
-            )
+            obj = stored["object"]
             images.append(
                 PosterTitleImageImage(
                     object=PosterTitleImageObject.model_validate(obj),

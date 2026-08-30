@@ -1,4 +1,5 @@
 import builtins
+import hashlib
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -16,10 +17,11 @@ from app.jobs.types import audio_stem_separation as audio_pkg
 from app.jobs.types.audio_stem_separation import executor as audio_executor
 from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
 from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_RUNTIME_UNAVAILABLE
+from app.jobs.types.audio_stem_separation.storage_adapter import AudioStemSeparationStorageAdapter
 from app.jobs.types.register import register_all_job_types
 from app.models.job import Job
 from app.schemas.jobs import AudioStemSeparationParams
-from app.services.job_runtime import build_runtime_snapshot, payload_hash, write_runtime_json
+from app.services.job_runtime import build_runtime_snapshot, output_target_from_job, payload_hash, write_runtime_json
 
 
 def _url_ref(key: str, data: bytes, *, content_type: str = "audio/wav") -> dict:
@@ -121,12 +123,20 @@ class FakeSettings:
         audio_stem_separation = SimpleNamespace(
             allowed_oss_buckets=("local-dev",),
             allowed_oss_regions=("local",),
+            execution_provider="cpu",
         )
 
     class Storage:
+        backend = "local"
+        local_object_storage_path = "storage/objects"
         oss_public_endpoint = ""
         oss_bucket = ""
         oss_region = ""
+        oss_access_key_id = ""
+        oss_access_key_secret_value = ""
+        oss_project_root = ""
+        oss_endpoint_override = ""
+        oss_scheme = "https"
 
     job = Job()
     storage = Storage()
@@ -167,6 +177,48 @@ class FakeStorage:
             "oss_key": key,
             "content_hash": sha256_digest(data),
         }
+
+    def write_stem(self, *, job: Job, stem: str, data: bytes, content_disposition: str) -> dict[str, str]:
+        output_target = output_target_from_job(job)
+        prefix = output_target["oss_prefix"].strip("/")
+        key = f"audio-stem-separation/{job.id}/{stem}.wav"
+        if prefix:
+            key = f"{prefix}/{key}"
+        written = self.write_bytes(
+            bucket=output_target["oss_bucket"],
+            region=output_target["oss_region"],
+            key=key,
+            data=data,
+            content_type="audio/wav",
+            content_disposition=content_disposition,
+        )
+        return {
+            "public_url": f"https://{written['oss_bucket']}.oss-{written['oss_region']}.aliyuncs.com/{written['oss_key']}",
+            "internal_url": (
+                f"https://{written['oss_bucket']}.oss-{written['oss_region']}-internal.aliyuncs.com/"
+                f"{written['oss_key']}"
+            ),
+            "content_type": "audio/wav",
+            "sha256": bare_sha256(written["content_hash"]),
+        }
+
+
+def _local_adapter_settings(root, *, bucket: str = "settings-bucket", region: str = "settings-region") -> SimpleNamespace:
+    return SimpleNamespace(
+        job=FakeSettings.Job(),
+        storage=SimpleNamespace(
+            backend="local",
+            local_object_storage_path=root,
+            oss_public_endpoint="",
+            oss_bucket=bucket,
+            oss_region=region,
+            oss_access_key_id="",
+            oss_access_key_secret_value="",
+            oss_project_root="",
+            oss_endpoint_override="",
+            oss_scheme="https",
+        ),
+    )
 
 
 class FakeRunner:
@@ -278,6 +330,7 @@ def test_audio_stem_separation_normalizes_and_rejects_disallowed_input_ref(monke
 
 
 def test_audio_stem_separation_runtime_fields_reflect_model_asset(monkeypatch):
+    monkeypatch.setattr(audio_executor, "settings", FakeSettings())
     monkeypatch.setattr(audio_stem_shared, "settings", FakeSettings())
     handler = _handler()
     ref = _url_ref("input.wav", b"audio")
@@ -297,6 +350,30 @@ def test_audio_stem_separation_runtime_fields_reflect_model_asset(monkeypatch):
         "source_content_type": "audio/wav",
         "target_sample_rate": 44100,
         "target_channels": 2,
+    }
+
+
+def test_audio_stem_separation_storage_adapter_writes_to_runtime_output_target(tmp_path):
+    adapter = AudioStemSeparationStorageAdapter.from_settings(_local_adapter_settings(tmp_path))
+    params = {"input_audio": _url_ref("input.wav", b"audio")}
+    job = _job(params=params)
+    data = b"wav-bytes"
+
+    result = adapter.write_stem(
+        job=job,
+        stem="vocals",
+        data=data,
+        content_disposition='attachment; filename="vocals.wav"',
+    )
+
+    expected_key = f"outputs/audio-stem-separation/{job.id}/vocals.wav"
+    assert (tmp_path / "local-dev" / expected_key).read_bytes() == data
+    assert not (tmp_path / "settings-bucket" / expected_key).exists()
+    assert result == {
+        "public_url": f"https://local-dev.oss-local.aliyuncs.com/{expected_key}",
+        "internal_url": f"https://local-dev.oss-local-internal.aliyuncs.com/{expected_key}",
+        "content_type": "audio/wav",
+        "sha256": hashlib.sha256(data).hexdigest(),
     }
 
 
@@ -424,7 +501,7 @@ async def test_audio_stem_separation_executes_fake_runner_and_writes_four_stems(
     job = _job(params=params)
     handler = audio_pkg.AudioStemSeparationJob()
 
-    monkeypatch.setattr(audio_executor, "storage", fake_storage)
+    monkeypatch.setattr(audio_executor, "_storage_adapter", lambda: fake_storage)
     monkeypatch.setattr(
         audio_executor,
         "prepare_audio_input",

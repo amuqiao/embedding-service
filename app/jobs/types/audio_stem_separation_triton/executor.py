@@ -9,13 +9,10 @@ from typing import Any
 import numpy as np
 
 from app.capabilities.media.audio_input import (
-    AUDIO_WAV_CONTENT_TYPE,
     MEDIA_AUDIO_INPUT_CAPABILITY_REF,
-    prepare_audio_input,
 )
 from app.core.config import settings
 from app.core.exceptions import AppError
-from app.integrations.storage import storage
 from app.integrations.triton_audio_stem import (
     TritonAudioStemClient,
     TritonAudioStemConfig,
@@ -24,17 +21,16 @@ from app.integrations.triton_audio_stem import (
 )
 from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
-from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
 from app.jobs.types.audio_stem_shared import (
     DEFAULT_TIMEOUT_SECONDS,
     SOURCES,
-    build_audio_input_plan,
     chunk_window as _chunk_window,
     load_model_asset as _load_model_asset,
     make_transition_window as _make_transition_window,
     segment_ranges as _segment_ranges,
     wav_bytes as _wav_bytes,
 )
+from app.jobs.types.audio_stem_separation_triton.storage_adapter import AudioStemSeparationTritonStorageAdapter
 from app.jobs.types.audio_stem_separation.errors import (
     AUDIO_STEM_DURATION_EXCEEDS_LIMIT,
     AUDIO_STEM_INFERENCE_FAILED,
@@ -45,13 +41,15 @@ from app.jobs.types.audio_stem_separation.errors import (
 )
 from app.models.job import Job
 from app.schemas.jobs import (
+    AudioInputPlanSnapshot,
+    AudioStemSeparationInputObject,
     AudioStemSeparationDurationMs,
     AudioStemSeparationStemOutputs,
     AudioStemSeparationTritonParams,
     AudioStemSeparationTritonResult,
     AudioStemSeparationTritonRuntimeFields,
 )
-from app.services.job_runtime import output_target_from_job, runtime_fields_from_job
+from app.services.job_runtime import runtime_fields_from_job
 
 _RUNNER_CACHE: dict[tuple[str, str, str, float], "HTDemucsTritonRunner"] = {}
 _RUNNER_CACHE_LOCK = threading.Lock()
@@ -159,11 +157,23 @@ def _runner() -> HTDemucsTritonRunner:
         return runner
 
 
-def _output_key(job: Job, stem: str) -> str:
-    output_target = output_target_from_job(job)
-    prefix = output_target["oss_prefix"].strip("/")
-    key = f"audio-stem-separation-triton/{job.id}/{stem}.wav"
-    return f"{prefix}/{key}" if prefix else key
+def _storage_adapter() -> AudioStemSeparationTritonStorageAdapter:
+    return AudioStemSeparationTritonStorageAdapter.from_settings(settings)
+
+
+def build_audio_input_plan(
+    input_audio: AudioStemSeparationInputObject,
+    *,
+    max_duration_seconds: float | None,
+) -> dict:
+    return _storage_adapter().build_audio_input_plan(
+        input_audio,
+        max_duration_seconds=max_duration_seconds,
+    )
+
+
+def prepare_audio_input(plan: AudioInputPlanSnapshot | dict):
+    return _storage_adapter().prepare_audio_input(plan)
 
 
 def _attachment_content_disposition(job: Job, stem: str) -> str:
@@ -237,26 +247,16 @@ class AudioStemSeparationTritonJob(JobExecutor):
         runner = _runner()
         separated = runner.separate(input_audio.data)
 
-        output_target = output_target_from_job(job)
         stem_objects: dict[str, dict[str, str]] = {}
         write_started = time.monotonic()
+        storage_adapter = _storage_adapter()
         for stem in SOURCES:
             data = _wav_bytes(separated.stems[stem], sample_rate=input_audio.sample_rate)
-            written = storage.write_bytes(
-                bucket=output_target["oss_bucket"],
-                region=output_target["oss_region"],
-                key=_output_key(job, stem),
+            stem_objects[stem] = storage_adapter.write_stem(
+                job=job,
+                stem=stem,
                 data=data,
-                content_type=AUDIO_WAV_CONTENT_TYPE,
                 content_disposition=_attachment_content_disposition(job, stem),
-            )
-            stem_objects[stem] = oss_url_ref_from_output_object(
-                bucket=str(written["oss_bucket"]),
-                region=str(written["oss_region"]),
-                key=str(written["oss_key"]),
-                content_type=AUDIO_WAV_CONTENT_TYPE,
-                content_hash=str(written["content_hash"]),
-                public_endpoint=settings.storage.oss_public_endpoint or None,
             )
         io_ms += int((time.monotonic() - write_started) * 1000)
         result = AudioStemSeparationTritonResult(
