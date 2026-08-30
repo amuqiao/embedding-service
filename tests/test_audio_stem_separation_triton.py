@@ -19,6 +19,7 @@ from app.jobs.types.audio_stem_separation import executor as audio_executor
 from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
 from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_RUNTIME_UNAVAILABLE
 from app.jobs.types.audio_stem_separation_triton import executor as triton_executor
+from app.jobs.types.audio_stem_separation_triton import storage_adapter as triton_storage_adapter
 from app.jobs.types.audio_stem_separation_triton.storage_adapter import AudioStemSeparationTritonStorageAdapter
 from app.jobs.types.register import register_all_job_types
 from app.models.job import Job
@@ -38,6 +39,26 @@ def _url_ref(key: str, data: bytes, *, content_type: str = "audio/wav") -> dict:
 def _handler():
     register_all_job_types()
     return job_registry.get("audio_stem_separation_triton")
+
+
+def test_triton_storage_adapter_uses_settings_oss_endpoint_for_aliyun_config():
+    storage = SimpleNamespace(
+        backend="aliyun_oss",
+        local_object_storage_path="storage/objects",
+        oss_public_endpoint="",
+        oss_bucket="bucket-a",
+        oss_region="cn-hangzhou",
+        oss_access_key_id="id",
+        oss_access_key_secret_value="secret",
+        oss_project_root="project-a",
+        oss_endpoint="oss-cn-hangzhou.aliyuncs.com",
+        oss_scheme="https",
+    )
+
+    config = triton_storage_adapter._repository_config_from_settings(SimpleNamespace(storage=storage))
+
+    assert config.provider == "aliyun_oss"
+    assert config.options["endpoint"] == "oss-cn-hangzhou.aliyuncs.com"
 
 
 def _media_input_plan(params: dict) -> dict:
@@ -129,7 +150,7 @@ class FakeSettings:
         oss_access_key_id = ""
         oss_access_key_secret_value = ""
         oss_project_root = ""
-        oss_endpoint_override = ""
+        oss_endpoint = ""
         oss_scheme = "https"
 
     job = Job()
@@ -204,7 +225,7 @@ def _local_adapter_settings(root, *, bucket: str = "settings-bucket", region: st
             oss_access_key_id="",
             oss_access_key_secret_value="",
             oss_project_root="",
-            oss_endpoint_override="",
+            oss_endpoint="",
             oss_scheme="https",
         ),
     )

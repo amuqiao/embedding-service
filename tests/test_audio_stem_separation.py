@@ -15,6 +15,7 @@ from app.jobs import registry as job_registry
 from app.jobs.types import audio_stem_shared
 from app.jobs.types import audio_stem_separation as audio_pkg
 from app.jobs.types.audio_stem_separation import executor as audio_executor
+from app.jobs.types.audio_stem_separation import storage_adapter as audio_storage_adapter
 from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
 from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_RUNTIME_UNAVAILABLE
 from app.jobs.types.audio_stem_separation.storage_adapter import AudioStemSeparationStorageAdapter
@@ -50,6 +51,26 @@ def test_wav_bytes_missing_soundfile_points_to_audio_separation_extra(monkeypatc
 def _handler():
     register_all_job_types()
     return job_registry.get("audio_stem_separation")
+
+
+def test_audio_storage_adapter_uses_settings_oss_endpoint_for_aliyun_config():
+    storage = SimpleNamespace(
+        backend="aliyun_oss",
+        local_object_storage_path="storage/objects",
+        oss_public_endpoint="",
+        oss_bucket="bucket-a",
+        oss_region="cn-hangzhou",
+        oss_access_key_id="id",
+        oss_access_key_secret_value="secret",
+        oss_project_root="project-a",
+        oss_endpoint="oss-cn-hangzhou.aliyuncs.com",
+        oss_scheme="https",
+    )
+
+    config = audio_storage_adapter._repository_config_from_settings(SimpleNamespace(storage=storage))
+
+    assert config.provider == "aliyun_oss"
+    assert config.options["endpoint"] == "oss-cn-hangzhou.aliyuncs.com"
 
 
 def _media_input_plan(params: dict) -> dict:
@@ -135,7 +156,7 @@ class FakeSettings:
         oss_access_key_id = ""
         oss_access_key_secret_value = ""
         oss_project_root = ""
-        oss_endpoint_override = ""
+        oss_endpoint = ""
         oss_scheme = "https"
 
     job = Job()
@@ -215,7 +236,7 @@ def _local_adapter_settings(root, *, bucket: str = "settings-bucket", region: st
             oss_access_key_id="",
             oss_access_key_secret_value="",
             oss_project_root="",
-            oss_endpoint_override="",
+            oss_endpoint="",
             oss_scheme="https",
         ),
     )

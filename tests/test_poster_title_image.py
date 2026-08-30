@@ -32,6 +32,7 @@ from app.jobs.types.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
     POSTER_TITLE_IMAGE_REFERENCE_INVALID,
 )
+from app.jobs.types.poster_title_image import storage_adapter as poster_storage_adapter
 from app.jobs.types.poster_title_image.storage_adapter import PosterTitleImageStorageAdapter
 from app.models.job import Job
 from app.schemas.billing import BillingEnvelope
@@ -82,9 +83,29 @@ def _storage_settings(
         oss_access_key_id="",
         oss_access_key_secret_value="",
         oss_project_root="",
-        oss_endpoint_override="",
+        oss_endpoint="",
         oss_scheme="https",
     )
+
+
+def test_poster_storage_adapter_uses_settings_oss_endpoint_for_aliyun_config():
+    storage = SimpleNamespace(
+        backend="aliyun_oss",
+        local_object_storage_path="storage/objects",
+        oss_public_endpoint="",
+        oss_bucket="bucket-a",
+        oss_region="cn-hangzhou",
+        oss_access_key_id="id",
+        oss_access_key_secret_value="secret",
+        oss_project_root="project-a",
+        oss_endpoint="oss-cn-hangzhou.aliyuncs.com",
+        oss_scheme="https",
+    )
+
+    config = poster_storage_adapter._repository_config_from_settings(SimpleNamespace(storage=storage))
+
+    assert config.provider == "aliyun_oss"
+    assert config.options["endpoint"] == "oss-cn-hangzhou.aliyuncs.com"
 
 
 class _FakePosterStorageAdapter:
