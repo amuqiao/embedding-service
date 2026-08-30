@@ -157,6 +157,8 @@
 - API 行为变化应同步更新 schema、测试和 README 中的入口说明。
 - 不要引入无关重构、依赖升级或目录迁移。
 
+- `app/object_storage` 不适配业务，业务 adapter 适配 `app/object_storage`。
+
 ## 文档规则
 
 - 面向协作的说明默认使用中文。
