@@ -429,6 +429,28 @@ def test_release_app_env_accepts_production_grade_config():
     assert settings.storage.backend == "aliyun_oss"
 
 
+def test_oss_public_endpoint_does_not_drive_api_endpoint():
+    settings = _build_settings(
+        **_release_settings_kwargs(
+            OSS_REGION="cn-hangzhou",
+            OSS_PUBLIC_ENDPOINT="cdn.example.com",
+        )
+    )
+
+    assert settings.storage.oss_endpoint == "oss-cn-hangzhou.aliyuncs.com"
+    assert settings.storage.oss_endpoint_style == "virtual_host"
+
+    custom_domain = _build_settings(
+        **_release_settings_kwargs(
+            OSS_REGION="cn-hangzhou",
+            OSS_PUBLIC_ENDPOINT="cdn.example.com",
+            OSS_ENDPOINT="https://cdn.example.com/",
+        )
+    )
+    assert custom_domain.storage.oss_endpoint == "cdn.example.com"
+    assert custom_domain.storage.oss_endpoint_style == "custom_domain"
+
+
 def test_release_app_env_accepts_redis_list_broker():
     test_settings = _build_settings(**_release_settings_kwargs(APP_ENV="test", TASKIQ_BROKER_KIND="redis_list"))
     prd_settings = _build_settings(**_release_settings_kwargs(APP_ENV="prd", TASKIQ_BROKER_KIND="redis_list"))

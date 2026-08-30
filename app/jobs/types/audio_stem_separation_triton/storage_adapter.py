@@ -200,7 +200,7 @@ def _repository_config(*, settings: Any, bucket: str, region: str) -> ObjectStor
                 "access_key_id": settings.storage.oss_access_key_id,
                 "access_key_secret": settings.storage.oss_access_key_secret_value,
                 "key_prefix": settings.storage.oss_project_root,
-                "endpoint": getattr(settings.storage, "oss_endpoint_override", "") or "",
+                "endpoint": getattr(settings.storage, "oss_endpoint", getattr(settings.storage, "oss_endpoint_override", "")) or "",
                 "public_base_url": _public_base_url(settings.storage.oss_public_endpoint),
                 "scheme": settings.storage.oss_scheme,
             },

@@ -10,6 +10,8 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.oss_endpoint import normalize_oss_endpoint
+
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_TEMPLATE_NAME = "fastapi-best-ai-architecture"
 DEFAULT_SERVICE_TITLE = "FastAPI Best AI Architecture"
@@ -392,14 +394,16 @@ class StorageSettings(ConfigSection):
     @property
     def oss_endpoint(self) -> str:
         if self.oss_endpoint_override:
-            return self.oss_endpoint_override
-        if self.oss_public_endpoint:
-            return self.oss_public_endpoint
-        return f"oss-{self.oss_region}.aliyuncs.com"
+            return normalize_oss_endpoint(self.oss_endpoint_override)
+        return f"oss-{self.oss_region}.aliyuncs.com" if self.oss_region else ""
 
     @property
     def oss_endpoint_style(self) -> str:
-        if self.oss_public_endpoint and self.oss_endpoint == self.oss_public_endpoint:
+        if (
+            self.oss_endpoint_override
+            and self.oss_public_endpoint
+            and self.oss_endpoint == normalize_oss_endpoint(self.oss_public_endpoint)
+        ):
             return "custom_domain"
         return "virtual_host"
 

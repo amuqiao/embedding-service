@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from app.core.oss_endpoint import normalize_oss_endpoint
 from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
 from app.integrations.object_storage import sha256_digest
 from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
@@ -53,8 +54,13 @@ def load_aliyun_oss_config(app_env: dict[str, str]) -> AliyunOSSConfig:
     bucket = _required_env("OSS_BUCKET", app_env)
     region = _required_env("OSS_REGION", app_env)
     public_endpoint = env_runtime.env_value("OSS_PUBLIC_ENDPOINT", app_env) or ""
-    endpoint = env_runtime.env_value("OSS_ENDPOINT", app_env) or public_endpoint
-    endpoint_style = "custom_domain" if public_endpoint and endpoint == public_endpoint else "virtual_host"
+    endpoint_override = normalize_oss_endpoint(env_runtime.env_value("OSS_ENDPOINT", app_env) or "")
+    endpoint = endpoint_override or f"oss-{region}.aliyuncs.com"
+    endpoint_style = (
+        "custom_domain"
+        if public_endpoint and endpoint_override == normalize_oss_endpoint(public_endpoint)
+        else "virtual_host"
+    )
 
     return AliyunOSSConfig(
         bucket=bucket,

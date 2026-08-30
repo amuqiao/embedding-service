@@ -50,6 +50,59 @@ def test_oss_cli_check_prints_non_secret_summary(tmp_path, capsys, monkeypatch):
     assert "secret-value" not in captured.out
 
 
+def test_oss_cli_public_endpoint_does_not_drive_api_endpoint(tmp_path, capsys, monkeypatch):
+    clear_storage_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "STORAGE_BACKEND=aliyun_oss",
+                "OSS_BUCKET=bucket-a",
+                "OSS_REGION=cn-hangzhou",
+                "OSS_ACCESS_KEY_ID=id",
+                "OSS_ACCESS_KEY_SECRET=secret",
+                "OSS_PROJECT_ROOT=project-a",
+                "OSS_PUBLIC_ENDPOINT=cdn.example.com",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert oss_cli.main(["check", "--env-file", str(env_file)]) == 0
+
+    captured = capsys.readouterr()
+    assert "endpoint=oss-cn-hangzhou.aliyuncs.com" in captured.out
+    assert "endpoint_style=virtual_host" in captured.out
+    assert "public_endpoint=cdn.example.com" in captured.out
+
+
+def test_oss_cli_normalizes_custom_domain_endpoint_style(tmp_path, capsys, monkeypatch):
+    clear_storage_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "STORAGE_BACKEND=aliyun_oss",
+                "OSS_BUCKET=bucket-a",
+                "OSS_REGION=cn-hangzhou",
+                "OSS_ACCESS_KEY_ID=id",
+                "OSS_ACCESS_KEY_SECRET=secret",
+                "OSS_PROJECT_ROOT=project-a",
+                "OSS_PUBLIC_ENDPOINT=cdn.example.com",
+                "OSS_ENDPOINT=https://cdn.example.com/",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert oss_cli.main(["check", "--env-file", str(env_file)]) == 0
+
+    captured = capsys.readouterr()
+    assert "endpoint=cdn.example.com" in captured.out
+    assert "endpoint_style=custom_domain" in captured.out
+    assert "public_endpoint=cdn.example.com" in captured.out
+
+
 def test_oss_cli_remote_default_key_uses_output_prefix(tmp_path, capsys, monkeypatch):
     clear_storage_env(monkeypatch)
     env_file = tmp_path / ".env"

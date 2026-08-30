@@ -143,6 +143,14 @@ Deprecated key 是已经移除或明确不支持的旧配置。当前禁用清�
 
 应用代码应读取同一个 `settings` 对象或显式注入 Settings，不在业务路径重新解析 `.env`，也不直接从 `os.environ` 读取 application key。
 
+### OSS 配置语义
+
+OSS 配置提供连接与命名空间事实，job type adapter 基于业务语义组装 `app/object_storage` 的 config/spec/payload；`app/object_storage` 不读取 env、不拼业务路径。
+
+`OSS_BUCKET`、`OSS_REGION`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET` 和 `OSS_PROJECT_ROOT` 是 `aliyun_oss` 后端的必需输入；`OSS_OUTPUT_PREFIX` 是 Job runtime 的输出前缀；`OSS_PUBLIC_ENDPOINT` 只用于对外 `public_url` 投影。
+
+`OSS_ENDPOINT` 是服务端读写 OSS 的高级 API endpoint 覆盖项，通常留空。留空时由 `OSS_REGION` 派生为 `oss-<region>.aliyuncs.com`；配置 `OSS_PUBLIC_ENDPOINT` 不会改变服务端 OSS API endpoint。只有服务端读写也必须走自定义域名或代理时，才同时配置 `OSS_ENDPOINT`。
+
 ## 启动校验
 
 配置错误必须在启动或配置加载阶段失败。当前校验覆盖：
