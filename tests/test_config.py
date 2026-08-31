@@ -15,6 +15,7 @@ from scripts.verify.env_config_check import (
     DEPRECATED_KEYS,
     DERIVED_ENV_KEYS,
     LAUNCHER_ENV_KEYS,
+    POC_ENV_KEYS,
     _key_set,
     check_example_alignment,
     check_file,
@@ -702,14 +703,36 @@ def test_settings_source_rejects_removed_business_oss_env_key_from_process_env(m
         config_module._flat_env_settings_source()
 
 
+def test_settings_source_ignores_poc_env_key_from_dotenv(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "APP_ENV=local",
+                "POC_DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/api/v1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "ROOT_DIR", tmp_path)
+    monkeypatch.delenv("ENV_FILE", raising=False)
+    for key in config_module.APPLICATION_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    data = config_module._flat_env_settings_source()
+
+    assert data == {"runtime": {"app_env": "local"}}
+
+
 def test_env_config_examples_match_declared_manifests():
-    assert _key_set(config_module.ROOT_DIR / ".env.example") == APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS
+    assert _key_set(config_module.ROOT_DIR / ".env.example") == APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS | POC_ENV_KEYS
     assert check_example_alignment() == []
 
 
 def test_env_config_check_uses_config_key_manifests():
     assert APPLICATION_ENV_KEYS == config_module.APPLICATION_ENV_KEYS
     assert LAUNCHER_ENV_KEYS == config_module.LAUNCHER_ENV_KEYS
+    assert POC_ENV_KEYS == config_module.POC_ENV_KEYS
     assert DERIVED_ENV_KEYS == config_module.DERIVED_ENV_KEYS
     assert DEPRECATED_KEYS == config_module.DEPRECATED_ENV_KEYS
 
@@ -755,10 +778,22 @@ def test_env_config_check_allows_launcher_keys_in_root_env(tmp_path):
     assert issues == []
 
 
+def test_env_config_check_allows_poc_keys_in_root_env(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("POC_DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/api/v1\n", encoding="utf-8")
+
+    issues = check_file(env_file)
+
+    assert "POC_DASHSCOPE_BASE_URL" in POC_ENV_KEYS
+    assert issues == []
+
+
 def test_env_config_check_detects_launcher_key_missing_from_env_example(monkeypatch, tmp_path):
     env_example = tmp_path / ".env.example"
     env_example.write_text(
-        "\n".join(f"{key}=value" for key in sorted((APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS) - {"API_PORT"}))
+        "\n".join(
+            f"{key}=value" for key in sorted((APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS | POC_ENV_KEYS) - {"API_PORT"})
+        )
         + "\n",
         encoding="utf-8",
     )

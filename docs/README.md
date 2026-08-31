@@ -10,6 +10,7 @@
 | [`current/configuration.md`](current/configuration.md) | 当前 `.env.example`、`.env`、Settings、launcher key、derived key、deprecated key 和 env-config 验证边界 |
 | [`current/object-storage.md`](current/object-storage.md) | 当前 `app/object_storage` 通用对象存储仓储层、业务 storage adapter 接入规范、读取校验合同、公网 URL 输入和 provider 扩展边界 |
 | [`current/ai-capability.md`](current/ai-capability.md) | 当前 AI 调用入口、model/prompt/pricing registry、AI kernel 组件和文本/图片 provider path |
+| [`runbooks/dashscope-calling-guide.md`](runbooks/dashscope-calling-guide.md) | DashScope 国内/国际 endpoint、OpenAI-compatible 与 native `/api/v1` 协议边界、chat、文本向量、多模态向量和 rerank 调用示例 |
 | [`current/ai-billing.md`](current/ai-billing.md) | 当前 AI call ledger、usage/cost 事实源、Job billing 聚合和非资金账本边界 |
 | [`current/job-kernel.md`](current/job-kernel.md) | 当前 Job、幂等键、Attempt、Dispatch outbox、Callback outbox、root/child lineage 和表设计边界 |
 | [`current/registry-governance.md`](current/registry-governance.md) | 当前 registry governance、capability/tool 注册、graph 校验、`./scripts/tools.sh registry` 查看入口和 `media.audio_input:2` 能力事实 |
@@ -67,6 +68,7 @@
 | 执行 Job 压测 | [`runbooks/job/job-load-testing-runbook.md`](runbooks/job/job-load-testing-runbook.md) | `load.sh` 机器合同、生产容量调优公式 |
 | 估算生产容量 | [`runbooks/job/MAX_ACTIVE_JOBS 估算与生产调优.md`](runbooks/job/MAX_ACTIVE_JOBS%20估算与生产调优.md) | 一次压测怎么跑、Job 明细查询命令教程 |
 | 验证 `poster_title_image` smoke | [`runbooks/poster-title-image-smoke-runbook.md`](runbooks/poster-title-image-smoke-runbook.md) | 标题图内部链路排障、完整 API 字段合同 |
+| 理解和验证 DashScope 调用地址 | [`runbooks/dashscope-calling-guide.md`](runbooks/dashscope-calling-guide.md) | provider registry 当前事实、模型 catalog 合同、具体业务 Job API 字段 |
 | 准备 htdemucs-ft ONNX 本地模型与测试音频 | [`runbooks/audio/htdemucs-ft-onnx-local-assets.md`](runbooks/audio/htdemucs-ft-onnx-local-assets.md) | `audio_stem_separation` 实现计划、模型推理代码、Job 提交流程 |
 | 在开发服务器验证 `audio_stem_separation` | [`runbooks/audio/audio-stem-separation-dev-server-runbook.md`](runbooks/audio/audio-stem-separation-dev-server-runbook.md) | 自动下载模型、生产部署、K8s 资源管理、模型推理代码 |
 | 压测 `audio_stem_separation_triton` smoke | [`runbooks/audio/audio-stem-separation-triton-smoke-benchmark.md`](runbooks/audio/audio-stem-separation-triton-smoke-benchmark.md) | Triton model repository 部署、生产容量承诺、旧本地 ONNX Job 验证；文内 baseline 只作复现对比样本 |

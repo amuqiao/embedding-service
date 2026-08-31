@@ -104,6 +104,11 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
 }
 
 APPLICATION_ENV_KEYS = frozenset(APPLICATION_ENV_FIELD_MAP)
+POC_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "POC_DASHSCOPE_BASE_URL",
+    }
+)
 _REMOVED_JOB_TYPE_OSS_ENV_KEYS = frozenset(
     {
         "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
@@ -205,7 +210,7 @@ def _read_dotenv_values(path: Path) -> dict[str, str]:
 
 
 def _unknown_dotenv_keys(dotenv: dict[str, str]) -> list[str]:
-    allowed_keys = APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS
+    allowed_keys = APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS | POC_ENV_KEYS
     return sorted(key for key in dotenv if key != key.upper() or key not in allowed_keys)
 
 

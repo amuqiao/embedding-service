@@ -19,7 +19,7 @@
 
 | 文件或入口 | 当前职责 |
 |---|---|
-| `.env.example` | 可提交配置模板，包含当前允许写入根 env 文件的 application key 和 launcher key |
+| `.env.example` | 可提交配置模板，包含当前允许写入根 env 文件的 application key、launcher key 和 POC key |
 | `.env` | 本地私有实例配置，不提交，可以省略可选 key 并使用代码默认值 |
 | `ENV_FILE` | 进程级选择器，只允许作为环境变量或脚本参数传入，不写进 `.env.example` 或 `.env` |
 | `app/core/config.py` | application env key、launcher env key、derived key、deprecated key、Settings 字段映射和启动校验事实源 |
@@ -85,6 +85,16 @@ WORKER_LOGLEVEL
 ```
 
 这些 key 可以留在 `.env.example`，因为它们是本项目本地运行形态的一部分；但应用代码不能从 `Settings` 读取它们。新增 launcher key 必须有明确脚本或 compose 消费方，不能作为业务配置变相进入应用。
+
+### POC Key
+
+POC key 不进入 `Settings`，只给 `poc/` 下的独立验证脚本读取。当前允许写入根 env 文件的 POC key 由 `POC_ENV_KEYS` 声明：
+
+```text
+POC_DASHSCOPE_BASE_URL
+```
+
+`POC_DASHSCOPE_BASE_URL` 用于 `poc/asset-vector` 这类直接调用 DashScope 原生 `api/v1` 的脚本。服务自身的 DashScope provider 仍使用 `DASHSCOPE_BASE_URL`，应用代码不能通过 `Settings` 读取 POC key。
 
 ### Process-Only Key
 
@@ -199,6 +209,7 @@ job type `storage_policy.py` 的 OSS 策略按字段生效：未显式配置的�
 |---|---|
 | 部署环境、依赖地址、密钥、安全开关、业务主控容量 | `Settings` application key + `.env.example` |
 | 本地端口、compose 项目名、worker CLI 参数 | launcher key + `.env.example` |
+| `poc/` 独立验证脚本专用配置 | POC key + `.env.example`，不进入 `Settings` |
 | 模型启停、默认模型、provider route、公开模型投影 | `app/ai/catalog/models.yaml` |
 | 模型价格、usage 到成本估算规则 | `app/ai/pricing/pricing.yaml` |
 | 业务 Job 自己的模型范围或 prompt | `app/jobs/types/<job_type>/models.yaml` 或 `prompts.yaml` |

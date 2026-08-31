@@ -56,7 +56,8 @@ def constant_keys_from_config(name: str) -> frozenset[str]:
 
 APPLICATION_ENV_KEYS = constant_keys_from_config("APPLICATION_ENV_FIELD_MAP")
 LAUNCHER_ENV_KEYS = constant_keys_from_config("LAUNCHER_ENV_KEYS")
-ROOT_ENV_KEYS = APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS
+POC_ENV_KEYS = constant_keys_from_config("POC_ENV_KEYS")
+ROOT_ENV_KEYS = APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS | POC_ENV_KEYS
 DEPRECATED_KEYS = constant_keys_from_config("DEPRECATED_ENV_KEYS")
 DERIVED_ENV_KEYS = constant_keys_from_config("DERIVED_ENV_KEYS")
 
