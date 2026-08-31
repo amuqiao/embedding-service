@@ -1,0 +1,57 @@
+poc/asset-vector/.gitignore
+  s_ee0ef3cef2319f::t_a4b0de542a682b 1-2
+.env.example
+  s_ee0ef3cef2319f::t_a4b0de542a682b 95-96
+app/core/config.py
+  s_ee0ef3cef2319f::t_a4b0de542a682b 107-111,213
+tests/test_config.py
+  s_ee0ef3cef2319f::t_a4b0de542a682b 18,706-726,728,735,781-790,794-796
+poc/asset-vector/README.md
+  s_ee0ef3cef2319f::t_a4b0de542a682b 1-253
+poc/tongyi_embedding_vision_flash_probe.py
+  s_ee0ef3cef2319f::t_a4b0de542a682b 6,12-50,53-89,96-104,107-111,114,116-117,119-120,122,127-160,174-175,179-180,183-184,188-192,194-220,223-224,226-227,230-235,237-279,282-301,303-363,367-389,392-393,399-541,544,547-576,579-593,598-602,604-628,631,633-643,645-648
+docs/current/configuration.md
+  s_ee0ef3cef2319f::t_a4b0de542a682b 22,89-98,212
+docs/runbooks/dashscope-calling-guide.md
+  s_ee0ef3cef2319f::t_a4b0de542a682b 1-424
+poc/asset-vector/resource-to-report-runbook.md
+  s_ee0ef3cef2319f::t_a4b0de542a682b 1-978
+poc/asset-vector/storage_adapter.py
+  s_ee0ef3cef2319f::t_a4b0de542a682b 1-153
+docs/README.md
+  s_ee0ef3cef2319f::t_a4b0de542a682b 13,71
+poc/asset-vector/asset_vector_poc.py
+  s_ee0ef3cef2319f::t_a4b0de542a682b 1-2071
+scripts/verify/env_config_check.py
+  s_ee0ef3cef2319f::t_a4b0de542a682b 59-60
+poc/asset-vector/upload_assets_to_oss.py
+  s_ee0ef3cef2319f::t_a4b0de542a682b 1-367
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "ba99feafadc45cbcad01fb14f5a0e85b6188b13c",
+  "prompts": {},
+  "sessions": {
+    "s_ee0ef3cef2319f": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a943b0231955f2f6cec29bb",
+        "model": "Doubao-Seed-2.1-pro__dev"
+      },
+      "human_author": "wangqiao <wangqiao@crazymaplestudio.com>",
+      "custom_attributes": {
+        "client_type": "ide",
+        "runtime_client": "trae-tob-git-ai",
+        "edit_kind": "bash",
+        "operation_id": "6a95655f31955f2f6cec2b05",
+        "source_scene": "agent",
+        "display_model_name": "Doubao-Seed-2.1-Pro",
+        "session_id": "6a943b0231955f2f6cec29bb",
+        "external_session_id": "6a943b0231955f2f6cec29bb",
+        "tool_use_id": "6a95655f31955f2f6cec2b05",
+        "tool_name": "Shell"
+      }
+    }
+  }
+}
