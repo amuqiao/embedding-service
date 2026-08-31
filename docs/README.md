@@ -41,6 +41,8 @@
 | [`api/service-contract.md`](api/service-contract.md) | 当前 HTTP envelope、Job、Callback、Billing、认证和公开 route 合同 |
 | [`api/extension-guide.md`](api/extension-guide.md) | 新增 `job_type`、HTTP 接口、模型、Prompt 和对象存储产物的接入入口 |
 | [`api/tagged-text-translation-api.md`](api/tagged-text-translation-api.md) | `tagged_text_translation` 批量带标签文案翻译 Job 的当前对接合同，覆盖创建、轮询、Callback、结果和错误码；不暴露 Prompt 接口 |
+| [`api/asset-tag-schema-translation-api.md`](api/asset-tag-schema-translation-api.md) | `asset_tag_schema_translation` 标签体系翻译 Job 的计划对接合同草案，定义批量标签术语翻译、字段结构、轮询、Callback 和错误语义 |
+| [`api/asset-image-tagging-api.md`](api/asset-image-tagging-api.md) | `asset_image_tagging` 图片素材批量打标 Job 的计划对接合同草案，定义素材、标签组、打标规则、结果、部分成功和 Callback 语义 |
 | [`api/languages-api.md`](api/languages-api.md) | `GET /api/v1/ai-jobs/languages` 语种目录对接文档，说明环境配置、响应字段、当前语种列表和错误响应 |
 | [`api/业务语种规范.md`](api/业务语种规范.md) | CPP / AI / RS 三方共享语种代码、`in` 例外和 AI 服务语种目录接口规范 |
 | [`api/poster-title-image-delivery-api.md`](api/poster-title-image-delivery-api.md) | AI 标题图生成对接的当前交付接口合同、任务创建、查询、费用和 Callback 说明 |
@@ -50,7 +52,7 @@
 | [`plans/job-observability-governance.md`](plans/job-observability-governance.md) | Job 日志、stage、adapter、链路 ID 和新 `job_type` 观测接入标准的治理计划；完成后沉淀到 current/API 文档 |
 | [`plans/ai-capability-governance.md`](plans/ai-capability-governance.md) | AI provider、adapter、model catalog、Job 模型策略、provider 诊断脚本和未来 DashScope 向量模型接入的目标架构规划；不是当前事实源 |
 | [`plans/image-search-tongyi-pgvector-architecture.md`](plans/image-search-tongyi-pgvector-architecture.md) | 以图搜图采用通义多模态向量 API、pgvector 和本项目 Job 架构的实现方案、计划接口和验收标准 |
-| [`plans/asset-image-tagging-job-architecture.md`](plans/asset-image-tagging-job-architecture.md) | 图片打标作为独立 `asset_image_tagging` Job 的架构计划，明确它与以图搜图/pgvector 检索是不同需求 |
+| [`plans/asset-image-tagging-job-architecture.md`](plans/asset-image-tagging-job-architecture.md) | 图片素材 AI 打标和标签体系翻译的 Job 架构计划，明确后端标签库、素材输入、OSS 读取和 AI 推荐结果边界 |
 | [`plans/ai-capability-long-term.md`](plans/ai-capability-long-term.md) | AI provider、正式业务 `job_type`、usage normalizer、cost attribution 和 billing read model 的 trigger-based 长期计划 |
 | [`plans/workflow-kernel-long-term.md`](plans/workflow-kernel-long-term.md) | Job 内部 workflow kernel 从模板能力走向正式业务 `job_type` 前的 trigger-based 长期计划 |
 | [`plans/job-platform-orchestration-options.md`](plans/job-platform-orchestration-options.md) | 未来公共 Job Platform 是否支持 DAG-lite 编排的两种微服务拆分方案比较、接入示例和推荐边界 |
