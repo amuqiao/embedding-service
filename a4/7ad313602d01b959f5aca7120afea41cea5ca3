@@ -1,0 +1,37 @@
+docs/plans/image-search-tongyi-pgvector-architecture.md
+  s_ee0ef3cef2319f::t_a67313904012d9 150,207,1273,1275,1392-1394,1398,1405,1453
+docs/README.md
+  s_ee0ef3cef2319f::t_a67313904012d9 44-45,55
+docs/api/asset-tag-schema-translation-api.md
+  s_ee0ef3cef2319f::t_a67313904012d9 1,3,5,7-16,18,21-26,29,31,33-38,40,42,44-51,54,56-67,70,72-77,79,81,83,85-87,91-92,94-121,124-125,128,134,136-143,145,147-151,153,155-162,164,166-169,171,173,175-178,180,182-213,216,218,220-222,224,226-293,296,298-340,343-377,379,381-407,409-416,418,420,422,424-428,430,433,436,438,440,442-502,504,506-510,512,514,516-521,523,525-532
+docs/api/asset-image-tagging-api.md
+  s_ee0ef3cef2319f::t_a67313904012d9 1-703
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "a47ad313602d01b959f5aca7120afea41cea5ca3",
+  "prompts": {},
+  "sessions": {
+    "s_ee0ef3cef2319f": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a943b0231955f2f6cec29bb",
+        "model": "Doubao-Seed-2.1-pro__dev"
+      },
+      "human_author": "wangqiao <wangqiao@crazymaplestudio.com>",
+      "custom_attributes": {
+        "runtime_client": "trae-tob-git-ai",
+        "display_model_name": "Doubao-Seed-2.1-Pro",
+        "tool_use_id": "6a95878e31955f2f6cec2b18",
+        "operation_id": "6a95878e31955f2f6cec2b18",
+        "source_scene": "agent",
+        "edit_kind": "bash",
+        "external_session_id": "6a943b0231955f2f6cec29bb",
+        "client_type": "ide",
+        "tool_name": "Shell",
+        "session_id": "6a943b0231955f2f6cec29bb"
+      }
+    }
+  }
+}
