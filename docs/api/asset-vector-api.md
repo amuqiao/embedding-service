@@ -34,9 +34,10 @@
 
 用户发起搜索
   -> 按搜索意图选择 text / image / item_ids / hybrid
-  -> 调对应搜索接口，传 search_mode 和该模式允许的字段
+  -> 业务后端按权限、项目、分类、标签、上下架状态预过滤出可选 candidate_item_ids
+  -> 调对应搜索接口，传 search_mode、该模式允许的查询字段和可选 candidate_item_ids
   -> AI 服务返回匹配到的 item_ids
-  -> 业务后端拿 item_ids 回自己的素材库过滤权限并拼详情
+  -> 业务后端拿 item_ids 回自己的素材库拼详情
 ```
 
 ```text
@@ -120,7 +121,7 @@
 |---|---:|---:|---|
 | `label_id` | string | 是 | 业务标签唯一 ID |
 | `language` | string | 是 | 语言代码，例如 `zh`、`en` |
-| `name` | string | 是 | 当前 `language` 下的标签名 |
+| `label_name` | string | 是 | 当前 `language` 下的标签名 |
 | `definition` | string 或 null | 否 | 当前 `language` 下的标签描述 |
 
 ### Text Query Fields
@@ -178,13 +179,13 @@ POST /api/v1/ai-jobs/jobs
           {
             "label_id": "label_hair_color_brown",
             "language": "zh",
-            "name": "棕色",
+            "label_name": "棕色",
             "definition": "头发主体颜色为棕色或棕褐色"
           },
           {
             "label_id": "label_hair_color_brown",
             "language": "en",
-            "name": "brown",
+            "label_name": "brown",
             "definition": "The main hair color is brown or brownish."
           }
         ],
@@ -588,7 +589,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 
 ### 接口能力
 
-根据用户输入文字搜索相似素材。该接口固定 `search_mode=text`，只允许传 `text` 和可选 `top_k`。
+根据用户输入文字搜索相似素材。该接口固定 `search_mode=text`，只允许传 `text`、可选 `candidate_item_ids` 和可选 `top_k`。
 
 ### Request
 
@@ -601,7 +602,8 @@ POST /api/v1/ai-jobs/vector-search
   "search_mode": "text",
   "text": {
     "query": "红色礼盒，节日风格"
-  }
+  },
+  "candidate_item_ids": ["asset_001", "asset_002", "asset_003"]
 }
 ```
 
@@ -611,9 +613,10 @@ POST /api/v1/ai-jobs/vector-search
 |---|---:|---:|---|
 | `search_mode` | string | 是 | 固定为 `text` |
 | `text` | object | 是 | 文本搜索条件，结构见 `Text Query Fields` |
+| `candidate_item_ids` | string[] | 否 | 候选资源 ID 列表；传入时只在这些资源内排序并返回其子集，不传时在 AI 服务已索引资源内搜索 |
 | `top_k` | integer | 否 | 返回结果数量；不传时由服务端使用默认值；传入时必须大于 0，具体最大值由双方上线前确认 |
 
-不允许传 `asset` 或 `item_ids`。
+不允许传 `asset` 或查询种子字段 `item_ids`。
 
 ### Response
 
@@ -623,7 +626,7 @@ POST /api/v1/ai-jobs/vector-search
 
 ### 接口能力
 
-根据一张查询图片搜索相似素材。该接口固定 `search_mode=image`，只允许传 `asset` 和可选 `top_k`。
+根据一张查询图片搜索相似素材。该接口固定 `search_mode=image`，只允许传 `asset`、可选 `candidate_item_ids` 和可选 `top_k`。
 
 ### Request
 
@@ -637,7 +640,8 @@ POST /api/v1/ai-jobs/vector-search
   "asset": {
     "public_url": "https://bucket.example.com/query/query_001.png",
     "content_type": "image/png"
-  }
+  },
+  "candidate_item_ids": ["asset_001", "asset_002", "asset_003"]
 }
 ```
 
@@ -647,9 +651,10 @@ POST /api/v1/ai-jobs/vector-search
 |---|---:|---:|---|
 | `search_mode` | string | 是 | 固定为 `image` |
 | `asset` | object | 是 | 查询图片 OSS 或公网资源信息，结构见 `Asset Fields` |
+| `candidate_item_ids` | string[] | 否 | 候选资源 ID 列表；传入时只在这些资源内排序并返回其子集，不传时在 AI 服务已索引资源内搜索 |
 | `top_k` | integer | 否 | 返回结果数量；不传时由服务端使用默认值；传入时必须大于 0，具体最大值由双方上线前确认 |
 
-不允许传 `text` 或 `item_ids`。
+不允许传 `text` 或查询种子字段 `item_ids`。
 
 ### Response
 
@@ -659,7 +664,7 @@ POST /api/v1/ai-jobs/vector-search
 
 ### 接口能力
 
-根据一个或多个已入库资源 ID 搜索相似素材。该接口固定 `search_mode=item_ids`，只允许传 `item_ids` 和可选 `top_k`。
+根据一个或多个已入库资源 ID 搜索相似素材。该接口固定 `search_mode=item_ids`，只允许传 `item_ids`、可选 `candidate_item_ids` 和可选 `top_k`。
 
 ### Request
 
@@ -670,7 +675,8 @@ POST /api/v1/ai-jobs/vector-search
 ```json
 {
   "search_mode": "item_ids",
-  "item_ids": ["asset_001", "asset_002"]
+  "item_ids": ["asset_001", "asset_002"],
+  "candidate_item_ids": ["asset_010", "asset_011", "asset_012"]
 }
 ```
 
@@ -680,6 +686,7 @@ POST /api/v1/ai-jobs/vector-search
 |---|---:|---:|---|
 | `search_mode` | string | 是 | 固定为 `item_ids` |
 | `item_ids` | string[] | 是 | 用作查询种子的已入库资源 ID 列表 |
+| `candidate_item_ids` | string[] | 否 | 候选资源 ID 列表；传入时只在这些资源内排序并返回其子集，不传时在 AI 服务已索引资源内搜索 |
 | `top_k` | integer | 否 | 返回结果数量；不传时由服务端使用默认值；传入时必须大于 0，具体最大值由双方上线前确认 |
 
 不允许传 `text` 或 `asset`。
@@ -692,7 +699,7 @@ POST /api/v1/ai-jobs/vector-search
 
 ### 接口能力
 
-组合两个或多个搜索信号后检索相似素材。该接口固定 `search_mode=hybrid`，可组合 `text`、`asset`、`item_ids`，并支持可选 `top_k`。
+组合两个或多个搜索信号后检索相似素材。该接口固定 `search_mode=hybrid`，可组合 `text`、`asset`、`item_ids`，并支持可选 `candidate_item_ids` 和可选 `top_k`。
 
 ### Request
 
@@ -710,7 +717,8 @@ POST /api/v1/ai-jobs/vector-search
     "public_url": "https://bucket.example.com/query/query_001.png",
     "content_type": "image/png"
   },
-  "item_ids": ["asset_001"]
+  "item_ids": ["asset_001"],
+  "candidate_item_ids": ["asset_010", "asset_011", "asset_012"]
 }
 ```
 
@@ -722,6 +730,7 @@ POST /api/v1/ai-jobs/vector-search
 | `text` | object | 条件必填 | 文本搜索条件，结构见 `Text Query Fields` |
 | `asset` | object | 条件必填 | 查询图片 OSS 或公网资源信息，结构见 `Asset Fields` |
 | `item_ids` | string[] | 条件必填 | 用作查询种子的已入库资源 ID 列表 |
+| `candidate_item_ids` | string[] | 否 | 候选资源 ID 列表；传入时只在这些资源内排序并返回其子集，不传时在 AI 服务已索引资源内搜索 |
 | `top_k` | integer | 否 | 返回结果数量；不传时由服务端使用默认值；传入时必须大于 0，具体最大值由双方上线前确认 |
 
 `text`、`asset`、`item_ids` 至少提供两种。
@@ -732,7 +741,7 @@ POST /api/v1/ai-jobs/vector-search
 
 ## 搜索响应字段
 
-搜索接口统一返回资源 ID 列表。业务后端拿 `item_ids` 回自己的素材库过滤权限、状态并拼装详情。
+搜索接口统一返回资源 ID 列表。传入 `candidate_item_ids` 时，返回结果只会来自该候选池；不传时，返回结果来自 AI 服务已索引资源集合。业务后端拿 `item_ids` 回自己的素材库拼装详情。
 
 ```json
 {
@@ -856,9 +865,13 @@ GET /api/v1/ai-jobs/vector-assets/ids?limit=1000&cursor=eyJwYWdlIjoxfQ
 - 多语种标签由业务方直接展开到 `labels[]`。同一个 `label_id` 可以出现多条不同 `language` 的标签文本。
 - 标签是否可信、是否已审核、是否参与检索，由业务后端决定。本服务不调用标签库，也不保存完整标签库。
 - 资源名称、标签名、标签描述发生变化且业务方认为会影响检索时，业务方应重新提交批量新增/更新资源接口。
+- 搜索接口支持可选 `candidate_item_ids`。业务后端可以先按权限、项目、分类、标签、状态、收藏等业务规则过滤候选池，再把候选池传给 AI 服务做向量排序，避免先全局取 Top K 再过滤导致结果不足。
+- `candidate_item_ids` 只表达搜索候选池，不表达查询种子；资源 ID 搜索的查询种子仍使用 `item_ids`。
+- `candidate_item_ids=[]` 是合法请求，表示候选池为空，服务端直接返回 `item_ids=[]`。
+- `candidate_item_ids` 中尚未建向量的资源不参与排序，也不会出现在返回结果中；业务方需要严格检查缺失向量时使用正向对账接口。
 - 搜索接口的 `top_k` 是可选字段；不传时由服务端控制默认返回数量。
 - 搜索结果只返回排序后的 `item_ids`，不返回业务素材详情、分数、模型、维度或向量元信息。
-- 权限、项目、分类、标签、状态、收藏等过滤由业务后端在拿到 `item_ids` 后处理。
+- 未传 `candidate_item_ids` 时，AI 服务按已索引资源集合检索；业务后端仍可在拿到 `item_ids` 后做最终过滤和详情拼装，但可能出现过滤后结果不足。
 - 正向和反向对账接口只返回对账必需字段，不返回模型、维度、版本或其他向量元信息。
 - 本服务不暴露完整向量、完整图片二进制、base64 大 payload、完整模型响应或 provider raw payload。
 
@@ -872,9 +885,9 @@ GET /api/v1/ai-jobs/vector-assets/ids?limit=1000&cursor=eyJwYWdlIjoxfQ
 | `JOB_NOT_FOUND` | 404 | 查询 Job | `job_id` 不存在或调用方无权访问 |
 | `ASSET_REF_INVALID` | 400 | 素材资源引用非法 | `asset.public_url`、`asset.content_type` 格式不符合要求或无法读取，或可选 `asset.sha256` 格式不符合要求 |
 | `INPUT_TOO_LARGE` | 400 | 素材大小、图片宽高或像素超过限制 | 不继续调用模型 |
-| `LABELS_INVALID` | 400 | 标签上下文非法 | 例如同一资源内 `label_id + language` 重复、`name` 为空 |
+| `LABELS_INVALID` | 400 | 标签上下文非法 | 例如同一资源内 `label_id + language` 重复、`label_name` 为空 |
 | `ASSET_VECTOR_ALL_ITEMS_FAILED` | 500 | 新增/更新或删除 Job 所有 item 均失败 | Job 级失败 |
-| `VECTOR_SEARCH_PARAMS_INVALID` | 400 | 搜索参数非法 | `search_mode` 和字段组合不匹配 |
+| `VECTOR_SEARCH_PARAMS_INVALID` | 400 | 搜索参数非法 | `search_mode` 和字段组合不匹配，或 `candidate_item_ids` 不是字符串数组 |
 | `QUERY_ITEM_NOT_INDEXED` | 404 | `item_ids[]` 中存在未建向量的资源 | 业务后端应先更新资源或改用图片/文本查询 |
 | `VECTOR_INDEX_NOT_READY` | 409 | 向量索引未就绪 | 可以稍后重试或先补建 |
 | `MODEL_CALL_FAILED` | 502 | 模型调用失败 | provider 错误、限流或超时 |
