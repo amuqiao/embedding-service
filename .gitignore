@@ -19,3 +19,4 @@ logs/
 env_test/
 env_master/
 smoke/results/
+poc/tongyi_embedding_vision_flash_probe.py

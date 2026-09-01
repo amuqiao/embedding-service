@@ -57,7 +57,7 @@ Content-Type: application/json
 
 ```text
 业务后端素材库 + 业务后端标签库
-  -> 业务后端组装 items[] + label_snapshot[] + rules
+  -> 业务后端组装 items[] + label_snapshot[]
   -> 创建 asset_image_tagging Job
   -> AI 服务读取 items[].asset 指向的图片资源
   -> AI 服务按 items[].category_id 匹配 label_snapshot[] 中对应分类的标签组
@@ -224,13 +224,7 @@ POST /api/v1/ai-jobs/jobs
           }
         ]
       }
-    ],
-    "rules": {
-      "description_required": true,
-      "description_language": "zh",
-      "return_reason": true,
-      "min_weight": 0.6
-    }
+    ]
   },
   "callback": {
     "url": "https://backend.example.com/ai-callbacks",
@@ -265,7 +259,6 @@ POST /api/v1/ai-jobs/jobs
 | `tagging_language` | string | 是 | 本次打标使用的标签语言，例如 `zh`、`en` |
 | `items` | object[] | 是 | 待打标素材列表，至少 1 个 |
 | `label_snapshot` | object[] | 是 | 业务后端组装后的标签组快照，至少 1 组；必须覆盖所有 `items[].category_id` |
-| `rules` | object | 否 | 本次打标规则 |
 
 ### Item Fields
 
@@ -305,15 +298,6 @@ POST /api/v1/ai-jobs/jobs
 | `label_name` | string | 是 | 当前 `tagging_language` 下的标签名 |
 | `definition` | string | 是 | 当前 `tagging_language` 下的标签定义 |
 | `metadata` | object | 否 | 透传字段 |
-
-### Rules Fields
-
-| 字段 | 类型 | 必填 | 说明 |
-|---|---:|---:|---|
-| `description_required` | boolean | 否 | 是否要求为每个成功素材生成描述 |
-| `description_language` | string 或 null | 否 | 描述语言；不传时默认等于 `tagging_language` |
-| `return_reason` | boolean | 否 | 是否要求返回每个标签的 `reason`；建议为 `true` |
-| `min_weight` | number 或 null | 否 | 低于该阈值的标签视为不采信；范围 `0 < min_weight <= 1` |
 
 ### Callback Fields
 
@@ -445,7 +429,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
                 ]
               }
             ],
-            "description": {
+            "asset_description": {
               "language": "zh",
               "text": "棕色中长发，发尾带自然波浪，头发主体颜色偏棕褐色。"
             },
@@ -549,10 +533,10 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | `labels[].label_name` | string | 打标语言下的标签名 |
 | `labels[].definition` | string | 打标语言下的标签定义快照 |
 | `labels[].weight` | number | 置信或强度，范围 `0 < weight <= 1` |
-| `labels[].reason` | string 或 null | 打标原因；`rules.return_reason=true` 时必须非空 |
-| `items[].description` | object 或 null | 素材描述；不要求生成描述时可为 `null` |
-| `description.language` | string | 描述语言 |
-| `description.text` | string | 描述文本 |
+| `labels[].reason` | string 或 null | 标签选择原因；由服务端策略决定是否返回 |
+| `items[].asset_description` | object 或 null | 素材描述；由服务端策略决定是否返回 |
+| `asset_description.language` | string | 素材描述语言；默认与 `tagging_language` 一致 |
+| `asset_description.text` | string | 素材描述文本 |
 | `items[].validation_issues` | object[] | item 级校验问题；完整成功时为空数组 |
 | `items[].error` | object 或 null | item 级失败原因；失败 item 必须非空 |
 
@@ -578,8 +562,8 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 
 | `issue` | 含义 |
 |---|---|
-| `low_weight_filtered` | 标签低于 `rules.min_weight` 被过滤 |
-| `description_missing` | 要求生成描述但模型未返回有效描述 |
+| `low_weight_filtered` | 标签低于服务端采信阈值被过滤 |
+| `asset_description_missing` | 服务端要求生成素材描述但模型未返回有效描述 |
 
 ## Batch Semantics
 
@@ -731,7 +715,7 @@ timestamp + "." + raw_body
               ]
             }
           ],
-          "description": {
+          "asset_description": {
             "language": "zh",
             "text": "棕色中长发，发尾带自然波浪，头发主体颜色偏棕褐色。"
           },
@@ -820,13 +804,7 @@ curl -sS -X POST "https://test-ai.example.com/api/v1/ai-jobs/jobs" \
             }
           ]
         }
-      ],
-      "rules": {
-        "description_required": true,
-        "description_language": "zh",
-        "return_reason": true,
-        "min_weight": 0.6
-      }
+      ]
     },
     "options": {
       "priority": "normal",
@@ -857,6 +835,7 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/jobs/018f9a7f-2b7d-7
 - 每个标签组必须声明 `selection_mode`。`single` 表示最多选 1 个，`multiple` 表示可选多个。
 - 成功和部分成功 item 的 `label_group_selections[]` 必须按当前 item 匹配到的 `label_snapshot[]` 顺序全量返回；未选中标签的组返回 `labels=[]`，不能省略整个组。
 - `selection_mode=single` 的结果中，`labels[]` 长度只能是 0 或 1。模型输出多个候选时，AI 服务必须把该 item 标记为 `failed`，不能向业务方返回违反合同的多个标签。
+- `labels[].reason` 和 `items[].asset_description` 是服务端输出策略，不作为创建 Job 的入参开关；业务方不能通过请求参数要求开启或关闭。
 - 真实 `label_id` 是业务标签事实源，只在请求和结果合同中出现；AI 服务调用模型时应转为临时内部编号，模型不得直接看到或返回真实 `label_id`。
 - 当前图片打标要求 `items[].asset.content_type` 必须是图片 MIME，图片必须通过公网 URL 传入，不接受裸 base64。
 - 本 Job 不写业务资源表，不写业务标签表。
@@ -873,7 +852,7 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/jobs/018f9a7f-2b7d-7
 | `CLIENT_REQUEST_ID_CONFLICT` | 409 | 同一 caller 下重复 `client_request_id` 但请求内容不一致 | no |
 | `JOB_NOT_FOUND` | 404 | 查询的 Job 不存在或不属于当前 caller | no |
 | `QUEUE_FULL` | 503 | 服务当前接单容量已满 | yes |
-| `UNSUPPORTED_LANGUAGE` | 400 | `tagging_language` 或 `description_language` 不支持 | no |
+| `UNSUPPORTED_LANGUAGE` | 400 | `tagging_language` 不支持 | no |
 | `ASSET_LABEL_SCHEMA_INVALID` | 400 | 标签组结构非法，例如 `selection_mode` 不支持、`label_id` 重复 | no |
 | `ASSET_REF_INVALID` | 400 | 素材资源引用非法，例如 `asset.public_url`、`asset.content_type` 格式不符合要求，或可选 `asset.sha256` 格式不符合要求 | no |
 | `INPUT_HASH_MISMATCH` | 400 | 请求传入可选 `asset.sha256` 且素材内容 hash 校验不一致 | no |
