@@ -1,0 +1,31 @@
+docs/api/asset-vector-api.md
+  s_ee0ef3cef2319f::t_11f763f0799993 37-38,40,124,182,188,592,605-606,616,619,629,643-644,654,657,667,678-679,689,702,720-721,733,744,868-871,874,888,890
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "78e6dcb3115175f3d9d1ebc3c8ff0b00a4cdf9a5",
+  "prompts": {},
+  "sessions": {
+    "s_ee0ef3cef2319f": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a943b0231955f2f6cec29bb",
+        "model": "Doubao-Seed-2.1-pro__dev"
+      },
+      "human_author": "wangqiao <wangqiao@crazymaplestudio.com>",
+      "custom_attributes": {
+        "session_id": "6a943b0231955f2f6cec29bb",
+        "client_type": "ide",
+        "external_session_id": "6a943b0231955f2f6cec29bb",
+        "source_scene": "agent",
+        "operation_id": "6a967d8431955f2f6cec2b3a",
+        "runtime_client": "trae-tob-git-ai",
+        "display_model_name": "Doubao-Seed-2.1-Pro",
+        "tool_name": "Shell",
+        "edit_kind": "bash",
+        "tool_use_id": "6a967d8431955f2f6cec2b3a"
+      }
+    }
+  }
+}
