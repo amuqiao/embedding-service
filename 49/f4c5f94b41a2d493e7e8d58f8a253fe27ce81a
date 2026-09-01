@@ -1,0 +1,33 @@
+.gitignore
+  s_ee0ef3cef2319f::t_b25fbae3b7d790 22
+docs/api/asset-image-tagging-api.md
+  s_ee0ef3cef2319f::t_b25fbae3b7d790 60,227,432,536-539,565-566,718,807,838,855
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "49f4c5f94b41a2d493e7e8d58f8a253fe27ce81a",
+  "prompts": {},
+  "sessions": {
+    "s_ee0ef3cef2319f": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a943b0231955f2f6cec29bb",
+        "model": "Doubao-Seed-2.1-pro__dev"
+      },
+      "human_author": "wangqiao <wangqiao@crazymaplestudio.com>",
+      "custom_attributes": {
+        "edit_kind": "bash",
+        "runtime_client": "trae-tob-git-ai",
+        "client_type": "ide",
+        "external_session_id": "6a943b0231955f2f6cec29bb",
+        "tool_use_id": "6a96a08731955f2f6cec2b8a",
+        "operation_id": "6a96a08731955f2f6cec2b8a",
+        "session_id": "6a943b0231955f2f6cec29bb",
+        "source_scene": "agent",
+        "tool_name": "Shell",
+        "display_model_name": "Doubao-Seed-2.1-Pro"
+      }
+    }
+  }
+}
