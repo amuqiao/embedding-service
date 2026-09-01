@@ -1,5 +1,8 @@
 import ast
+import os
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 from fastapi.routing import APIRoute
@@ -27,7 +30,12 @@ from app.core.registry_checks import (
 )
 from app.main import app
 from app.jobs.base import JobExecutor, JobTypeSpec, PromptSpec
-from app.business_packages.register import business_package_modules, load_business_packages, register_all_business_packages
+from app.business_packages.register import (
+    business_package_modules,
+    job_type_business_package_names,
+    load_business_packages,
+    register_all_business_packages,
+)
 from app.jobs import registry as job_registry
 from app.jobs.types.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
@@ -44,6 +52,33 @@ from app.workflows.registry import WorkflowDefinition
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / "app"
+
+
+def _bootstrap_env(**overrides: str) -> dict[str, str]:
+    env = os.environ.copy()
+    for key in {
+        "APP_ENV",
+        "DATABASE_URL",
+        "SERVICE_API_KEY",
+        "CALLBACK_SIGNING_SECRET",
+        "DISABLE_HTTP_AUTH_HEADER",
+        "DISABLE_CALLER_ID_HEADER",
+        "ENABLED_BUSINESS_PACKAGES",
+    }:
+        env.pop(key, None)
+    env.update(
+        {
+            "APP_CONFIG_SKIP_DEFAULT_ENV_FILE": "true",
+            "APP_ENV": "local",
+            "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@127.0.0.1:25432/fastapi_best_ai_architecture",
+            "SERVICE_API_KEY": "test-token",
+            "CALLBACK_SIGNING_SECRET": "test-callback-secret",
+            "DISABLE_HTTP_AUTH_HEADER": "false",
+            "DISABLE_CALLER_ID_HEADER": "false",
+        }
+    )
+    env.update(overrides)
+    return env
 
 
 def _literal_error_reasons() -> set[str]:
@@ -803,6 +838,19 @@ def test_business_packages_default_to_all_registered_job_types():
     assert set(job_registry.enabled_job_types()) == set(job_registry.all_job_types())
 
 
+def test_business_packages_own_each_registered_job_type_once():
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+    register_all_business_packages()
+
+    owners = job_type_business_package_names()
+
+    assert set(owners) == set(job_registry.all_job_types())
+    assert owners["poster_title_image"] == "poster_title_image"
+    assert owners["poster_title_image_join"] == "poster_title_image"
+    assert owners["tagged_text_translation"] == "tagged_text_translation"
+
+
 def test_business_packages_default_external_job_types_exclude_leaf_children():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
@@ -836,7 +884,7 @@ def test_business_packages_default_external_job_types_exclude_demo_in_release_en
     assert "audio_stem_separation" not in set(job_registry.external_job_types())
 
 
-def test_enabled_business_packages_registers_selected_package_only(monkeypatch):
+def test_enabled_business_packages_enable_selected_package_only(monkeypatch):
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
     monkeypatch.setattr(
@@ -850,7 +898,7 @@ def test_enabled_business_packages_registers_selected_package_only(monkeypatch):
 
     register_all_business_packages()
 
-    assert set(job_registry.all_job_types()) == {"tagged_text_translation"}
+    assert "poster_title_image" in set(job_registry.all_job_types())
     assert set(job_registry.enabled_job_types()) == {"tagged_text_translation"}
     assert set(job_registry.external_job_types()) == {"tagged_text_translation"}
     assert job_registry.is_job_type_enabled("tagged_text_translation") is True
@@ -859,7 +907,7 @@ def test_enabled_business_packages_registers_selected_package_only(monkeypatch):
     assert job_registry.is_external_job_type_enabled("poster_title_image") is False
 
 
-def test_enabled_job_type_factory_rejects_unselected_business_package_job_type(monkeypatch):
+def test_enabled_job_type_factory_keeps_catalog_for_unselected_business_package(monkeypatch):
     from app.jobs.factory import get_enabled_job_executor, get_job_executor
 
     job_registry.clear_for_tests()
@@ -875,10 +923,78 @@ def test_enabled_job_type_factory_rejects_unselected_business_package_job_type(m
 
     register_all_business_packages()
 
-    with pytest.raises(KeyError, match="No job executor"):
-        get_job_executor("poster_title_image")
+    assert get_job_executor("poster_title_image").name == "poster_title_image"
     with pytest.raises(KeyError, match="No enabled job executor"):
         get_enabled_job_executor("poster_title_image")
+
+
+def test_enabled_business_packages_subset_keeps_model_catalog_validation(monkeypatch):
+    from app.ai.catalog.registry import validate_model_catalog
+
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+    monkeypatch.setattr(
+        "app.core.config.settings",
+        SimpleNamespace(
+            runtime=SimpleNamespace(is_release_env=False),
+            registry=SimpleNamespace(enabled_business_packages=("tagged_text_translation",)),
+            storage=SimpleNamespace(backend="local"),
+        ),
+    )
+
+    register_all_business_packages()
+    validate_model_catalog()
+
+    assert "poster_title_image" in set(job_registry.all_job_types())
+    assert "poster_title_image" not in set(job_registry.enabled_job_types())
+
+
+def test_api_startup_accepts_enabled_business_package_subset():
+    code = """
+from app.main import app
+from app.jobs import registry as job_registry
+
+assert app.title
+assert set(job_registry.enabled_job_types()) == {"tagged_text_translation"}
+assert "poster_title_image" in set(job_registry.all_job_types())
+assert "poster_title_image" not in set(job_registry.external_job_types())
+print("ok")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=_bootstrap_env(ENABLED_BUSINESS_PACKAGES="tagged_text_translation"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
+
+
+def test_worker_startup_accepts_enabled_business_package_subset():
+    code = """
+from app.tasks.runtime import ensure_worker_runtime_initialized
+from app.jobs import registry as job_registry
+
+ensure_worker_runtime_initialized()
+assert set(job_registry.enabled_job_types()) == {"tagged_text_translation"}
+assert "poster_title_image" in set(job_registry.all_job_types())
+assert "poster_title_image" not in set(job_registry.external_job_types())
+print("ok")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=_bootstrap_env(ENABLED_BUSINESS_PACKAGES="tagged_text_translation"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
 
 
 def test_enabled_business_package_registers_static_workflow_children(monkeypatch):

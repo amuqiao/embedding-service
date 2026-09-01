@@ -108,7 +108,7 @@ Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts
 
 `APP_ENV=test` 或 `APP_ENV=prd` 时，`POST /jobs` 只允许提交 `visibility="public"` 的 `job_type`。`visibility="demo"` 的模板示例只能在 `local/dev` 用于本地验证、smoke 或压测；`visibility="internal"` 的类型只供服务内部 workflow child 使用，任何环境都不能被外部直接提交。
 
-`ENABLED_BUSINESS_PACKAGES` 控制当前服务实例启用的业务包。为空时启用全部静态注册业务包；显式配置时只加载列表内业务包，未加载业务包下的 `job_type`、workflow 和 routes 不进入当前实例。外部提交仍由 `job_type.visibility`、`job_type.role` 和 `APP_ENV` 过滤。
+`ENABLED_BUSINESS_PACKAGES` 控制当前服务实例启用的业务包。为空时启用全部静态注册业务包；显式配置时只允许列表内业务包接收新 Job、执行 Job 和挂载业务 routes。全量 executor catalog 仍会注册，用于历史 Job 查询、schema 校验和结果投影；外部提交仍由 `job_type.visibility`、`job_type.role` 和 `APP_ENV` 过滤。
 
 模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML。顶层字段维护运行时服务配置，例如 `adapter`、`provider_model`、`adapter_model`、`pricing_ref`、所需环境变量和内部模型调用参数；`public` 块维护 `/models` 返回的调用方可见投影，例如稳定模型 ID 对应的展示名、`model_type`、公开 provider 标签、`capabilities`、`input_media_types`、`output_media_types`、`limits` / `features` 类型化元信息和公开 `parameters`。
 

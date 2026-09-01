@@ -21,6 +21,7 @@ BUSINESS_PACKAGE_MODULES: tuple[str, ...] = (
 
 _route_mounts: tuple[BusinessRouteMount, ...] = ()
 _registered_package_names: tuple[str, ...] = ()
+_job_type_package_names: dict[str, str] = {}
 
 
 def business_package_modules() -> tuple[str, ...]:
@@ -74,25 +75,30 @@ def validate_business_package_config(settings) -> None:
     _validate_release_storage_requirements(settings, selected_packages)
 
 
-def _configure_default_job_type_access(*, release_env: bool) -> None:
+def _configure_job_type_access(
+    *,
+    enabled_job_types: frozenset[str],
+    release_env: bool,
+) -> None:
     from app.jobs import registry as job_registry
 
-    if not release_env:
-        job_registry.configure_enabled_job_types(None)
-        return
-
     specs = job_registry.all_job_type_specs()
-    enabled = frozenset(specs)
     external = frozenset(
         job_type
         for job_type, spec in specs.items()
-        if spec.visibility == "public" and spec.role != "leaf"
+        if job_type in enabled_job_types
+        and spec.role != "leaf"
+        and (spec.visibility == "public" or (spec.visibility == "demo" and not release_env))
     )
-    job_registry.configure_enabled_job_types(enabled, external_job_types=external)
+    job_registry.configure_enabled_job_types(enabled_job_types, external_job_types=external)
 
 
 def registered_business_package_names() -> tuple[str, ...]:
     return _registered_package_names
+
+
+def job_type_business_package_names() -> dict[str, str]:
+    return dict(_job_type_package_names)
 
 
 def registered_business_route_mounts() -> tuple[BusinessRouteMount, ...]:
@@ -115,16 +121,42 @@ def register_all_business_packages() -> None:
     register_all_tools()
     register_all_capabilities()
 
+    ownership: dict[str, str] = {}
     route_collector = BusinessRouteCollector()
+    for package in all_packages:
+
+        def register_package_executor(executor, *, package_name: str = package.name):
+            existing_owner = ownership.get(executor.name)
+            if existing_owner is not None and existing_owner != package_name:
+                raise ValueError(
+                    f"job_type {executor.name} is registered by multiple business packages: "
+                    f"{existing_owner}, {package_name}"
+                )
+            registered = register(executor)
+            ownership[executor.name] = package_name
+            return registered
+
+        package.register(register_package_executor)
+
+    selected_package_names = frozenset(package.name for package in selected_packages)
     for package in selected_packages:
-        package.register(register)
         if package.register_routes is not None:
             package.register_routes(route_collector)
 
-    global _route_mounts, _registered_package_names
+    enabled_job_types = frozenset(
+        job_type
+        for job_type, package_name in ownership.items()
+        if package_name in selected_package_names
+    )
+
+    global _route_mounts, _registered_package_names, _job_type_package_names
     _route_mounts = route_collector.route_mounts()
     _registered_package_names = tuple(package.name for package in selected_packages)
-    _configure_default_job_type_access(release_env=settings.runtime.is_release_env)
+    _job_type_package_names = dict(ownership)
+    _configure_job_type_access(
+        enabled_job_types=enabled_job_types,
+        release_env=settings.runtime.is_release_env,
+    )
 
 
 def _join_api_prefix(api_prefix: str, package_prefix: str) -> str:

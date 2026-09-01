@@ -148,7 +148,7 @@
 - 修改配置项时必须同步检查 `app/core/config.py`、`.env.example`、部署文档和相关测试。
 - OSS 接入规则：`.env` 只放默认 OSS 事实，job type `storage_policy.py` 放业务策略，job adapter 合成 `app/object_storage` payload。
 - 脚本类配置文件选择遵循：显式 `--env-file` 或 `ENV_FILE` 表示指定配置文件为事实源，脚本不得再用当前 shell 同名环境变量覆盖该文件；只有默认读取 `.env` 时，才允许当前 shell 环境变量覆盖 `.env`，用于本地临时调试。
-- 业务包治理遵循：代码维护静态业务包全集，运行时按 `ENABLED_BUSINESS_PACKAGES` 启用业务包子集，pytest 默认验证全集，smoke 场景列表展示支持全集，执行时按当前已加载业务包 fail-fast。`job_type` 是业务包内部注册事实，不通过全局 env 单独裁剪。
+- 业务包治理遵循：代码维护静态业务包全集，运行时按 `ENABLED_BUSINESS_PACKAGES` 启用业务包子集，pytest 默认验证全集，smoke 场景列表展示支持全集，执行时按当前 enabled 业务包 fail-fast。全量 executor catalog 仍注册，用于历史 Job 查询、schema 校验和结果投影；`job_type` 是业务包内部注册事实，不通过全局 env 单独裁剪。
 
 ## 代码修改规则
 
