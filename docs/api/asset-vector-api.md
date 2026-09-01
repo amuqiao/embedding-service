@@ -2,6 +2,43 @@
 
 本文面向业务后端，定义素材新增/更新、删除、搜索和对账接口。业务后端负责素材库、权限、上下架、标签库和展示数据；AI 服务负责把业务方提交的素材信息转成向量，并返回匹配到的资源 ID 列表。
 
+## 联调参数配置
+
+以下配置区用于双方联调时填写环境地址和密钥。不要把真实生产密钥提交到仓库；交付文档中的密钥应使用占位符，由安全渠道另行下发。
+
+### 测试环境
+
+| 项 | 示例值 | 说明 |
+|---|---|---|
+| Base URL | `https://test-ai.example.com` | 测试环境 AI 服务地址 |
+| API Prefix | `/api/v1/ai-jobs` | 本文接口前缀 |
+| `SERVICE_API_KEY` | `<TEST_SERVICE_API_KEY>` | 用于 `Authorization: Bearer <SERVICE_API_KEY>` |
+| `CALLBACK_SIGNING_SECRET` | `<TEST_CALLBACK_SIGNING_SECRET>` | 用于调用方校验 AI 服务投递的 Callback 签名 |
+| `X-AI-Service-Caller-ID` | `cms-test` | 可选；不传时服务使用 `default` |
+| `X-Request-ID` | `test-asset-vector-001` | 可选；单次请求追踪 ID |
+
+### 生产环境
+
+| 项 | 示例值 | 说明 |
+|---|---|---|
+| Base URL | `https://ai.example.com` | 生产环境 AI 服务地址 |
+| API Prefix | `/api/v1/ai-jobs` | 本文接口前缀 |
+| `SERVICE_API_KEY` | `<PROD_SERVICE_API_KEY>` | 用于 `Authorization: Bearer <SERVICE_API_KEY>` |
+| `CALLBACK_SIGNING_SECRET` | `<PROD_CALLBACK_SIGNING_SECRET>` | 用于调用方校验 AI 服务投递的 Callback 签名 |
+| `X-AI-Service-Caller-ID` | `cms` | 可选；不传时服务使用 `default` |
+| `X-Request-ID` | `prod-asset-vector-001` | 可选；单次请求追踪 ID |
+
+请求头：
+
+```http
+Authorization: Bearer <SERVICE_API_KEY>
+X-AI-Service-Caller-ID: <caller-id>
+X-Request-ID: <request-id>
+Content-Type: application/json
+```
+
+`X-AI-Service-Caller-ID` 是可选调用方标识，不是多租户安全边界。`X-Request-ID` 允许 1 到 128 个 ASCII 字母、数字、点号、下划线、冒号或连字符；不传时服务端生成。
+
 ## 接口清单
 
 | 接口 | 方法和路径 | 调用方式 | 业务用途 |
@@ -77,12 +114,11 @@
 
 ```json
 {
-  "code": "INVALID_JOB_PARAMS",
-  "msg": "job_params is invalid",
-  "error": {
-    "code": "INVALID_JOB_PARAMS",
-    "message": "job_params is invalid",
-    "details": {}
+  "code": "100012",
+  "msg": "invalid job_params",
+  "data": {
+    "field": "job_params.items",
+    "reason": "items must contain at least one asset item"
   },
   "request_id": "req_01",
   "server_time": "2026-08-31T10:01:00+00:00"
@@ -140,6 +176,26 @@
 |---|---:|---:|---|
 | `url` | string | 是 | 业务方接收 Callback 的 HTTPS 地址 |
 | `events` | string[] 或 null | 否 | 支持 `job.succeeded`、`job.failed`；省略时默认订阅两种终态事件 |
+
+### Callback 签名
+
+创建 Job 时传入 `callback.url` 后，AI 服务会在 Job 终态投递 Callback。Callback payload 不套 HTTP envelope，`job` 字段是完整 Job snapshot，结构与查询 Job 接口返回的 `data.job` 一致。
+
+Callback 请求头：
+
+```http
+Content-Type: application/json
+X-Callback-Timestamp: 2026-08-31T10:01:00+00:00
+X-Callback-Signature: sha256=<hex>
+```
+
+签名内容是：
+
+```text
+timestamp + "." + raw_body
+```
+
+签名算法是 HMAC-SHA256，密钥是双方按环境约定的 `CALLBACK_SIGNING_SECRET`。调用方应校验签名、时间戳和 `event_id`，防止伪造与重放。
 
 ## 批量新增/更新资源接口
 
@@ -250,6 +306,7 @@ POST /api/v1/ai-jobs/jobs
       },
       "job_result": null,
       "job_error": null,
+      "cost": null,
       "usage": null,
       "callback": {
         "status": "pending",
@@ -276,7 +333,9 @@ POST /api/v1/ai-jobs/jobs
 
 ```json
 {
-  "accepted": true
+  "accepted": true,
+  "msg": "ok",
+  "details": {}
 }
 ```
 
@@ -348,6 +407,7 @@ POST /api/v1/ai-jobs/jobs
       },
       "job_result": null,
       "job_error": null,
+      "cost": null,
       "usage": null,
       "callback": {
         "status": "pending",
@@ -424,6 +484,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         ]
       },
       "job_error": null,
+      "cost": null,
       "usage": {
         "ai_call_count": 1,
         "total_tokens": null,
@@ -489,6 +550,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         },
         "retryable": false
       },
+      "cost": null,
       "usage": {
         "ai_call_count": 1,
         "total_tokens": null,
@@ -522,6 +584,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | `job_progress.percent` | number | Job 进度百分比 |
 | `job_result` | object 或 null | 终态结果；批处理失败时也可以包含 item 级结果，结构见 `Job Result Fields` |
 | `job_error` | object 或 null | Job 级失败原因 |
+| `cost` | object 或 null | Job 级费用快照；不可用或未终态时为 `null` |
 | `usage` | object 或 null | AI 调用用量摘要 |
 | `callback` | object 或 null | Callback 投递状态 |
 | `status_url` | string | 当前 Job 查询路径 |
@@ -580,7 +643,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 
 | 字段 | 类型 | 说明 |
 |---|---:|---|
-| `callback.status` | string | `pending`、`delivered` 或 `failed` |
+| `callback.status` | string | `not_configured`、`pending`、`delivering`、`delivered`、`retrying` 或 `failed` |
 | `callback.attempt` | integer | 已投递次数 |
 | `callback.last_error` | string 或 null | 最近一次投递失败原因 |
 | `callback.next_retry_at` | string 或 null | 下一次重试时间；没有重试计划时为 `null` |
@@ -855,6 +918,172 @@ GET /api/v1/ai-jobs/vector-assets/ids?limit=1000&cursor=eyJwYWdlIjoxfQ
 | `item_ids` | string[] | AI 服务已索引的业务资源 ID 列表 |
 | `next_cursor` | string 或 null | 下一页游标；没有下一页时为 `null` |
 
+## Curl 示例
+
+以下示例用于说明当前调用方式。示例中的域名、密钥、Job ID 和资源 URL 需要替换为双方联调环境提供的值。
+
+### 批量新增/更新资源
+
+```bash
+curl -sS -X POST "https://test-ai.example.com/api/v1/ai-jobs/jobs" \
+  -H "Authorization: Bearer <TEST_SERVICE_API_KEY>" \
+  -H "X-AI-Service-Caller-ID: cms-test" \
+  -H "X-Request-ID: test-asset-vector-upsert-001" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_request_id": "asset-vector-upsert-20260831-001",
+    "job_type": "asset_vector_batch_upsert",
+    "job_params": {
+      "items": [
+        {
+          "item_id": "asset_001",
+          "item_name": "棕色中长卷发",
+          "asset": {
+            "public_url": "https://bucket.example.com/assets/hair_001.png",
+            "content_type": "image/png"
+          },
+          "labels": [
+            {
+              "label_id": "label_hair_color_brown",
+              "language": "zh",
+              "label_name": "棕色",
+              "definition": "头发主体颜色为棕色或棕褐色"
+            }
+          ]
+        }
+      ]
+    },
+    "options": {
+      "priority": "normal",
+      "idempotency_mode": "return_existing"
+    }
+  }'
+```
+
+### 查询 Job
+
+```bash
+curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/jobs/018f9a7f-2b7d-7a0a-9f24-6ff0b87c8b91" \
+  -H "Authorization: Bearer <TEST_SERVICE_API_KEY>" \
+  -H "X-AI-Service-Caller-ID: cms-test" \
+  -H "X-Request-ID: test-asset-vector-poll-001"
+```
+
+### 批量删除资源
+
+```bash
+curl -sS -X POST "https://test-ai.example.com/api/v1/ai-jobs/jobs" \
+  -H "Authorization: Bearer <TEST_SERVICE_API_KEY>" \
+  -H "X-AI-Service-Caller-ID: cms-test" \
+  -H "X-Request-ID: test-asset-vector-delete-001" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_request_id": "asset-vector-delete-20260831-001",
+    "job_type": "asset_vector_batch_delete",
+    "job_params": {
+      "item_ids": ["asset_001", "asset_002"]
+    },
+    "options": {
+      "priority": "normal",
+      "idempotency_mode": "return_existing"
+    }
+  }'
+```
+
+### 图片搜索
+
+```bash
+curl -sS -X POST "https://test-ai.example.com/api/v1/ai-jobs/vector-search" \
+  -H "Authorization: Bearer <TEST_SERVICE_API_KEY>" \
+  -H "X-AI-Service-Caller-ID: cms-test" \
+  -H "X-Request-ID: test-asset-vector-image-search-001" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "search_mode": "image",
+    "asset": {
+      "public_url": "https://bucket.example.com/query/query_001.png",
+      "content_type": "image/png"
+    },
+    "top_k": 20
+  }'
+```
+
+### 限定候选池文本搜索
+
+```bash
+curl -sS -X POST "https://test-ai.example.com/api/v1/ai-jobs/vector-search" \
+  -H "Authorization: Bearer <TEST_SERVICE_API_KEY>" \
+  -H "X-AI-Service-Caller-ID: cms-test" \
+  -H "X-Request-ID: test-asset-vector-text-search-001" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "search_mode": "text",
+    "text": {
+      "query": "红色礼盒，节日风格"
+    },
+    "candidate_item_ids": ["asset_001", "asset_002", "asset_003"],
+    "top_k": 20
+  }'
+```
+
+### 资源 ID 搜索
+
+```bash
+curl -sS -X POST "https://test-ai.example.com/api/v1/ai-jobs/vector-search" \
+  -H "Authorization: Bearer <TEST_SERVICE_API_KEY>" \
+  -H "X-AI-Service-Caller-ID: cms-test" \
+  -H "X-Request-ID: test-asset-vector-item-search-001" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "search_mode": "item_ids",
+    "item_ids": ["asset_001"],
+    "top_k": 20
+  }'
+```
+
+### 混合搜索
+
+```bash
+curl -sS -X POST "https://test-ai.example.com/api/v1/ai-jobs/vector-search" \
+  -H "Authorization: Bearer <TEST_SERVICE_API_KEY>" \
+  -H "X-AI-Service-Caller-ID: cms-test" \
+  -H "X-Request-ID: test-asset-vector-hybrid-search-001" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "search_mode": "hybrid",
+    "text": {
+      "query": "红色礼盒"
+    },
+    "asset": {
+      "public_url": "https://bucket.example.com/query/query_001.png",
+      "content_type": "image/png"
+    },
+    "top_k": 20
+  }'
+```
+
+### 正向对账
+
+```bash
+curl -sS -X POST "https://test-ai.example.com/api/v1/ai-jobs/vector-assets:exists" \
+  -H "Authorization: Bearer <TEST_SERVICE_API_KEY>" \
+  -H "X-AI-Service-Caller-ID: cms-test" \
+  -H "X-Request-ID: test-asset-vector-exists-001" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "item_ids": ["asset_001", "asset_002"]
+  }'
+```
+
+### 反向对账
+
+```bash
+curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/vector-assets/ids?limit=1000" \
+  -H "Authorization: Bearer <TEST_SERVICE_API_KEY>" \
+  -H "X-AI-Service-Caller-ID: cms-test" \
+  -H "X-Request-ID: test-asset-vector-ids-001"
+```
+
 ## 处理规则
 
 - `item_id` 是业务资源唯一 ID，也是本服务和业务后端之间的结果对齐键。
@@ -877,18 +1106,27 @@ GET /api/v1/ai-jobs/vector-assets/ids?limit=1000&cursor=eyJwYWdlIjoxfQ
 
 ## 错误码
 
-| 错误码 | HTTP 状态 | 场景 | 说明 |
-|---|---:|---|---|
-| `INVALID_JOB_TYPE` | 400 | `job_type` 不支持 | 不创建 Job |
-| `INVALID_JOB_PARAMS` | 400 | Job 请求结构非法 | 例如 `items[]` 为空、`item_id` 重复、`item_ids[]` 为空 |
-| `CLIENT_REQUEST_ID_CONFLICT` | 409 | 幂等键冲突 | 同一 `client_request_id` 对应不同请求指纹 |
-| `JOB_NOT_FOUND` | 404 | 查询 Job | `job_id` 不存在或调用方无权访问 |
-| `ASSET_REF_INVALID` | 400 | 素材资源引用非法 | `asset.public_url`、`asset.content_type` 格式不符合要求或无法读取，或可选 `asset.sha256` 格式不符合要求 |
-| `INPUT_TOO_LARGE` | 400 | 素材大小、图片宽高或像素超过限制 | 不继续调用模型 |
-| `LABELS_INVALID` | 400 | 标签上下文非法 | 例如同一资源内 `label_id + language` 重复、`label_name` 为空 |
-| `ASSET_VECTOR_ALL_ITEMS_FAILED` | 500 | 新增/更新或删除 Job 所有 item 均失败 | Job 级失败 |
-| `VECTOR_SEARCH_PARAMS_INVALID` | 400 | 搜索参数非法 | `search_mode` 和字段组合不匹配，或 `candidate_item_ids` 不是字符串数组 |
-| `QUERY_ITEM_NOT_INDEXED` | 404 | `item_ids[]` 中存在未建向量的资源 | 业务后端应先更新资源或改用图片/文本查询 |
-| `VECTOR_INDEX_NOT_READY` | 409 | 向量索引未就绪 | 可以稍后重试或先补建 |
-| `MODEL_CALL_FAILED` | 502 | 模型调用失败 | provider 错误、限流或超时 |
-| `MODEL_OUTPUT_INVALID` | 500 | 模型输出不符合合同 | 向量维度不符、字段缺失或响应不可解析 |
+| Reason | HTTP | 场景 | Retryable |
+|---|---:|---|---:|
+| `UNAUTHORIZED` | 401 | 缺少或错误的 Bearer token | no |
+| `FORBIDDEN` | 403 | caller 被拒绝访问 | no |
+| `REQUEST_ID_INVALID` | 400 | `X-Request-ID` 格式非法 | no |
+| `INVALID_JOB_TYPE` | 400 | `job_type` 未注册或当前环境不允许外部提交 | no |
+| `INVALID_JOB_PARAMS` | 400 | Job 请求结构非法，例如 `items[]` 为空、`item_id` 重复、`item_ids[]` 为空 | no |
+| `CLIENT_REQUEST_ID_CONFLICT` | 409 | 同一 caller 下重复 `client_request_id` 但请求内容不一致 | no |
+| `JOB_NOT_FOUND` | 404 | 查询的 Job 不存在或不属于当前 caller | no |
+| `QUEUE_FULL` | 503 | 服务当前接单容量已满 | yes |
+| `ASSET_REF_INVALID` | 400 | 素材资源引用非法，例如 `asset.public_url`、`asset.content_type` 格式不符合要求或无法读取 | no |
+| `INPUT_TOO_LARGE` | 400 | 素材大小、图片宽高或像素超过限制 | no |
+| `LABELS_INVALID` | 400 | 标签上下文非法，例如同一资源内 `label_id + language` 重复、`label_name` 为空 | no |
+| `VECTOR_SEARCH_PARAMS_INVALID` | 400 | 搜索参数非法，例如 `search_mode` 和字段组合不匹配，或 `candidate_item_ids` 不是字符串数组 | no |
+| `QUERY_ITEM_NOT_INDEXED` | 404 | `item_ids[]` 中存在未建向量的查询种子资源 | no |
+| `VECTOR_INDEX_NOT_READY` | 409 | 向量索引未就绪 | yes |
+| `MODEL_CALL_FAILED` | 502 | 调用模型失败 | yes |
+| `MODEL_CALL_TIMEOUT` | 504 | 调用模型超时 | yes |
+| `MODEL_OUTPUT_INVALID` | 502 | 模型输出不符合合同，例如向量维度不符、字段缺失或响应不可解析 | no |
+| `ASSET_VECTOR_ALL_ITEMS_FAILED` | 500 | 新增/更新或删除 Job 所有 item 均失败 | no |
+| `JOB_TIMEOUT` | 504 | Job 执行超时 | yes |
+| `JOB_EXECUTION_FAILED` | 500 | 未归类的 Job 执行失败 | no |
+
+错误响应中的 `code` 是数字错误码，`msg` 是错误消息；表中的 Reason 是服务内部和 `job_error.reason` 中使用的稳定错误原因。调用方做业务分支时优先根据 HTTP status、`job_status` 和 `job_error.reason` 处理。

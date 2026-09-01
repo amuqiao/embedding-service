@@ -2,6 +2,43 @@
 
 本文面向业务后端，定义 `asset_image_tagging` 的异步 Job 对接合同。该接口用于批量给图片素材生成候选标签和素材描述；AI 服务不维护素材库，不维护标签库，不写业务数据库。
 
+## 联调参数配置
+
+以下配置区用于双方联调时填写环境地址和密钥。不要把真实生产密钥提交到仓库；交付文档中的密钥应使用占位符，由安全渠道另行下发。
+
+### 测试环境
+
+| 项 | 示例值 | 说明 |
+|---|---|---|
+| Base URL | `https://test-ai.example.com` | 测试环境 AI 服务地址 |
+| API Prefix | `/api/v1/ai-jobs` | 本文接口前缀 |
+| `SERVICE_API_KEY` | `<TEST_SERVICE_API_KEY>` | 用于 `Authorization: Bearer <SERVICE_API_KEY>` |
+| `CALLBACK_SIGNING_SECRET` | `<TEST_CALLBACK_SIGNING_SECRET>` | 用于调用方校验 AI 服务投递的 Callback 签名 |
+| `X-AI-Service-Caller-ID` | `cms-test` | 可选；不传时服务使用 `default` |
+| `X-Request-ID` | `test-asset-image-tagging-001` | 可选；单次请求追踪 ID |
+
+### 生产环境
+
+| 项 | 示例值 | 说明 |
+|---|---|---|
+| Base URL | `https://ai.example.com` | 生产环境 AI 服务地址 |
+| API Prefix | `/api/v1/ai-jobs` | 本文接口前缀 |
+| `SERVICE_API_KEY` | `<PROD_SERVICE_API_KEY>` | 用于 `Authorization: Bearer <SERVICE_API_KEY>` |
+| `CALLBACK_SIGNING_SECRET` | `<PROD_CALLBACK_SIGNING_SECRET>` | 用于调用方校验 AI 服务投递的 Callback 签名 |
+| `X-AI-Service-Caller-ID` | `cms` | 可选；不传时服务使用 `default` |
+| `X-Request-ID` | `prod-asset-image-tagging-001` | 可选；单次请求追踪 ID |
+
+请求头：
+
+```http
+Authorization: Bearer <SERVICE_API_KEY>
+X-AI-Service-Caller-ID: <caller-id>
+X-Request-ID: <request-id>
+Content-Type: application/json
+```
+
+`X-AI-Service-Caller-ID` 是可选调用方标识，不是多租户安全边界。`X-Request-ID` 允许 1 到 128 个 ASCII 字母、数字、点号、下划线、冒号或连字符；不传时服务端生成。
+
 ## 基本信息
 
 | 项 | 内容 |
@@ -101,12 +138,11 @@ label_snapshot[]
 
 ```json
 {
-  "code": "INVALID_JOB_PARAMS",
-  "msg": "job_params is invalid",
-  "error": {
-    "code": "INVALID_JOB_PARAMS",
-    "message": "job_params is invalid",
-    "details": {}
+  "code": "100012",
+  "msg": "invalid job_params",
+  "data": {
+    "field": "job_params.items",
+    "reason": "items must contain at least one asset item"
   },
   "request_id": "req_01",
   "server_time": "2026-08-31T10:01:00+00:00"
@@ -608,19 +644,19 @@ GET /api/v1/ai-jobs/jobs/{job_id}/billing
 
 ### Callback Headers
 
-| Header | 说明 |
-|---|---|
-| `Content-Type` | 固定为 `application/json` |
-| `X-Callback-Timestamp` | 签名时间戳，Unix 秒 |
-| `X-Callback-Signature` | HMAC-SHA256 签名，格式为 `sha256=<hex>` |
-
-签名原文为：
-
-```text
-<X-Callback-Timestamp>.<raw_request_body>
+```http
+Content-Type: application/json
+X-Callback-Timestamp: 2026-08-31T10:01:00+00:00
+X-Callback-Signature: sha256=<hex>
 ```
 
-业务方使用双方预先约定的 Callback 签名密钥对签名原文计算 HMAC-SHA256 后，与 `X-Callback-Signature` 做恒定时间比较。
+签名内容是：
+
+```text
+timestamp + "." + raw_body
+```
+
+签名算法是 HMAC-SHA256，密钥是双方按环境约定的 `CALLBACK_SIGNING_SECRET`。调用方应校验签名、时间戳和 `event_id`，防止伪造与重放。
 
 `event_id` 是 Callback 事件幂等键，业务方应按它去重。同一 `event_id` 重复投递但已成功处理时，业务方仍应返回 `accepted=true`。
 
@@ -729,11 +765,84 @@ GET /api/v1/ai-jobs/jobs/{job_id}/billing
 
 ```json
 {
-  "accepted": true
+  "accepted": true,
+  "msg": "ok",
+  "details": {}
 }
 ```
 
 `204`、空 body、非 JSON body、缺少 `accepted`、`accepted` 不是 boolean，或 `accepted=false` 都会被视为未接受。Callback 投递失败不会改变 Job 终态。业务方必须保留轮询能力。
+
+## Curl 示例
+
+以下示例用于说明当前调用方式。示例中的域名、密钥、Job ID 和资源 URL 需要替换为双方联调环境提供的值。
+
+### 创建图片打标任务
+
+```bash
+curl -sS -X POST "https://test-ai.example.com/api/v1/ai-jobs/jobs" \
+  -H "Authorization: Bearer <TEST_SERVICE_API_KEY>" \
+  -H "X-AI-Service-Caller-ID: cms-test" \
+  -H "X-Request-ID: test-asset-image-tagging-create-001" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_request_id": "asset-image-tagging-import-20260831-001",
+    "job_type": "asset_image_tagging",
+    "job_params": {
+      "tagging_language": "zh",
+      "items": [
+        {
+          "item_id": "hair_001",
+          "item_name": "棕色中长卷发",
+          "category_id": "hair",
+          "category_name": "发型",
+          "asset": {
+            "public_url": "https://bucket.example.com/assets/hair_001.png",
+            "content_type": "image/png"
+          }
+        }
+      ],
+      "label_snapshot": [
+        {
+          "category_id": "hair",
+          "category_name": "发型",
+          "selection_mode": "single",
+          "labels": [
+            {
+              "label_id": "hair_color_brown",
+              "label_name": "棕色",
+              "definition": "头发主体颜色为棕色或棕褐色"
+            },
+            {
+              "label_id": "hair_color_black",
+              "label_name": "黑色",
+              "definition": "头发主体颜色为黑色或深黑色"
+            }
+          ]
+        }
+      ],
+      "rules": {
+        "description_required": true,
+        "description_language": "zh",
+        "return_reason": true,
+        "min_weight": 0.6
+      }
+    },
+    "options": {
+      "priority": "normal",
+      "idempotency_mode": "return_existing"
+    }
+  }'
+```
+
+### 查询图片打标任务
+
+```bash
+curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/jobs/018f9a7f-2b7d-7a0a-9f24-6ff0b87c8b91" \
+  -H "Authorization: Bearer <TEST_SERVICE_API_KEY>" \
+  -H "X-AI-Service-Caller-ID: cms-test" \
+  -H "X-Request-ID: test-asset-image-tagging-poll-001"
+```
 
 ## 处理规则
 
@@ -754,16 +863,26 @@ GET /api/v1/ai-jobs/jobs/{job_id}/billing
 
 ## 错误码
 
-| 错误码 | HTTP 状态 | 场景 | 说明 |
-|---|---:|---|---|
-| `INVALID_JOB_TYPE` | 400 | `job_type` 不支持 | 不创建 Job |
-| `INVALID_JOB_PARAMS` | 400 | `job_params` 结构非法 | 例如 `items[]` 为空、`label_snapshot[]` 为空、`items[].category_id` 没有匹配标签组、ID 重复 |
-| `CLIENT_REQUEST_ID_CONFLICT` | 409 | 幂等键冲突 | 同一 `client_request_id` 对应不同请求指纹 |
-| `UNSUPPORTED_LANGUAGE` | 400 | 语种不支持 | `tagging_language` 或 `description_language` 非法 |
-| `ASSET_LABEL_SCHEMA_INVALID` | 400 | 标签组结构非法 | 例如 `selection_mode` 不支持、`label_id` 重复 |
-| `ASSET_REF_INVALID` | 400 | 素材资源引用非法 | `asset.public_url`、`asset.content_type` 格式不符合要求，或可选 `asset.sha256` 格式不符合要求 |
-| `INPUT_HASH_MISMATCH` | 400 | 素材内容 hash 不一致 | 仅当请求传入可选 `asset.sha256` 且校验不一致时触发；不继续调用模型 |
-| `INPUT_TOO_LARGE` | 400 | 素材大小、图片宽高或像素超过限制 | 不继续调用模型 |
-| `MODEL_CALL_FAILED` | 502 | 模型调用失败 | provider 错误、限流或超时 |
-| `MODEL_OUTPUT_INVALID` | 500 | 模型输出不符合合同 | JSON 非法、未知标签引用、字段缺失、单选标签组返回多个标签 |
-| `ASSET_IMAGE_TAGGING_ALL_ITEMS_FAILED` | 500 | 所有素材都打标失败 | Job 级失败 |
+| Reason | HTTP | 场景 | Retryable |
+|---|---:|---|---:|
+| `UNAUTHORIZED` | 401 | 缺少或错误的 Bearer token | no |
+| `FORBIDDEN` | 403 | caller 被拒绝访问 | no |
+| `REQUEST_ID_INVALID` | 400 | `X-Request-ID` 格式非法 | no |
+| `INVALID_JOB_TYPE` | 400 | `job_type` 未注册或当前环境不允许外部提交 | no |
+| `INVALID_JOB_PARAMS` | 400 | `job_params` 结构非法，例如 `items[]` 为空、`label_snapshot[]` 为空、`items[].category_id` 没有匹配标签组、ID 重复 | no |
+| `CLIENT_REQUEST_ID_CONFLICT` | 409 | 同一 caller 下重复 `client_request_id` 但请求内容不一致 | no |
+| `JOB_NOT_FOUND` | 404 | 查询的 Job 不存在或不属于当前 caller | no |
+| `QUEUE_FULL` | 503 | 服务当前接单容量已满 | yes |
+| `UNSUPPORTED_LANGUAGE` | 400 | `tagging_language` 或 `description_language` 不支持 | no |
+| `ASSET_LABEL_SCHEMA_INVALID` | 400 | 标签组结构非法，例如 `selection_mode` 不支持、`label_id` 重复 | no |
+| `ASSET_REF_INVALID` | 400 | 素材资源引用非法，例如 `asset.public_url`、`asset.content_type` 格式不符合要求，或可选 `asset.sha256` 格式不符合要求 | no |
+| `INPUT_HASH_MISMATCH` | 400 | 请求传入可选 `asset.sha256` 且素材内容 hash 校验不一致 | no |
+| `INPUT_TOO_LARGE` | 400 | 素材大小、图片宽高或像素超过限制 | no |
+| `MODEL_CALL_FAILED` | 502 | 调用模型失败 | yes |
+| `MODEL_CALL_TIMEOUT` | 504 | 调用模型超时 | yes |
+| `MODEL_OUTPUT_INVALID` | 502 | 模型输出不符合合同，例如 JSON 非法、未知标签引用、字段缺失、单选标签组返回多个标签 | no |
+| `ASSET_IMAGE_TAGGING_ALL_ITEMS_FAILED` | 500 | 所有素材都打标失败 | no |
+| `JOB_TIMEOUT` | 504 | Job 执行超时 | yes |
+| `JOB_EXECUTION_FAILED` | 500 | 未归类的 Job 执行失败 | no |
+
+错误响应中的 `code` 是数字错误码，`msg` 是错误消息；表中的 Reason 是服务内部和 `job_error.reason` 中使用的稳定错误原因。调用方做业务分支时优先根据 HTTP status、`job_status` 和 `job_error.reason` 处理。
