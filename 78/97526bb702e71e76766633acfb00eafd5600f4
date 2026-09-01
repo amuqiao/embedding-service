@@ -1,0 +1,33 @@
+docs/api/asset-image-tagging-api.md
+  s_ee0ef3cef2319f::t_272d2cd636a7ff 5-41,141-145,647-651,653,656,659,768-770,776-846,866-888
+docs/api/asset-vector-api.md
+  s_ee0ef3cef2319f::t_272d2cd636a7ff 5-41,117-121,180-199,309,336-338,410,487,553,587,646,921-1086,1109-1132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "7897526bb702e71e76766633acfb00eafd5600f4",
+  "prompts": {},
+  "sessions": {
+    "s_ee0ef3cef2319f": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a943b0231955f2f6cec29bb",
+        "model": "Doubao-Seed-2.1-pro__dev"
+      },
+      "human_author": "wangqiao <wangqiao@crazymaplestudio.com>",
+      "custom_attributes": {
+        "edit_kind": "bash",
+        "tool_use_id": "6a9681d931955f2f6cec2b4b",
+        "operation_id": "6a9681d931955f2f6cec2b4b",
+        "tool_name": "Shell",
+        "external_session_id": "6a943b0231955f2f6cec29bb",
+        "session_id": "6a943b0231955f2f6cec29bb",
+        "runtime_client": "trae-tob-git-ai",
+        "display_model_name": "Doubao-Seed-2.1-Pro",
+        "source_scene": "agent",
+        "client_type": "ide"
+      }
+    }
+  }
+}
