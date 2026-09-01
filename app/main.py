@@ -23,7 +23,7 @@ from app.core.error_registry import freeze_error_registry
 from app.core.registry_checks import validate_all_registries
 from app.schemas.errors import build_error_envelope
 from app.schemas.envelope import success_resp
-from app.jobs.types.register import register_all_job_types
+from app.business_packages.register import include_business_package_routes, register_all_business_packages
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +267,7 @@ def _request_id(request: Request) -> str:
 
 def bootstrap_runtime() -> None:
     from app.capabilities.registry import freeze as freeze_capability_registry
-    register_all_job_types()
+    register_all_business_packages()
     from app.tools.registry import freeze as freeze_tool_registry
 
     freeze_error_registry()
@@ -383,6 +383,7 @@ def include_routes(application: FastAPI) -> None:
     application.include_router(health.router)
     application.include_router(meta.router, prefix=API_PREFIX)
     application.include_router(jobs.router, prefix=API_PREFIX)
+    include_business_package_routes(application, api_prefix=API_PREFIX)
 
 
 def include_optional_ops_dashboard(application: FastAPI) -> None:

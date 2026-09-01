@@ -25,4 +25,8 @@ def register_job_package(register: RegisterExecutor) -> None:
     register_poster_title_image_workflow()
 
 
-PACKAGE = JobTypePackage(name="poster_title_image", register=register_job_package)
+PACKAGE = JobTypePackage(
+    name="poster_title_image",
+    register=register_job_package,
+    requires_object_storage=True,
+)

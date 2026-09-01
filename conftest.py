@@ -5,8 +5,8 @@ registry (e.g. via run_ai_job or job status validation).
 """
 import os
 
-os.environ["ENABLED_JOB_TYPES"] = ""
+os.environ["ENABLED_BUSINESS_PACKAGES"] = ""
 
-from app.jobs.types.register import register_all_job_types
+from app.business_packages.register import register_all_business_packages
 
-register_all_job_types()
+register_all_business_packages()

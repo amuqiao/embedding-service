@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Sequence
 
+from app.business_packages.base import BusinessPackage, RegisterJobExecutor
 from app.jobs.base import JobExecutor
 
 
-RegisterExecutor = Callable[[JobExecutor], JobExecutor]
-
-
-@dataclass(frozen=True)
-class JobTypePackage:
-    name: str
-    register: Callable[[RegisterExecutor], None]
+RegisterExecutor = RegisterJobExecutor
+JobTypePackage = BusinessPackage
 
 
 def register_executor_classes(

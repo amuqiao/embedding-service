@@ -13,7 +13,7 @@ from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest, ExampleLifecycleProbeParams
 from app.services.job_runtime import payload_hash, write_runtime_json
 from app.services.jobs import validate_create_contract
-from app.jobs.types.register import register_all_job_types
+from app.business_packages.register import register_all_business_packages
 
 
 @pytest.mark.asyncio
@@ -82,7 +82,7 @@ def test_lifecycle_probe_rejects_total_simulated_wait_over_limit():
 
 
 def test_lifecycle_probe_allows_callback_at_create_time():
-    register_all_job_types()
+    register_all_business_packages()
     payload = CreateJobRequest.model_validate(
         {
             "client_request_id": "example-lifecycle-callback",

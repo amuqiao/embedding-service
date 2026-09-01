@@ -22,7 +22,7 @@ from app.jobs.types.audio_stem_separation_triton import executor as triton_execu
 from app.jobs.types.audio_stem_separation_triton import storage_adapter as triton_storage_adapter
 from app.jobs.types.audio_stem_separation_triton.storage_adapter import AudioStemSeparationTritonStorageAdapter
 from app.jobs.types.audio_stem_separation_triton.storage_policy import AudioStemSeparationTritonStoragePolicy
-from app.jobs.types.register import register_all_job_types
+from app.business_packages.register import register_all_business_packages
 from app.models.job import Job
 from app.schemas.jobs import AudioStemSeparationTritonParams, AudioStemSeparationTritonResult
 from app.services.job_runtime import build_runtime_snapshot, output_target_from_job, payload_hash, write_runtime_json
@@ -38,7 +38,7 @@ def _url_ref(key: str, data: bytes, *, content_type: str = "audio/wav") -> dict:
 
 
 def _handler():
-    register_all_job_types()
+    register_all_business_packages()
     return job_registry.get("audio_stem_separation_triton")
 
 

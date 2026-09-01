@@ -11,7 +11,7 @@ from app.services.job_runtime import payload_hash
 from app.services.jobs import _validate_workflow_child_admission
 from app.jobs import registry as job_registry
 from app.jobs.runner import execute_job, fail_job
-from app.jobs.types.register import register_all_job_types
+from app.business_packages.register import register_all_business_packages
 from app.tasks import jobs as task_jobs
 from app.workflows.orchestrator import (
     _create_child_job,
@@ -287,7 +287,7 @@ async def test_workflow_child_validation_rejects_non_text_model_for_builtin_text
 
 @pytest.mark.asyncio
 async def test_create_child_job_rejects_disabled_job_type():
-    register_all_job_types()
+    register_all_business_packages()
     job_registry.configure_enabled_job_types(
         ("tagged_text_translation",),
         external_job_types=("tagged_text_translation",),
@@ -600,7 +600,7 @@ async def test_publish_job_attempt_records_failed_publish_after_broker_error(mon
 
 @pytest.mark.asyncio
 async def test_execute_job_runs_custom_job_without_model_runtime(monkeypatch):
-    register_all_job_types()
+    register_all_business_packages()
     job = _running_add_job()
     lease_token = uuid.uuid4()
     attempt = _attempt(id=job.active_attempt_id, job_id=job.id, lease_token=lease_token)
@@ -675,7 +675,7 @@ async def test_execute_job_runs_custom_job_without_model_runtime(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_execute_workflow_root_creates_ready_internal_child_jobs(monkeypatch):
-    register_all_job_types()
+    register_all_business_packages()
     root_params = {"workflow": True}
     root_job = Job(
         id=uuid.uuid4(),
@@ -1119,7 +1119,7 @@ async def test_create_ready_child_jobs_rejects_mismatched_persisted_plan_header(
 
 @pytest.mark.asyncio
 async def test_reconcile_workflow_root_creates_missing_ready_child(monkeypatch):
-    register_all_job_types()
+    register_all_business_packages()
     root_job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
@@ -1295,7 +1295,7 @@ async def test_create_ready_child_jobs_rejects_invalid_persisted_plan_header(
 
 @pytest.mark.asyncio
 async def test_advance_workflow_after_child_success_creates_downstream_ready_child(monkeypatch):
-    register_all_job_types()
+    register_all_business_packages()
     root_job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
@@ -2102,7 +2102,7 @@ async def test_execute_workflow_root_rejects_cyclic_persisted_workflow_plan(monk
 
 @pytest.mark.asyncio
 async def test_execute_job_marks_attempt_succeeded_in_same_success_path(monkeypatch):
-    register_all_job_types()
+    register_all_business_packages()
     job = _running_add_job()
     lease_token = uuid.uuid4()
     attempt = _attempt(id=job.active_attempt_id, job_id=job.id, lease_token=lease_token)
@@ -2141,7 +2141,7 @@ async def test_execute_job_marks_attempt_succeeded_in_same_success_path(monkeypa
 
 @pytest.mark.asyncio
 async def test_execute_internal_child_success_runs_workflow_advance_side_effects(monkeypatch):
-    register_all_job_types()
+    register_all_business_packages()
     job = _running_add_job()
     job.root_job_id = uuid.uuid4()
     job.workflow_node_key = "first"
@@ -2223,7 +2223,7 @@ async def test_execute_job_reports_unregistered_job_type(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_execute_job_reports_disabled_job_type(monkeypatch):
-    register_all_job_types()
+    register_all_business_packages()
     job_registry.configure_enabled_job_types(
         ("tagged_text_translation",),
         external_job_types=("tagged_text_translation",),
@@ -2431,7 +2431,7 @@ async def test_fail_job_marks_job_failed_and_leaves_callback_to_callbacker(monke
 
 @pytest.mark.asyncio
 async def test_fail_job_projects_unlisted_runtime_error_before_public_exposure(monkeypatch):
-    register_all_job_types()
+    register_all_business_packages()
     job = _running_add_job()
     job.active_attempt_id = None
     error = {"code": "MODEL_CALL_FAILED", "message": "provider failed", "details": {"provider": "x"}}

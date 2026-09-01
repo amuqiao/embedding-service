@@ -26,13 +26,6 @@ _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TEXT_LENGTH: int = 10_000
 _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TOTAL_TEXT_LENGTH: int = (
     _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_ITEMS * _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TEXT_LENGTH
 )
-_OBJECT_STORAGE_REQUIRED_JOB_TYPES = frozenset(
-    {
-        "audio_stem_separation",
-        "audio_stem_separation_triton",
-        "poster_title_image",
-    }
-)
 _RELEASE_APP_ENVS = frozenset({"test", "prd"})
 _PLACEHOLDER_SECRET_VALUES = frozenset(
     {
@@ -75,6 +68,7 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "DASHSCOPE_API_KEY": ("ai_provider", "dashscope_api_key"),
     "DASHSCOPE_BASE_URL": ("ai_provider", "dashscope_base_url"),
     "MODEL_CONFIG_PATH": ("registry", "model_config_path_raw"),
+    "ENABLED_BUSINESS_PACKAGES": ("registry", "enabled_business_packages_raw"),
     "MODEL_CALL_TIMEOUT_SECONDS": ("ai_provider", "model_call_timeout_seconds"),
     "BILLING_ENABLED": ("billing", "enabled"),
     "MODEL_CATALOG_EXPOSE_BILLING_CAPABILITY": ("billing", "model_catalog_expose_billing_capability"),
@@ -85,7 +79,6 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "OPS_DASHBOARD_MAX_WINDOW_SECONDS": ("ops_dashboard", "max_window_seconds"),
     "OPS_DASHBOARD_QUERY_TIMEOUT_SECONDS": ("ops_dashboard", "query_timeout_seconds"),
     "MAX_ACTIVE_JOBS": ("job", "max_active_jobs"),
-    "ENABLED_JOB_TYPES": ("job", "enabled_job_types_raw"),
     "OSS_INPUT_MAX_BYTES": ("job", "oss_input_max_bytes"),
     "TAGGED_TEXT_TRANSLATION_MAX_ITEMS": ("job", "tagged_text_translation", "max_items"),
     "TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH": ("job", "tagged_text_translation", "max_text_length"),
@@ -118,7 +111,7 @@ _REMOVED_JOB_TYPE_OSS_ENV_KEYS = frozenset(
     }
 )
 REMOVED_APPLICATION_ENV_KEYS = frozenset(
-    {"DEFAULT_MODEL_ID", "OPS_DASHBOARD_MOCK_DATA_ENABLED"} | _REMOVED_JOB_TYPE_OSS_ENV_KEYS
+    {"DEFAULT_MODEL_ID", "ENABLED_JOB_TYPES", "OPS_DASHBOARD_MOCK_DATA_ENABLED"} | _REMOVED_JOB_TYPE_OSS_ENV_KEYS
 )
 LAUNCHER_ENV_KEYS: frozenset[str] = frozenset(
     {
@@ -482,6 +475,16 @@ class AIProviderSettings(ConfigSection):
 class RegistrySettings(ConfigSection):
     model_config_path_raw: str = "app/ai/catalog/models.yaml"
     prompt_config_path_raw: str = "app/core/prompts.yaml"
+    enabled_business_packages_raw: str = ""
+
+    @model_validator(mode="after")
+    def validate_registry(self) -> "RegistrySettings":
+        if self.enabled_business_packages_raw.strip():
+            _comma_separated_non_empty_values(
+                self.enabled_business_packages_raw,
+                env_name="ENABLED_BUSINESS_PACKAGES",
+            )
+        return self
 
     @property
     def model_config_path(self) -> Path:
@@ -490,6 +493,15 @@ class RegistrySettings(ConfigSection):
     @property
     def prompt_config_path(self) -> Path:
         return _resolve_repo_path(self.prompt_config_path_raw)
+
+    @property
+    def enabled_business_packages(self) -> tuple[str, ...]:
+        if not self.enabled_business_packages_raw.strip():
+            return ()
+        return _comma_separated_non_empty_values(
+            self.enabled_business_packages_raw,
+            env_name="ENABLED_BUSINESS_PACKAGES",
+        )
 
 
 class BillingSettings(ConfigSection):
@@ -644,7 +656,6 @@ class AudioStemTritonJobSettings(ConfigSection):
 
 class JobSettings(ConfigSection):
     max_active_jobs: int = 5000
-    enabled_job_types_raw: str = ""
     oss_input_max_bytes: int = 5_242_880
     tagged_text_translation: TaggedTextTranslationJobSettings = Field(
         default_factory=TaggedTextTranslationJobSettings
@@ -673,28 +684,7 @@ class JobSettings(ConfigSection):
                 raise ValueError(f"{name} must be greater than 0")
         if self.max_active_jobs < 0:
             raise ValueError("MAX_ACTIVE_JOBS must be greater than or equal to 0")
-        if self.enabled_job_types_raw.strip():
-            _comma_separated_non_empty_values(
-                self.enabled_job_types_raw,
-                env_name="ENABLED_JOB_TYPES",
-            )
         return self
-
-    @property
-    def enabled_job_types(self) -> tuple[str, ...]:
-        if not self.enabled_job_types_raw.strip():
-            return ()
-        return _comma_separated_non_empty_values(
-            self.enabled_job_types_raw,
-            env_name="ENABLED_JOB_TYPES",
-        )
-
-    @property
-    def object_storage_required_by_enabled_job_types(self) -> bool:
-        enabled = set(self.enabled_job_types)
-        if not enabled:
-            return True
-        return bool(enabled & _OBJECT_STORAGE_REQUIRED_JOB_TYPES)
 
 
 class ObservabilitySettings(ConfigSection):
@@ -741,8 +731,6 @@ class Settings(BaseSettings):
                 raise ValueError("release APP_ENV must not disable HTTP auth or caller id headers")
             if self.callback.allow_insecure_callbacks:
                 raise ValueError("release APP_ENV must not allow insecure callbacks")
-            if self.storage.backend == "local" and self.job.object_storage_required_by_enabled_job_types:
-                raise ValueError("release APP_ENV must not use STORAGE_BACKEND=local")
             if _looks_like_placeholder_secret(self.security.api_key) or len(self.security.api_key) < 16:
                 raise ValueError("release APP_ENV requires a non-placeholder SERVICE_API_KEY with at least 16 characters")
             if (

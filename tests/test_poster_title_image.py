@@ -743,11 +743,11 @@ def test_poster_title_image_rejects_reference_oss_outside_allowlist(ref):
 
 
 def test_poster_title_image_create_request_does_not_require_runtime_prompt_payload(monkeypatch):
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
     from app.services.jobs import _validate_create_request
 
     _patch_poster_executor_settings(monkeypatch)
-    register_all_job_types()
+    register_all_business_packages()
     handler, job_params, runtime_fields = _validate_create_request(
         CreateJobRequest(
             client_request_id="poster-1",
@@ -789,11 +789,11 @@ def test_poster_title_image_model_options_accept_catalog_sizes():
 
 
 def test_poster_title_image_create_request_preserves_title_text_line_break(monkeypatch):
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
     from app.services.jobs import _validate_create_request
 
     _patch_poster_executor_settings(monkeypatch)
-    register_all_job_types()
+    register_all_business_packages()
     params = _params(_url_ref("reference/title.png", b"x"))
     params["items"][0]["title_text"] = "AI美术封面2\nhuanghang"
 
@@ -809,10 +809,10 @@ def test_poster_title_image_create_request_preserves_title_text_line_break(monke
 
 
 def test_poster_title_image_create_request_rejects_html_line_break():
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
     from app.services.jobs import _validate_create_request
 
-    register_all_job_types()
+    register_all_business_packages()
     params = _params(_url_ref("reference/title.png", b"x"))
     params["items"][0]["title_text"] = "AI美术封面2<br />huanghang"
 
@@ -830,10 +830,10 @@ def test_poster_title_image_create_request_rejects_html_line_break():
 
 
 def test_poster_title_image_create_request_rejects_unicode_line_separator():
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
     from app.services.jobs import _validate_create_request
 
-    register_all_job_types()
+    register_all_business_packages()
     params = _params(_url_ref("reference/title.png", b"x"))
     params["items"][0]["title_text"] = "AI美术封面2\u2028huanghang"
 
@@ -859,10 +859,10 @@ def test_poster_title_image_create_request_rejects_unicode_line_separator():
     ],
 )
 def test_poster_title_image_create_request_rejects_invalid_title_text_line_breaks(title_text):
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
     from app.services.jobs import _validate_create_request
 
-    register_all_job_types()
+    register_all_business_packages()
     params = _params(_url_ref("reference/title.png", b"x"))
     params["items"][0]["title_text"] = title_text
 
@@ -887,10 +887,10 @@ def test_poster_title_image_create_request_rejects_invalid_title_text_line_break
     ],
 )
 def test_poster_title_image_create_request_rejects_prompt_override_line_break_control(field_name, value):
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
     from app.services.jobs import _validate_create_request
 
-    register_all_job_types()
+    register_all_business_packages()
     params = _params(_url_ref("reference/title.png", b"x"))
     params["items"][0]["prompt_overrides"] = {field_name: value}
 
@@ -908,11 +908,11 @@ def test_poster_title_image_create_request_rejects_prompt_override_line_break_co
 
 
 def test_poster_title_image_create_request_accepts_shared_language_outside_legacy_subset(monkeypatch):
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
     from app.services.jobs import _validate_create_request
 
     _patch_poster_executor_settings(monkeypatch)
-    register_all_job_types()
+    register_all_business_packages()
     params = _params(_url_ref("reference/title.png", b"x"))
     params["items"][0]["language"] = "en"
     handler, job_params, runtime_fields = _validate_create_request(
@@ -929,11 +929,11 @@ def test_poster_title_image_create_request_accepts_shared_language_outside_legac
 
 
 def test_poster_title_image_create_request_accepts_allowed_caller_model_id(monkeypatch):
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
     from app.services.jobs import _validate_create_request
 
     _patch_poster_executor_settings(monkeypatch)
-    register_all_job_types()
+    register_all_business_packages()
     handler, job_params, runtime_fields = _validate_create_request(
         CreateJobRequest(
             client_request_id="poster-1",
@@ -948,10 +948,10 @@ def test_poster_title_image_create_request_accepts_allowed_caller_model_id(monke
 
 
 def test_poster_title_image_create_request_rejects_model_outside_allowlist():
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
     from app.services.jobs import _validate_create_request
 
-    register_all_job_types()
+    register_all_business_packages()
     with pytest.raises(AppError) as exc:
         _validate_create_request(
             CreateJobRequest(
@@ -966,7 +966,7 @@ def test_poster_title_image_create_request_rejects_model_outside_allowlist():
 
 
 def test_poster_title_image_create_request_rejects_unavailable_configured_generation_model(monkeypatch):
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
     from app.services.jobs import _validate_create_request
 
     monkeypatch.setattr(
@@ -988,7 +988,7 @@ def test_poster_title_image_create_request_rejects_unavailable_configured_genera
         "app.jobs.types.poster_title_image.executor.poster_title_image_generation_allowed_model_ids",
         lambda: ("not-an-image-model",),
     )
-    register_all_job_types()
+    register_all_business_packages()
     with pytest.raises(Exception, match="模型不可用"):
         _validate_create_request(
             CreateJobRequest(

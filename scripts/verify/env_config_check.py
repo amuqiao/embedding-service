@@ -148,6 +148,9 @@ import sys
 from pydantic import ValidationError
 try:
     from app.core.config import settings
+    from app.business_packages.register import validate_business_package_config
+
+    validate_business_package_config(settings)
 except ValidationError as exc:
     parts = []
     for error in exc.errors():
@@ -158,7 +161,7 @@ except ValidationError as exc:
     print(f"ERROR: app config invalid: {messages}", file=sys.stderr)
     raise SystemExit(1)
 except Exception as exc:
-    print(f"ERROR: app config invalid: {type(exc).__name__}", file=sys.stderr)
+    print(f"ERROR: app config invalid: {type(exc).__name__}: {exc}", file=sys.stderr)
     raise SystemExit(1)
 release = "true" if settings.runtime.is_release_env else "false"
 print(f"OK        app-config app_env={settings.runtime.app_env} release={release}")

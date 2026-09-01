@@ -158,9 +158,9 @@ def is_demo_job_type(job_type: str | None) -> bool:
     if not job_type:
         return False
     from app.jobs import registry as job_registry
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
 
-    register_all_job_types()
+    register_all_business_packages()
     try:
         spec = job_registry.all_job_type_specs()[job_type]
     except KeyError as exc:

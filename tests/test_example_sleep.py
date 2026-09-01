@@ -11,7 +11,7 @@ from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest
 from app.services.job_runtime import payload_hash, write_runtime_json
 from app.services.jobs import validate_create_contract
-from app.jobs.types.register import register_all_job_types
+from app.business_packages.register import register_all_business_packages
 
 
 @pytest.mark.asyncio
@@ -33,7 +33,7 @@ async def test_example_sleep_can_simulate_execution_delay(monkeypatch):
 
 
 def test_example_sleep_rejects_callback_at_create_time():
-    register_all_job_types()
+    register_all_business_packages()
     payload = CreateJobRequest.model_validate(
         {
             "client_request_id": "example-sleep-callback",

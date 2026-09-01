@@ -7,11 +7,11 @@ def ensure_worker_runtime_initialized() -> None:
     from app.core.error_registry import freeze_error_registry
     from app.ai.catalog.registry import validate_model_catalog
     from app.core.registry_checks import validate_all_registries
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
     from app.tools.registry import freeze as freeze_tool_registry
 
     init_db_engine()
-    register_all_job_types()
+    register_all_business_packages()
     freeze_error_registry()
     freeze_tool_registry()
     freeze_capability_registry()

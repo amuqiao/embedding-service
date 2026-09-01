@@ -27,7 +27,7 @@ from app.core.registry_checks import (
 )
 from app.main import app
 from app.jobs.base import JobExecutor, JobTypeSpec, PromptSpec
-from app.jobs.types.register import job_type_package_modules, load_job_type_packages, register_all_job_types
+from app.business_packages.register import business_package_modules, load_business_packages, register_all_business_packages
 from app.jobs import registry as job_registry
 from app.jobs.types.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
@@ -482,7 +482,7 @@ def _patch_job_type_specs(monkeypatch, specs: dict[str, JobTypeSpec]) -> None:
 
 
 def test_job_type_registry_exposes_required_metadata():
-    register_all_job_types()
+    register_all_business_packages()
     specs = job_registry.all_job_type_specs()
 
     assert "example_pair" in specs
@@ -704,7 +704,7 @@ def test_job_type_registry_exposes_required_metadata():
 
 
 def test_registered_job_type_names_are_layered_contract():
-    register_all_job_types()
+    register_all_business_packages()
     specs = job_registry.all_job_type_specs()
     source_job_type_names = _registered_job_type_names_in_source()
 
@@ -738,7 +738,7 @@ def test_registered_job_type_names_are_layered_contract():
     }
 
 
-def test_job_type_packages_are_explicit_lazy_composition_root():
+def test_business_packages_are_explicit_lazy_composition_root():
     expected_modules = (
         "app.jobs.types.arithmetic",
         "app.jobs.types.examples",
@@ -751,8 +751,8 @@ def test_job_type_packages_are_explicit_lazy_composition_root():
         "app.jobs.types.audio_stem_separation_triton.register",
     )
 
-    assert job_type_package_modules() == expected_modules
-    packages = load_job_type_packages()
+    assert business_package_modules() == expected_modules
+    packages = load_business_packages()
     assert [package.name for package in packages] == [
         "arithmetic",
         "examples",
@@ -765,7 +765,7 @@ def test_job_type_packages_are_explicit_lazy_composition_root():
         "audio_stem_separation_triton",
     ]
 
-    register_path = APP_DIR / "jobs" / "types" / "register.py"
+    register_path = APP_DIR / "business_packages" / "register.py"
     tree = ast.parse(register_path.read_text(encoding="utf-8"))
     direct_business_imports = []
     unexpected_job_type_import_strings = []
@@ -784,27 +784,29 @@ def test_job_type_packages_are_explicit_lazy_composition_root():
     assert unexpected_job_type_import_strings == []
 
 
-def test_loading_job_type_packages_has_no_registry_side_effects():
+def test_loading_business_packages_has_no_registry_side_effects():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
 
-    packages = load_job_type_packages()
+    packages = load_business_packages()
 
     assert packages
     assert job_registry.all_job_types() == []
     assert workflow_registry.all_workflow_types() == []
 
 
-def test_enabled_job_types_default_to_all_registered_job_types():
+def test_business_packages_default_to_all_registered_job_types():
     job_registry.clear_for_tests()
-    register_all_job_types()
+    workflow_registry.clear_for_tests()
+    register_all_business_packages()
 
     assert set(job_registry.enabled_job_types()) == set(job_registry.all_job_types())
 
 
-def test_enabled_job_types_default_external_job_types_exclude_leaf_children():
+def test_business_packages_default_external_job_types_exclude_leaf_children():
     job_registry.clear_for_tests()
-    register_all_job_types()
+    workflow_registry.clear_for_tests()
+    register_all_business_packages()
 
     external_job_types = set(job_registry.external_job_types())
 
@@ -813,17 +815,19 @@ def test_enabled_job_types_default_external_job_types_exclude_leaf_children():
     assert "poster_title_image_join" not in external_job_types
 
 
-def test_enabled_job_types_default_external_job_types_exclude_demo_in_release_env(monkeypatch):
+def test_business_packages_default_external_job_types_exclude_demo_in_release_env(monkeypatch):
     job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
     monkeypatch.setattr(
         "app.core.config.settings",
         SimpleNamespace(
             runtime=SimpleNamespace(is_release_env=True),
-            job=SimpleNamespace(enabled_job_types=()),
+            registry=SimpleNamespace(enabled_business_packages=()),
+            storage=SimpleNamespace(backend="aliyun_oss"),
         ),
     )
 
-    register_all_job_types()
+    register_all_business_packages()
 
     assert set(job_registry.enabled_job_types()) == set(job_registry.all_job_types())
     assert "tagged_text_translation" in set(job_registry.external_job_types())
@@ -832,19 +836,21 @@ def test_enabled_job_types_default_external_job_types_exclude_demo_in_release_en
     assert "audio_stem_separation" not in set(job_registry.external_job_types())
 
 
-def test_enabled_job_types_allowlist_keeps_registered_catalog_and_enables_requested_roots(monkeypatch):
+def test_enabled_business_packages_registers_selected_package_only(monkeypatch):
     job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
     monkeypatch.setattr(
         "app.core.config.settings",
         SimpleNamespace(
             runtime=SimpleNamespace(is_release_env=False),
-            job=SimpleNamespace(enabled_job_types=("tagged_text_translation",)),
+            registry=SimpleNamespace(enabled_business_packages=("tagged_text_translation",)),
+            storage=SimpleNamespace(backend="local"),
         ),
     )
 
-    register_all_job_types()
+    register_all_business_packages()
 
-    assert "poster_title_image" in set(job_registry.all_job_types())
+    assert set(job_registry.all_job_types()) == {"tagged_text_translation"}
     assert set(job_registry.enabled_job_types()) == {"tagged_text_translation"}
     assert set(job_registry.external_job_types()) == {"tagged_text_translation"}
     assert job_registry.is_job_type_enabled("tagged_text_translation") is True
@@ -853,36 +859,41 @@ def test_enabled_job_types_allowlist_keeps_registered_catalog_and_enables_reques
     assert job_registry.is_external_job_type_enabled("poster_title_image") is False
 
 
-def test_enabled_job_type_factory_keeps_registered_catalog_separate_from_runtime_allowlist(monkeypatch):
+def test_enabled_job_type_factory_rejects_unselected_business_package_job_type(monkeypatch):
     from app.jobs.factory import get_enabled_job_executor, get_job_executor
 
     job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
     monkeypatch.setattr(
         "app.core.config.settings",
         SimpleNamespace(
             runtime=SimpleNamespace(is_release_env=False),
-            job=SimpleNamespace(enabled_job_types=("tagged_text_translation",)),
+            registry=SimpleNamespace(enabled_business_packages=("tagged_text_translation",)),
+            storage=SimpleNamespace(backend="local"),
         ),
     )
 
-    register_all_job_types()
+    register_all_business_packages()
 
-    assert get_job_executor("poster_title_image").name == "poster_title_image"
+    with pytest.raises(KeyError, match="No job executor"):
+        get_job_executor("poster_title_image")
     with pytest.raises(KeyError, match="No enabled job executor"):
         get_enabled_job_executor("poster_title_image")
 
 
-def test_enabled_job_types_adds_static_workflow_children(monkeypatch):
+def test_enabled_business_package_registers_static_workflow_children(monkeypatch):
     job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
     monkeypatch.setattr(
         "app.core.config.settings",
         SimpleNamespace(
             runtime=SimpleNamespace(is_release_env=False),
-            job=SimpleNamespace(enabled_job_types=("poster_title_image",)),
+            registry=SimpleNamespace(enabled_business_packages=("poster_title_image",)),
+            storage=SimpleNamespace(backend="aliyun_oss"),
         ),
     )
 
-    register_all_job_types()
+    register_all_business_packages()
 
     assert set(job_registry.enabled_job_types()) == {
         "poster_title_image",
@@ -894,50 +905,55 @@ def test_enabled_job_types_adds_static_workflow_children(monkeypatch):
     assert job_registry.is_external_job_type_enabled("poster_title_image_generate_item") is False
 
 
-def test_enabled_job_types_does_not_expose_workflow_children_as_external(monkeypatch):
+def test_enabled_business_package_does_not_expose_workflow_leaf_children(monkeypatch):
     job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
     monkeypatch.setattr(
         "app.core.config.settings",
         SimpleNamespace(
             runtime=SimpleNamespace(is_release_env=False),
-            job=SimpleNamespace(enabled_job_types=("example_workflow",)),
+            registry=SimpleNamespace(enabled_business_packages=("examples",)),
+            storage=SimpleNamespace(backend="local"),
         ),
     )
 
-    register_all_job_types()
+    register_all_business_packages()
 
     assert {"example_sleep", "example_pair", "example_collect"} <= set(job_registry.enabled_job_types())
-    assert set(job_registry.external_job_types()) == {"example_workflow"}
-    assert job_registry.is_external_job_type_enabled("example_sleep") is False
+    assert {"example_workflow", "example_sleep", "example_pair"} <= set(job_registry.external_job_types())
+    assert job_registry.is_external_job_type_enabled("example_collect") is False
 
 
-@pytest.mark.parametrize("enabled_job_types", [("missing_job",), ("poster_title_image_join",)])
-def test_enabled_job_types_rejects_unknown_or_internal_job_type(monkeypatch, enabled_job_types):
+def test_enabled_business_packages_rejects_unknown_package(monkeypatch):
     job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
     monkeypatch.setattr(
         "app.core.config.settings",
         SimpleNamespace(
             runtime=SimpleNamespace(is_release_env=False),
-            job=SimpleNamespace(enabled_job_types=enabled_job_types),
+            registry=SimpleNamespace(enabled_business_packages=("missing_package",)),
+            storage=SimpleNamespace(backend="local"),
         ),
     )
 
-    with pytest.raises(ValueError, match="ENABLED_JOB_TYPES"):
-        register_all_job_types()
+    with pytest.raises(ValueError, match="ENABLED_BUSINESS_PACKAGES"):
+        register_all_business_packages()
 
 
-def test_enabled_job_types_rejects_demo_job_type_in_release_env(monkeypatch):
+def test_enabled_business_packages_release_local_storage_rejects_object_storage_package(monkeypatch):
     job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
     monkeypatch.setattr(
         "app.core.config.settings",
         SimpleNamespace(
             runtime=SimpleNamespace(is_release_env=True),
-            job=SimpleNamespace(enabled_job_types=("example_pair",)),
+            registry=SimpleNamespace(enabled_business_packages=("poster_title_image",)),
+            storage=SimpleNamespace(backend="local"),
         ),
     )
 
-    with pytest.raises(ValueError, match="release APP_ENV ENABLED_JOB_TYPES"):
-        register_all_job_types()
+    with pytest.raises(ValueError, match="STORAGE_BACKEND=local"):
+        register_all_business_packages()
 
 
 def test_register_job_type_decorator_is_marker_not_registration_side_effect():
@@ -1001,7 +1017,7 @@ def test_registry_layers_do_not_depend_on_callers():
 
 
 def test_poster_title_image_retry_policy_is_scoped_to_transient_leaf_execution():
-    register_all_job_types()
+    register_all_business_packages()
     specs = job_registry.all_job_type_specs()
     retryable_codes = ["AI_PROVIDER_FAILED", "JOB_TIMEOUT", "MODEL_CALL_TIMEOUT", "OSS_FETCH_FAILED", "OSS_WRITE_FAILED"]
     expected_leaf_business = {
@@ -1026,7 +1042,7 @@ def test_poster_title_image_retry_policy_is_scoped_to_transient_leaf_execution()
 
 
 def test_poster_title_image_job_types_declare_business_log_events():
-    register_all_job_types()
+    register_all_business_packages()
     specs = job_registry.all_job_type_specs()
     assert specs["poster_title_image"].log_events == (
         LogEvent.POSTER_TITLE_IMAGE_STYLE_PROBE_COMPLETED,
@@ -1556,7 +1572,7 @@ def test_validate_job_type_registry_rejects_bad_prompt_spec_field_type(monkeypat
 
 
 def test_registry_consistency_check_passes():
-    register_all_job_types()
+    register_all_business_packages()
     validate_all_registries(app)
 
 
@@ -1623,7 +1639,7 @@ def test_worker_registration_validates_job_type_registry(monkeypatch):
     calls = {}
 
     monkeypatch.setattr("app.core.database.init_db_engine", lambda: calls.setdefault("db", True))
-    monkeypatch.setattr("app.jobs.types.register.register_all_job_types", lambda: calls.setdefault("jobs", True))
+    monkeypatch.setattr("app.business_packages.register.register_all_business_packages", lambda: calls.setdefault("jobs", True))
     monkeypatch.setattr("app.core.error_registry.freeze_error_registry", lambda: calls.setdefault("errors", True))
     monkeypatch.setattr("app.core.registry_checks.validate_all_registries", lambda: calls.setdefault("registry", True))
     monkeypatch.setattr("app.ai.catalog.registry.validate_model_catalog", lambda: calls.setdefault("models", True))
@@ -1660,11 +1676,11 @@ async def test_taskiq_worker_events_manage_database_engine(monkeypatch):
     assert calls == ["init", "close"]
 
 
-def test_register_all_job_types_reregisters_after_clear():
-    register_all_job_types()
+def test_register_all_business_packages_reregisters_after_clear():
+    register_all_business_packages()
     job_registry.clear_for_tests()
 
-    register_all_job_types()
+    register_all_business_packages()
 
     assert {
         "arithmetic",

@@ -4,13 +4,13 @@ from datetime import UTC, datetime
 import pytest
 
 from app.jobs import registry as job_registry
-from app.jobs.types.register import register_all_job_types
+from app.business_packages.register import register_all_business_packages
 from app.models.job import Job
 from app.services.job_runtime import payload_hash
 
 
 def _example_collect_handler():
-    register_all_job_types()
+    register_all_business_packages()
     return job_registry.get("example_collect")
 
 

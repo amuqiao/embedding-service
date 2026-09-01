@@ -7,7 +7,7 @@ from app.core.exceptions import AppError
 from app.jobs.runner import execute_job
 from app.jobs.types.job_real_llm_double_echo import JobRealLlmDoubleEchoJob
 from app.jobs.types.job_real_llm_echo import JobRealLlmEchoJob
-from app.jobs.types.register import register_all_job_types
+from app.business_packages.register import register_all_business_packages
 from app.models.job import Job, JobAttempt
 from app.schemas.jobs import CreateJobRequest, JobRealLlmDoubleEchoParams, JobRealLlmEchoParams, JobResult
 from app.services.job_runtime import payload_hash
@@ -132,7 +132,7 @@ def test_job_real_llm_echo_parse_output_rejects_non_json():
 
 
 def test_job_real_llm_echo_rejects_callback_at_create_time():
-    register_all_job_types()
+    register_all_business_packages()
     payload = CreateJobRequest.model_validate(
         {
             "client_request_id": "real-llm-callback",
@@ -233,7 +233,7 @@ def _running_real_llm_double_job() -> Job:
 
 @pytest.mark.asyncio
 async def test_job_real_llm_echo_uses_shared_llm_runtime(monkeypatch):
-    register_all_job_types()
+    register_all_business_packages()
     job = _running_real_llm_job()
     attempt, lease_token = _business_attempt(job)
     captured = {}
@@ -317,7 +317,7 @@ async def test_job_real_llm_double_echo_calls_ledger_twice(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_internal_real_llm_echo_bills_root_scope(monkeypatch):
-    register_all_job_types()
+    register_all_business_packages()
     job = _running_real_llm_job()
     attempt, lease_token = _business_attempt(job)
     root_id = uuid.uuid4()

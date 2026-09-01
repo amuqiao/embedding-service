@@ -10,4 +10,8 @@ def register_job_package(register: RegisterExecutor) -> None:
     register(AudioStemSeparationJob())
 
 
-PACKAGE = JobTypePackage(name="audio_stem_separation", register=register_job_package)
+PACKAGE = JobTypePackage(
+    name="audio_stem_separation",
+    register=register_job_package,
+    requires_object_storage=True,
+)

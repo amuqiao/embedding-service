@@ -16,11 +16,11 @@ def registry_snapshot() -> dict[str, list[dict[str, Any]]]:
     from app.api.operations import all_operation_specs
     from app.capabilities import registry as capability_registry
     from app.jobs import registry as job_registry
-    from app.jobs.types.register import register_all_job_types
+    from app.business_packages.register import register_all_business_packages
     from app.tools import registry as tool_registry
     from app.workflows import registry as workflow_registry
 
-    register_all_job_types()
+    register_all_business_packages()
 
     operations = [
         {

@@ -6078,7 +6078,7 @@ def test_env_config_check_allows_launcher_keys_inside_env_example(tmp_path):
 
 def test_verify_check_uses_default_env_config_scan():
     env = os.environ.copy()
-    env["ENABLED_JOB_TYPES"] = "tagged_text_translation"
+    env["ENABLED_BUSINESS_PACKAGES"] = "tagged_text_translation"
 
     result = subprocess.run(
         [
@@ -6090,8 +6090,8 @@ def test_verify_check_uses_default_env_config_scan():
             run_cli_smoke() { :; }
             run_python_syntax() { :; }
             run_alembic_revision_check() { printf 'alembic-revision-check\\n'; }
-            run_registry_check() { printf 'registry-enabled-job-types=%s\\n' "${ENABLED_JOB_TYPES-unset}"; }
-            run_tests() { printf 'test-enabled-job-types=%s\\n' "${ENABLED_JOB_TYPES-unset}"; }
+            run_registry_check() { printf 'registry-enabled-business-packages=%s\\n' "${ENABLED_BUSINESS_PACKAGES-unset}"; }
+            run_tests() { printf 'test-enabled-business-packages=%s\\n' "${ENABLED_BUSINESS_PACKAGES-unset}"; }
             run_env_config_check() {
               printf 'env-config-argc=%s\\n' "$#"
               for arg in "$@"; do
@@ -6111,15 +6111,15 @@ def test_verify_check_uses_default_env_config_scan():
     assert "env-config-argc=0" in result.stdout
     assert "env-config-arg=" not in result.stdout
     assert "alembic-revision-check" in result.stdout
-    assert "registry-enabled-job-types=\n" in result.stdout
-    assert "test-enabled-job-types=\n" in result.stdout
+    assert "registry-enabled-business-packages=\n" in result.stdout
+    assert "test-enabled-business-packages=\n" in result.stdout
 
 
-def test_verify_run_tests_clears_enabled_job_types(tmp_path):
+def test_verify_run_tests_clears_enabled_business_packages(tmp_path):
     fake_python = tmp_path / "python"
     fake_python.write_text(
         "#!/usr/bin/env bash\n"
-        "printf 'enabled-job-types=%s\\n' \"${ENABLED_JOB_TYPES-unset}\"\n"
+        "printf 'enabled-business-packages=%s\\n' \"${ENABLED_BUSINESS_PACKAGES-unset}\"\n"
         "printf 'args=%s\\n' \"$*\"\n",
         encoding="utf-8",
     )
@@ -6128,7 +6128,7 @@ def test_verify_run_tests_clears_enabled_job_types(tmp_path):
     env = os.environ.copy()
     env.update(
         {
-            "ENABLED_JOB_TYPES": "tagged_text_translation",
+            "ENABLED_BUSINESS_PACKAGES": "tagged_text_translation",
             "PYTHON_BIN": str(fake_python),
         }
     )
@@ -6146,7 +6146,7 @@ def test_verify_run_tests_clears_enabled_job_types(tmp_path):
         check=True,
     )
 
-    assert "enabled-job-types=\n" in result.stdout
+    assert "enabled-business-packages=\n" in result.stdout
     assert "args=-m pytest -q" in result.stdout
 
 

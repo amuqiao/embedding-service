@@ -2191,9 +2191,9 @@ def _registered_job_type_specs() -> list[dict[str, Any]]:
     try:
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             from app.jobs.registry import all_job_type_specs
-            from app.jobs.types.register import register_all_job_types
+            from app.business_packages.register import register_all_business_packages
 
-            register_all_job_types()
+            register_all_business_packages()
             return sorted((asdict(spec) for spec in all_job_type_specs().values()), key=lambda item: item["job_type"])
     except Exception:
         output = stdout.getvalue().strip()

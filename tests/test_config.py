@@ -148,45 +148,30 @@ def test_poster_title_image_model_config_defaults_and_overrides():
     assert default_settings.registry.prompt_config_path_raw == "app/core/prompts.yaml"
 
 
-def test_enabled_job_types_config_defaults_and_overrides():
+def test_enabled_business_packages_config_defaults_and_overrides():
     default_settings = _build_settings()
-    assert default_settings.job.enabled_job_types == ()
-    assert default_settings.job.object_storage_required_by_enabled_job_types is True
+    assert default_settings.registry.enabled_business_packages == ()
 
     custom_settings = _build_settings(
-        ENABLED_JOB_TYPES="tagged_text_translation,poster_title_image,tagged_text_translation"
+        ENABLED_BUSINESS_PACKAGES="tagged_text_translation,poster_title_image,tagged_text_translation"
     )
 
-    assert custom_settings.job.enabled_job_types == ("tagged_text_translation", "poster_title_image")
-    assert custom_settings.job.object_storage_required_by_enabled_job_types is True
+    assert custom_settings.registry.enabled_business_packages == ("tagged_text_translation", "poster_title_image")
 
 
-def test_enabled_job_types_rejects_empty_list_items():
-    with pytest.raises(ValidationError, match="ENABLED_JOB_TYPES"):
-        _build_settings(ENABLED_JOB_TYPES="tagged_text_translation,,poster_title_image")
+def test_enabled_business_packages_rejects_empty_list_items():
+    with pytest.raises(ValidationError, match="ENABLED_BUSINESS_PACKAGES"):
+        _build_settings(ENABLED_BUSINESS_PACKAGES="tagged_text_translation,,poster_title_image")
 
 
-def test_release_env_allows_local_storage_when_enabled_job_types_do_not_require_object_storage():
+def test_release_env_local_storage_is_checked_by_business_package_bootstrap():
     settings = _build_settings(
         APP_ENV="test",
-        ENABLED_JOB_TYPES="tagged_text_translation",
         SERVICE_API_KEY="x" * 16,
         CALLBACK_SIGNING_SECRET="y" * 32,
     )
 
     assert settings.storage.backend == "local"
-    assert settings.job.object_storage_required_by_enabled_job_types is False
-
-
-@pytest.mark.parametrize("enabled_job_types", ["", "poster_title_image"])
-def test_release_env_rejects_local_storage_when_enabled_job_types_require_object_storage(enabled_job_types):
-    with pytest.raises(ValidationError, match="STORAGE_BACKEND"):
-        _build_settings(
-            APP_ENV="test",
-            ENABLED_JOB_TYPES=enabled_job_types,
-            SERVICE_API_KEY="x" * 16,
-            CALLBACK_SIGNING_SECRET="y" * 32,
-        )
 
 
 def test_tagged_text_translation_config_defaults_and_overrides():
@@ -453,7 +438,6 @@ def test_release_app_env_uses_same_rules_for_test_and_prd():
         ({"DISABLE_HTTP_AUTH_HEADER": True}, "must not disable HTTP auth"),
         ({"DISABLE_CALLER_ID_HEADER": True}, "must not disable HTTP auth"),
         ({"ALLOW_INSECURE_CALLBACKS": True}, "must not allow insecure callbacks"),
-        ({"STORAGE_BACKEND": "local"}, "must not use STORAGE_BACKEND=local"),
         ({"SERVICE_API_KEY": "<替换为随机 token>"}, "SERVICE_API_KEY"),
         ({"SERVICE_API_KEY": "short"}, "SERVICE_API_KEY"),
         ({"CALLBACK_SIGNING_SECRET": "<替换为随机 32 字节 hex>"}, "CALLBACK_SIGNING_SECRET"),

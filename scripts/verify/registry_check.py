@@ -18,10 +18,10 @@ def validate_registry_with_captured_logs(stdout: io.StringIO, stderr: io.StringI
         from app.api.operations import all_operation_specs
         from app.core.config import settings
         from app.core.registry_checks import validate_all_registries
-        from app.jobs.types.register import register_all_job_types
+        from app.business_packages.register import register_all_business_packages
         from app.main import app
 
-        register_all_job_types()
+        register_all_business_packages()
         validate_all_registries(app)
         validate_contract_docs(
             service_contract_path=ROOT_DIR / "docs" / "api" / "service-contract.md",

@@ -6,11 +6,11 @@ import pytest
 from app.jobs import registry as job_registry
 from app.models.job import Job
 from app.services.job_runtime import payload_hash
-from app.jobs.types.register import register_all_job_types
+from app.business_packages.register import register_all_business_packages
 
 
 def _example_pair_handler():
-    register_all_job_types()
+    register_all_business_packages()
     return job_registry.get("example_pair")
 
 

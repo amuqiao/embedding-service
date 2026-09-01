@@ -20,7 +20,7 @@ from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
 from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_RUNTIME_UNAVAILABLE
 from app.jobs.types.audio_stem_separation.storage_adapter import AudioStemSeparationStorageAdapter
 from app.jobs.types.audio_stem_separation.storage_policy import AudioStemSeparationStoragePolicy
-from app.jobs.types.register import register_all_job_types
+from app.business_packages.register import register_all_business_packages
 from app.models.job import Job
 from app.schemas.jobs import AudioStemSeparationParams
 from app.services.job_runtime import build_runtime_snapshot, output_target_from_job, payload_hash, write_runtime_json
@@ -50,7 +50,7 @@ def test_wav_bytes_missing_soundfile_points_to_audio_separation_extra(monkeypatc
 
 
 def _handler():
-    register_all_job_types()
+    register_all_business_packages()
     return job_registry.get("audio_stem_separation")
 
 

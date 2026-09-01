@@ -21,7 +21,7 @@ from app.workflows import (
 )
 from app.workflows import registry as workflow_registry
 from app.jobs.types.example_catalog import all_example_workflow_mode_specs
-from app.jobs.types.register import register_all_job_types
+from app.business_packages.register import register_all_business_packages
 from app.jobs.types.poster_title_image.executor import _item_node_key
 
 
@@ -109,7 +109,7 @@ def test_chord_compiles_reducer_after_header_group():
 def test_poster_title_image_workflow_dedupes_style_probe_by_reference_and_prompt():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
-    register_all_job_types()
+    register_all_business_packages()
     ref_a = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/a.png",
         "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/a.png",
@@ -175,7 +175,7 @@ def test_poster_title_image_workflow_dedupes_style_probe_by_reference_and_prompt
 def test_poster_title_image_workflow_allows_default_max_item_count():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
-    register_all_job_types()
+    register_all_business_packages()
     base_item = {
         "language": "en",
         "title_text": "Title",
@@ -222,7 +222,7 @@ def test_poster_title_image_workflow_max_nodes_follows_configured_item_count(mon
         SimpleNamespace(job=SimpleNamespace(poster_title_image=SimpleNamespace(max_items=12))),
     )
     monkeypatch.setattr(poster_executor, "_WORKFLOW_DEFINITION", None)
-    register_all_job_types()
+    register_all_business_packages()
     ref = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/a.png",
         "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/a.png",
@@ -262,7 +262,7 @@ def test_poster_title_image_workflow_max_nodes_follows_configured_item_count(mon
 def test_poster_title_image_workflow_node_keys_do_not_collide_for_safe_item_ids():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
-    register_all_job_types()
+    register_all_business_packages()
     ref = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/a.png",
         "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/a.png",
@@ -300,7 +300,7 @@ def test_poster_title_image_workflow_node_keys_do_not_collide_for_safe_item_ids(
 def test_poster_title_image_workflow_preserves_title_text_line_breaks_in_child_params():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
-    register_all_job_types()
+    register_all_business_packages()
     ref = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/a.png",
         "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/a.png",
@@ -333,7 +333,7 @@ def test_poster_title_image_workflow_preserves_title_text_line_breaks_in_child_p
 def test_poster_title_image_workflow_freezes_image_adapter_in_child_params(monkeypatch):
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
-    register_all_job_types()
+    register_all_business_packages()
     monkeypatch.setattr(
         "app.jobs.types.poster_title_image.executor._image_adapter",
         lambda _model_id=None: "openai_images",
@@ -368,7 +368,7 @@ def test_poster_title_image_workflow_freezes_image_adapter_in_child_params(monke
 def test_poster_title_image_workflow_rejects_unsafe_item_ids_before_node_key_building():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
-    register_all_job_types()
+    register_all_business_packages()
     ref = {
         "public_url": "https://local-dev.oss-local.aliyuncs.com/reference/a.png",
         "internal_url": "https://local-dev.oss-local-internal.aliyuncs.com/reference/a.png",
@@ -516,7 +516,7 @@ def test_workflow_registry_compiles_registered_definition():
 def test_compile_registered_workflow_rejects_undeclared_runtime_job_type_dependency():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
-    register_all_job_types()
+    register_all_business_packages()
     register(
         WorkflowDefinition(
             workflow_type="test.workflow",
@@ -533,7 +533,7 @@ def test_compile_registered_workflow_rejects_undeclared_runtime_job_type_depende
 def test_compile_registered_workflow_rejects_disabled_runtime_job_type_dependency():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
-    register_all_job_types()
+    register_all_business_packages()
     job_registry.configure_enabled_job_types(
         ("tagged_text_translation",),
         external_job_types=("tagged_text_translation",),
@@ -558,7 +558,7 @@ def test_compile_registered_workflow_rejects_disabled_runtime_job_type_dependenc
 def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
-    register_all_job_types()
+    register_all_business_packages()
 
     specs = all_example_workflow_mode_specs()
     assert tuple(item["mode"] for item in specs) == ("single", "chain", "group", "chord", "map", "starmap", "chunks")
@@ -623,7 +623,7 @@ def test_registered_workflow_mode_job_types_compile_to_dag_lite_plans():
 
 
 def test_example_workflow_sleep_normalization_preserves_payload_shape():
-    register_all_job_types()
+    register_all_business_packages()
 
     workflow = job_registry.get("example_workflow")
     collect = job_registry.get("example_collect")

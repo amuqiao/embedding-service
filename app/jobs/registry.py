@@ -52,7 +52,7 @@ def configure_enabled_job_types(
     normalized = frozenset(job_type.strip() for job_type in job_types if job_type.strip())
     unknown = sorted(normalized - set(_registry))
     if unknown:
-        raise ValueError(f"ENABLED_JOB_TYPES references unknown job_type: {unknown}")
+        raise ValueError(f"enabled job type registry references unknown job_type: {unknown}")
     external_normalized = (
         normalized
         if external_job_types is None
@@ -60,13 +60,13 @@ def configure_enabled_job_types(
     )
     unknown_external = sorted(external_normalized - set(_registry))
     if unknown_external:
-        raise ValueError(f"ENABLED_JOB_TYPES references unknown external job_type: {unknown_external}")
+        raise ValueError(f"enabled job type registry references unknown external job_type: {unknown_external}")
     not_enabled_external = sorted(external_normalized - normalized)
     if not_enabled_external:
-        raise ValueError(f"ENABLED_JOB_TYPES external job_type is not enabled: {not_enabled_external}")
+        raise ValueError(f"enabled job type registry external job_type is not enabled: {not_enabled_external}")
     invalid_external = sorted(job_type for job_type in external_normalized if not _is_external_root_capable(job_type))
     if invalid_external:
-        raise ValueError(f"ENABLED_JOB_TYPES external job_type must be root-capable: {invalid_external}")
+        raise ValueError(f"enabled job type registry external job_type must be root-capable: {invalid_external}")
     _enabled_job_types = normalized
     _external_job_types = external_normalized
 
