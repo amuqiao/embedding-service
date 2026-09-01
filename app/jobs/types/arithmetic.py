@@ -4,7 +4,8 @@ from typing import Any
 
 from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
-from app.jobs.types._registrar import JobTypePackage, RegisterExecutor
+from app.business_packages.base import BusinessPackage
+from app.jobs.types._registrar import RegisterExecutor
 from app.schemas.jobs import ArithmeticParams, ArithmeticResult, ArithmeticRuntimeFields
 from app.services.job_runtime import job_params_from_job
 
@@ -48,4 +49,4 @@ def register_job_package(register: RegisterExecutor) -> None:
     register(ArithmeticJob())
 
 
-PACKAGE = JobTypePackage(name="arithmetic", register=register_job_package)
+PACKAGE = BusinessPackage(name="arithmetic", register=register_job_package)

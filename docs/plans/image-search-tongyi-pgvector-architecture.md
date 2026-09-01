@@ -321,14 +321,14 @@ app/features/asset_vector/
 | `routes.py` | FastAPI route；不直接调用 provider，不直接拼 SQL |
 | `ai.py` | 调用通用 AI gateway 的薄封装，组织 embedding input item |
 | `errors.py` | capability 自己的错误码注册 |
-| `register.py` | 注册 router、operation、error、schema 的能力入口 |
+| `register.py` | 声明 `BusinessPackage`，注册 router、operation、error、schema 和相关 Job |
 | `jobs/` | 异步 Job executor 和 Job package 注册 |
 
 全局只保留薄胶水：
 
 ```text
-app/jobs/types/register.py
-  -> 注册 app.features.asset_vector.jobs.register.PACKAGE
+app/business_packages/register.py
+  -> 注册 app.features.asset_vector.register.PACKAGE
 
 app/api/operations.py
   -> 注册 vector-search / vector-assets operation spec

@@ -58,7 +58,7 @@ CreateJobRequest
 - `reject_duplicate`
 - `return_existing`
 
-外部提交准入由 `ENABLED_JOB_TYPES`、`job_type.visibility` 和 `APP_ENV` 共同决定。`ENABLED_JOB_TYPES` 为空时运行期启用全部静态注册 `job_type`；外部入口仍按下方 `APP_ENV` 规则过滤，`test` / `prd` 默认不暴露 demo root。显式配置时，只有 allowlist 内的 root `job_type` 可作为外部入口，workflow 内部 child job type 由服务静态补齐。
+外部提交准入由 `ENABLED_BUSINESS_PACKAGES`、`job_type.visibility`、`job_type.role` 和 `APP_ENV` 共同决定。`ENABLED_BUSINESS_PACKAGES` 为空时启用全部静态注册业务包；显式配置时只加载列出的业务包，未加载业务包下的 `job_type` 不可提交。外部入口仍按下方 `APP_ENV` 规则过滤，`test` / `prd` 默认不暴露 demo root。
 
 | APP_ENV | 可外部提交的 job_type |
 |---|---|

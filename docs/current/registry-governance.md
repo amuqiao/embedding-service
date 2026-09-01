@@ -13,6 +13,7 @@ Operation
   -> Route / OpenAPI / service contract
 
 Job Type
+  <- Business Package
   -> Capability
     -> Tool
       -> Integration / adapter
@@ -31,13 +32,14 @@ Workflow Definition
 | Ref parser | `app/core/registries/refs.py` | 校验 `capability_ref` / `tool_ref` 的 `<key>:<version>` 格式 |
 | Capability registry | `app/capabilities/registry.py`、`app/capabilities/register.py` | 注册 `CapabilityDefinition`，支持 freeze 和测试清理 |
 | Tool registry | `app/tools/registry.py`、`app/tools/register.py` | 注册 `ToolDefinition`，支持 freeze 和测试清理 |
+| Business package registry | `app/business_packages/base.py`、`app/business_packages/register.py` | 显式维护业务包清单，按实例配置加载业务包，并收集业务包 routes |
 | Job Type registry | `app/jobs/registry.py`、`app/jobs/base.py` | `JobTypeSpec.allowed_capability_refs` 声明 job type 可用 capability |
 | Workflow registry | `app/workflows/registry.py` | `WorkflowDefinition` 声明 workflow type、root job type、版本、失败策略、节点上限和 runtime child job type 依赖 |
 | Operation registry | `app/api/operations.py` | `OperationSpec` 声明 HTTP operation path、method、成功状态、schema、错误码和副作用 |
 | Error registry | `app/core/error_registry.py` | `ErrorSpec` 包含 `visibility` 和 `projection_targets` 元数据 |
 | Registry check | `app/core/registry_checks.py`、`tests/test_registry_contract.py` | 校验 error、operation、job type、capability、tool、schema、log event、entrypoint、settings、error projection、注册入口、import direction 和 route operation |
 
-API startup 和 worker startup 都执行同一组注册和校验。`app/jobs/types/register.py` 仍是当前 composition root：它显式调用 tool、capability 注册入口，并通过 `JOB_TYPE_PACKAGE_MODULES` 懒加载各业务包的 `PACKAGE = JobTypePackage(...)` registrar；error、job type 和 workflow 注册由业务包 registrar 内聚完成。`app/jobs/types/example_lifecycle_probe/` 是标准业务包样板。`@register_job_type` 只作为源码准入标记，import executor 不写入全局 registry。注册完成后 API/worker 会 freeze error、tool 和 capability registry；freeze 后相同 definition 可幂等重复注册，变更 definition 会失败。
+API startup 和 worker startup 都执行同一组注册和校验。`app/business_packages/register.py` 是当前 composition root：它先注册平台工具和 capability，再通过 `BUSINESS_PACKAGE_MODULES` 懒加载各业务包的 `PACKAGE = BusinessPackage(...)` registrar。业务包 registrar 内聚注册本包 error、job type、workflow definition，并可按需注册本包 HTTP routes；API startup 会在 `validate_all_registries(application)` 前挂载业务包 routes，worker startup 只注册执行侧能力，不挂载 routes。`app/jobs/types/example_lifecycle_probe/` 是标准 job-only 业务包样板。`@register_job_type` 只作为源码准入标记，import executor 不写入全局 registry。注册完成后 API/worker 会 freeze error、tool 和 capability registry；freeze 后相同 definition 可幂等重复注册，变更 definition 会失败。
 
 开发者查看当前注册清单使用只读命令：
 
@@ -68,12 +70,12 @@ Tool `startup_validators` 只用于 API/worker 进程级必需依赖。可选能
 - internal error 的 `projection_targets` 必须指向已注册 public error。
 - public HTTP operation 不能引用 internal error。
 - job type public error contract 不能声明 internal error。
-- 源码中 `@register_job_type` 声明的 job type 必须全部出现在 `app/jobs/types/register.py` composition root 的注册结果中。
+- 源码中 `@register_job_type` 声明的 job type 必须全部由某个 `BusinessPackage` registrar 注册，并出现在 `app/business_packages/register.py` composition root 的注册结果中。
 - `ToolDefinition(...)` 只允许出现在 `app/tools/register.py`，`CapabilityDefinition(...)` 只允许出现在 `app/capabilities/register.py`。
 - route decorator 从 `OperationSpec` 派生 path、`operation_id`、`response_model`、成功状态和错误响应描述；registry check 会校验 route/OpenAPI 与 operation metadata 对齐。
 - registered workflow 必须声明 `root_job_type`，且当前 `root_job_type` 必须与 `workflow_type` 相同，因为外部提交路径用 `job_type` 查找 workflow definition。
 - workflow root job type 必须存在且 role 为 `root` 或 `root_or_leaf`；`failure_policy`、`workflow_version`、`max_nodes`、`runtime_job_type_dependencies` 和 `build` callable 由 registry check 校验。
-- `runtime_job_type_dependencies` 必须引用已注册且 child-capable 的 `job_type`；`ENABLED_JOB_TYPES` 显式启用 workflow root 时会据此补齐运行期 child job type。创建 workflow root 时，编译后的 `workflow_plan.nodes[].job_type` 必须全部落在 `runtime_job_type_dependencies` 内，并且当前实例必须已启用这些 child job type。
+- `runtime_job_type_dependencies` 必须引用已注册且 child-capable 的 `job_type`。业务包被启用时，包内 root、leaf 和 workflow definition 作为一个注册单元进入当前实例；创建 workflow root 时，编译后的 `workflow_plan.nodes[].job_type` 必须全部落在 `runtime_job_type_dependencies` 内，并且当前实例必须已注册这些 child job type。
 - `./scripts/tools.sh registry --json` 的当前 manifest 由测试覆盖关键结构；新增 operation、job type、workflow、tool、capability 或 job capability 关系时必须同步测试和文档。
 - import direction 由 registry contract 测试覆盖：`app/capabilities` 不依赖 `app/jobs`，也不跳过 tool 直接依赖 `app/integrations`；`app/tools` 不反向依赖 `app/jobs` / `app/capabilities`；`app/integrations` 不反向依赖 `app/jobs` / `app/capabilities` / `app/tools`。
 - operation registry、job type registry、prompt config、route operation 和 error code 唯一性仍按既有规则校验。
@@ -101,7 +103,7 @@ Tool `startup_validators` 只用于 API/worker 进程级必需依赖。可选能
 
 `audio_stem_separation` 和 `audio_stem_separation_triton` 都声明 `allowed_capability_refs={"media.audio_input:2"}`。两个 job type 在创建 Job 的 `runtime_fields` 时由 job shared builder 冻结 `media_input_plan`，执行期 capability 只读取 frozen plan，不按最新配置重新推导输入读取策略，也不直接解析调用方 payload。
 
-`tagged_text_translation` 当前不声明 `allowed_capability_refs`，也不新增 tool。它通过 `TaggedTextTranslationParams`、`TaggedTextTranslationRuntimeFields` 和 `TaggedTextTranslationResult` 进入 schema registry，通过 `app/jobs/types/register.py` 进入 job type registry，并在 executor 内部调用文本模型 facade。
+`tagged_text_translation` 当前不声明 `allowed_capability_refs`，也不新增 tool。它通过 `TaggedTextTranslationParams`、`TaggedTextTranslationRuntimeFields` 和 `TaggedTextTranslationResult` 进入 schema registry，通过 `app/business_packages/register.py` 进入 job type registry，并在 executor 内部调用文本模型 facade。
 
 `audio_decode_normalize:1` 是进程内 media transform tool：request schema 包含原始对象字节和 decode policy；执行结果是本地内存中的 canonical audio，不登记为可序列化 result schema。
 
@@ -121,13 +123,13 @@ AudioInputPlanSnapshot
 
 ## 当前准入规则
 
-新增 `job_type` 必须在 executor 上使用 `@register_job_type` 源码标记，并通过业务包 `PACKAGE = JobTypePackage(...)` 注册。正式业务包使用 `app/jobs/types/<job_type>/register.py` 内聚 executor、errors 和 workflow definition 注册；中心 `app/jobs/types/register.py` 只维护 `JOB_TYPE_PACKAGE_MODULES` 显式清单并懒加载 package registrar，不直接 import 业务 executor。`@register_job_type` 不产生 import-time 注册副作用；源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 package registrar 注册结果；新增文件但忘记接入 package registrar 或中心 package module 清单会失败。静态合同校验覆盖全部注册 `job_type`，不因当前实例未启用而跳过 schema、prompt、error、log event 或 capability 引用检查。
+新增 `job_type` 必须在 executor 上使用 `@register_job_type` 源码标记，并通过业务包 `PACKAGE = BusinessPackage(...)` 注册。正式业务包使用 `app/jobs/types/<job_type>/register.py` 内聚 executor、errors 和 workflow definition 注册；中心 `app/business_packages/register.py` 只维护 `BUSINESS_PACKAGE_MODULES` 显式清单并懒加载 package registrar，不直接 import 业务 executor。`@register_job_type` 不产生 import-time 注册副作用；源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 business package registrar 注册结果；新增文件但忘记接入 package registrar 或中心 business package module 清单会失败。
+
+`ENABLED_BUSINESS_PACKAGES` 是当前服务实例的业务包选择开关。为空表示启用全部静态注册业务包；显式配置时只加载列出的业务包，未选业务包的 job type、workflow 和 routes 不进入当前实例。正式发布或切流前如果要关闭某个业务包，应先确认没有该业务包的未完成 Job；否则已落库 running Job 会因为当前实例没有对应 executor 而失败。`APP_ENV=test/prd` 不改变业务包加载集合，只改变外部可提交 job type：仅 `visibility="public"` 且非 leaf 的 job type 暴露给 `POST /jobs`。声明 `requires_object_storage=True` 的业务包在 release 环境不能与 `STORAGE_BACKEND=local` 同时启用；`./scripts/verify.sh env-config --app-env test` 会执行同一预检。
 
 新增 tool 必须通过 `app/tools/register.py` 创建 `ToolDefinition`。新增 capability 必须通过 `app/capabilities/register.py` 创建 `CapabilityDefinition`。不要在业务 executor、capability service、tool 实现或测试外路径中直接散落 definition 构造。
 
 新增 capability 与 tool 的 schema、entrypoint、error code、log event 和 settings 引用必须能被 `validate_capability_tool_registry()` 校验。新增 job type 的 `allowed_capability_refs` 必须引用已注册 capability。
-
-`ENABLED_JOB_TYPES` 是运行准入，不只是外部提交准入。缩小该 allowlist 后，未启用 `job_type` 的新提交、workflow child 创建和已落库 running Job 继续执行都会失败；历史状态查询、Callback payload 投影和结果快照仍可读取全量注册目录，以便展示已经产生的 Job 事实。上线时如果存在未完成 Job，应先 drain，或保持对应 `job_type` 启用到旧 Job 结束。
 
 `ToolDefinition.startup_validators` 只允许表达进程级必需依赖；可选模型链路、demo job 或特定业务运行时依赖必须在对应执行路径或专项 smoke / verify 中显式失败，不能扩大为 API/worker 全局启动依赖。
 

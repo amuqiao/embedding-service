@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from app.jobs.types._registrar import JobTypePackage, RegisterExecutor, register_executor_classes
+from app.business_packages.base import BusinessPackage
+from app.jobs.types._registrar import RegisterExecutor, register_executor_classes
 from app.jobs.types.poster_title_image.errors import register_poster_title_image_errors
 from app.jobs.types.poster_title_image.executor import (
     PosterTitleImageGenerateItemJob,
@@ -25,7 +26,7 @@ def register_job_package(register: RegisterExecutor) -> None:
     register_poster_title_image_workflow()
 
 
-PACKAGE = JobTypePackage(
+PACKAGE = BusinessPackage(
     name="poster_title_image",
     register=register_job_package,
     requires_object_storage=True,

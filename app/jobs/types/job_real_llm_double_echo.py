@@ -9,7 +9,8 @@ from app.ai.resolver import resolve_route_config_hash
 from app.core.exceptions import AppError
 from app.jobs.base import JobExecutor, PromptSpec
 from app.jobs.registry import register_job_type
-from app.jobs.types._registrar import JobTypePackage, RegisterExecutor
+from app.business_packages.base import BusinessPackage
+from app.jobs.types._registrar import RegisterExecutor
 from app.models.job import Job
 from app.schemas.jobs import (
     JobRealLlmDoubleEchoParams,
@@ -144,4 +145,4 @@ def register_job_package(register: RegisterExecutor) -> None:
     register(JobRealLlmDoubleEchoJob())
 
 
-PACKAGE = JobTypePackage(name="job_real_llm_double_echo", register=register_job_package)
+PACKAGE = BusinessPackage(name="job_real_llm_double_echo", register=register_job_package)

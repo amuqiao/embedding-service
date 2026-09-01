@@ -6,7 +6,8 @@ from typing import Any
 from app.core.exceptions import AppError
 from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
-from app.jobs.types._registrar import JobTypePackage, RegisterExecutor, register_executor_classes
+from app.business_packages.base import BusinessPackage
+from app.jobs.types._registrar import RegisterExecutor, register_executor_classes
 from app.jobs.types.example_catalog import all_example_workflow_mode_specs
 from app.schemas.jobs import (
     ExampleCollectParams,
@@ -367,4 +368,4 @@ def register_job_package(register: RegisterExecutor) -> None:
     register_example_workflows()
 
 
-PACKAGE = JobTypePackage(name="examples", register=register_job_package)
+PACKAGE = BusinessPackage(name="examples", register=register_job_package)
