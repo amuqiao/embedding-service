@@ -43,6 +43,7 @@
 | [`api/tagged-text-translation-api.md`](api/tagged-text-translation-api.md) | `tagged_text_translation` 批量带标签文案翻译 Job 的当前对接合同，覆盖创建、轮询、Callback、结果和错误码；不暴露 Prompt 接口 |
 | [`api/asset-tag-schema-translation-api.md`](api/asset-tag-schema-translation-api.md) | `asset_tag_schema_translation` 标签体系翻译 Job 的计划对接合同草案，定义批量标签术语翻译、字段结构、轮询、Callback 和错误语义 |
 | [`api/asset-image-tagging-api.md`](api/asset-image-tagging-api.md) | `asset_image_tagging` 图片素材批量打标 Job 的计划对接合同草案，定义素材、标签组、打标规则、结果、部分成功和 Callback 语义 |
+| [`api/asset-vector-api.md`](api/asset-vector-api.md) | 素材向量检索对接接口文档，定义批量新增/更新资源、批量删除资源、文本搜索、图片搜索、资源 ID 搜索、混合搜索和对账接口 |
 | [`api/languages-api.md`](api/languages-api.md) | `GET /api/v1/ai-jobs/languages` 语种目录对接文档，说明环境配置、响应字段、当前语种列表和错误响应 |
 | [`api/业务语种规范.md`](api/业务语种规范.md) | CPP / AI / RS 三方共享语种代码、`in` 例外和 AI 服务语种目录接口规范 |
 | [`api/poster-title-image-delivery-api.md`](api/poster-title-image-delivery-api.md) | AI 标题图生成对接的当前交付接口合同、任务创建、查询、费用和 Callback 说明 |

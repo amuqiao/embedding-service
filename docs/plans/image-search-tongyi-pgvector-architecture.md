@@ -2,7 +2,7 @@
 
 本文把“以图搜图 / 文搜图 / 描述搜索”定义为 `asset_vector` capability：后端资源库是资源事实源，本服务是 AI 能力层和向量 read model 投影层，通过异步 Job 同步资源向量，通过同步 HTTP route 提供搜索和对账能力。
 
-本文是计划文档，不记录当前已实现事实，也不是正式 API 合同。实现完成后，应把当前事实沉淀到 `docs/current/`，把对外稳定接口拆到 `docs/api/asset-vector-api.md`，并把本文标记完成或归档。
+本文是计划文档，不记录当前已实现事实，也不是正式 API 合同。对外字段、请求、响应和错误码以 [`../api/asset-vector-api.md`](../api/asset-vector-api.md) 为准；实现完成后，应把当前事实沉淀到 `docs/current/`，并把本文标记完成或归档。
 
 ## 先建立两个心智模型
 
@@ -147,6 +147,7 @@ text_payload = 后端本次请求提供的最终检索文本
 - 阿里云重排序文档：[`../aliyun/重排序.md`](../aliyun/重排序.md)
 - 原始草稿：[`../以图搜图/向量检索服务技术方案-v2-通义方案.md`](../以图搜图/向量检索服务技术方案-v2-通义方案.md)
 - 新 CC 库 4.6：[`../以图搜图/新cc库-基础搭建/新cc库-基础搭建.md`](../以图搜图/新cc库-基础搭建/新cc库-基础搭建.md)
+- `asset_vector` 对接合同：[`../api/asset-vector-api.md`](../api/asset-vector-api.md)
 - `asset_vector` 图片打标 Job 计划：[`asset-image-tagging-job-architecture.md`](asset-image-tagging-job-architecture.md)
 
 ## 需求翻译
@@ -725,9 +726,9 @@ ledger 只能记录输入摘要、hash、content_type、大小、模型和路由
 
 不允许静默写入 0 成本并标记为最终可信费用。
 
-## 异步 Job 合同草案
+## 历史接口草案
 
-正式实现后，这部分应迁移到 `docs/api/asset-vector-api.md`。在计划阶段，它用于评估后端是否能对接。
+对外字段、请求、响应和错误码已拆到 [`../api/asset-vector-api.md`](../api/asset-vector-api.md)。本节只保留早期架构推演背景，不作为业务后端对接合同。
 
 所有 Job 仍使用统一入口：
 
@@ -1529,8 +1530,8 @@ vector-assets:exists       -> resource_ids 长度可以是 1
 - 旧 `source_revision` Job 晚完成时不会覆盖新向量。
 - `asset_vector_batch_upsert` 能通过 manifest 批量同步资源，并输出部分失败明细。
 - `asset_vector_batch_delete` 能幂等删除资源向量。
-- `POST /vector-search` 能支持 `text -> image`、`image -> image` 和 `resource_id -> image`。
-- 搜索结果只返回 `resource_id + group_id + score` 等必要元信息，不返回业务详情、权限信息、完整向量或 provider raw payload。
+- `POST /vector-search` 能支持 `text`、`asset`、`item_id` 和 `hybrid` 查询。
+- 搜索结果只返回 `item_id + score` 等必要元信息，不返回业务详情、权限信息、完整向量或 provider raw payload。
 - `vector-assets:exists` 和 `vector-assets/ids` 能支撑正反向对账。
 - DashScope 429 / timeout / 5xx 在 Job 路径和同步搜索路径都有明确错误语义。
 - 模型维度、usage/cost、route_config_hash 有测试覆盖。

@@ -20,9 +20,10 @@
 
 ```text
 业务后端素材库 + 业务后端标签库
-  -> 业务后端组装 items[] + tag_groups[] + rules
+  -> 业务后端组装 items[] + label_snapshot[] + rules
   -> 创建 asset_image_tagging Job
   -> AI 服务读取 items[].asset 指向的图片资源
+  -> AI 服务按 items[].category_id 匹配 label_snapshot[] 中对应分类的标签组
   -> AI 服务内部把 label_id 转为临时标签编号
   -> 模型只基于临时编号 / 标签名 / 标签定义选择标签
   -> AI 服务把临时编号映射回 label_id，并按 single / multiple 校验选择结果
@@ -32,22 +33,33 @@
 
 ## 标签选择模型
 
-图片打标的核心输入是“素材 + 一组标签组”。模型只能从业务方传入的标签组里选择标签，不能创建新标签。
+图片打标的核心输入是“素材 + 标签组快照”。`label_snapshot[]` 是业务方为本次打标准备的标签组列表，每个标签组声明自己适用的素材分类。模型只能从当前素材分类匹配到的标签组里选择标签，不能创建新标签。
 
 ```text
 items[]
   hair_001
+    item_name=棕色中长卷发
+    category_id=hair
+    category_name=发型
     asset.public_url=https://...
     asset.content_type=image/png
 
-tag_groups[]
-  hair_color
+label_snapshot[]
+  第 1 组
+    category_id=hair
+    category_name=发型
     selection_mode=single
-    tags: brown / black / blonde
+    labels: brown / black / blonde
+  第 2 组
+    category_id=hair
+    category_name=发型
+    selection_mode=multiple
+    labels: wavy / straight / braided
 
 输出
   hair_001
-    hair_color -> brown
+    第 1 组 -> brown
+    第 2 组 -> wavy
 ```
 
 `selection_mode` 表达标签组的选择方式：
@@ -58,7 +70,7 @@ tag_groups[]
 | `multiple` | 多选标签组 | 该组可返回 0 个、1 个或多个标签 |
 
 是否接受空选、低置信结果或人工补标，由业务后端结合结果中的 `validation_issues`、`weight` 和自身规则判断；本接口只用 `selection_mode` 表达单选或多选。
-业务后端应把标签库中的单选、多选配置映射到 `selection_mode` 后传入。
+业务后端应把标签库中的单选、多选配置映射到 `selection_mode` 后传入。同一个 `category_id` 可以在 `label_snapshot[]` 中出现多次，表示同一素材分类下存在多个标签组。
 
 ## 公共请求约定
 
@@ -129,39 +141,52 @@ POST /api/v1/ai-jobs/jobs
     "items": [
       {
         "item_id": "hair_001",
-        "group_id": "hair_group_001",
+        "item_name": "棕色中长卷发",
+        "category_id": "hair",
+        "category_name": "发型",
         "asset": {
           "public_url": "https://bucket.example.com/assets/hair_001.png",
-          "internal_url": "https://bucket-internal.example.com/assets/hair_001.png",
-          "content_type": "image/png",
-          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          "content_type": "image/png"
         },
         "metadata": {
-          "filename": "hair_001.png",
-          "asset_category": "hair"
+          "filename": "hair_001.png"
         }
       }
     ],
-    "tag_groups": [
+    "label_snapshot": [
       {
-        "group_id": "hair_color",
-        "group_name": "发色",
+        "category_id": "hair",
+        "category_name": "发型",
         "selection_mode": "single",
-        "tags": [
+        "labels": [
           {
-            "label_id": "label_hair_color_brown",
-            "name": "棕色",
+            "label_id": "hair_color_brown",
+            "label_name": "棕色",
             "definition": "头发主体颜色为棕色或棕褐色"
           },
           {
-            "label_id": "label_hair_color_black",
-            "name": "黑色",
+            "label_id": "hair_color_black",
+            "label_name": "黑色",
             "definition": "头发主体颜色为黑色或深黑色"
           }
-        ],
-        "metadata": {
-          "asset_category": "hair"
-        }
+        ]
+      },
+      {
+        "category_id": "hair",
+        "category_name": "发型",
+        "selection_mode": "multiple",
+        "labels": [
+          {
+            "label_id": "hair_shape_wavy",
+            "label_name": "波浪",
+            "definition": "头发带有明显自然波浪或卷曲形态"
+          },
+          {
+            "label_id": "hair_shape_straight",
+            "label_name": "直发",
+            "definition": "头发整体形态较直，没有明显波浪或卷曲"
+          }
+        ]
       }
     ],
     "rules": {
@@ -203,7 +228,7 @@ POST /api/v1/ai-jobs/jobs
 |---|---:|---:|---|
 | `tagging_language` | string | 是 | 本次打标使用的标签语言，例如 `zh`、`en` |
 | `items` | object[] | 是 | 待打标素材列表，至少 1 个 |
-| `tag_groups` | object[] | 是 | 业务后端组装后的候选标签组，至少 1 组 |
+| `label_snapshot` | object[] | 是 | 业务后端组装后的标签组快照，至少 1 组；必须覆盖所有 `items[].category_id` |
 | `rules` | object | 否 | 本次打标规则 |
 
 ### Item Fields
@@ -211,35 +236,37 @@ POST /api/v1/ai-jobs/jobs
 | 字段 | 类型 | 必填 | 说明 |
 |---|---:|---:|---|
 | `item_id` | string | 是 | 业务素材 ID 和本次 Job 内的结果对齐键；同一 Job 内唯一，结果原样返回 |
-| `group_id` | string 或 null | 否 | 后端素材组 ID；单素材可为 `null` |
+| `item_name` | string | 是 | 业务素材名称；用于辅助模型理解素材，不作为唯一键 |
+| `category_id` | string | 是 | 素材分类 ID；用于匹配 `label_snapshot[].category_id` |
+| `category_name` | string | 是 | 素材分类名称；用于辅助模型理解分类语义 |
 | `asset` | object | 是 | 通用素材资源引用；当前图片打标要求 `asset.content_type` 为图片 MIME |
-| `metadata` | object | 否 | 透传字段，例如文件名、素材业务分类、图层、Sheet 名 |
+| `metadata` | object | 否 | 透传字段，例如文件名、图层、Sheet 名 |
 
 ### Asset Fields
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---:|---:|---|
 | `public_url` | string | 是 | HTTPS 公网 URL，可以来自对象存储、CDN 或其他可公网访问的资源服务；AI 服务通过该地址读取素材 |
-| `internal_url` | string 或 null | 否 | 内网 URL 或审计字段；首版可不读取 |
 | `content_type` | string | 是 | 素材 MIME；当前图片打标支持 `image/png`、`image/jpeg`、`image/webp` |
-| `sha256` | string | 是 | 原始资源内容的小写 64 位 hex SHA-256 |
+| `internal_url` | string 或 null | 否 | 内网 URL 或审计字段；首版可不读取 |
+| `sha256` | string 或 null | 否 | 原始资源内容的小写 64 位 hex SHA-256；业务方有内容 hash 时可传 |
 
-### Tag Group Fields
+### Label Snapshot Fields
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---:|---:|---|
-| `group_id` | string | 是 | 标签组稳定 ID；同一 Job 内唯一 |
-| `group_name` | string | 是 | 当前 `tagging_language` 下的标签组名称 |
-| `selection_mode` | string | 是 | 标签组选择方式；支持 `single`、`multiple` |
-| `tags` | object[] | 是 | 候选标签列表，至少 1 个 |
-| `metadata` | object | 否 | 透传字段，例如素材业务分类、原始 Sheet 名 |
+| `category_id` | string | 是 | 标签组适用的素材分类 ID；用于和 `items[].category_id` 匹配 |
+| `category_name` | string | 是 | 标签组适用的素材分类名称 |
+| `selection_mode` | string | 是 | 当前标签组选择方式；支持 `single`、`multiple` |
+| `labels` | object[] | 是 | 当前标签组下的候选标签列表，至少 1 个 |
+| `metadata` | object | 否 | 透传字段，例如原始 Sheet 名、标签体系版本 |
 
-### Candidate Tag Fields
+### Candidate Label Fields
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---:|---:|---|
 | `label_id` | string | 是 | 后端标签唯一 ID；同一 Job 内必须全局唯一 |
-| `name` | string | 是 | 当前 `tagging_language` 下的标签名 |
+| `label_name` | string | 是 | 当前 `tagging_language` 下的标签名 |
 | `definition` | string | 是 | 当前 `tagging_language` 下的标签定义 |
 | `metadata` | object | 否 | 透传字段 |
 
@@ -342,25 +369,42 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         "items": [
           {
             "item_id": "hair_001",
-            "group_id": "hair_group_001",
+            "item_name": "棕色中长卷发",
+            "category_id": "hair",
+            "category_name": "发型",
             "asset": {
               "public_url": "https://bucket.example.com/assets/hair_001.png",
-              "content_type": "image/png",
-              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              "content_type": "image/png"
             },
             "status": "succeeded",
-            "group_selections": [
+            "label_group_selections": [
               {
-                "group_id": "hair_color",
-                "group_name": "发色",
+                "label_snapshot_index": 0,
+                "category_id": "hair",
+                "category_name": "发型",
                 "selection_mode": "single",
                 "labels": [
                   {
-                    "label_id": "label_hair_color_brown",
-                    "name": "棕色",
+                    "label_id": "hair_color_brown",
+                    "label_name": "棕色",
                     "definition": "头发主体颜色为棕色或棕褐色",
                     "weight": 0.92,
                     "reason": "图片中头发主体呈棕褐色"
+                  }
+                ]
+              },
+              {
+                "label_snapshot_index": 1,
+                "category_id": "hair",
+                "category_name": "发型",
+                "selection_mode": "multiple",
+                "labels": [
+                  {
+                    "label_id": "hair_shape_wavy",
+                    "label_name": "波浪",
+                    "definition": "头发带有明显自然波浪或卷曲形态",
+                    "weight": 0.88,
+                    "reason": "发尾有明显自然波浪"
                   }
                 ]
               }
@@ -454,16 +498,19 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | `batch_summary.failed` | integer | item 级失败数 |
 | `items[]` | object[] | 每个素材的打标结果，按请求 `items[]` 顺序返回 |
 | `items[].item_id` | string | 对应请求 `items[].item_id` |
-| `items[].group_id` | string 或 null | 对应请求 `items[].group_id` |
+| `items[].item_name` | string | 对应请求 `items[].item_name` |
+| `items[].category_id` | string | 对应请求 `items[].category_id` |
+| `items[].category_name` | string | 对应请求 `items[].category_name` |
 | `items[].asset` | object | 素材资源引用快照 |
 | `items[].status` | string | `succeeded`、`partial_success` 或 `failed` |
-| `items[].group_selections` | object[] | 按标签组组织的选择结果；成功和部分成功 item 按请求 `tag_groups[]` 全量返回，失败 item 为空数组 |
-| `group_selections[].group_id` | string | 标签组 ID |
-| `group_selections[].group_name` | string | 标签组名称 |
-| `group_selections[].selection_mode` | string | 标签组选择方式，与请求 `tag_groups[].selection_mode` 一致 |
-| `group_selections[].labels[]` | object[] | 该组内选中的标签；空数组表示该组没有选中标签。`single` 组长度只能是 0 或 1，`multiple` 组可返回多个 |
+| `items[].label_group_selections` | object[] | 按匹配到的标签组顺序组织的选择结果；成功和部分成功 item 按匹配到的 `label_snapshot[]` 顺序全量返回，失败 item 为空数组 |
+| `label_group_selections[].label_snapshot_index` | integer | 该标签组在请求 `label_snapshot[]` 中的位置，从 0 开始 |
+| `label_group_selections[].category_id` | string | 标签组分类 ID，与当前 item 的 `category_id` 一致 |
+| `label_group_selections[].category_name` | string | 标签组分类名称 |
+| `label_group_selections[].selection_mode` | string | 标签组选择方式，与请求 `label_snapshot[].selection_mode` 一致 |
+| `label_group_selections[].labels[]` | object[] | 该组内选中的标签；空数组表示该组没有选中标签。`single` 组长度只能是 0 或 1，`multiple` 组可返回多个 |
 | `labels[].label_id` | string | 后端标签唯一 ID |
-| `labels[].name` | string | 打标语言下的标签名 |
+| `labels[].label_name` | string | 打标语言下的标签名 |
 | `labels[].definition` | string | 打标语言下的标签定义快照 |
 | `labels[].weight` | number | 置信或强度，范围 `0 < weight <= 1` |
 | `labels[].reason` | string 或 null | 打标原因；`rules.return_reason=true` 时必须非空 |
@@ -486,7 +533,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | 字段 | 类型 | 说明 |
 |---|---:|---|
 | `issue` | string | 校验问题类型 |
-| `group_id` | string 或 null | 相关标签组 ID |
+| `label_snapshot_index` | integer 或 null | 相关标签组在请求 `label_snapshot[]` 中的位置，从 0 开始 |
 | `label_id` | string 或 null | 相关标签 ID |
 | `message` | string | 可读说明 |
 | `details` | object | 结构化诊断信息 |
@@ -608,25 +655,42 @@ GET /api/v1/ai-jobs/jobs/{job_id}/billing
       "items": [
         {
           "item_id": "hair_001",
-          "group_id": "hair_group_001",
+          "item_name": "棕色中长卷发",
+          "category_id": "hair",
+          "category_name": "发型",
           "asset": {
             "public_url": "https://bucket.example.com/assets/hair_001.png",
-            "content_type": "image/png",
-            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "content_type": "image/png"
           },
           "status": "succeeded",
-          "group_selections": [
+          "label_group_selections": [
             {
-              "group_id": "hair_color",
-              "group_name": "发色",
+              "label_snapshot_index": 0,
+              "category_id": "hair",
+              "category_name": "发型",
               "selection_mode": "single",
               "labels": [
                 {
-                  "label_id": "label_hair_color_brown",
-                  "name": "棕色",
+                  "label_id": "hair_color_brown",
+                  "label_name": "棕色",
                   "definition": "头发主体颜色为棕色或棕褐色",
                   "weight": 0.92,
                   "reason": "图片中头发主体呈棕褐色"
+                }
+              ]
+            },
+            {
+              "label_snapshot_index": 1,
+              "category_id": "hair",
+              "category_name": "发型",
+              "selection_mode": "multiple",
+              "labels": [
+                {
+                  "label_id": "hair_shape_wavy",
+                  "label_name": "波浪",
+                  "definition": "头发带有明显自然波浪或卷曲形态",
+                  "weight": 0.88,
+                  "reason": "发尾有明显自然波浪"
                 }
               ]
             }
@@ -673,14 +737,16 @@ GET /api/v1/ai-jobs/jobs/{job_id}/billing
 
 ## 处理规则
 
-- AI 服务不从业务后端拉素材库或标签库；每个 Job 必须携带本次打标需要的完整 `items[]` 和 `tag_groups[]` 快照。
-- 业务后端负责按素材业务分类、`ai_tagging` 开关和业务规则过滤可打标标签；素材业务分类建议放在 `items[].metadata.asset_category`。
-- `tagging_language` 是本次打标语言；`tag_groups[]` 中的 `group_name`、`tags[].name` 和 `tags[].definition` 必须使用该语言。
+- AI 服务不从业务后端拉素材库或标签库；每个 Job 必须携带本次打标需要的完整 `items[]` 和 `label_snapshot[]` 快照。
+- `label_snapshot[]` 是标签组列表，不是分类树；同一个 `category_id` 可以出现多次，表示同一分类下有多个标签组。
+- 每个 `items[].category_id` 必须能在 `label_snapshot[].category_id` 中找到至少一个标签组；否则请求参数非法。
+- AI 服务处理单个素材时，只使用 `category_id` 匹配到的标签组，不使用其他分类的标签组参与判断。
+- `tagging_language` 是本次打标语言；`label_snapshot[].labels[].label_name` 和 `label_snapshot[].labels[].definition` 必须使用该语言。
 - 如果业务后端只有另一种语言的标签，应先用标签翻译 Job 生成并保存对应语言，再提交本 Job。
 - 同一 Job 内 `items[].item_id` 必须唯一。
-- 同一 Job 内 `tag_groups[].group_id` 必须唯一，`tag_groups[].tags[].label_id` 必须全局唯一。
+- 同一 Job 内 `label_snapshot[].labels[].label_id` 必须全局唯一。
 - 每个标签组必须声明 `selection_mode`。`single` 表示最多选 1 个，`multiple` 表示可选多个。
-- 成功和部分成功 item 的 `group_selections[]` 必须按请求 `tag_groups[]` 全量返回；未选中标签的组返回 `labels=[]`，不能省略整个组。
+- 成功和部分成功 item 的 `label_group_selections[]` 必须按当前 item 匹配到的 `label_snapshot[]` 顺序全量返回；未选中标签的组返回 `labels=[]`，不能省略整个组。
 - `selection_mode=single` 的结果中，`labels[]` 长度只能是 0 或 1。模型输出多个候选时，AI 服务必须把该 item 标记为 `failed`，不能向业务方返回违反合同的多个标签。
 - 真实 `label_id` 是业务标签事实源，只在请求和结果合同中出现；AI 服务调用模型时应转为临时内部编号，模型不得直接看到或返回真实 `label_id`。
 - 当前图片打标要求 `items[].asset.content_type` 必须是图片 MIME，图片必须通过公网 URL 传入，不接受裸 base64。
@@ -691,13 +757,13 @@ GET /api/v1/ai-jobs/jobs/{job_id}/billing
 | 错误码 | HTTP 状态 | 场景 | 说明 |
 |---|---:|---|---|
 | `INVALID_JOB_TYPE` | 400 | `job_type` 不支持 | 不创建 Job |
-| `INVALID_JOB_PARAMS` | 400 | `job_params` 结构非法 | 例如 `items[]` 为空、`tag_groups[]` 为空、ID 重复 |
+| `INVALID_JOB_PARAMS` | 400 | `job_params` 结构非法 | 例如 `items[]` 为空、`label_snapshot[]` 为空、`items[].category_id` 没有匹配标签组、ID 重复 |
 | `CLIENT_REQUEST_ID_CONFLICT` | 409 | 幂等键冲突 | 同一 `client_request_id` 对应不同请求指纹 |
 | `UNSUPPORTED_LANGUAGE` | 400 | 语种不支持 | `tagging_language` 或 `description_language` 非法 |
-| `ASSET_TAG_SCHEMA_INVALID` | 400 | 标签组结构非法 | 例如 `selection_mode` 不支持、`label_id` 重复 |
-| `ASSET_REF_INVALID` | 400 | 素材资源引用非法 | URL、content type 或 sha256 格式不符合要求 |
-| `INPUT_HASH_MISMATCH` | 400 | 素材内容 hash 不一致 | 不继续调用模型 |
+| `ASSET_LABEL_SCHEMA_INVALID` | 400 | 标签组结构非法 | 例如 `selection_mode` 不支持、`label_id` 重复 |
+| `ASSET_REF_INVALID` | 400 | 素材资源引用非法 | `asset.public_url`、`asset.content_type` 格式不符合要求，或可选 `asset.sha256` 格式不符合要求 |
+| `INPUT_HASH_MISMATCH` | 400 | 素材内容 hash 不一致 | 仅当请求传入可选 `asset.sha256` 且校验不一致时触发；不继续调用模型 |
 | `INPUT_TOO_LARGE` | 400 | 素材大小、图片宽高或像素超过限制 | 不继续调用模型 |
 | `MODEL_CALL_FAILED` | 502 | 模型调用失败 | provider 错误、限流或超时 |
-| `MODEL_OUTPUT_INVALID` | 500 | 模型输出不符合合同 | JSON 非法、未知标签引用、字段缺失、单选组返回多个标签 |
+| `MODEL_OUTPUT_INVALID` | 500 | 模型输出不符合合同 | JSON 非法、未知标签引用、字段缺失、单选标签组返回多个标签 |
 | `ASSET_IMAGE_TAGGING_ALL_ITEMS_FAILED` | 500 | 所有素材都打标失败 | Job 级失败 |
