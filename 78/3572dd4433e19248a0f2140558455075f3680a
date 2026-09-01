@@ -1,0 +1,31 @@
+docs/notes/业务包架构.md
+  s_ee0ef3cef2319f::t_87d41491c4adc9 1-313
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "783572dd4433e19248a0f2140558455075f3680a",
+  "prompts": {},
+  "sessions": {
+    "s_ee0ef3cef2319f": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a943b0231955f2f6cec29bb",
+        "model": "Doubao-Seed-2.1-pro__dev"
+      },
+      "human_author": "wangqiao <wangqiao@crazymaplestudio.com>",
+      "custom_attributes": {
+        "tool_name": "Shell",
+        "display_model_name": "Doubao-Seed-2.1-Pro",
+        "tool_use_id": "6a96e8e331955f2f6cec2b9b",
+        "operation_id": "6a96e8e331955f2f6cec2b9b",
+        "external_session_id": "6a943b0231955f2f6cec29bb",
+        "runtime_client": "trae-tob-git-ai",
+        "edit_kind": "bash",
+        "session_id": "6a943b0231955f2f6cec29bb",
+        "source_scene": "agent",
+        "client_type": "ide"
+      }
+    }
+  }
+}
