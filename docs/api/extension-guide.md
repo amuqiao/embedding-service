@@ -8,7 +8,7 @@
 
 新增 tool：
 
-1. 在 `app/tools/private/<name>.py` 中实现单一底层执行边界；tool 不依赖 `app/jobs` 或 `app/business_packages`。如需第三方 SDK/client，把 provider client 放在 `app/tools/providers/<provider>.py`，由 private tool 调用 provider。
+1. 在 `app/tools/private/<name>.py` 中实现单一底层执行边界；tool 不依赖 `app/jobs` 或 `app/business_packages`。如需第三方 SDK/client，先按归属放置：AI provider 放在 `app/ai/providers/`，对象存储 provider 放在 `app/object_storage/providers/`，只服务单个 tool 的底层 client 才放在 `app/tools/providers/<provider>.py`。
 2. 如需 request / result schema，在 tool 附近的合同模块中定义，例如 `app/tools/private/<name>_contracts.py`，并加入 `app/schemas/registry.py`。
 3. 在 `app/tools/register.py` 中创建 `ToolDefinition`，声明 `tool_ref`、kind、entrypoint、schema、required settings、error codes 和 log events。
 4. 只在进程级必需依赖上使用 `startup_validators`；可选模型链路或 demo job 依赖留在执行路径或专项 smoke / verify 中 fail-fast。

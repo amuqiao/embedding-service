@@ -74,7 +74,7 @@ Construction:
 - 不理解业务 payload 字段。
 - 不决定业务对象 key 命名。
 - 不决定某个业务是否必须校验 `sha256`。
-- 不负责旧 OSS 业务链路迁移。
+- 不负责 Job 编排或业务对象生命周期。
 - 不负责应用级配置从 `.env` 映射到 `ObjectStorageConfig`。
 - 不负责把对象存储异常翻译成具体 HTTP 响应或 Job 错误码。
 - 不负责解释业务 URL Ref、CDN URL 与 Aliyun OSS virtual-host URL 之间的映射。
@@ -87,6 +87,7 @@ Construction:
 | 内部对象写 | `BaseObjectStorageAdapter.write_object_bytes()` | 返回 `PutObjectResult`，包含 `sha256`、`size_bytes` 和可选 `public_url` |
 | 对象元数据 | `head_object()` / `ObjectStorageRepository.head()` | 用于读取前预检和业务需要的元数据查询 |
 | 对象删除 | `delete_object()` / `ObjectStorageRepository.delete()` | provider 负责具体删除行为 |
+| Aliyun 签名读 URL | `AliyunOSSRepository.signed_get_url()` | Aliyun OSS provider 专属能力，不进入通用 repository 抽象 |
 | 完整性校验 | `ExpectedObjectIntegrity` + `ObjectReadPolicy` | 是否校验由 policy 显式决定 |
 | 公网 URL 输入 | `PublicUrlReader` + `PublicUrlReadSpec` | 用于只有 CDN URL 或公网可下载 URL、没有 AK/SK 的场景 |
 | provider 构建 | `ObjectStorageConfig` + `build_repository()` | 当前内置 `aliyun_oss` 和 `local` |
@@ -379,4 +380,4 @@ poster_title_image
     -> app.object_storage
 ```
 
-当前文档只描述新 `app/object_storage` 的通用方案，不表示旧 OSS 业务链路已经完成替换。
+当前文档描述 `app/object_storage` 的现行通用合同；业务 adapter 只依赖该合同。

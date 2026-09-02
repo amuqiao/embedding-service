@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from app.tools.providers.aliyun_oss import AliyunOSSClient, AliyunOSSError
+from app.object_storage import AliyunOSSRepository, ObjectRef, ObjectStorageError
 from smoke.flows.oss.url_ref import oss_url_ref_from_output_object
 from smoke.harness import formatters
 from scripts.media import audio as audio_media
@@ -215,17 +215,21 @@ def _upload_audio_to_aliyun_oss(
     verification = _verify_htdemucs_input(source, max_duration_seconds=max_duration_seconds)
     data = source.read_bytes()
     config = oss_image_upload.load_aliyun_oss_config(app_env)
-    client = AliyunOSSClient(config)
+    repository = AliyunOSSRepository(config)
     output_prefix = (env_runtime.env_value("OSS_OUTPUT_PREFIX", app_env) or "ai-jobs").strip().strip("/")
     clean_key_prefix = (key_prefix or DEFAULT_INPUT_KEY_PREFIX).strip().strip("/")
     parts = [part for part in (output_prefix, clean_key_prefix) if part]
     parts.append(f"{int(time.time())}-{uuid.uuid4().hex}")
     parts.append(source.name)
-    object_key = client.object_key("/".join(parts))
+    upload_key = "/".join(parts)
     try:
-        client.put_object(object_key, data, content_type=AUDIO_WAV_CONTENT_TYPE)
-        signed_url = client.signed_get_url(object_key, expires_seconds=signed_url_expires_seconds)
-    except AliyunOSSError as exc:
+        written = repository.put_bytes(upload_key, data, content_type=AUDIO_WAV_CONTENT_TYPE)
+        object_key = written.key
+        signed_url = repository.signed_get_url(
+            ObjectRef(provider=repository.provider, bucket=config.bucket, region=config.region, key=object_key),
+            expires_seconds=signed_url_expires_seconds,
+        )
+    except ObjectStorageError as exc:
         raise FlowError(f"failed to upload audio to Aliyun OSS or generate signed URL: {exc}", exit_code=4) from exc
     content_hash = f"sha256:{_bare_sha256(data)}"
     return {
@@ -488,8 +492,11 @@ def cleanup_staged_input(staged_input: dict[str, Any], app_env: dict[str, str]) 
         if not isinstance(key, str) or not key.strip():
             raise FlowError("uploaded audio cleanup requires key", exit_code=4)
         try:
-            AliyunOSSClient(config).delete_object(key)
-        except AliyunOSSError as exc:
+            repository = AliyunOSSRepository(config)
+            repository.delete(
+                ObjectRef(provider=repository.provider, bucket=config.bucket, region=config.region, key=key)
+            )
+        except ObjectStorageError as exc:
             raise FlowError(f"failed to delete uploaded Aliyun OSS audio: {exc}", exit_code=4) from exc
         return
     if provider == "local":

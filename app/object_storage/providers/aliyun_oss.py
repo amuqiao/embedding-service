@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from email.utils import formatdate
 import hashlib
 import hmac
+import time
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 import urllib.error
 import urllib.request
 from xml.etree import ElementTree
@@ -120,6 +121,30 @@ class AliyunOSSRepository(ObjectStorageRepository):
     def delete(self, ref: ObjectRef) -> None:
         self._assert_ref(ref)
         self._request("DELETE", ref.key)
+
+    def signed_get_url(self, ref: ObjectRef, *, expires_seconds: int = 3600) -> str:
+        self._assert_ref(ref)
+        if (
+            not isinstance(expires_seconds, int)
+            or isinstance(expires_seconds, bool)
+            or expires_seconds <= 0
+        ):
+            raise ObjectStorageValidationError("expires_seconds must be a positive integer")
+        expires_at = str(int(time.time()) + expires_seconds)
+        string_to_sign = "\n".join(["GET", "", "", expires_at, f"/{self.config.bucket}/{ref.key}"])
+        digest = hmac.new(
+            self.config.access_key_secret.encode("utf-8"),
+            string_to_sign.encode("utf-8"),
+            hashlib.sha1,
+        ).digest()
+        query = urlencode(
+            {
+                "OSSAccessKeyId": self.config.access_key_id,
+                "Expires": expires_at,
+                "Signature": base64.b64encode(digest).decode("ascii"),
+            }
+        )
+        return f"{self._object_url(ref.key)}?{query}"
 
     def _public_url(self, key: str) -> str:
         object_key = normalize_object_key(key)
@@ -298,5 +323,6 @@ def _endpoint_mismatch_hint(*, body: str, config: AliyunOSSConfig) -> str:
         f"configured_endpoint={config.normalized_endpoint} "
         f"bucket={config.bucket} "
         f"configured_region={config.region} "
-        f"recommended_endpoint={recommended_endpoint}."
+        f"recommended_endpoint={recommended_endpoint}. "
+        "Check OSS_REGION and OSS_ENDPOINT in the selected env file."
     )

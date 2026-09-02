@@ -157,7 +157,7 @@ OSS_PUBLIC_ENDPOINT=
 运行连通性测试：
 
 ```bash
-./.venv/bin/python examples/business/check_aliyun_oss.py --env-file .env.dev
+uv run python examples/business/check_aliyun_oss.py --env-file .env.dev
 ```
 
 该脚本属于业务/供应商扩展示例，不进入 `scripts/verify.sh` 的稳定命令面。脚本会在 `OSS_PROJECT_ROOT` 下写入一个临时对象，并验证 `PUT`、`GET`、`HEAD`。服务运行时要使用阿里云 OSS 时，将本地 `.env` 中的 `STORAGE_BACKEND` 设为 `aliyun_oss`，并配置同一组 `OSS_*` 环境变量。

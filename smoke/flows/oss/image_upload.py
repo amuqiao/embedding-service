@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.oss_endpoint import normalize_oss_endpoint
-from app.tools.providers.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
+from app.object_storage import AliyunOSSConfig, AliyunOSSRepository, ObjectRef, ObjectStorageError
 from smoke.harness import formatters
 from smoke.harness import env_runtime
 from smoke.harness.errors import FlowError
@@ -66,7 +66,7 @@ def load_aliyun_oss_config(app_env: dict[str, str]) -> AliyunOSSConfig:
         region=region,
         access_key_id=_required_env("OSS_ACCESS_KEY_ID", app_env),
         access_key_secret=_required_env("OSS_ACCESS_KEY_SECRET", app_env),
-        project_root=_required_env("OSS_PROJECT_ROOT", app_env),
+        key_prefix=_required_env("OSS_PROJECT_ROOT", app_env),
         endpoint=endpoint,
         endpoint_style=endpoint_style,
         scheme="https",
@@ -90,7 +90,7 @@ def upload_image(
     key: str | None = None,
     key_prefix: str | None = None,
     signed_url_expires_seconds: int = 3600,
-    client: AliyunOSSClient | None = None,
+    repository: AliyunOSSRepository | None = None,
 ) -> dict[str, Any]:
     source = _resolve_repo_path(image)
     if not source.is_file():
@@ -98,13 +98,17 @@ def upload_image(
 
     data = source.read_bytes()
     resolved_content_type = image_content_type(source, content_type)
-    config = client.config if client is not None else load_aliyun_oss_config(app_env)
-    oss_client = client or AliyunOSSClient(config)
-    object_key = oss_client.object_key(key or _default_key(source=source, app_env=app_env, key_prefix=key_prefix))
+    config = repository.config if repository is not None else load_aliyun_oss_config(app_env)
+    oss_repository = repository or AliyunOSSRepository(config)
+    upload_key = key or _default_key(source=source, app_env=app_env, key_prefix=key_prefix)
     try:
-        oss_client.put_object(object_key, data, content_type=resolved_content_type)
-        signed_url = oss_client.signed_get_url(object_key, expires_seconds=signed_url_expires_seconds)
-    except AliyunOSSError as exc:
+        written = oss_repository.put_bytes(upload_key, data, content_type=resolved_content_type)
+        object_key = written.key
+        signed_url = oss_repository.signed_get_url(
+            ObjectRef(provider=oss_repository.provider, bucket=config.bucket, region=config.region, key=object_key),
+            expires_seconds=signed_url_expires_seconds,
+        )
+    except ObjectStorageError as exc:
         raise FlowError(f"failed to upload image to Aliyun OSS or generate signed URL: {exc}", exit_code=4) from exc
 
     content_hash = f"sha256:{bare_sha256(data)}"
@@ -135,9 +139,9 @@ def delete_uploaded_image(
     *,
     upload_result: dict[str, Any],
     app_env: dict[str, str],
-    client: AliyunOSSClient | None = None,
+    repository: AliyunOSSRepository | None = None,
 ) -> None:
-    config = client.config if client is not None else load_aliyun_oss_config(app_env)
+    config = repository.config if repository is not None else load_aliyun_oss_config(app_env)
     if upload_result.get("provider") != "aliyun_oss":
         raise FlowError("uploaded image cleanup requires provider=aliyun_oss", exit_code=4)
     if upload_result.get("bucket") != config.bucket:
@@ -147,10 +151,12 @@ def delete_uploaded_image(
     key = upload_result.get("key")
     if not isinstance(key, str) or not key.strip():
         raise FlowError("uploaded image cleanup requires key", exit_code=4)
-    oss_client = client or AliyunOSSClient(config)
+    oss_repository = repository or AliyunOSSRepository(config)
     try:
-        oss_client.delete_object(key)
-    except AliyunOSSError as exc:
+        oss_repository.delete(
+            ObjectRef(provider=oss_repository.provider, bucket=config.bucket, region=config.region, key=key)
+        )
+    except ObjectStorageError as exc:
         raise FlowError(f"failed to delete uploaded Aliyun OSS image: {exc}", exit_code=4) from exc
 
 

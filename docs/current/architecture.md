@@ -76,6 +76,7 @@ API 进程的 PostgreSQL async engine 和 session factory 由 FastAPI lifespan �
 | Job kernel | `app/models/job.py`、`app/repositories/job_repo.py`、`app/tasks/jobs.py`、`app/tasks/recovery.py` | Job 聚合、Attempt、Dispatch outbox、Callback outbox、状态迁移和恢复 |
 | Job extension | `app/jobs/`、`app/services/job_runtime.py`、`app/services/executor.py` | `job_type` 注册、运行时快照、executor 执行和结果投影 |
 | Business package / Tool registry | `app/business_packages/`、`app/tools/private/`、`app/tools/providers/`、`app/core/registries/`、`app/core/registry_checks.py` | 业务包注册 `job_type` / workflow，`JobTypeSpec.required_tool_refs` 声明工具依赖，tool 封装底层执行边界并在启动期 fail-fast 校验 |
+| Object storage | `app/object_storage/` | 对象存储读写、删除、元数据、签名 URL 和 provider 配置校验；不承载业务 payload、业务 key 规则或业务错误码 |
 | Workflow | `app/workflows/`、`app/business_packages/examples/` | DAG-lite root/child 编排、ready child 创建、child terminal 后推进和 root 汇总 |
 | AI gateway | `app/ai/gateway.py`、`app/ai/kernel.py`、`app/ai/adapters/litellm_client.py` | 模型启用校验、provider 调用、AI call ledger、usage 和 cost 记录 |
 | Billing | `app/services/billing.py`、`app/schemas/billing.py` | 从 `ai_call_ledger_entries` 聚合 Job scope billing read model |

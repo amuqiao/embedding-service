@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
-from app.tools.providers.aliyun_oss import AliyunOSSClient, AliyunOSSConfig
+from app.object_storage import AliyunOSSConfig, AliyunOSSRepository, ObjectRef
 
 DEFAULT_TEST_CONTENT = "fastapi-best-ai-architecture aliyun oss connectivity check\n"
 
@@ -50,7 +50,7 @@ def load_config() -> AliyunOSSConfig:
         region=region,
         access_key_id=required_env("OSS_ACCESS_KEY_ID"),
         access_key_secret=required_env("OSS_ACCESS_KEY_SECRET"),
-        project_root=os.getenv("OSS_PROJECT_ROOT", "").strip().strip("/"),
+        key_prefix=os.getenv("OSS_PROJECT_ROOT", "").strip().strip("/"),
         endpoint=endpoint.removeprefix("https://").removeprefix("http://").strip("/"),
         endpoint_style=endpoint_style,
         scheme=os.getenv("OSS_SCHEME", "https").strip() or "https",
@@ -70,28 +70,33 @@ def main() -> int:
 
     load_dotenv(args.env_file)
     config = load_config()
-    client = AliyunOSSClient(config)
-    object_key = client.object_key(args.key)
+    repository = AliyunOSSRepository(config)
     content = DEFAULT_TEST_CONTENT.encode("utf-8")
 
     print_step("CONFIG", "OK", f"bucket={config.bucket} region={config.region} endpoint={config.normalized_endpoint}")
-    print_step("OBJECT", "INFO", object_key)
 
-    client.put_object(args.key, content, content_type="text/plain; charset=utf-8")
+    written = repository.put_bytes(args.key, content, content_type="text/plain; charset=utf-8")
+    object_ref = ObjectRef(
+        provider=repository.provider,
+        bucket=config.bucket,
+        region=config.region,
+        key=written.key,
+    )
+    print_step("OBJECT", "INFO", object_ref.key)
     print_step("PUT", "OK", "uploaded test object")
 
-    body = client.get_object(object_key)
+    body = repository.get_bytes(object_ref)
     if body != content:
         raise RuntimeError("GET body does not match uploaded content")
     print_step("GET", "OK", f"bytes={len(body)}")
 
-    headers = client.head_object(args.key)
-    print_step("HEAD", "OK", f"content-length={headers.get('Content-Length', '-')}")
+    meta = repository.head(object_ref)
+    print_step("HEAD", "OK", f"content-length={meta.size_bytes or '-'}")
 
     if args.keep:
         print_step("DELETE", "SKIP", "kept by --keep")
     else:
-        client.delete_object(object_key)
+        repository.delete(object_ref)
         print_step("DELETE", "OK", "removed test object")
 
     return 0

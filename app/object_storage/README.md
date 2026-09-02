@@ -2,6 +2,16 @@
 
 `app/object_storage` 是对象存储仓储层，业务 `job_type` 必须通过自己的 storage adapter 接入，不能直接绑定具体 provider。
 
+## Boundary Rules
+
+本目录是基础设施模块，不是业务适配层。修改本目录前必须先确认改动满足以下条件：
+
+- 只新增或调整对象存储通用原语，例如读、写、删、元数据、签名 URL、provider 配置校验和底层错误。
+- 不为某个业务包、POC、smoke flow、接口字段或资源命名规则增加专用逻辑。
+- 不引入业务错误码、业务 payload、业务 content type 白名单、业务 key 拼装规则或业务 URL Ref 解释。
+- 业务差异必须放在对应业务包的 storage adapter；smoke 专用差异必须放在对应 smoke flow。
+- 多个业务当前碰巧复用同一逻辑，不代表该逻辑可以进入本目录；只有稳定、无业务词汇、可被对象存储语义独立解释的能力才允许下沉。
+
 ## Architecture
 
 本目录采用简化版 **Ports and Adapters / Hexagonal Architecture**：
@@ -79,10 +89,10 @@ Policy:
 - 公网 URL 输入只通过 `PublicUrlReader` 读取，并由业务 storage adapter 组合使用。
 - 自定义公网输入 reader 必须继承 `PublicUrlInputReader`。
 - `PublicUrlConfig.allowed_hosts` 和 `max_bytes_ceiling` 是 job type 级输入安全护栏，不放进全局仓储配置。
-- 新 `job_type` 只能依赖 `app.object_storage`；旧 OSS 链路冻结维护，不再扩展新业务能力。
+- 业务 `job_type` 只能依赖 `app.object_storage`；对象存储读写事实源只保留本模块。
 - provider 配置只接受声明过的字段；未知字段必须 fail-fast。
 - 读取校验策略必须显式使用 `ObjectReadPolicy`，不要在业务主流程里散落手写 size 或 sha256 校验。
-- Job runtime 的 legacy artifact 读写不属于本模块；放在服务层或业务 adapter 中。
+- Job runtime artifact 读写不属于本模块；业务输入输出适配放在业务 adapter 中。
 
 允许直接使用 provider 的位置：
 
@@ -317,5 +327,5 @@ storage = PublicInputStorageAdapter.from_config(
 - `job_type` 的业务输入输出 schema
 - 业务 payload 字段解释
 - 业务错误码或 FastAPI `AppError` 映射
-- 本项目旧 OSS 代码迁移
+- Job 编排和业务对象生命周期
 - provider 凭据的生产密钥管理

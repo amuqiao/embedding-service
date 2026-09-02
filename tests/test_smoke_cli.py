@@ -10,7 +10,7 @@ from PIL import Image
 from typer.testing import CliRunner
 
 from smoke.cli import app
-from app.tools.providers.aliyun_oss import AliyunOSSConfig
+from app.object_storage import AliyunOSSConfig, PutObjectResult
 from app.ai.adapters.base import ImageGenerationResult
 from smoke.flows.audio import stem_separation as audio_stem_separation
 from smoke.flows.image import adapter_probe as adapter_image_probe
@@ -2906,30 +2906,39 @@ def test_poster_title_image_items_json_rejects_explicit_invalid_values(monkeypat
         )
 
 
-def test_oss_image_upload_builds_url_ref_with_fake_client(tmp_path, monkeypatch):
+def test_oss_image_upload_builds_url_ref_with_fake_repository(tmp_path, monkeypatch):
     clear_storage_env(monkeypatch)
     monkeypatch.setattr(oss_image_upload, "ROOT_DIR", tmp_path)
     source = tmp_path / "reference.png"
     source.write_bytes(b"png-reference")
     calls = []
 
-    class FakeClient:
+    class FakeRepository:
+        provider = "aliyun_oss"
         config = AliyunOSSConfig(
             bucket="bucket-a",
             region="cn-hangzhou",
             access_key_id="id",
             access_key_secret="secret",
-            project_root="project-a",
+            key_prefix="project-a",
         )
 
-        def object_key(self, key):
-            return f"project-a/{key.strip('/')}" if not key.startswith("project-a/") else key
+        def put_bytes(self, key, data, *, content_type, content_disposition=None):
+            assert content_disposition is None
+            object_key = f"project-a/{key.strip('/')}" if not key.startswith("project-a/") else key
+            calls.append({"key": object_key, "data": data, "content_type": content_type})
+            return PutObjectResult(
+                provider="aliyun_oss",
+                bucket="bucket-a",
+                region="cn-hangzhou",
+                key=object_key,
+                content_type=content_type,
+                size_bytes=len(data),
+                sha256=oss_image_upload.bare_sha256(data),
+            )
 
-        def put_object(self, key, data, *, content_type):
-            calls.append({"key": key, "data": data, "content_type": content_type})
-
-        def signed_get_url(self, key, *, expires_seconds):
-            assert key == "project-a/inputs/reference.png"
+        def signed_get_url(self, ref, *, expires_seconds):
+            assert ref.key == "project-a/inputs/reference.png"
             assert expires_seconds == 1800
             return "https://signed.example.com/project-a/inputs/reference.png?Signature=sig"
 
@@ -2939,7 +2948,7 @@ def test_oss_image_upload_builds_url_ref_with_fake_client(tmp_path, monkeypatch)
         app_env={"OSS_OUTPUT_PREFIX": "outputs", "OSS_PUBLIC_ENDPOINT": "aigc-datas.epubgame.com"},
         key="inputs/reference.png",
         signed_url_expires_seconds=1800,
-        client=FakeClient(),
+        repository=FakeRepository(),
     )
 
     assert calls == [
@@ -2961,6 +2970,41 @@ def test_oss_image_upload_builds_url_ref_with_fake_client(tmp_path, monkeypatch)
         "content_type": "image/png",
         "sha256": oss_image_upload.bare_sha256(b"png-reference"),
     }
+
+
+def test_oss_image_upload_cleanup_deletes_object_ref(monkeypatch):
+    clear_storage_env(monkeypatch)
+    deleted_refs = []
+
+    class FakeRepository:
+        provider = "aliyun_oss"
+        config = AliyunOSSConfig(
+            bucket="bucket-a",
+            region="cn-hangzhou",
+            access_key_id="id",
+            access_key_secret="secret",
+            key_prefix="project-a",
+        )
+
+        def delete(self, ref):
+            deleted_refs.append(ref)
+
+    oss_image_upload.delete_uploaded_image(
+        upload_result={
+            "provider": "aliyun_oss",
+            "bucket": "bucket-a",
+            "region": "cn-hangzhou",
+            "key": "project-a/inputs/reference.png",
+        },
+        app_env={},
+        repository=FakeRepository(),
+    )
+
+    assert len(deleted_refs) == 1
+    assert deleted_refs[0].provider == "aliyun_oss"
+    assert deleted_refs[0].bucket == "bucket-a"
+    assert deleted_refs[0].region == "cn-hangzhou"
+    assert deleted_refs[0].key == "project-a/inputs/reference.png"
 
 
 def test_smoke_builds_double_job_payload():

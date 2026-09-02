@@ -12,6 +12,7 @@ import urllib.request
 from urllib.parse import quote, urlsplit
 
 from app.core.exceptions import AppError
+from app.object_storage import AliyunOSSRepository, ObjectStorageError
 from app.business_packages.poster_title_image.image_policy import (
     POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
     POSTER_TITLE_IMAGE_REFERENCE_POLICY,
@@ -19,7 +20,6 @@ from app.business_packages.poster_title_image.image_policy import (
 from app.tools.private.image import (
     validate_image_bytes,
 )
-from app.tools.providers.aliyun_oss import AliyunOSSClient, AliyunOSSError
 from smoke.flows.oss.url_ref import canonical_ref_from_oss_url_ref
 from smoke.harness import formatters
 from smoke.flows.oss import image_upload as oss_image_upload
@@ -543,8 +543,8 @@ def _signed_download_url(
             exit_code=4,
         )
     try:
-        return AliyunOSSClient(config).signed_get_url(ref.key, expires_seconds=expires_seconds)
-    except AliyunOSSError as exc:
+        return AliyunOSSRepository(config).signed_get_url(ref, expires_seconds=expires_seconds)
+    except ObjectStorageError as exc:
         raise FlowError(f"failed to generate signed output URL: {exc}", exit_code=4) from exc
 
 

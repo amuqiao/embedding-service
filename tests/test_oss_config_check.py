@@ -357,3 +357,23 @@ def test_oss_cli_no_longer_imports_legacy_oss_paths():
 
     assert "app.tools.providers.aliyun_oss" not in source
     assert "smoke.flows.oss.image_upload" not in source
+
+
+def test_runtime_code_no_longer_imports_legacy_aliyun_oss_provider():
+    current_test = Path(__file__).resolve()
+    roots = (
+        Path("app"),
+        Path("examples"),
+        Path("smoke"),
+        Path("tests"),
+    )
+    offenders: list[str] = []
+    for root in roots:
+        for path in root.rglob("*.py"):
+            if path.resolve() == current_test:
+                continue
+            source = path.read_text(encoding="utf-8")
+            if "app.tools.providers.aliyun_oss" in source:
+                offenders.append(str(path))
+
+    assert offenders == []
