@@ -22,6 +22,7 @@ _WORKER_HARD_TIMEOUT_BUFFER: int = 60
 _JOB_STALE_RUNNING_BUFFER: int = 600
 _CALLBACK_DELIVERY_CLAIM_GRACE: int = 175
 _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_ITEMS: int = 100
+_ASSET_IMAGE_TAGGING_SCHEMA_MAX_ITEMS: int = 100
 _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TEXT_LENGTH: int = 10_000
 _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TOTAL_TEXT_LENGTH: int = (
     _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_ITEMS * _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TEXT_LENGTH
@@ -85,6 +86,7 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH": ("job", "tagged_text_translation", "max_total_text_length"),
     "ASSET_IMAGE_TAGGING_MODEL_ADAPTER": ("job", "asset_image_tagging", "model_adapter"),
     "ASSET_IMAGE_TAGGING_MODEL_ID": ("job", "asset_image_tagging", "model_id"),
+    "ASSET_IMAGE_TAGGING_MAX_ITEMS": ("job", "asset_image_tagging", "max_items"),
     "POSTER_TITLE_IMAGE_MAX_ITEMS": ("job", "poster_title_image", "max_items"),
     "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": ("job", "poster_title_image", "max_draw_count"),
     "AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER": ("job", "audio_stem_separation", "execution_provider"),
@@ -619,6 +621,7 @@ class PosterTitleImageJobSettings(ConfigSection):
 class AssetImageTaggingJobSettings(ConfigSection):
     model_adapter: str = "openai_responses"
     model_id: str = "gpt-5.5"
+    max_items: int = 10
 
     @model_validator(mode="after")
     def validate_asset_image_tagging(self) -> "AssetImageTaggingJobSettings":
@@ -632,6 +635,13 @@ class AssetImageTaggingJobSettings(ConfigSection):
             raise ValueError("ASSET_IMAGE_TAGGING_MODEL_ID must not be empty")
         if self.model_id != self.model_id.strip():
             raise ValueError("ASSET_IMAGE_TAGGING_MODEL_ID must not have leading or trailing whitespace")
+        if self.max_items <= 0:
+            raise ValueError("ASSET_IMAGE_TAGGING_MAX_ITEMS must be greater than 0")
+        if self.max_items > _ASSET_IMAGE_TAGGING_SCHEMA_MAX_ITEMS:
+            raise ValueError(
+                "ASSET_IMAGE_TAGGING_MAX_ITEMS must be less than or equal to "
+                f"{_ASSET_IMAGE_TAGGING_SCHEMA_MAX_ITEMS}"
+            )
         return self
 
 

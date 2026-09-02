@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
-from app.core.exceptions import AppError
+from app.business_packages.asset_image_tagging import model_adapter as asset_image_tagging_model_adapter
+from app.business_packages.asset_image_tagging.errors import ASSET_IMAGE_TAGGING_ITEMS_EXCEEDS_LIMIT
+from app.business_packages.asset_image_tagging.executor import (
+    ASSET_IMAGE_TAGGING_ITEM_JOB_TYPE,
+    ASSET_IMAGE_TAGGING_JOIN_JOB_TYPE,
+    ASSET_IMAGE_TAGGING_JOIN_NODE_KEY,
+    AssetImageTaggingItemJob,
+    AssetImageTaggingJob,
+    AssetImageTaggingJoinJob,
+    register_asset_image_tagging_workflow,
+)
 from app.business_packages.asset_image_tagging.model_adapter import (
     OpenAIResponsesAssetImageTaggingModelAdapter,
     asset_image_tagging_model_adapter_from_settings,
@@ -17,7 +28,11 @@ from app.business_packages.asset_image_tagging.schemas import (
     AssetImageTaggingItemParams,
     AssetImageTaggingLabelSnapshotGroup,
     AssetImageTaggingParams,
+    AssetImageTaggingResult,
 )
+from app.core.exceptions import AppError
+from app.jobs.registry import register as register_job_executor
+from app.workflows import compile_registered_workflow
 from smoke.flows.asset import image_tagging as image_tagging_flow
 from smoke.flows.asset.image_tagging import (
     DEFAULT_FIXTURE_PATH,
@@ -28,9 +43,9 @@ from smoke.flows.asset.image_tagging import (
 from smoke.harness.errors import FlowError
 
 
-def _item(category_id: str = "hair") -> AssetImageTaggingItemParams:
+def _item(category_id: str = "hair", item_id: str = "asset_001") -> AssetImageTaggingItemParams:
     return AssetImageTaggingItemParams(
-        item_id="asset_001",
+        item_id=item_id,
         item_name="棕色中长卷发",
         category_id=category_id,
         category_name="发型",
@@ -59,6 +74,13 @@ def _label_group(selection_mode: str = "single") -> AssetImageTaggingLabelSnapsh
             },
         ],
     )
+
+
+def _register_asset_image_tagging_workflow_for_test() -> None:
+    register_job_executor(AssetImageTaggingJob())
+    register_job_executor(AssetImageTaggingItemJob())
+    register_job_executor(AssetImageTaggingJoinJob())
+    register_asset_image_tagging_workflow()
 
 
 def test_asset_image_tagging_selects_from_matching_category_only():
@@ -113,8 +135,108 @@ def test_asset_image_tagging_prompt_payload_keeps_item_category_scope():
     )
 
     assert payload["tagging_language"] == "zh"
-    assert payload["items"][0]["item"]["category_id"] == "hair"
+    assert payload["items"][0]["item"]["item_ref"] == "I1"
+    assert "item_id" not in payload["items"][0]["item"]
+    assert "category_id" not in payload["items"][0]["item"]
     assert payload["items"][0]["label_groups"][0]["selection_mode"] == "single"
+    assert payload["items"][0]["label_groups"][0]["group_ref"] == "G1"
+    assert "category_id" not in payload["items"][0]["label_groups"][0]
+    assert payload["items"][0]["label_groups"][0]["labels"][0] == {
+        "label_ref": "L1",
+        "label_name": "棕色",
+        "definition": "头发主体颜色为棕色或棕褐色",
+    }
+
+
+def test_asset_image_tagging_rejects_items_over_configured_limit(monkeypatch):
+    monkeypatch.setattr(
+        "app.business_packages.asset_image_tagging.executor.settings",
+        SimpleNamespace(job=SimpleNamespace(asset_image_tagging=SimpleNamespace(max_items=1))),
+    )
+    params = AssetImageTaggingParams(
+        tagging_language="zh",
+        items=[_item(item_id="asset_001"), _item(item_id="asset_002")],
+        label_snapshot=[_label_group()],
+    )
+
+    with pytest.raises(AppError) as exc:
+        AssetImageTaggingJob().normalize_job_params(params.model_dump(exclude_none=True))
+
+    assert exc.value.code == ASSET_IMAGE_TAGGING_ITEMS_EXCEEDS_LIMIT
+    assert exc.value.details == {
+        "item_count": 2,
+        "max_items": 1,
+        "job_type": "asset_image_tagging",
+    }
+
+
+def test_asset_image_tagging_workflow_compiles_one_child_per_item_and_join():
+    _register_asset_image_tagging_workflow_for_test()
+    params = AssetImageTaggingParams(
+        tagging_language="zh",
+        items=[_item(item_id="asset_001"), _item(item_id="asset_002")],
+        label_snapshot=[_label_group()],
+    )
+
+    plan = compile_registered_workflow("asset_image_tagging", params.model_dump(exclude_none=True))
+    nodes = {node["key"]: node for node in plan["nodes"]}
+
+    assert plan["workflow_type"] == "asset_image_tagging"
+    assert plan["node_count"] == 3
+    assert nodes["item.0"]["job_type"] == ASSET_IMAGE_TAGGING_ITEM_JOB_TYPE
+    assert nodes["item.1"]["job_type"] == ASSET_IMAGE_TAGGING_ITEM_JOB_TYPE
+    assert nodes[ASSET_IMAGE_TAGGING_JOIN_NODE_KEY]["job_type"] == ASSET_IMAGE_TAGGING_JOIN_JOB_TYPE
+    assert nodes[ASSET_IMAGE_TAGGING_JOIN_NODE_KEY]["depends_on"] == ["item.0", "item.1"]
+    assert nodes["item.0"]["job_params"]["item"]["item_id"] == "asset_001"
+    assert nodes["item.0"]["job_params"]["label_snapshot_indexes"] == [0]
+    assert nodes[ASSET_IMAGE_TAGGING_JOIN_NODE_KEY]["job_params"]["item_ids"] == [
+        "asset_001",
+        "asset_002",
+    ]
+
+
+def test_asset_image_tagging_public_result_extracts_join_result_from_workflow_envelope():
+    result_item = build_result_item(
+        item=_item(),
+        tagging_language="zh",
+        label_snapshot=[_label_group()],
+    )
+    join_result = AssetImageTaggingResult(
+        tagging_language="zh",
+        batch_summary={"total": 1, "succeeded": 1, "partial_success": 0, "failed": 0},
+        items=[result_item],
+    ).model_dump(exclude_none=True)
+    canonical_result = {
+        "schema_version": 1,
+        "job_type": "asset_image_tagging",
+        "workflow": {
+            "workflow_type": "asset_image_tagging",
+            "workflow_version": 1,
+            "outcome": "success",
+            "failure_policy": "fail_fast",
+            "node_count": 2,
+            "succeeded": 2,
+            "failed": 0,
+            "nodes": [
+                {
+                    "node_key": "item.0",
+                    "job_id": "item-job-id",
+                    "job_type": ASSET_IMAGE_TAGGING_ITEM_JOB_TYPE,
+                    "status": "succeeded",
+                    "result": result_item.model_dump(exclude_none=True),
+                },
+                {
+                    "node_key": ASSET_IMAGE_TAGGING_JOIN_NODE_KEY,
+                    "job_id": "join-job-id",
+                    "job_type": ASSET_IMAGE_TAGGING_JOIN_JOB_TYPE,
+                    "status": "succeeded",
+                    "result": join_result,
+                },
+            ],
+        },
+    }
+
+    assert AssetImageTaggingJob().public_result(canonical_result) == join_result
 
 
 def test_asset_image_tagging_adapter_uses_openai_settings(monkeypatch):
@@ -140,6 +262,7 @@ def test_asset_image_tagging_adapter_uses_openai_settings(monkeypatch):
     assert adapter.base_url == "https://openai.example/v1"
     assert adapter.model_id == "gpt-4o"
     assert adapter.timeout_seconds == 42
+    assert adapter.batch_size == 1
 
 
 async def test_asset_image_tagging_adapter_requires_openai_api_key():
@@ -148,13 +271,85 @@ async def test_asset_image_tagging_adapter_requires_openai_api_key():
         base_url=None,
         model_id="gpt-4o",
         timeout_seconds=42,
+        batch_size=1,
     )
 
     with pytest.raises(AppError, match="OPENAI_API_KEY"):
         await adapter.tag(AssetImageTaggingParams(tagging_language="zh", items=[_item()], label_snapshot=[_label_group()]))
 
 
-def test_asset_image_tagging_maps_model_label_ids_back_to_snapshot():
+async def test_asset_image_tagging_openai_adapter_uses_structured_output_and_single_item_batches(monkeypatch):
+    calls: list[dict] = []
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                output_text=json.dumps(
+                    {
+                        "items": [
+                            {
+                                "item_ref": "I1",
+                                "asset_description": "一张棕色中长卷发素材。",
+                                "label_group_selections": [
+                                    {
+                                        "group_ref": "G1",
+                                        "labels": [
+                                            {
+                                                "label_ref": "L1",
+                                                "weight": 0.91,
+                                                "reason": "图片主体发色偏棕。",
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+    class FakeClient:
+        responses = FakeResponses()
+
+    monkeypatch.setattr(asset_image_tagging_model_adapter, "_client", lambda **_kwargs: FakeClient())
+
+    adapter = OpenAIResponsesAssetImageTaggingModelAdapter(
+        api_key="openai-key",
+        base_url="https://openai.example/v1",
+        model_id="gpt-4o",
+        timeout_seconds=42,
+        batch_size=1,
+    )
+    first_item = _item()
+    second_item = _item().model_copy(update={"item_id": "asset_002", "item_name": "黑色中长卷发"})
+
+    result_items = await adapter.tag(
+        AssetImageTaggingParams(
+            tagging_language="zh",
+            items=[first_item, second_item],
+            label_snapshot=[_label_group()],
+        )
+    )
+
+    assert len(calls) == 2
+    assert all(call["text"]["format"]["type"] == "json_schema" for call in calls)
+    assert all(call["text"]["format"]["strict"] is True for call in calls)
+    rendered_input = json.dumps(calls[0]["input"], ensure_ascii=False)
+    assert "item_id" not in rendered_input
+    assert "category_id" not in rendered_input
+    assert "label_id" not in rendered_input
+    assert "item_ref" in rendered_input
+    assert "label_ref" in rendered_input
+    assert [item.item_id for item in result_items] == ["asset_001", "asset_002"]
+    assert [item.label_group_selections[0].labels[0].label_id for item in result_items] == [
+        "hair_color_brown",
+        "hair_color_brown",
+    ]
+
+
+def test_asset_image_tagging_maps_model_label_refs_back_to_snapshot():
     params = AssetImageTaggingParams(
         tagging_language="zh",
         items=[_item()],
@@ -166,14 +361,14 @@ def test_asset_image_tagging_maps_model_label_ids_back_to_snapshot():
         payload={
             "items": [
                 {
-                    "item_id": "asset_001",
+                    "item_ref": "I1",
                     "asset_description": "一张棕色中长卷发素材。",
                     "label_group_selections": [
                         {
-                            "label_snapshot_index": 0,
+                            "group_ref": "G1",
                             "labels": [
                                 {
-                                    "label_id": "hair_color_brown",
+                                    "label_ref": "L1",
                                     "weight": 0.91,
                                     "reason": "图片主体发色偏棕。",
                                 }
@@ -192,7 +387,7 @@ def test_asset_image_tagging_maps_model_label_ids_back_to_snapshot():
     assert label.definition == "头发主体颜色为棕色或棕褐色"
 
 
-def test_asset_image_tagging_marks_extra_label_group_index_as_partial_success():
+def test_asset_image_tagging_marks_extra_group_ref_as_partial_success():
     params = AssetImageTaggingParams(
         tagging_language="zh",
         items=[_item()],
@@ -204,24 +399,24 @@ def test_asset_image_tagging_marks_extra_label_group_index_as_partial_success():
         payload={
             "items": [
                 {
-                    "item_id": "asset_001",
+                    "item_ref": "I1",
                     "asset_description": "一张棕色中长卷发素材。",
                     "label_group_selections": [
                         {
-                            "label_snapshot_index": 0,
+                            "group_ref": "G1",
                             "labels": [
                                 {
-                                    "label_id": "hair_color_brown",
+                                    "label_ref": "L1",
                                     "weight": 0.91,
                                     "reason": "图片主体发色偏棕。",
                                 }
                             ],
                         },
                         {
-                            "label_snapshot_index": 99,
+                            "group_ref": "G99",
                             "labels": [
                                 {
-                                    "label_id": "made_up",
+                                    "label_ref": "made_up",
                                     "weight": 0.8,
                                     "reason": "非法跨分类标签组。",
                                 }
@@ -235,7 +430,7 @@ def test_asset_image_tagging_marks_extra_label_group_index_as_partial_success():
 
     assert result_items[0].status == "partial_success"
     assert result_items[0].validation_issues[0].issue == "model_response_invalid"
-    assert result_items[0].validation_issues[0].label_snapshot_index == 99
+    assert result_items[0].validation_issues[0].details["group_ref"] == "G99"
 
 
 def test_asset_image_tagging_rejects_empty_single_selection():
@@ -250,9 +445,9 @@ def test_asset_image_tagging_rejects_empty_single_selection():
         payload={
             "items": [
                 {
-                    "item_id": "asset_001",
+                    "item_ref": "I1",
                     "asset_description": "一张棕色中长卷发素材。",
-                    "label_group_selections": [{"label_snapshot_index": 0, "labels": []}],
+                    "label_group_selections": [{"group_ref": "G1", "labels": []}],
                 }
             ]
         },

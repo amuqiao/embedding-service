@@ -6,10 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.exceptions import AppError
+from app.jobs import registry as job_registry
+from app.jobs.base import JobExecutor
 from app.models.job import Job, JobAttempt
 from app.services.job_runtime import payload_hash
 from app.services.jobs import _validate_workflow_child_admission
-from app.jobs import registry as job_registry
 from app.jobs.runner import execute_job, fail_job
 from app.business_packages.register import register_all_business_packages
 from app.tasks import jobs as task_jobs
@@ -40,6 +41,32 @@ class _FakeDB:
 
     def add(self, obj):
         self.added.append(obj)
+
+
+class _TestWorkflowJob(JobExecutor):
+    name = "test.workflow"
+    visibility = "demo"
+    role = "root"
+    allow_callback = False
+
+    def runtime_job_fields(self, job_params):
+        return {}
+
+    def public_result(self, canonical_result):
+        return canonical_result
+
+    async def _execute(self, job, db):
+        raise AppError("JOB_RUNTIME_NOT_SUPPORTED", "test workflow root must be orchestrated")
+
+
+def _patch_test_workflow_executor(monkeypatch):
+    executor = _TestWorkflowJob()
+
+    def fake_get_job_executor(job_type):
+        assert job_type == executor.name
+        return executor
+
+    monkeypatch.setattr("app.workflows.orchestrator.get_job_executor", fake_get_job_executor)
 
 
 def _runtime_ref_for_job(job_type: str, params: dict[str, object], runtime_fields: dict[str, object]) -> dict[str, object]:
@@ -1428,6 +1455,7 @@ async def test_advance_workflow_after_child_success_creates_downstream_ready_chi
 
 @pytest.mark.asyncio
 async def test_advance_workflow_after_last_child_success_finalizes_root(monkeypatch):
+    _patch_test_workflow_executor(monkeypatch)
     root_job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",
@@ -1769,6 +1797,7 @@ async def test_advance_workflow_after_required_child_failed_finalizes_root_faile
 
 @pytest.mark.asyncio
 async def test_advance_workflow_allow_partial_finalizes_partial_success(monkeypatch):
+    _patch_test_workflow_executor(monkeypatch)
     root_job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",

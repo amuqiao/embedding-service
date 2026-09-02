@@ -751,6 +751,7 @@ job_audit_events         排障时间线，不参与状态推进
 |---|---|
 | `ENABLED_BUSINESS_PACKAGES` | 当前服务实例启用的业务包；为空表示启用全部静态注册业务包，显式配置时只允许列出的业务包接收新 Job、执行 Job 和挂载业务 routes |
 | `TAGGED_TEXT_TRANSLATION_MAX_ITEMS` / `TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH` / `TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH` | `tagged_text_translation` 的单 Job item 数量、单条原始 `text` 字符数和单 Job 原始文本总字符数上限；字符数按 Unicode code point 计算，缺省时使用代码默认值，并受 schema 或 schema 派生硬上限保护 |
+| `ASSET_IMAGE_TAGGING_MAX_ITEMS` | `asset_image_tagging` 的单 Job item 数量上限；默认外部最多 10 个 item，内部通过 workflow 拆成单 item child job |
 | `POSTER_TITLE_IMAGE_MAX_ITEMS` / `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` | `poster_title_image` 的批量数量和单 item 出图数量上限 |
 | job type `storage_policy.py` | job type 的 OSS 输入来源、输出 namespace、校验和读取策略；不通过 `.env` 暴露业务 OSS 白名单 |
 | `AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER` | `audio_stem_separation` 的 ONNX Runtime provider 模式：`auto` 有 CUDA 用 CUDA 否则 CPU，`cpu` 强制 CPU，`cuda` 强制 CUDA 且不可用时失败 |

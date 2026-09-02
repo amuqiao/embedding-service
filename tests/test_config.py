@@ -244,13 +244,16 @@ def test_asset_image_tagging_model_id_config_defaults_and_overrides():
     default_settings = _build_settings()
     assert default_settings.job.asset_image_tagging.model_adapter == "openai_responses"
     assert default_settings.job.asset_image_tagging.model_id == "gpt-5.5"
+    assert default_settings.job.asset_image_tagging.max_items == 10
 
     custom_settings = _build_settings(
         ASSET_IMAGE_TAGGING_MODEL_ADAPTER="openai_responses",
         ASSET_IMAGE_TAGGING_MODEL_ID="gpt-4o",
+        ASSET_IMAGE_TAGGING_MAX_ITEMS=7,
     )
     assert custom_settings.job.asset_image_tagging.model_adapter == "openai_responses"
     assert custom_settings.job.asset_image_tagging.model_id == "gpt-4o"
+    assert custom_settings.job.asset_image_tagging.max_items == 7
 
     with pytest.raises(ValidationError, match="ASSET_IMAGE_TAGGING_MODEL_ADAPTER"):
         _build_settings(ASSET_IMAGE_TAGGING_MODEL_ADAPTER="")
@@ -266,6 +269,12 @@ def test_asset_image_tagging_model_id_config_defaults_and_overrides():
 
     with pytest.raises(ValidationError, match="ASSET_IMAGE_TAGGING_MODEL_ID"):
         _build_settings(ASSET_IMAGE_TAGGING_MODEL_ID=" gpt-4o")
+
+    with pytest.raises(ValidationError, match="ASSET_IMAGE_TAGGING_MAX_ITEMS"):
+        _build_settings(ASSET_IMAGE_TAGGING_MAX_ITEMS=0)
+
+    with pytest.raises(ValidationError, match="ASSET_IMAGE_TAGGING_MAX_ITEMS"):
+        _build_settings(ASSET_IMAGE_TAGGING_MAX_ITEMS=101)
 
 
 @pytest.mark.parametrize(

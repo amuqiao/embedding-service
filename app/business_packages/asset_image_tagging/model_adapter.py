@@ -9,8 +9,10 @@ from pydantic import ValidationError
 
 from app.business_packages.asset_image_tagging.prompt_builder import (
     build_batch_prompt_payload,
-    build_item_prompt_context,
     matching_label_groups,
+    model_group_ref,
+    model_item_ref,
+    model_label_ref,
 )
 from app.business_packages.asset_image_tagging.schemas import (
     AssetImageTaggingAssetDescription,
@@ -38,12 +40,63 @@ ISSUE_MODEL_LABEL_INVALID = "model_label_invalid"
 ISSUE_MODEL_LABEL_WEIGHT_INVALID = "model_label_weight_invalid"
 ISSUE_MODEL_SINGLE_SELECTION_INVALID = "model_single_selection_invalid"
 ISSUE_MODEL_DESCRIPTION_MISSING = "model_description_missing"
-_MODEL_BATCH_ITEM_COUNT = 5
+_OPENAI_STRUCTURED_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["items"],
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["item_ref", "asset_description", "label_group_selections"],
+                "properties": {
+                    "item_ref": {"type": "string"},
+                    "asset_description": {"type": "string"},
+                    "label_group_selections": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["group_ref", "labels"],
+                            "properties": {
+                                "group_ref": {"type": "string"},
+                                "labels": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "required": ["label_ref", "weight", "reason"],
+                                        "properties": {
+                                            "label_ref": {"type": "string"},
+                                            "weight": {"type": "number"},
+                                            "reason": {"type": "string"},
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        }
+    },
+}
+_OPENAI_TEXT_FORMAT = {
+    "format": {
+        "type": "json_schema",
+        "name": "asset_image_tagging_result",
+        "strict": True,
+        "schema": _OPENAI_STRUCTURED_OUTPUT_SCHEMA,
+    }
+}
+_MODEL_BATCH_ITEM_COUNT = 1
 
 _SYSTEM_PROMPT = """你是图片素材打标服务。
 你只能根据图片内容、素材名称、分类和候选标签进行判断。
 必须只输出 JSON object，不要输出 Markdown、解释文字或代码块。
-只能选择候选标签中给出的 label_id。
+只能选择候选标签中给出的 label_ref。
 selection_mode=single 的标签组必须选择 1 个最匹配标签；selection_mode=multiple 的标签组可以选择 0 到多个标签。
 每个输入 label_groups 都必须在 label_group_selections 中返回一条记录；multiple 没有合适标签时返回空 labels。
 weight 必须是 0 到 1 之间的小数，表示置信度。
@@ -72,19 +125,20 @@ def _build_user_prompt(params: AssetImageTaggingParams) -> str:
     return (
         "请为下面的批量素材打标签。\n"
         "输入 JSON 中每个 item 只允许使用它自己的 label_groups。\n"
+        "item_ref、group_ref、label_ref 是本次请求内的临时引用，必须原样返回。\n"
         "每个 label_group 都必须返回一条 label_group_selections 记录。\n"
         "selection_mode=single 必须选择 1 个最匹配标签；selection_mode=multiple 可以返回空 labels。\n"
         "请按以下 JSON 结构返回：\n"
         "{\n"
         '  "items": [\n'
         "    {\n"
-        '      "item_id": "原 item_id",\n'
+        '      "item_ref": "原 item_ref",\n'
         '      "asset_description": "素材描述",\n'
         '      "label_group_selections": [\n'
         "        {\n"
-        '          "label_snapshot_index": 0,\n'
+        '          "group_ref": "候选 group_ref",\n'
         '          "labels": [\n'
-        '            {"label_id": "候选 label_id", "weight": 0.9, "reason": "选择原因"}\n'
+        '            {"label_ref": "候选 label_ref", "weight": 0.9, "reason": "选择原因"}\n'
         "          ]\n"
         "        }\n"
         "      ]\n"
@@ -97,13 +151,13 @@ def _build_user_prompt(params: AssetImageTaggingParams) -> str:
 
 def _build_responses_content(params: AssetImageTaggingParams) -> list[dict[str, Any]]:
     content: list[dict[str, Any]] = [{"type": "input_text", "text": _build_user_prompt(params)}]
-    for index, item in enumerate(params.items, start=1):
+    for index, item in enumerate(params.items):
         content.append(
             {
                 "type": "input_text",
                 "text": (
-                    f"图片 {index}: item_id={item.item_id}, item_name={item.item_name}, "
-                    f"category_id={item.category_id}, category_name={item.category_name}"
+                    f"图片 {index + 1}: item_ref={model_item_ref(index)}, item_name={item.item_name}, "
+                    f"category_name={item.category_name}"
                 ),
             }
         )
@@ -200,24 +254,25 @@ def _index_model_items(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 "asset_image_tagging model output item must be an object",
                 {"index": index},
             )
-        item_id = raw_item.get("item_id")
-        if not isinstance(item_id, str) or not item_id:
+        item_ref = raw_item.get("item_ref")
+        if not isinstance(item_ref, str) or not item_ref:
             raise _invalid_output(
-                "asset_image_tagging model output item_id must be a non-empty string",
+                "asset_image_tagging model output item_ref must be a non-empty string",
                 {"index": index},
             )
-        if item_id in model_items:
+        if item_ref in model_items:
             raise _invalid_output(
-                "asset_image_tagging model output item_id must be unique",
-                {"item_id": item_id},
+                "asset_image_tagging model output item_ref must be unique",
+                {"item_ref": item_ref},
             )
-        model_items[item_id] = raw_item
+        model_items[item_ref] = raw_item
     return model_items
 
 
 def _selection_payload_by_index(
     *,
     item: AssetImageTaggingItemParams,
+    label_snapshot: list[AssetImageTaggingLabelSnapshotGroup],
     model_item: dict[str, Any],
 ) -> tuple[dict[int, dict[str, Any]], list[AssetImageTaggingValidationIssue]]:
     raw_selections = model_item.get("label_group_selections")
@@ -232,6 +287,7 @@ def _selection_payload_by_index(
 
     selections: dict[int, dict[str, Any]] = {}
     issues: list[AssetImageTaggingValidationIssue] = []
+    group_index_by_ref = {model_group_ref(index): index for index, _group in enumerate(label_snapshot)}
     for raw_selection in raw_selections:
         if not isinstance(raw_selection, dict):
             issues.append(
@@ -242,13 +298,23 @@ def _selection_payload_by_index(
                 )
             )
             continue
-        label_snapshot_index = raw_selection.get("label_snapshot_index")
-        if isinstance(label_snapshot_index, bool) or not isinstance(label_snapshot_index, int):
+        group_ref = raw_selection.get("group_ref")
+        if not isinstance(group_ref, str) or not group_ref:
             issues.append(
                 AssetImageTaggingValidationIssue(
                     issue=ISSUE_MODEL_RESPONSE_INVALID,
-                    message="model label_snapshot_index must be an integer",
+                    message="model group_ref must be a non-empty string",
                     details={"item_id": item.item_id},
+                )
+            )
+            continue
+        label_snapshot_index = group_index_by_ref.get(group_ref)
+        if label_snapshot_index is None:
+            issues.append(
+                AssetImageTaggingValidationIssue(
+                    issue=ISSUE_MODEL_RESPONSE_INVALID,
+                    message="model group_ref is unknown",
+                    details={"item_id": item.item_id, "group_ref": group_ref},
                 )
             )
             continue
@@ -257,7 +323,7 @@ def _selection_payload_by_index(
                 AssetImageTaggingValidationIssue(
                     issue=ISSUE_MODEL_RESPONSE_INVALID,
                     label_snapshot_index=label_snapshot_index,
-                    message="model returned duplicate label_snapshot_index for item",
+                    message="model returned duplicate group_ref for item",
                     details={"item_id": item.item_id},
                 )
             )
@@ -304,7 +370,7 @@ def _selected_labels_from_model(
             )
         ]
 
-    label_by_id = {label.label_id: label for label in group.labels}
+    label_by_ref = {model_label_ref(index): label for index, label in enumerate(group.labels)}
     selected: list[AssetImageTaggingSelectedLabel] = []
     issues: list[AssetImageTaggingValidationIssue] = []
     for raw_label in raw_labels:
@@ -318,15 +384,14 @@ def _selected_labels_from_model(
                 )
             )
             continue
-        label_id = raw_label.get("label_id")
-        if not isinstance(label_id, str) or label_id not in label_by_id:
+        label_ref = raw_label.get("label_ref")
+        if not isinstance(label_ref, str) or label_ref not in label_by_ref:
             issues.append(
                 AssetImageTaggingValidationIssue(
                     issue=ISSUE_MODEL_LABEL_INVALID,
                     label_snapshot_index=label_snapshot_index,
-                    label_id=str(label_id) if label_id is not None else None,
-                    message="model selected label_id is not in this label group",
-                    details={"item_id": item.item_id},
+                    message="model selected label_ref is not in this label group",
+                    details={"item_id": item.item_id, "label_ref": label_ref},
                 )
             )
             continue
@@ -336,14 +401,14 @@ def _selected_labels_from_model(
                 AssetImageTaggingValidationIssue(
                     issue=ISSUE_MODEL_LABEL_WEIGHT_INVALID,
                     label_snapshot_index=label_snapshot_index,
-                    label_id=label_id,
+                    label_id=label_by_ref[label_ref].label_id,
                     message="model selected label weight must be a number in (0, 1]",
                     details={"item_id": item.item_id},
                 )
             )
             continue
         reason = raw_label.get("reason")
-        selected_label = label_by_id[label_id]
+        selected_label = label_by_ref[label_ref]
         selected.append(
             AssetImageTaggingSelectedLabel(
                 label_id=selected_label.label_id,
@@ -391,7 +456,11 @@ def _result_item_from_model(
             details={"item_id": item.item_id, "category_id": item.category_id},
         )
 
-    selection_payloads, validation_issues = _selection_payload_by_index(item=item, model_item=model_item)
+    selection_payloads, validation_issues = _selection_payload_by_index(
+        item=item,
+        label_snapshot=label_snapshot,
+        model_item=model_item,
+    )
     allowed_label_snapshot_indexes = {label_snapshot_index for label_snapshot_index, _group in matching_groups}
     extra_label_snapshot_indexes = sorted(set(selection_payloads) - allowed_label_snapshot_indexes)
     for label_snapshot_index in extra_label_snapshot_indexes:
@@ -470,23 +539,23 @@ def build_result_items_from_model_payload(
     payload: dict[str, Any],
 ) -> list[AssetImageTaggingResultItem]:
     model_items = _index_model_items(payload)
-    expected_item_ids = {item.item_id for item in params.items}
-    extra_item_ids = sorted(set(model_items) - expected_item_ids)
-    if extra_item_ids:
+    item_by_ref = {model_item_ref(index): item for index, item in enumerate(params.items)}
+    extra_item_refs = sorted(set(model_items) - set(item_by_ref))
+    if extra_item_refs:
         raise _invalid_output(
-            "asset_image_tagging model output returned unknown item_id",
-            {"item_ids": extra_item_ids},
+            "asset_image_tagging model output returned unknown item_ref",
+            {"item_refs": extra_item_refs},
         )
     result_items: list[AssetImageTaggingResultItem] = []
-    for item in params.items:
-        model_item = model_items.get(item.item_id)
+    for item_ref, item in item_by_ref.items():
+        model_item = model_items.get(item_ref)
         if model_item is None:
             result_items.append(
                 _failed_item(
                     item,
                     code=ITEM_MODEL_RESPONSE_INVALID,
-                    message="model output did not contain this item_id",
-                    details={"item_id": item.item_id},
+                    message="model output did not contain this item_ref",
+                    details={"item_id": item.item_id, "item_ref": item_ref},
                 )
             )
             continue
@@ -641,11 +710,6 @@ def build_result_item(
     tagging_language: str,
     label_snapshot: list[AssetImageTaggingLabelSnapshotGroup],
 ) -> AssetImageTaggingResultItem:
-    prompt_context = build_item_prompt_context(
-        item=item,
-        tagging_language=tagging_language,
-        label_snapshot=label_snapshot,
-    )
     matching_groups = matching_label_groups(item, label_snapshot)
     if not matching_groups:
         return _failed_item(
@@ -653,8 +717,8 @@ def build_result_item(
             code=ITEM_LABEL_SNAPSHOT_NOT_FOUND,
             message="no matching label_snapshot group for item category",
             details={
-                "item_id": prompt_context["item"]["item_id"],
-                "category_id": prompt_context["item"]["category_id"],
+                "item_id": item.item_id,
+                "category_id": item.category_id,
             },
         )
 
@@ -727,11 +791,20 @@ class AssetImageTaggingModelAdapter(Protocol):
 class OpenAIResponsesAssetImageTaggingModelAdapter:
     adapter_name = "openai_responses"
 
-    def __init__(self, *, api_key: str, base_url: str | None, model_id: str, timeout_seconds: int) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str | None,
+        model_id: str,
+        timeout_seconds: int,
+        batch_size: int,
+    ) -> None:
         self.api_key = api_key
         self.base_url = base_url or None
         self.model_id = model_id
         self.timeout_seconds = timeout_seconds
+        self.batch_size = batch_size
 
     @classmethod
     def from_settings(cls) -> "OpenAIResponsesAssetImageTaggingModelAdapter":
@@ -740,6 +813,7 @@ class OpenAIResponsesAssetImageTaggingModelAdapter:
             base_url=settings.ai_provider.openai_base_url,
             model_id=settings.job.asset_image_tagging.model_id,
             timeout_seconds=settings.ai_provider.model_call_timeout_seconds,
+            batch_size=_MODEL_BATCH_ITEM_COUNT,
         )
 
     async def tag(self, params: AssetImageTaggingParams) -> list[AssetImageTaggingResultItem]:
@@ -751,8 +825,8 @@ class OpenAIResponsesAssetImageTaggingModelAdapter:
             )
 
         result_items: list[AssetImageTaggingResultItem] = []
-        for start in range(0, len(params.items), _MODEL_BATCH_ITEM_COUNT):
-            batch_items = params.items[start : start + _MODEL_BATCH_ITEM_COUNT]
+        for start in range(0, len(params.items), self.batch_size):
+            batch_items = params.items[start : start + self.batch_size]
             result_items.extend(await self._tag_batch(_model_batch_params(params=params, items=batch_items)))
         return result_items
 
@@ -767,6 +841,7 @@ class OpenAIResponsesAssetImageTaggingModelAdapter:
                 model=self.model_id,
                 instructions=_SYSTEM_PROMPT,
                 input=[{"role": "user", "content": _build_responses_content(params)}],
+                text=_OPENAI_TEXT_FORMAT,
             )
         except APITimeoutError as exc:
             raise AppError(

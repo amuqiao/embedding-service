@@ -9,7 +9,7 @@ from app.core.language_catalog import supported_language_codes
 from app.schemas.common import StrictBaseModel
 from app.schemas.jobs import RuntimeFieldsBase
 
-ASSET_IMAGE_TAGGING_MAX_ITEMS = 100
+ASSET_IMAGE_TAGGING_SCHEMA_MAX_ITEMS = 100
 ASSET_IMAGE_TAGGING_MAX_LABEL_GROUPS = 500
 ASSET_IMAGE_TAGGING_MAX_ITEM_ID_LENGTH = 255
 ASSET_IMAGE_TAGGING_MAX_ITEM_NAME_LENGTH = 512
@@ -85,7 +85,7 @@ class AssetImageTaggingParams(StrictBaseModel):
     tagging_language: str = Field(min_length=1, max_length=16)
     items: list[AssetImageTaggingItemParams] = Field(
         min_length=1,
-        max_length=ASSET_IMAGE_TAGGING_MAX_ITEMS,
+        max_length=ASSET_IMAGE_TAGGING_SCHEMA_MAX_ITEMS,
     )
     label_snapshot: list[AssetImageTaggingLabelSnapshotGroup] = Field(
         min_length=1,
@@ -121,7 +121,7 @@ class AssetImageTaggingParams(StrictBaseModel):
 class AssetImageTaggingRuntimeFields(RuntimeFieldsBase):
     operation: Literal["asset_image_tagging"] = "asset_image_tagging"
     tagging_language: str = Field(min_length=1, max_length=16)
-    item_count: int = Field(ge=1, le=ASSET_IMAGE_TAGGING_MAX_ITEMS)
+    item_count: int = Field(ge=1, le=ASSET_IMAGE_TAGGING_SCHEMA_MAX_ITEMS)
     label_group_count: int = Field(ge=1, le=ASSET_IMAGE_TAGGING_MAX_LABEL_GROUPS)
     category_ids: list[str] = Field(min_length=1)
 
@@ -137,6 +137,47 @@ class AssetImageTaggingRuntimeFields(RuntimeFieldsBase):
         if len(self.category_ids) != len(set(self.category_ids)):
             raise ValueError("category_ids must be unique")
         return self
+
+
+class AssetImageTaggingItemJobParams(StrictBaseModel):
+    tagging_language: str = Field(min_length=1, max_length=16)
+    item: AssetImageTaggingItemParams
+    label_snapshot: list[AssetImageTaggingLabelSnapshotGroup] = Field(min_length=1, max_length=ASSET_IMAGE_TAGGING_MAX_LABEL_GROUPS)
+    label_snapshot_indexes: list[int] = Field(min_length=1, max_length=ASSET_IMAGE_TAGGING_MAX_LABEL_GROUPS)
+
+    @field_validator("tagging_language")
+    @classmethod
+    def validate_language(cls, value: str) -> str:
+        if value not in supported_language_codes():
+            raise ValueError("language is not supported")
+        return value
+
+    @model_validator(mode="after")
+    def validate_item_label_snapshot(self) -> "AssetImageTaggingItemJobParams":
+        if len(self.label_snapshot) != len(self.label_snapshot_indexes):
+            raise ValueError("label_snapshot_indexes length must match label_snapshot")
+        if len(self.label_snapshot_indexes) != len(set(self.label_snapshot_indexes)):
+            raise ValueError("label_snapshot_indexes must be unique")
+        if any(index < 0 for index in self.label_snapshot_indexes):
+            raise ValueError("label_snapshot_indexes must be >= 0")
+        if not any(group.category_id == self.item.category_id for group in self.label_snapshot):
+            raise ValueError("item.category_id must exist in label_snapshot")
+        return self
+
+
+class AssetImageTaggingItemRuntimeFields(RuntimeFieldsBase):
+    operation: Literal["asset_image_tagging_item"] = "asset_image_tagging_item"
+    tagging_language: str = Field(min_length=1, max_length=16)
+    item_id: str = Field(min_length=1, max_length=ASSET_IMAGE_TAGGING_MAX_ITEM_ID_LENGTH)
+    category_id: str = Field(min_length=1, max_length=ASSET_IMAGE_TAGGING_MAX_CATEGORY_ID_LENGTH)
+    label_group_count: int = Field(ge=1, le=ASSET_IMAGE_TAGGING_MAX_LABEL_GROUPS)
+
+    @field_validator("tagging_language")
+    @classmethod
+    def validate_language(cls, value: str) -> str:
+        if value not in supported_language_codes():
+            raise ValueError("language is not supported")
+        return value
 
 
 class AssetImageTaggingSelectedLabel(StrictBaseModel):
@@ -239,12 +280,46 @@ class AssetImageTaggingBatchSummary(StrictBaseModel):
         return self
 
 
+class AssetImageTaggingJoinParams(StrictBaseModel):
+    tagging_language: str = Field(min_length=1, max_length=16)
+    item_ids: list[str] = Field(min_length=1, max_length=ASSET_IMAGE_TAGGING_SCHEMA_MAX_ITEMS)
+
+    @field_validator("tagging_language")
+    @classmethod
+    def validate_language(cls, value: str) -> str:
+        if value not in supported_language_codes():
+            raise ValueError("language is not supported")
+        return value
+
+    @model_validator(mode="after")
+    def validate_item_ids(self) -> "AssetImageTaggingJoinParams":
+        if len(self.item_ids) != len(set(self.item_ids)):
+            raise ValueError("item_ids must be unique")
+        return self
+
+
+class AssetImageTaggingJoinRuntimeFields(RuntimeFieldsBase):
+    operation: Literal["asset_image_tagging_join"] = "asset_image_tagging_join"
+    tagging_language: str = Field(min_length=1, max_length=16)
+    item_count: int = Field(ge=1, le=ASSET_IMAGE_TAGGING_SCHEMA_MAX_ITEMS)
+
+    @field_validator("tagging_language")
+    @classmethod
+    def validate_language(cls, value: str) -> str:
+        if value not in supported_language_codes():
+            raise ValueError("language is not supported")
+        return value
+
+
 class AssetImageTaggingResult(StrictBaseModel):
     schema_version: Literal["default"] = "default"
     job_type: Literal["asset_image_tagging"] = "asset_image_tagging"
     tagging_language: str = Field(min_length=1, max_length=16)
     batch_summary: AssetImageTaggingBatchSummary
-    items: list[AssetImageTaggingResultItem] = Field(min_length=1, max_length=ASSET_IMAGE_TAGGING_MAX_ITEMS)
+    items: list[AssetImageTaggingResultItem] = Field(
+        min_length=1,
+        max_length=ASSET_IMAGE_TAGGING_SCHEMA_MAX_ITEMS,
+    )
 
     @field_validator("tagging_language")
     @classmethod
@@ -275,6 +350,8 @@ SCHEMAS = (
     AssetImageTaggingLabelSnapshotGroup,
     AssetImageTaggingParams,
     AssetImageTaggingRuntimeFields,
+    AssetImageTaggingItemJobParams,
+    AssetImageTaggingItemRuntimeFields,
     AssetImageTaggingSelectedLabel,
     AssetImageTaggingLabelGroupSelection,
     AssetImageTaggingAssetDescription,
@@ -282,5 +359,7 @@ SCHEMAS = (
     AssetImageTaggingItemError,
     AssetImageTaggingResultItem,
     AssetImageTaggingBatchSummary,
+    AssetImageTaggingJoinParams,
+    AssetImageTaggingJoinRuntimeFields,
     AssetImageTaggingResult,
 )

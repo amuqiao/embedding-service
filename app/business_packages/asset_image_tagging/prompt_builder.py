@@ -20,8 +20,21 @@ def matching_label_groups(
     ]
 
 
+def model_item_ref(index: int) -> str:
+    return f"I{index + 1}"
+
+
+def model_group_ref(index: int) -> str:
+    return f"G{index + 1}"
+
+
+def model_label_ref(index: int) -> str:
+    return f"L{index + 1}"
+
+
 def build_item_prompt_context(
     *,
+    item_index: int,
     item: AssetImageTaggingItemParams,
     tagging_language: str,
     label_snapshot: list[AssetImageTaggingLabelSnapshotGroup],
@@ -29,19 +42,23 @@ def build_item_prompt_context(
     return {
         "tagging_language": tagging_language,
         "item": {
-            "item_id": item.item_id,
+            "item_ref": model_item_ref(item_index),
             "item_name": item.item_name,
-            "category_id": item.category_id,
             "category_name": item.category_name,
-            "asset": item.asset.model_dump(exclude_none=True),
         },
         "label_groups": [
             {
-                "label_snapshot_index": index,
-                "category_id": group.category_id,
+                "group_ref": model_group_ref(index),
                 "category_name": group.category_name,
                 "selection_mode": group.selection_mode,
-                "labels": [label.model_dump(exclude_none=True) for label in group.labels],
+                "labels": [
+                    {
+                        "label_ref": model_label_ref(label_index),
+                        "label_name": label.label_name,
+                        "definition": label.definition,
+                    }
+                    for label_index, label in enumerate(group.labels)
+                ],
             }
             for index, group in matching_label_groups(item, label_snapshot)
         ],
@@ -53,10 +70,11 @@ def build_batch_prompt_payload(params: AssetImageTaggingParams) -> dict[str, Any
         "tagging_language": params.tagging_language,
         "items": [
             build_item_prompt_context(
+                item_index=index,
                 item=item,
                 tagging_language=params.tagging_language,
                 label_snapshot=params.label_snapshot,
             )
-            for item in params.items
+            for index, item in enumerate(params.items)
         ],
     }

@@ -50,7 +50,7 @@ Content-Type: application/json
 | 查询接口 | `GET /api/v1/ai-jobs/jobs/{job_id}` |
 | Callback | 支持，可选 |
 | Billing | 支持，可选查询 |
-| 批量形态 | `job_params.items[]` 一次提交多个素材；单素材是批量特例 |
+| 批量形态 | `job_params.items[]` 一次提交多个素材；单素材是批量特例；默认最多 10 个，受服务端 `ASSET_IMAGE_TAGGING_MAX_ITEMS` 配置限制 |
 | 状态保存 | AI 服务只保存 Job 执行状态和结果快照；不保存为业务标签事实 |
 
 ## 调用流程
@@ -61,6 +61,7 @@ Content-Type: application/json
   -> 创建 asset_image_tagging Job
   -> AI 服务读取 items[].asset 指向的图片资源
   -> AI 服务按 items[].category_id 匹配 label_snapshot[] 中对应分类的标签组
+  -> AI 服务内部按 item 拆分并发 child job
   -> AI 服务内部把 label_id 转为临时标签编号
   -> 模型只基于临时编号 / 标签名 / 标签定义选择标签
   -> AI 服务把临时编号映射回 label_id，并按 single / multiple 校验选择结果
@@ -257,7 +258,7 @@ POST /api/v1/ai-jobs/jobs
 | 字段 | 类型 | 必填 | 说明 |
 |---|---:|---:|---|
 | `tagging_language` | string | 是 | 本次打标使用的标签语言，例如 `zh`、`en` |
-| `items` | object[] | 是 | 待打标素材列表，至少 1 个 |
+| `items` | object[] | 是 | 待打标素材列表，至少 1 个；默认最多 10 个，受服务端 `ASSET_IMAGE_TAGGING_MAX_ITEMS` 配置限制 |
 | `label_snapshot` | object[] | 是 | 业务后端组装后的标签组快照，至少 1 组；必须覆盖所有 `items[].category_id` |
 
 ### Item Fields
@@ -825,6 +826,7 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/jobs/018f9a7f-2b7d-7
 ## 处理规则
 
 - AI 服务不从业务后端拉素材库或标签库；每个 Job 必须携带本次打标需要的完整 `items[]` 和 `label_snapshot[]` 快照。
+- `items[]` 数量受服务端 `ASSET_IMAGE_TAGGING_MAX_ITEMS` 限制，默认最多 10 个；超出限制时创建 Job 失败。
 - `label_snapshot[]` 是标签组列表，不是分类树；同一个 `category_id` 可以出现多次，表示同一分类下有多个标签组。
 - 每个 `items[].category_id` 必须能在 `label_snapshot[].category_id` 中找到至少一个标签组；否则请求参数非法。
 - AI 服务处理单个素材时，只使用 `category_id` 匹配到的标签组，不使用其他分类的标签组参与判断。
@@ -849,6 +851,7 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/jobs/018f9a7f-2b7d-7
 | `REQUEST_ID_INVALID` | 400 | `X-Request-ID` 格式非法 | no |
 | `INVALID_JOB_TYPE` | 400 | `job_type` 未注册或当前环境不允许外部提交 | no |
 | `INVALID_JOB_PARAMS` | 400 | `job_params` 结构非法，例如 `items[]` 为空、`label_snapshot[]` 为空、`items[].category_id` 没有匹配标签组、ID 重复 | no |
+| `ASSET_IMAGE_TAGGING_ITEMS_EXCEEDS_LIMIT` | 400 | `items[]` 数量超过服务端 `ASSET_IMAGE_TAGGING_MAX_ITEMS` 配置 | no |
 | `CLIENT_REQUEST_ID_CONFLICT` | 409 | 同一 caller 下重复 `client_request_id` 但请求内容不一致 | no |
 | `JOB_NOT_FOUND` | 404 | 查询的 Job 不存在或不属于当前 caller | no |
 | `QUEUE_FULL` | 503 | 服务当前接单容量已满 | yes |

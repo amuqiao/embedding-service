@@ -947,6 +947,8 @@ def test_registered_job_type_names_are_layered_contract():
 
     expected_job_type_names = {
         "asset_image_tagging",
+        "asset_image_tagging_item",
+        "asset_image_tagging_join",
         "asset_vector_batch_delete",
         "asset_vector_batch_upsert",
         "arithmetic",
@@ -975,6 +977,8 @@ def test_registered_job_type_names_are_layered_contract():
         "tagged_text_translation",
     }
     assert {name for name, spec in specs.items() if spec.visibility == "internal"} >= {
+        "asset_image_tagging_item",
+        "asset_image_tagging_join",
         "poster_title_image_generate_item",
         "poster_title_image_join",
         "poster_title_image_style_probe",
@@ -1155,6 +1159,8 @@ def test_business_packages_own_each_registered_job_type_once():
     assert owners["audio_stem_separation"] == "audio_stem_separation"
     assert owners["audio_stem_separation_triton"] == "audio_stem_separation"
     assert owners["asset_image_tagging"] == "asset_image_tagging"
+    assert owners["asset_image_tagging_item"] == "asset_image_tagging"
+    assert owners["asset_image_tagging_join"] == "asset_image_tagging"
     assert owners["asset_vector_batch_upsert"] == "asset_vector"
     assert owners["asset_vector_batch_delete"] == "asset_vector"
 

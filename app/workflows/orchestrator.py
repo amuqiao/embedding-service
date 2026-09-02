@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import AppError, ValidationAppError
 from app.core.prompt_templates import get_template
-from app.jobs.factory import get_enabled_job_executor
+from app.jobs.factory import get_enabled_job_executor, get_job_executor
 from app.models.job import Job, JobEvent
 from app.repositories.job_repo import JobRepo
 from app.services.job_runtime import (
@@ -403,11 +403,14 @@ def _root_success_result(
 
 
 def _root_public_result(root_job: Job, canonical_result: dict[str, Any]) -> dict[str, Any]:
-    if root_job.job_type != "poster_title_image":
-        return canonical_result
-    from app.business_packages.poster_title_image.executor import _extract_join_result
-
-    return _extract_join_result(canonical_result)
+    result = get_job_executor(root_job.job_type).public_result(canonical_result)
+    if result is None:
+        raise AppError(
+            "RUNTIME_REF_INVALID",
+            "workflow root public result must be a JSON object",
+            details={"job_id": str(root_job.id), "job_type": root_job.job_type},
+        )
+    return result
 
 
 def _root_failure_error(child: Job) -> dict[str, Any]:
