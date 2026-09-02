@@ -1,0 +1,1 @@
+"""Asset vector business package."""

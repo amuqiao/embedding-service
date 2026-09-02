@@ -186,6 +186,18 @@ CallbackResponseEnvelope
 
 `204`、空 body、非 JSON body、缺少 `accepted`、`accepted` 不是 boolean，或 `accepted=false` 都会被视为未接受。非 2xx、超时、网络错误或未接受响应会触发 Callback 重试，直到成功或达到最大尝试次数。
 
+## 业务同步接口
+
+业务包可以在 `/api/v1/ai-jobs` 下挂载同步 HTTP 接口；这些接口仍使用统一 `HttpEnvelope[T]`、Bearer 鉴权、`X-AI-Service-Caller-ID` 和 `X-Request-ID` 合同。当前已注册的业务同步接口包括：
+
+```http
+POST /api/v1/ai-jobs/vector-search
+POST /api/v1/ai-jobs/vector-assets:exists
+GET /api/v1/ai-jobs/vector-assets/ids
+```
+
+`vector-search`、`vector-assets:exists` 和 `vector-assets/ids` 的字段级合同以 `docs/api/asset-vector-api.md` 为准。
+
 ## 示例业务包同步接口
 
 ```http

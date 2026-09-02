@@ -61,8 +61,7 @@ Content-Type: application/json
 业务后端素材库
   -> 组装资源 ID、资源名称、OSS 资源地址、可选标签
   -> 调批量新增/更新资源接口
-  -> AI 服务读取 asset.public_url
-  -> AI 服务根据资源名称、素材内容和可选标签生成向量
+  -> AI 服务生成或更新该资源的检索向量
   -> 业务后端轮询 Job 或接收 Callback
 ```
 
@@ -131,8 +130,8 @@ Content-Type: application/json
 |---|---:|---|
 | `queued` | 否 | Job 已创建，等待 worker 执行 |
 | `running` | 否 | Job 正在执行 |
-| `succeeded` | 是 | Job 已产出结果；业务方仍需读取 item 级状态 |
-| `failed` | 是 | Job 批级失败，或所有 item 均失败 |
+| `succeeded` | 是 | Job 已产出结果；批量新增/更新已整批生效，批量删除请求的资源已从本服务清除 |
+| `failed` | 是 | Job 批级失败；业务数据不应按成功结果处理 |
 
 ## 公共字段
 
@@ -203,7 +202,7 @@ timestamp + "." + raw_body
 
 批量新增或更新素材的可检索信息。业务方每次提交当前资源的完整快照，包括资源 ID、资源名称、OSS 资源地址和可选标签。单资源更新也是批量特例，`items` 数组只放 1 条即可。
 
-批量内单条资源失败时，AI 服务继续处理后续资源，并在 Job 结果中返回每个 `item_id` 的处理状态。该行为由服务端固定，不需要业务方传开关。
+该接口按整批语义处理：请求结构或执行过程失败时 Job 失败；Job 成功时本批资源已完成新增或更新。服务不暴露单条失败继续处理开关，调用方按 Job 终态判断本批是否成功。
 
 该接口支持两种获取结果的方式：
 
@@ -345,7 +344,7 @@ POST /api/v1/ai-jobs/jobs
 
 ### 接口能力
 
-批量删除素材在 AI 服务中的向量投影。适用于资源删除、永久下架、批量清理和导入回滚。删除不存在的 `item_id` 视为成功，方便业务事件重试。
+批量删除素材在 AI 服务中的向量投影。适用于资源删除、永久下架、批量清理和导入回滚。删除不存在的 `item_id` 也视为成功；成功后这些 `item_id` 在本服务内应不存在。
 
 该接口支持两种获取结果的方式：
 
@@ -450,7 +449,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 
 ### Succeeded Response
 
-`job_status=succeeded` 表示批处理已完成，不表示每个 item 都成功。业务方必须读取 `job_result.items[].status`。
+`job_status=succeeded` 表示批量新增/更新已整批完成，或批量删除请求的资源已从本服务清除。
 
 ```json
 {
@@ -466,11 +465,11 @@ GET /api/v1/ai-jobs/jobs/{job_id}
         "percent": 100
       },
       "job_result": {
+        "schema_version": "default",
         "job_type": "asset_vector_batch_upsert",
         "batch_summary": {
           "total": 1,
-          "succeeded": 1,
-          "failed": 0
+          "succeeded": 1
         },
         "items": [
           {
@@ -478,8 +477,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
             "status": "succeeded",
             "indexed": {
               "indexed_at": "2026-08-31T10:01:00+00:00"
-            },
-            "error": null
+            }
           }
         ]
       },
@@ -522,33 +520,14 @@ GET /api/v1/ai-jobs/jobs/{job_id}
       "job_progress": {
         "percent": 100
       },
-      "job_result": {
-        "job_type": "asset_vector_batch_upsert",
-        "batch_summary": {
-          "total": 1,
-          "succeeded": 0,
-          "failed": 1
-        },
-        "items": [
-          {
-            "item_id": "asset_001",
-            "status": "failed",
-            "indexed": null,
-            "error": {
-              "reason": "ASSET_REF_INVALID",
-              "message": "asset.public_url is not readable",
-              "retryable": false
-            }
-          }
-        ]
-      },
+      "job_result": null,
       "job_error": {
-        "reason": "ASSET_VECTOR_ALL_ITEMS_FAILED",
+        "reason": "MODEL_CALL_FAILED",
         "details": {
-          "total": 1,
-          "failed": 1
+          "provider": "dashscope",
+          "operation": "embedding"
         },
-        "retryable": false
+        "retryable": true
       },
       "cost": null,
       "usage": {
@@ -582,7 +561,7 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | `job_type` | string | `asset_vector_batch_upsert` 或 `asset_vector_batch_delete` |
 | `job_status` | string | `queued`、`running`、`succeeded` 或 `failed` |
 | `job_progress.percent` | number | Job 进度百分比 |
-| `job_result` | object 或 null | 终态结果；批处理失败时也可以包含 item 级结果，结构见 `Job Result Fields` |
+| `job_result` | object 或 null | 成功时返回终态结果；失败时通常为 `null`，失败原因见 `job_error` |
 | `job_error` | object 或 null | Job 级失败原因 |
 | `cost` | object 或 null | Job 级费用快照；不可用或未终态时为 `null` |
 | `usage` | object 或 null | AI 调用用量摘要 |
@@ -599,29 +578,26 @@ GET /api/v1/ai-jobs/jobs/{job_id}
 | 字段 | 类型 | 说明 |
 |---|---:|---|
 | `job_type` | string | 固定为 `asset_vector_batch_upsert` |
+| `schema_version` | string | 结果结构版本；当前固定为 `default` |
 | `batch_summary.total` | integer | 请求 item 总数 |
 | `batch_summary.succeeded` | integer | 成功写入或更新向量的 item 数 |
-| `batch_summary.failed` | integer | 失败 item 数 |
 | `items[]` | object[] | item 级结果，按请求 `items[]` 顺序返回 |
 | `items[].item_id` | string | 对应请求 `items[].item_id` |
-| `items[].status` | string | `succeeded` 或 `failed` |
-| `items[].indexed` | object 或 null | 写入成功时的向量信息 |
+| `items[].status` | string | 固定为 `succeeded` |
+| `items[].indexed` | object | 写入成功时的向量信息 |
 | `indexed.indexed_at` | string | 索引完成时间 |
-| `items[].error` | object 或 null | item 级失败原因 |
 
 删除结果字段：
 
 | 字段 | 类型 | 说明 |
 |---|---:|---|
 | `job_type` | string | 固定为 `asset_vector_batch_delete` |
+| `schema_version` | string | 结果结构版本；当前固定为 `default` |
 | `batch_summary.total` | integer | 请求删除的 item 总数 |
-| `batch_summary.deleted` | integer | 实际删除的向量数 |
-| `batch_summary.missing` | integer | 原本不存在的 item 数 |
-| `batch_summary.failed` | integer | 删除失败 item 数 |
+| `batch_summary.deleted` | integer | 请求删除完成的 item 数；不存在的 `item_id` 也按删除完成处理 |
 | `items[]` | object[] | item 级结果，按请求 `item_ids[]` 顺序返回 |
 | `items[].item_id` | string | 请求删除的业务资源 ID |
-| `items[].status` | string | `deleted`、`missing` 或 `failed` |
-| `items[].error` | object 或 null | item 级失败原因 |
+| `items[].status` | string | 固定为 `deleted` |
 
 ### Job Error Fields
 
@@ -886,15 +862,15 @@ POST /api/v1/ai-jobs/vector-assets:exists
 ### Request
 
 ```http
-GET /api/v1/ai-jobs/vector-assets/ids?limit=1000&cursor=eyJwYWdlIjoxfQ
+GET /api/v1/ai-jobs/vector-assets/ids?limit=500&cursor=asset_001
 ```
 
 ### Query Fields
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---:|---:|---|
-| `limit` | integer | 否 | 返回数量，必须大于 0；具体最大值由双方上线前确认 |
-| `cursor` | string 或 null | 否 | 上一页返回的游标 |
+| `limit` | integer | 否 | 返回数量，必须大于 0，最大 500；不传时服务端默认返回 100 条 |
+| `cursor` | string 或 null | 否 | 上一页响应中的 `next_cursor`；调用方只应原样传回，不要自行构造 |
 
 ### Response
 
@@ -1078,7 +1054,7 @@ curl -sS -X POST "https://test-ai.example.com/api/v1/ai-jobs/vector-assets:exist
 ### 反向对账
 
 ```bash
-curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/vector-assets/ids?limit=1000" \
+curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/vector-assets/ids?limit=500" \
   -H "Authorization: Bearer <TEST_SERVICE_API_KEY>" \
   -H "X-AI-Service-Caller-ID: cms-test" \
   -H "X-Request-ID: test-asset-vector-ids-001"
@@ -1108,6 +1084,7 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/vector-assets/ids?li
 
 | Reason | HTTP | 场景 | Retryable |
 |---|---:|---|---:|
+| `INVALID_INPUT` | 400 | 同步搜索或对账接口请求结构非法，例如 `search_mode` 与参数不匹配、`top_k` 超限、`limit` 超限 | no |
 | `UNAUTHORIZED` | 401 | 缺少或错误的 Bearer token | no |
 | `FORBIDDEN` | 403 | caller 被拒绝访问 | no |
 | `REQUEST_ID_INVALID` | 400 | `X-Request-ID` 格式非法 | no |
@@ -1116,17 +1093,12 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/vector-assets/ids?li
 | `CLIENT_REQUEST_ID_CONFLICT` | 409 | 同一 caller 下重复 `client_request_id` 但请求内容不一致 | no |
 | `JOB_NOT_FOUND` | 404 | 查询的 Job 不存在或不属于当前 caller | no |
 | `QUEUE_FULL` | 503 | 服务当前接单容量已满 | yes |
-| `ASSET_REF_INVALID` | 400 | 素材资源引用非法，例如 `asset.public_url`、`asset.content_type` 格式不符合要求或无法读取 | no |
-| `INPUT_TOO_LARGE` | 400 | 素材大小、图片宽高或像素超过限制 | no |
-| `LABELS_INVALID` | 400 | 标签上下文非法，例如同一资源内 `label_id + language` 重复、`label_name` 为空 | no |
-| `VECTOR_SEARCH_PARAMS_INVALID` | 400 | 搜索参数非法，例如 `search_mode` 和字段组合不匹配，或 `candidate_item_ids` 不是字符串数组 | no |
 | `QUERY_ITEM_NOT_INDEXED` | 404 | `item_ids[]` 中存在未建向量的查询种子资源 | no |
-| `VECTOR_INDEX_NOT_READY` | 409 | 向量索引未就绪 | yes |
 | `MODEL_CALL_FAILED` | 502 | 调用模型失败 | yes |
 | `MODEL_CALL_TIMEOUT` | 504 | 调用模型超时 | yes |
 | `MODEL_OUTPUT_INVALID` | 502 | 模型输出不符合合同，例如向量维度不符、字段缺失或响应不可解析 | no |
-| `ASSET_VECTOR_ALL_ITEMS_FAILED` | 500 | 新增/更新或删除 Job 所有 item 均失败 | no |
 | `JOB_TIMEOUT` | 504 | Job 执行超时 | yes |
 | `JOB_EXECUTION_FAILED` | 500 | 未归类的 Job 执行失败 | no |
+| `INTERNAL_ERROR` | 500 | 同步搜索或对账接口未预期异常 | no |
 
 错误响应中的 `code` 是数字错误码，`msg` 是错误消息；表中的 Reason 是服务内部和 `job_error.reason` 中使用的稳定错误原因。调用方做业务分支时优先根据 HTTP status、`job_status` 和 `job_error.reason` 处理。

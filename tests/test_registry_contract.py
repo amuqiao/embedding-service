@@ -946,6 +946,9 @@ def test_registered_job_type_names_are_layered_contract():
     source_job_type_names = _registered_job_type_names_in_source()
 
     expected_job_type_names = {
+        "asset_image_tagging",
+        "asset_vector_batch_delete",
+        "asset_vector_batch_upsert",
         "arithmetic",
         "job_real_llm_double_echo",
         "job_real_llm_echo",
@@ -965,6 +968,9 @@ def test_registered_job_type_names_are_layered_contract():
     assert source_job_type_names == expected_job_type_names
     assert set(specs) == source_job_type_names
     assert {name for name, spec in specs.items() if spec.visibility == "public"} >= {
+        "asset_image_tagging",
+        "asset_vector_batch_delete",
+        "asset_vector_batch_upsert",
         "poster_title_image",
         "tagged_text_translation",
     }
@@ -986,6 +992,8 @@ def test_business_packages_are_explicit_lazy_composition_root():
         "app.business_packages.poster_title_image.register",
         "app.business_packages.tagged_text_translation.register",
         "app.business_packages.audio_stem_separation.register",
+        "app.business_packages.asset_image_tagging.register",
+        "app.business_packages.asset_vector.register",
     )
 
     assert business_package_modules() == expected_modules
@@ -1000,6 +1008,8 @@ def test_business_packages_are_explicit_lazy_composition_root():
         "poster_title_image",
         "tagged_text_translation",
         "audio_stem_separation",
+        "asset_image_tagging",
+        "asset_vector",
     ]
 
     register_path = APP_DIR / "business_packages" / "register.py"
@@ -1036,6 +1046,8 @@ def test_business_packages_declare_schema_contracts():
         "poster_title_image",
         "tagged_text_translation",
         "audio_stem_separation",
+        "asset_image_tagging",
+        "asset_vector",
     }
     assert all(package.schemas for package in packages)
     assert {
@@ -1049,6 +1061,9 @@ def test_business_packages_declare_schema_contracts():
         "PosterTitleImageParams",
         "AudioStemSeparationParams",
         "AudioStemSeparationTritonParams",
+        "AssetImageTaggingParams",
+        "AssetVectorBatchUpsertParams",
+        "AssetVectorSearchRequest",
     } <= schema_names <= all_schema_names()
 
 
@@ -1139,6 +1154,20 @@ def test_business_packages_own_each_registered_job_type_once():
     assert owners["tagged_text_translation"] == "tagged_text_translation"
     assert owners["audio_stem_separation"] == "audio_stem_separation"
     assert owners["audio_stem_separation_triton"] == "audio_stem_separation"
+    assert owners["asset_image_tagging"] == "asset_image_tagging"
+    assert owners["asset_vector_batch_upsert"] == "asset_vector"
+    assert owners["asset_vector_batch_delete"] == "asset_vector"
+
+
+def test_asset_vector_job_types_use_success_side_effects_for_index_mutation():
+    job_registry.clear_for_tests()
+    workflow_registry.clear_for_tests()
+    register_all_business_packages()
+
+    specs = job_registry.all_job_type_specs()
+
+    assert specs["asset_vector_batch_upsert"].side_effect_policy == "success_side_effect"
+    assert specs["asset_vector_batch_delete"].side_effect_policy == "success_side_effect"
 
 
 def test_business_packages_default_external_job_types_exclude_leaf_children():

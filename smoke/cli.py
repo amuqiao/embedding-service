@@ -236,6 +236,29 @@ EXAMPLE_RECONCILER_PROBE_HELP_EPILOG = """\b
   必须同时传入 --confirm-run 和 --confirm-fault-injection；非 local/dev APP_ENV 或非 loopback API 会拒绝执行。
 """
 
+ASSET_IMAGE_TAGGING_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/smoke.sh asset-image-tagging --confirm-run
+  ./scripts/smoke.sh --json asset-image-tagging --confirm-run
+
+\b
+说明：
+  本场景提交 asset_image_tagging Job，验证批量素材打标签接口合同、Job 创建、worker 执行和轮询。
+  当前 smoke 使用确定性本地 stub，不调用真实 AI provider，不产生模型费用。
+"""
+
+ASSET_VECTOR_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/smoke.sh asset-vector --confirm-run
+  ./scripts/smoke.sh --json asset-vector --confirm-run
+  ./scripts/smoke.sh asset-vector --confirm-run --no-cleanup
+
+\b
+说明：
+  本场景提交 asset_vector_batch_upsert Job，随后验证 vector-assets:exists、vector-assets/ids、text/image/item_ids/hybrid 四种搜索，最后默认提交 asset_vector_batch_delete 清理 smoke 数据。
+  当前 smoke 使用业务包内确定性向量 adapter，不调用真实 AI provider，不产生模型费用。
+"""
+
 LLM_JOB_BILLING_HELP_EPILOG = """\b
 常用示例：
   ./scripts/smoke.sh llm-job-billing --confirm-cost --model-id gpt-5.4-mini
@@ -794,6 +817,75 @@ def example_reconciler_probe_command(
             json_output=options.json_output,
         )
     except example_reconciler_probe.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+
+
+@app.command(
+    "asset-image-tagging",
+    help="提交 asset_image_tagging Job，验证素材打标签业务包异步链路。",
+    epilog=ASSET_IMAGE_TAGGING_HELP_EPILOG,
+)
+def asset_image_tagging_command(
+    ctx: typer.Context,
+    confirm_run: ConfirmRunOption = False,
+    client_request_id: ClientRequestIdOption = None,
+) -> None:
+    from smoke.flows.asset import image_tagging as asset_image_tagging
+
+    _validate_global_options(ctx, "asset-image-tagging", cli_contract.GLOBAL_CONTEXT_OPTIONS)
+    options = _smoke_options(ctx)
+    try:
+        asset_image_tagging.run(
+            confirm_run=confirm_run,
+            api_url=options.api_url,
+            env_file=options.env_file,
+            allow_remote_api=options.allow_remote_api,
+            service_api_key=options.service_api_key,
+            caller_id=options.caller_id,
+            timeout_seconds=options.timeout_seconds,
+            poll_interval_seconds=options.poll_interval_seconds,
+            client_request_id=client_request_id,
+            json_output=options.json_output,
+        )
+    except asset_image_tagging.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+
+
+@app.command(
+    "asset-vector",
+    help="提交 asset_vector Job 并验证同步搜索和对账接口。",
+    epilog=ASSET_VECTOR_HELP_EPILOG,
+)
+def asset_vector_command(
+    ctx: typer.Context,
+    confirm_run: ConfirmRunOption = False,
+    client_request_id: ClientRequestIdOption = None,
+    cleanup: Annotated[
+        bool,
+        typer.Option("--cleanup/--no-cleanup", help="smoke 结束时删除写入的测试资源向量。"),
+    ] = True,
+) -> None:
+    from smoke.flows.asset import vector as asset_vector
+
+    _validate_global_options(ctx, "asset-vector", cli_contract.GLOBAL_CONTEXT_OPTIONS)
+    options = _smoke_options(ctx)
+    try:
+        asset_vector.run(
+            confirm_run=confirm_run,
+            api_url=options.api_url,
+            env_file=options.env_file,
+            allow_remote_api=options.allow_remote_api,
+            service_api_key=options.service_api_key,
+            caller_id=options.caller_id,
+            timeout_seconds=options.timeout_seconds,
+            poll_interval_seconds=options.poll_interval_seconds,
+            client_request_id=client_request_id,
+            cleanup=cleanup,
+            json_output=options.json_output,
+        )
+    except asset_vector.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(exc.exit_code) from exc
 

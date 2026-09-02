@@ -84,6 +84,22 @@ SCENARIOS = [
         standard_option_groups=["job", "artifact"],
     ),
     SmokeScenario(
+        name="asset-image-tagging",
+        type="workflow",
+        acceptance_class="business_e2e",
+        dependencies=["api", "worker", "db", "redis"],
+        entrypoints=["asset-image-tagging"],
+        standard_option_groups=["job"],
+    ),
+    SmokeScenario(
+        name="asset-vector",
+        type="workflow",
+        acceptance_class="business_e2e",
+        dependencies=["api", "worker", "db", "redis"],
+        entrypoints=["asset-vector"],
+        standard_option_groups=["job"],
+    ),
+    SmokeScenario(
         name="adapter-image-probe",
         type="provider_probe",
         acceptance_class="exploratory",

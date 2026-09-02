@@ -19,6 +19,8 @@ BUSINESS_PACKAGE_MODULES: tuple[str, ...] = (
     "app.business_packages.poster_title_image.register",
     "app.business_packages.tagged_text_translation.register",
     "app.business_packages.audio_stem_separation.register",
+    "app.business_packages.asset_image_tagging.register",
+    "app.business_packages.asset_vector.register",
 )
 
 _route_mounts: tuple[BusinessRouteMount, ...] = ()

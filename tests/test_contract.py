@@ -759,6 +759,24 @@ def test_openapi_declares_bearer_auth_for_protected_routes(monkeypatch):
     assert success_schema["properties"]["data"]["$ref"].endswith("/ExampleBusinessPackagePingResponse")
     assert "401" in example_business_package["responses"]
 
+    vector_search = schema["paths"][f"{API_PREFIX}/vector-search"]["post"]
+    assert vector_search["operationId"] == "asset_vector_search"
+    assert {"HTTPBearer": []} in vector_search["security"]
+    success_schema = vector_search["responses"]["200"]["content"]["application/json"]["schema"]
+    assert success_schema["properties"]["data"]["$ref"].endswith("/AssetVectorSearchResponse")
+
+    vector_exists = schema["paths"][f"{API_PREFIX}/vector-assets:exists"]["post"]
+    assert vector_exists["operationId"] == "asset_vector_assets_exists"
+    assert {"HTTPBearer": []} in vector_exists["security"]
+    success_schema = vector_exists["responses"]["200"]["content"]["application/json"]["schema"]
+    assert success_schema["properties"]["data"]["$ref"].endswith("/AssetVectorExistsResponse")
+
+    vector_ids = schema["paths"][f"{API_PREFIX}/vector-assets/ids"]["get"]
+    assert vector_ids["operationId"] == "asset_vector_asset_ids"
+    assert {"HTTPBearer": []} in vector_ids["security"]
+    success_schema = vector_ids["responses"]["200"]["content"]["application/json"]["schema"]
+    assert success_schema["properties"]["data"]["$ref"].endswith("/AssetVectorIdsResponse")
+
 
 def test_openapi_declares_prompt_templates_job_type_query_parameter(monkeypatch):
     _patch_main_settings(monkeypatch)
