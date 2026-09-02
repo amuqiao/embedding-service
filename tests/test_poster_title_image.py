@@ -24,7 +24,6 @@ from app.business_packages.poster_title_image.png_chroma_key import remove_green
 from app.business_packages.poster_title_image.title_layer import (
     transparent_title_layer_from_green_screen_bytes,
     transparent_title_layer_from_green_screen_file,
-    transparent_title_layer_from_green_screen_oss_url,
 )
 from app.tools.private.image import (
     validate_image_bytes,
@@ -1061,27 +1060,15 @@ def test_remove_green_background_matches_poc_chroma_key_strategy():
     assert result.getpixel((20, 20))[3] == 255
 
 
-def test_transparent_title_layer_postprocess_supports_bytes_file_and_oss_url(tmp_path):
+def test_transparent_title_layer_postprocess_supports_bytes_and_file(tmp_path):
     data = _png_bytes()
     local_path = tmp_path / "title.png"
     local_path.write_bytes(data)
-    local_storage = LocalObjectStorage(tmp_path)
-    local_storage.write_bytes(
-        bucket="local-dev",
-        region="local",
-        key="generated/title.png",
-        data=data,
-        content_type="image/png",
-    )
 
     from_bytes = transparent_title_layer_from_green_screen_bytes(data)
     from_file = transparent_title_layer_from_green_screen_file(local_path)
-    from_oss_url = transparent_title_layer_from_green_screen_oss_url(
-        "https://local-dev.oss-local-internal.aliyuncs.com/generated/title.png",
-        object_storage=local_storage,
-    )
 
-    for output in [from_bytes, from_file, from_oss_url]:
+    for output in [from_bytes, from_file]:
         assert output.width == 40
         assert output.height == 40
         result = Image.open(io.BytesIO(output.data)).convert("RGBA")

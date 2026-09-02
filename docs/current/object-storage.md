@@ -77,6 +77,7 @@ Construction:
 - 不负责旧 OSS 业务链路迁移。
 - 不负责应用级配置从 `.env` 映射到 `ObjectStorageConfig`。
 - 不负责把对象存储异常翻译成具体 HTTP 响应或 Job 错误码。
+- 不负责解释业务 URL Ref、CDN URL 与 Aliyun OSS virtual-host URL 之间的映射。
 
 ## 当前能力
 
@@ -344,6 +345,7 @@ provider builder 必须遵守：
 - 业务主流程依赖自己的 storage adapter。
 - storage adapter 可以继承或组合 `BaseObjectStorageAdapter`。
 - 业务对象 key、content type、payload 字段转换放在业务 adapter。
+- 业务 URL Ref、CDN URL、Aliyun OSS public/internal URL 解析放在业务 adapter 或 smoke adapter。
 - 业务主流程不直接 import `app.object_storage.providers.*`。
 - `providers/` 不写业务逻辑。
 - 是否校验 size 或 sha256 由 `ObjectReadPolicy` 显式表达。

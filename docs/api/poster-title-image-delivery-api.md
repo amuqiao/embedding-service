@@ -162,7 +162,7 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---:|---|
-| `public_url` | string | 是 | 公网 HTTPS OSS URL |
+| `public_url` | string | 是 | 公网 HTTPS OSS URL 或服务端配置的 CDN/public endpoint URL |
 | `internal_url` | string | 是 | 兼容保留字段；输入参考图不要求为 OSS internal URL，输出对象仍返回 AI 服务生成的内网 OSS URL |
 | `content_type` | string | 是 | MIME type，例如 `image/png`、`image/jpeg`、`image/webp` |
 | `sha256` | string | 是 | 同一个 OSS object 原始内容的小写 64 位 hex SHA-256，不带 `sha256:` 前缀 |
@@ -170,7 +170,7 @@ HTTP 请求校验失败、鉴权失败或服务端无法处理请求时返回错
 规则：
 
 - URL 必须使用 `https`，不允许 query string 或 fragment。
-- URL host 必须命中服务端配置的 OSS allowlist；不允许把该字段作为任意 URL 下载入口。
+- URL host 必须命中服务端配置的 OSS/CDN allowlist；不允许把该字段作为任意 URL 下载入口。
 - 服务读取输入对象时使用 `public_url`；输入参考图的 `internal_url` 只作为兼容字段保留，不参与读取和 OSS object 身份校验。
 - 服务读取输入对象后必须校验 MIME、大小和 `sha256`；校验失败返回 `INVALID_INPUT`。
 - `sha256` 是 `public_url` 下载到的对象原始内容 hash，不是 URL 字符串的 hash。
@@ -740,7 +740,7 @@ POST /api/v1/ai-jobs/jobs
 | `job_params.items[].model_options.draw_count` | 1 到 4，且不能超过服务端 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` |
 | `job_params.items[].model_options.background` | `transparent` |
 | `job_params.items[].model_options.output_format` | `png` |
-| `job_params.items[].reference_image.public_url` | 必须，HTTPS OSS URL；不允许 query string 或 fragment |
+| `job_params.items[].reference_image.public_url` | 必须，HTTPS OSS URL 或服务端配置的 CDN/public endpoint URL；不允许 query string 或 fragment |
 | `job_params.items[].reference_image.internal_url` | 必须，兼容保留字段；输入参考图不要求为 OSS internal URL |
 | `job_params.items[].reference_image.content_type` | 必须，`image/png`、`image/jpeg` 或 `image/webp` |
 | `job_params.items[].reference_image.sha256` | 必须，同一个 OSS object 原始内容的小写 64 位 hex SHA-256 |

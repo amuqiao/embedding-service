@@ -13,7 +13,6 @@ from app.object_storage import (
     normalize_content_hash,
     sha256_digest,
 )
-from app.object_storage.aliyun_url import parse_aliyun_oss_url
 from app.services import object_storage as platform_object_storage
 from app.services.object_storage import AliyunObjectStorage, LocalObjectStorage
 from app.tools.private import object_storage_read
@@ -235,26 +234,3 @@ def test_object_storage_read_maps_runtime_config_error(monkeypatch):
         object_storage_read.read_object_bytes(bucket="bucket", region="ap-southeast-1", key="input.wav")
 
     assert exc_info.value.code == "OSS_FETCH_FAILED"
-
-
-def test_parse_aliyun_oss_url_extracts_object_identity():
-    location = parse_aliyun_oss_url(
-        "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/a%20b/title.png"
-    )
-
-    assert location.bucket == "cpp-rs-dev"
-    assert location.region == "ap-southeast-1"
-    assert location.key == "a b/title.png"
-    assert location.internal is True
-    assert location.object_identity == ("cpp-rs-dev", "ap-southeast-1", "a b/title.png")
-
-
-def test_parse_aliyun_oss_url_rejects_unsafe_url_parts():
-    for url in (
-        "http://bucket.oss-ap-southeast-1.aliyuncs.com/key.png",
-        "https://bucket.oss-ap-southeast-1.aliyuncs.com/key.png?token=secret",
-        "https://bucket.oss-ap-southeast-1.aliyuncs.com/../key.png",
-        "https://example.com/key.png",
-    ):
-        with pytest.raises(AppError):
-            parse_aliyun_oss_url(url)

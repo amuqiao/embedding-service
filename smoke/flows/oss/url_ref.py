@@ -6,7 +6,6 @@ from typing import Any
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from app.core.exceptions import AppError
-from app.object_storage.aliyun_url import AliyunOSSObjectLocation, parse_aliyun_oss_url
 from app.object_storage import bare_sha256
 
 
@@ -28,6 +27,19 @@ class CanonicalObjectRef:
             raise AppError("INVALID_INPUT", "object ref content_type must not be empty")
         if self.content_hash is not None:
             object.__setattr__(self, "content_hash", f"sha256:{bare_sha256(self.content_hash)}")
+
+
+@dataclass(frozen=True)
+class AliyunOSSObjectLocation:
+    bucket: str
+    region: str
+    key: str
+    internal: bool
+    endpoint: str
+
+    @property
+    def object_identity(self) -> tuple[str, str, str]:
+        return self.bucket, self.region, self.key
 
 
 def canonical_ref_from_oss_url_ref(
@@ -124,8 +136,8 @@ def cpp_oss_url_ref_from_canonical(
 ) -> dict[str, str]:
     if ref.provider != "aliyun_oss":
         raise AppError("INVALID_INPUT", "canonical object ref provider must be aliyun_oss")
-    public_location = parse_aliyun_oss_url(public_url)
-    internal_location = parse_aliyun_oss_url(internal_url)
+    public_location = _parse_aliyun_oss_url(public_url)
+    internal_location = _parse_aliyun_oss_url(internal_url)
     expected_identity = (ref.bucket, ref.region, ref.key)
     if public_location.internal:
         raise AppError("INVALID_INPUT", "public_url must use a public OSS endpoint")
@@ -212,7 +224,46 @@ def _parse_public_url_ref(url: str) -> AliyunOSSObjectLocation:
     if parsed.query or parsed.fragment:
         raise AppError("INVALID_INPUT", "OSS URL must not contain query string or fragment")
     unsigned_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-    return parse_aliyun_oss_url(unsigned_url)
+    return _parse_aliyun_oss_url(unsigned_url)
+
+
+def _parse_aliyun_oss_url(url: str) -> AliyunOSSObjectLocation:
+    if not isinstance(url, str) or not url.strip():
+        raise AppError("INVALID_INPUT", "OSS URL must be a non-empty string")
+    parsed = urlsplit(url.strip())
+    if parsed.scheme != "https":
+        raise AppError("INVALID_INPUT", "OSS URL must use https")
+    if parsed.query or parsed.fragment:
+        raise AppError("INVALID_INPUT", "OSS URL must not contain query string or fragment")
+    if parsed.username or parsed.password or parsed.port is not None:
+        raise AppError("INVALID_INPUT", "OSS URL must not contain credentials or port")
+    host = (parsed.hostname or "").lower()
+    suffix = ".aliyuncs.com"
+    marker = ".oss-"
+    if not host.endswith(suffix) or marker not in host:
+        raise AppError("INVALID_INPUT", "OSS URL host is not an Aliyun OSS virtual-host endpoint")
+    bucket, endpoint_part = host.split(marker, 1)
+    if not bucket or not endpoint_part.endswith(suffix.removeprefix(".")):
+        raise AppError("INVALID_INPUT", "OSS URL host is invalid")
+    region_part = endpoint_part.removesuffix(suffix.removeprefix(".")).rstrip(".")
+    internal = False
+    if region_part.endswith("-internal"):
+        internal = True
+        region_part = region_part.removesuffix("-internal")
+    if not region_part:
+        raise AppError("INVALID_INPUT", "OSS URL region is missing")
+    key = unquote(parsed.path.lstrip("/"))
+    if not key:
+        raise AppError("INVALID_INPUT", "OSS URL object key is missing")
+    if any(part in {"", ".", ".."} for part in key.split("/")):
+        raise AppError("INVALID_INPUT", "OSS URL object key contains illegal path traversal")
+    return AliyunOSSObjectLocation(
+        bucket=bucket,
+        region=region_part,
+        key=key,
+        internal=internal,
+        endpoint=f"oss-{region_part}{'-internal' if internal else ''}.aliyuncs.com",
+    )
 
 
 def _parse_public_endpoint_key(url: str, *, public_endpoint: str) -> str:

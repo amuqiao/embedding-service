@@ -45,6 +45,19 @@ def test_cpp_oss_url_ref_adapter_rejects_public_url_query():
         )
 
 
+def test_cpp_oss_url_ref_adapter_rejects_unsafe_public_urls():
+    for public_url in (
+        "http://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/poster/title-layer.png",
+        "https://cpp-rs-dev.oss-ap-southeast-1-internal.aliyuncs.com/ai-output/poster/title-layer.png",
+        "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/../title-layer.png",
+        "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output//title-layer.png",
+        "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/ai-output/./title-layer.png",
+        "https://example.com/ai-output/poster/title-layer.png",
+    ):
+        with pytest.raises(AppError):
+            canonical_ref_from_cpp_oss_url_ref(_payload(public_url=public_url))
+
+
 def test_cpp_oss_url_ref_adapter_does_not_validate_input_internal_url():
     ref = canonical_ref_from_cpp_oss_url_ref(
         _payload(

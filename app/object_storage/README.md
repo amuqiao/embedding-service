@@ -37,9 +37,6 @@ Construction:
 
 Public input reader:
   public_url.py              # PublicUrlInputReader, PublicUrlReader
-
-Provider URL helpers:
-  aliyun_url.py              # Aliyun OSS virtual-host URL parsing
 ```
 
 ## Mental Model
