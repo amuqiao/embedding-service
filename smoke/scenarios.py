@@ -104,7 +104,13 @@ SCENARIOS = [
         type="workflow",
         acceptance_class="business_e2e",
         dependencies=["api", "worker", "db", "redis", "image_provider", "embedding_provider"],
-        entrypoints=["asset-search-eval"],
+        entrypoints=[
+            "asset-search-eval run-all",
+            "asset-search-eval tag",
+            "asset-search-eval index",
+            "asset-search-eval search",
+            "asset-search-eval cleanup",
+        ],
         standard_option_groups=["job", "artifact"],
     ),
     SmokeScenario(

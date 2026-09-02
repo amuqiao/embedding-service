@@ -285,36 +285,43 @@ ASSET_SEARCH_EVAL_HELP_EPILOG = """\b
 常用示例：
   ./scripts/smoke.sh \\
     --output-dir poc/asset-vector/reports/evals/latest \\
-    asset-search-eval \\
+    asset-search-eval run-all \\
     --confirm-run \\
     --confirm-cost
 
 \b
-  # 使用 regression 测试集。
+  # 阶段 1：全量或批量打标，输出 tagging-items.jsonl。
   ./scripts/smoke.sh \\
     --timeout 600 \\
-    asset-search-eval \\
+    --output-dir poc/asset-vector/reports/evals/full-run \\
+    asset-search-eval tag \\
     --confirm-run \\
     --confirm-cost \\
     --dataset regression
 
 \b
-  # 调整每批提交数量；默认 10。
-  ./scripts/smoke.sh asset-search-eval --confirm-run --confirm-cost --batch-size 5
+  # 阶段 2：复用 vector-upsert-input.json 入库，输出 index-state.json。
+  ./scripts/smoke.sh \\
+    --timeout 600 \\
+    --output-dir poc/asset-vector/reports/evals/full-run \\
+    asset-search-eval index \\
+    --confirm-run \\
+    --confirm-cost
 
 \b
-  # 全量测试集必须显式确认；会调用真实打标模型和真实向量模型。
+  # 阶段 3：复用已入库向量反复检索评估，输出搜索 JSON/HTML 报告。
   ./scripts/smoke.sh \\
-    --timeout 1800 \\
-    asset-search-eval \\
-    --confirm-run \\
+    --timeout 600 \\
+    --output-dir poc/asset-vector/reports/evals/full-run/search-v1 \\
+    asset-search-eval search \\
     --confirm-cost \\
-    --dataset full \\
-    --confirm-full-batch
+    --dataset regression \\
+    --index-state poc/asset-vector/reports/evals/full-run/index-state.json
 
 \b
 说明：
-  本场景编排 asset_image_tagging 与 asset_vector，生成标签中间结果、向量入库结果、搜索结果、聚合指标和 HTML 报告。
+  run-all 是小样本闭环 smoke：打标、入库、搜索、默认清理。
+  tag/index/search/cleanup 是可复用阶段：全量打标和入库可以低频执行，search 可以基于 index-state 反复生成报告。
   默认测试集是 smoke/fixtures/asset_search_eval/smoke.zh.json；可用 --dataset smoke|regression|full 或自定义 JSON 路径。
 """
 
@@ -558,6 +565,16 @@ audio_stem_separation_app = typer.Typer(
     name="audio-stem-separation",
     help="真实验证 htdemucs-ft 音乐源分离 Job，支持本地 ONNX 和 Triton 模型服务两种 job_type。",
     epilog=AUDIO_STEM_SEPARATION_HELP_EPILOG,
+    no_args_is_help=True,
+    add_completion=False,
+    rich_markup_mode=None,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
+
+asset_search_eval_app = typer.Typer(
+    name="asset-search-eval",
+    help="编排 AI 打标、向量入库、搜索评估，并输出 JSON/HTML 复盘报告。",
+    epilog=ASSET_SEARCH_EVAL_HELP_EPILOG,
     no_args_is_help=True,
     add_completion=False,
     rich_markup_mode=None,
@@ -973,12 +990,11 @@ def asset_vector_command(
         raise typer.Exit(exc.exit_code) from exc
 
 
-@app.command(
-    "asset-search-eval",
-    help="编排 AI 打标、向量入库、搜索评估，并输出 JSON/HTML 复盘报告。",
-    epilog=ASSET_SEARCH_EVAL_HELP_EPILOG,
+@asset_search_eval_app.command(
+    "run-all",
+    help="小样本闭环：打标、入库、搜索评估，并默认清理本次测试向量。",
 )
-def asset_search_eval_command(
+def asset_search_eval_run_all_command(
     ctx: typer.Context,
     confirm_run: ConfirmRunOption = False,
     confirm_cost: ConfirmCostOption = False,
@@ -1008,7 +1024,7 @@ def asset_search_eval_command(
 
     _validate_global_options(
         ctx,
-        "asset-search-eval",
+        "asset-search-eval run-all",
         cli_contract.GLOBAL_CONTEXT_OPTIONS | cli_contract.GLOBAL_OUTPUT_OPTIONS,
     )
     options = _smoke_options(ctx)
@@ -1030,6 +1046,194 @@ def asset_search_eval_command(
             batch_size=batch_size,
             output_dir=options.output_dir,
             cleanup=cleanup,
+            json_output=options.json_output,
+        )
+    except asset_search_eval.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+
+
+@asset_search_eval_app.command("tag", help="执行批量 AI 打标，输出 tagging-items.jsonl 和打标报告。")
+def asset_search_eval_tag_command(
+    ctx: typer.Context,
+    confirm_run: ConfirmRunOption = False,
+    confirm_cost: ConfirmCostOption = False,
+    client_request_id: ClientRequestIdOption = None,
+    dataset: Annotated[
+        str,
+        typer.Option("--dataset", help="测试集别名 smoke|regression|full，或自定义 dataset JSON 路径。"),
+    ] = "smoke",
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", min=1, help="从测试集 items 开头截取 N 条；搜索用例会同步裁剪。"),
+    ] = None,
+    batch_size: Annotated[
+        int,
+        typer.Option("--batch-size", min=1, help="打标 Job 的每批 item 数；默认 10。"),
+    ] = 10,
+    confirm_full_batch: Annotated[
+        bool,
+        typer.Option("--confirm-full-batch", help="确认执行 full 测试集全量真实模型调用。"),
+    ] = False,
+) -> None:
+    from smoke.flows.asset import search_eval as asset_search_eval
+
+    _validate_global_options(
+        ctx,
+        "asset-search-eval tag",
+        cli_contract.GLOBAL_CONTEXT_OPTIONS | cli_contract.GLOBAL_OUTPUT_OPTIONS,
+    )
+    options = _smoke_options(ctx)
+    try:
+        asset_search_eval.tag(
+            confirm_run=confirm_run,
+            confirm_cost=confirm_cost,
+            confirm_full_batch=confirm_full_batch,
+            api_url=options.api_url,
+            env_file=options.env_file,
+            allow_remote_api=options.allow_remote_api,
+            service_api_key=options.service_api_key,
+            caller_id=options.caller_id,
+            timeout_seconds=options.timeout_seconds,
+            poll_interval_seconds=options.poll_interval_seconds,
+            client_request_id=client_request_id,
+            dataset=dataset,
+            item_limit=limit,
+            batch_size=batch_size,
+            output_dir=options.output_dir,
+            json_output=options.json_output,
+        )
+    except asset_search_eval.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+
+
+@asset_search_eval_app.command("index", help="复用 vector-upsert-input.json 入库，输出 index-state.json。")
+def asset_search_eval_index_command(
+    ctx: typer.Context,
+    confirm_run: ConfirmRunOption = False,
+    confirm_cost: ConfirmCostOption = False,
+    vector_upsert_input: Annotated[
+        str | None,
+        typer.Option(
+            "--vector-upsert-input",
+            help="tag 阶段输出的 vector-upsert-input.json；不传时读取 --output-dir/vector-upsert-input.json。",
+        ),
+    ] = None,
+    batch_size: Annotated[
+        int,
+        typer.Option("--batch-size", min=1, help="向量入库 Job 的每批 item 数；默认 10。"),
+    ] = 10,
+) -> None:
+    from smoke.flows.asset import search_eval as asset_search_eval
+
+    _validate_global_options(
+        ctx,
+        "asset-search-eval index",
+        cli_contract.GLOBAL_CONTEXT_OPTIONS | cli_contract.GLOBAL_OUTPUT_OPTIONS,
+    )
+    options = _smoke_options(ctx)
+    try:
+        asset_search_eval.index(
+            confirm_run=confirm_run,
+            confirm_cost=confirm_cost,
+            api_url=options.api_url,
+            env_file=options.env_file,
+            allow_remote_api=options.allow_remote_api,
+            service_api_key=options.service_api_key,
+            caller_id=options.caller_id,
+            timeout_seconds=options.timeout_seconds,
+            poll_interval_seconds=options.poll_interval_seconds,
+            vector_upsert_input=vector_upsert_input,
+            batch_size=batch_size,
+            output_dir=options.output_dir,
+            json_output=options.json_output,
+        )
+    except asset_search_eval.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+
+
+@asset_search_eval_app.command("search", help="复用已入库向量执行检索评估，输出搜索 JSON/HTML 报告。")
+def asset_search_eval_search_command(
+    ctx: typer.Context,
+    confirm_cost: ConfirmCostOption = False,
+    dataset: Annotated[
+        str,
+        typer.Option("--dataset", help="测试集别名 smoke|regression|full，或自定义 dataset JSON 路径。"),
+    ] = "smoke",
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", min=1, help="从测试集 items 开头截取 N 条；搜索用例会同步裁剪。"),
+    ] = None,
+    index_state: Annotated[
+        str | None,
+        typer.Option("--index-state", help="index 阶段输出的 index-state.json；用于限定已入库候选池。"),
+    ] = None,
+) -> None:
+    from smoke.flows.asset import search_eval as asset_search_eval
+
+    _validate_global_options(
+        ctx,
+        "asset-search-eval search",
+        cli_contract.GLOBAL_CONTEXT_OPTIONS | cli_contract.GLOBAL_OUTPUT_OPTIONS,
+    )
+    options = _smoke_options(ctx)
+    try:
+        asset_search_eval.search(
+            confirm_cost=confirm_cost,
+            api_url=options.api_url,
+            env_file=options.env_file,
+            allow_remote_api=options.allow_remote_api,
+            service_api_key=options.service_api_key,
+            caller_id=options.caller_id,
+            dataset=dataset,
+            item_limit=limit,
+            index_state=index_state,
+            output_dir=options.output_dir,
+            json_output=options.json_output,
+        )
+    except asset_search_eval.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+
+
+@asset_search_eval_app.command("cleanup", help="按 index-state.json 删除评估写入的向量资源。")
+def asset_search_eval_cleanup_command(
+    ctx: typer.Context,
+    confirm_run: ConfirmRunOption = False,
+    index_state: Annotated[
+        str | None,
+        typer.Option("--index-state", help="index 阶段输出的 index-state.json。"),
+    ] = None,
+    batch_size: Annotated[
+        int,
+        typer.Option("--batch-size", min=1, help="删除 Job 的每批 item 数；默认 10。"),
+    ] = 10,
+) -> None:
+    from smoke.flows.asset import search_eval as asset_search_eval
+
+    _validate_global_options(
+        ctx,
+        "asset-search-eval cleanup",
+        cli_contract.GLOBAL_CONTEXT_OPTIONS | cli_contract.GLOBAL_OUTPUT_OPTIONS,
+    )
+    options = _smoke_options(ctx)
+    try:
+        if index_state is None:
+            raise asset_search_eval.FlowError("asset-search-eval cleanup requires --index-state", exit_code=2)
+        asset_search_eval.cleanup_index(
+            confirm_run=confirm_run,
+            api_url=options.api_url,
+            env_file=options.env_file,
+            allow_remote_api=options.allow_remote_api,
+            service_api_key=options.service_api_key,
+            caller_id=options.caller_id,
+            timeout_seconds=options.timeout_seconds,
+            poll_interval_seconds=options.poll_interval_seconds,
+            index_state=index_state,
+            batch_size=batch_size,
+            output_dir=options.output_dir,
             json_output=options.json_output,
         )
     except asset_search_eval.FlowError as exc:
@@ -1426,6 +1630,12 @@ app.add_typer(
     audio_stem_separation_app,
     name="audio-stem-separation",
     help="真实验证 htdemucs-ft ONNX 音乐源分离 Job。",
+)
+
+app.add_typer(
+    asset_search_eval_app,
+    name="asset-search-eval",
+    help="编排 AI 打标、向量入库、搜索评估，并输出 JSON/HTML 复盘报告。",
 )
 
 

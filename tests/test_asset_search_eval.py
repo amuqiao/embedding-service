@@ -174,6 +174,26 @@ def test_asset_search_eval_batch_result_rejects_item_mismatch():
         )
 
 
+def test_asset_search_eval_rejects_invalid_index_state_schema(tmp_path):
+    path = tmp_path / "index-state.json"
+    path.write_text(json.dumps({"item_ids": ["asset-1"]}), encoding="utf-8")
+
+    with pytest.raises(FlowError, match="index-state schema mismatch"):
+        search_eval._load_index_state(str(path))
+
+
+def test_asset_search_eval_search_case_candidates_must_stay_inside_index_state():
+    case = {
+        "case_id": "case-1",
+        "search_mode": "text",
+        "text": {"query": "礼物"},
+        "candidate_item_ids": ["asset-1", "asset-2"],
+    }
+
+    with pytest.raises(FlowError, match="outside index-state item_ids"):
+        search_eval._search_payload(case, source_items={}, candidate_item_ids=["asset-1"])
+
+
 def test_asset_search_eval_cleans_up_successful_upserts_when_later_batch_fails(tmp_path, monkeypatch):
     dataset = search_eval._slice_dataset(search_eval._load_dataset(search_eval.DATASET_ALIASES["smoke"]), item_limit=2)
     dataset_path = tmp_path / "dataset.json"
@@ -411,3 +431,39 @@ def test_asset_search_eval_metrics_and_html_outputs(tmp_path):
     assert artifacts.search_report_html.is_file()
     assert "Asset Search Eval" in artifacts.index_html.read_text(encoding="utf-8")
     assert json.loads(json.dumps(metrics)) == metrics
+
+
+def test_asset_search_eval_single_html_writers_create_parent_dirs(tmp_path):
+    dataset = search_eval._slice_dataset(search_eval._load_dataset(search_eval.DATASET_ALIASES["smoke"]), item_limit=1)
+    item = dataset["items"][0]
+    tagging_rows = [
+        {
+            "item_id": item["item_id"],
+            "item_name": item["item_name"],
+            "category_name": item["category_name"],
+            "asset": item["asset"],
+            "selected_label_names": ["礼物"],
+            "expected_label_ids": ["object_type_gift"],
+            "matched_expected_labels": True,
+        }
+    ]
+    search_rows = [
+        {
+            "case_id": "text-gift-box",
+            "search_mode": "text",
+            "query": {"text": {"query": "礼物"}},
+            "expected_item_ids": [item["item_id"]],
+            "returned_item_ids": [item["item_id"]],
+            "best_rank": 1,
+        }
+    ]
+
+    search_eval._write_tagging_html(tmp_path / "new-html" / "tagging.html", tagging_rows=tagging_rows)
+    search_eval._write_search_html(
+        tmp_path / "another-html" / "search.html",
+        search_rows=search_rows,
+        item_by_id={item["item_id"]: item},
+    )
+
+    assert (tmp_path / "new-html" / "tagging.html").is_file()
+    assert (tmp_path / "another-html" / "search.html").is_file()

@@ -20,6 +20,7 @@ UPSERT_JOB_TYPE = "asset_vector_batch_upsert"
 DELETE_JOB_TYPE = "asset_vector_batch_delete"
 ROOT_DIR = Path(__file__).resolve().parents[3]
 DEFAULT_REPORTS_ROOT = ROOT_DIR / "poc/asset-vector/reports/evals"
+INDEX_STATE_SCHEMA = "asset_search_eval_index_state.v1"
 DATASET_ALIASES = {
     "smoke": ROOT_DIR / "smoke/fixtures/asset_search_eval/smoke.zh.json",
     "regression": ROOT_DIR / "smoke/fixtures/asset_search_eval/regression.zh.json",
@@ -39,6 +40,8 @@ class SearchEvalArtifacts:
     tagging_items_jsonl: Path
     vector_upsert_input_json: Path
     vector_upsert_result_json: Path
+    index_state_json: Path
+    vector_exists_result_json: Path
     search_cases_jsonl: Path
     search_results_jsonl: Path
     vector_delete_result_json: Path
@@ -87,6 +90,8 @@ def _artifacts(output_dir: Path) -> SearchEvalArtifacts:
         tagging_items_jsonl=output_dir / "tagging-items.jsonl",
         vector_upsert_input_json=output_dir / "vector-upsert-input.json",
         vector_upsert_result_json=output_dir / "vector-upsert-result.json",
+        index_state_json=output_dir / "index-state.json",
+        vector_exists_result_json=output_dir / "vector-exists-result.json",
         search_cases_jsonl=output_dir / "search-cases.jsonl",
         search_results_jsonl=output_dir / "search-results.jsonl",
         vector_delete_result_json=output_dir / "vector-delete-result.json",
@@ -113,6 +118,37 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     )
 
 
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise FlowError(f"asset_search_eval JSON file not found: {path}", exit_code=2)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise FlowError(f"asset_search_eval file must be valid JSON: {path}: {exc}", exit_code=2) from exc
+    if not isinstance(data, dict):
+        raise FlowError(f"asset_search_eval file must contain a JSON object: {path}", exit_code=2)
+    return data
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        raise FlowError(f"asset_search_eval JSONL file not found: {path}", exit_code=2)
+    rows: list[dict[str, Any]] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise FlowError(f"asset_search_eval JSONL line is invalid: {path}:{line_number}: {exc}", exit_code=2) from exc
+        if not isinstance(row, dict):
+            raise FlowError(f"asset_search_eval JSONL line must be an object: {path}:{line_number}", exit_code=2)
+        rows.append(row)
+    if not rows:
+        raise FlowError(f"asset_search_eval JSONL file has no rows: {path}", exit_code=2)
+    return rows
+
+
 def _load_dataset(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise FlowError(f"asset_search_eval dataset not found: {path}", exit_code=2)
@@ -132,6 +168,51 @@ def _load_dataset(path: Path) -> dict[str, Any]:
     if not isinstance(search_cases, list) or not search_cases:
         raise FlowError("asset_search_eval dataset.search_cases must be a non-empty list", exit_code=2)
     return dataset
+
+
+def _load_working_dataset(
+    *,
+    dataset: str,
+    item_limit: int | None,
+    confirm_full_batch: bool,
+    require_full_confirmation: bool,
+) -> tuple[str, Path, dict[str, Any]]:
+    dataset_name, dataset_path, is_full_alias = _resolve_dataset_path(dataset)
+    loaded_dataset = _load_dataset(dataset_path)
+    is_full_dataset = (
+        is_full_alias
+        or loaded_dataset.get("dataset_range") == "full"
+        or (item_limit is None and len(loaded_dataset["items"]) > 100)
+    )
+    if require_full_confirmation and is_full_dataset and item_limit is None and not confirm_full_batch:
+        raise FlowError("--confirm-full-batch is required when running a full asset_search_eval dataset", exit_code=2)
+    working_dataset = _slice_dataset(loaded_dataset, item_limit=item_limit)
+    _validate_dataset(working_dataset)
+    return dataset_name, dataset_path, working_dataset
+
+
+def _resolve_vector_upsert_input_path(path: str | None, *, output_dir: Path | None) -> Path:
+    if path is None:
+        if output_dir is None:
+            raise FlowError("--vector-upsert-input is required when --output-dir is not provided", exit_code=2)
+        return output_dir / "vector-upsert-input.json"
+    resolved = Path(path).expanduser()
+    if not resolved.is_absolute():
+        resolved = ROOT_DIR / resolved
+    return resolved
+
+
+def _load_vector_upsert_input(path: Path) -> list[dict[str, Any]]:
+    payload = _read_json(path)
+    if payload.get("job_type") != UPSERT_JOB_TYPE:
+        raise FlowError(f"asset_search_eval vector upsert input job_type mismatch: {path}", exit_code=2)
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        raise FlowError(f"asset_search_eval vector upsert input missing items: {path}", exit_code=2)
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("item_id"), str):
+            raise FlowError(f"asset_search_eval vector upsert input contains invalid item: {path}", exit_code=2)
+    return items
 
 
 def _slice_dataset(dataset: dict[str, Any], *, item_limit: int | None) -> dict[str, Any]:
@@ -376,6 +457,15 @@ def _tagging_rows(dataset: dict[str, Any], tagging_result: dict[str, Any]) -> li
             continue
         item_id = str(item.get("item_id"))
         labels = _selected_labels(item)
+        selected_labels = [
+            {
+                "label_id": label.get("label_id"),
+                "label_name": label.get("label_name"),
+                "definition": label.get("definition"),
+            }
+            for label in labels
+            if isinstance(label.get("label_id"), str) and isinstance(label.get("label_name"), str)
+        ]
         selected_ids = [str(label.get("label_id")) for label in labels if isinstance(label.get("label_id"), str)]
         selected_names = [str(label.get("label_name")) for label in labels if isinstance(label.get("label_name"), str)]
         expected_ids = expected_by_item.get(item_id) if isinstance(expected_by_item, dict) else None
@@ -396,6 +486,7 @@ def _tagging_rows(dataset: dict[str, Any], tagging_result: dict[str, Any]) -> li
                 "category_name": item.get("category_name"),
                 "status": item.get("status"),
                 "asset": item.get("asset"),
+                "selected_labels": selected_labels,
                 "selected_label_ids": selected_ids,
                 "selected_label_names": selected_names,
                 "expected_label_ids": expected_ids,
@@ -467,6 +558,57 @@ def _vector_upsert_payload(
     return upsert_items
 
 
+def _index_state(
+    *,
+    run_id: str,
+    dataset_name: str,
+    dataset_path: Path | None,
+    vector_upsert_input_path: Path,
+    vector_items: list[dict[str, Any]],
+    upsert_result: dict[str, Any],
+    exists_result: dict[str, Any],
+    artifacts: SearchEvalArtifacts,
+) -> dict[str, Any]:
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return {
+        "schema": INDEX_STATE_SCHEMA,
+        "scenario": SCENARIO_NAME,
+        "run_id": run_id,
+        "dataset": dataset_name,
+        "dataset_path": None if dataset_path is None else str(dataset_path),
+        "vector_upsert_input_json": str(vector_upsert_input_path),
+        "item_ids": [str(item["item_id"]) for item in vector_items],
+        "item_count": len(vector_items),
+        "vector_upsert_job_ids": upsert_result["job_ids"],
+        "exists_verified": True,
+        "exists_response": exists_result,
+        "created_at": now,
+        "artifacts": _artifact_paths(artifacts),
+    }
+
+
+def _load_index_state(index_state_path: str | None, *, output_dir: Path | None = None) -> tuple[dict[str, Any], Path]:
+    path = _resolve_index_state_path(index_state_path, output_dir=output_dir)
+    state = _read_json(path)
+    if state.get("schema") != INDEX_STATE_SCHEMA or state.get("scenario") != SCENARIO_NAME:
+        raise FlowError(f"asset_search_eval index-state schema mismatch: {path}", exit_code=2)
+    item_ids = state.get("item_ids")
+    if not isinstance(item_ids, list) or not item_ids or not all(isinstance(item_id, str) for item_id in item_ids):
+        raise FlowError(f"asset_search_eval index-state missing item_ids: {path}", exit_code=2)
+    return state, path
+
+
+def _resolve_index_state_path(index_state_path: str | None, *, output_dir: Path | None = None) -> Path:
+    if index_state_path is None:
+        if output_dir is None:
+            raise FlowError("--index-state is required when --output-dir is not provided", exit_code=2)
+        return output_dir / "index-state.json"
+    path = Path(index_state_path).expanduser()
+    if not path.is_absolute():
+        path = ROOT_DIR / path
+    return path
+
+
 def _search_payload(
     case: dict[str, Any],
     *,
@@ -488,6 +630,21 @@ def _search_payload(
         if raw_candidate_item_ids is None:
             payload["candidate_item_ids"] = candidate_item_ids
         else:
+            if not isinstance(raw_candidate_item_ids, list) or not all(
+                isinstance(item_id, str) for item_id in raw_candidate_item_ids
+            ):
+                raise FlowError(
+                    f"asset_search_eval search case candidate_item_ids must be a string list: {case['case_id']}",
+                    exit_code=2,
+                )
+            candidate_set = set(candidate_item_ids)
+            outside_candidate_pool = [item_id for item_id in raw_candidate_item_ids if item_id not in candidate_set]
+            if outside_candidate_pool:
+                raise FlowError(
+                    "asset_search_eval search case candidate_item_ids are outside index-state item_ids: "
+                    f"{case['case_id']} {outside_candidate_pool}",
+                    exit_code=2,
+                )
             payload["candidate_item_ids"] = raw_candidate_item_ids
     else:
         payload["candidate_item_ids"] = candidate_item_ids
@@ -501,12 +658,15 @@ def _run_search_cases(
     context: service_runtime.RuntimeContext,
     headers: dict[str, str],
     dataset: dict[str, Any],
+    candidate_item_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     source_items = _item_by_id(dataset)
-    candidate_item_ids = [str(item["item_id"]) for item in dataset["items"]]
+    resolved_candidate_item_ids = candidate_item_ids
+    if resolved_candidate_item_ids is None:
+        resolved_candidate_item_ids = [str(item["item_id"]) for item in dataset["items"]]
     rows: list[dict[str, Any]] = []
     for case in dataset["search_cases"]:
-        payload = _search_payload(case, source_items=source_items, candidate_item_ids=candidate_item_ids)
+        payload = _search_payload(case, source_items=source_items, candidate_item_ids=resolved_candidate_item_ids)
         envelope = http_runtime.request_json(
             _api_url(context, "/vector-search"),
             method="POST",
@@ -544,6 +704,40 @@ def _run_search_cases(
             }
         )
     return rows
+
+
+def _assert_assets_exist(
+    *,
+    context: service_runtime.RuntimeContext,
+    headers: dict[str, str],
+    item_ids: list[str],
+) -> dict[str, Any]:
+    envelope = http_runtime.request_json(
+        _api_url(context, "/vector-assets:exists"),
+        method="POST",
+        headers=headers,
+        payload={"item_ids": item_ids},
+    )
+    items = _data(envelope).get("items")
+    if not isinstance(items, list) or len(items) != len(item_ids):
+        raise FlowError(f"asset_search_eval vector-assets:exists response mismatch: {envelope}", exit_code=1)
+    exists_by_item_id = {str(item.get("item_id")): item.get("exists") for item in items if isinstance(item, dict)}
+    missing = [item_id for item_id in item_ids if exists_by_item_id.get(item_id) is not True]
+    if missing:
+        raise FlowError(f"asset_search_eval indexed items do not exist: {missing}", exit_code=1)
+    return envelope
+
+
+def _assert_index_covers_search_cases(*, candidate_item_ids: list[str], search_cases: list[dict[str, Any]]) -> None:
+    candidate_set = set(candidate_item_ids)
+    missing: dict[str, list[str]] = {}
+    for case in search_cases:
+        expected = [str(item_id) for item_id in case["expected_item_ids"]]
+        missing_expected = [item_id for item_id in expected if item_id not in candidate_set]
+        if missing_expected:
+            missing[str(case["case_id"])] = missing_expected
+    if missing:
+        raise FlowError(f"asset_search_eval index-state does not cover search cases: {missing}", exit_code=2)
 
 
 def _metrics(tagging_rows: list[dict[str, Any]], search_rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -790,6 +984,7 @@ def _write_html_reports(
 
 
 def _write_tagging_html(path: Path, *, tagging_rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     rows_html = "\n".join(
         f"""
         <tr>
@@ -819,6 +1014,7 @@ def _write_tagging_html(path: Path, *, tagging_rows: list[dict[str, Any]]) -> No
 
 
 def _write_search_html(path: Path, *, search_rows: list[dict[str, Any]], item_by_id: dict[str, dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     sections: list[str] = []
     for row in search_rows:
         result_cards: list[str] = []
@@ -883,6 +1079,8 @@ def _artifact_paths(artifacts: SearchEvalArtifacts) -> dict[str, str]:
         "tagging_items_jsonl": str(artifacts.tagging_items_jsonl),
         "vector_upsert_input_json": str(artifacts.vector_upsert_input_json),
         "vector_upsert_result_json": str(artifacts.vector_upsert_result_json),
+        "index_state_json": str(artifacts.index_state_json),
+        "vector_exists_result_json": str(artifacts.vector_exists_result_json),
         "vector_delete_result_json": str(artifacts.vector_delete_result_json),
         "search_results_jsonl": str(artifacts.search_results_jsonl),
         "metrics_json": str(artifacts.metrics_json),
@@ -896,7 +1094,7 @@ def _write_failure_run(
     exc: Exception,
     run_id: str,
     dataset_name: str,
-    dataset_path: Path,
+    dataset_path: Path | None,
     output_dir: Path,
     phase: str,
     context: service_runtime.RuntimeContext | None,
@@ -917,7 +1115,7 @@ def _write_failure_run(
             "scenario": SCENARIO_NAME,
             "run_id": run_id,
             "dataset": dataset_name,
-            "dataset_path": str(dataset_path),
+            "dataset_path": None if dataset_path is None else str(dataset_path),
             "output_dir": str(output_dir),
             "api_url": None if context is None else context.summary["api_url"],
             "phase": phase,
@@ -937,6 +1135,566 @@ def _write_failure_run(
             "artifacts": _artifact_paths(artifacts),
             "metrics": metrics,
         },
+    )
+
+
+def tag(
+    *,
+    confirm_run: bool,
+    confirm_cost: bool,
+    confirm_full_batch: bool,
+    api_url: str | None,
+    env_file: str | None,
+    allow_remote_api: bool,
+    service_api_key: str | None,
+    caller_id: str,
+    timeout_seconds: int,
+    poll_interval_seconds: float,
+    client_request_id: str | None,
+    dataset: str,
+    item_limit: int | None,
+    batch_size: int,
+    output_dir: str | None,
+    json_output: bool,
+) -> None:
+    if not confirm_run:
+        raise FlowError("--confirm-run is required because this command creates real tagging Jobs", exit_code=2)
+    if not confirm_cost:
+        raise FlowError("--confirm-cost is required because this command calls real model providers", exit_code=2)
+    if batch_size < 1:
+        raise FlowError("--batch-size must be greater than or equal to 1", exit_code=2)
+
+    run_id = _run_id()
+    started_at = time.monotonic()
+    started_at_wall = datetime.now(UTC)
+    dataset_name, dataset_path, _is_full_alias = _resolve_dataset_path(dataset)
+    artifacts = _artifacts(_resolve_output_dir(output_dir, run_id=run_id))
+    artifacts.output_dir.mkdir(parents=True, exist_ok=True)
+    phase = "load_dataset"
+    context: service_runtime.RuntimeContext | None = None
+    working_dataset: dict[str, Any] | None = None
+    metrics: dict[str, Any] = {}
+    try:
+        dataset_name, dataset_path, working_dataset = _load_working_dataset(
+            dataset=dataset,
+            item_limit=item_limit,
+            confirm_full_batch=confirm_full_batch,
+            require_full_confirmation=True,
+        )
+        _write_json(artifacts.dataset_snapshot_json, working_dataset)
+        phase = "service_context"
+        context = job_runtime.resolve_job_context(
+            env_file=env_file,
+            api_url=api_url,
+            allow_remote_api=allow_remote_api,
+            caller_id=caller_id,
+            service_api_key=service_api_key,
+        )
+        if not context.summary["ready"]:
+            raise FlowError(f"smoke context is not ready: {context.summary['problems']}", exit_code=2)
+        headers = service_runtime.build_headers(context.app_env, caller_id=caller_id, service_api_key=service_api_key)
+        phase = "tagging"
+        tagging_payloads, tagging_result = _submit_tagging_batches(
+            context=context,
+            headers=headers,
+            dataset=working_dataset,
+            client_request_id=client_request_id,
+            run_id=run_id,
+            batch_size=batch_size,
+            request_path=artifacts.tagging_request_json,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+        _write_json(artifacts.tagging_request_json, {"job_type": TAGGING_JOB_TYPE, "job_payloads": tagging_payloads})
+        _write_json(artifacts.tagging_result_json, tagging_result)
+        tagging_rows = _tagging_rows(working_dataset, tagging_result)
+        _write_jsonl(artifacts.tagging_items_jsonl, tagging_rows)
+        vector_items = _vector_upsert_payload(working_dataset, tagging_result, run_id=run_id)
+        _write_json(
+            artifacts.vector_upsert_input_json,
+            {"job_type": UPSERT_JOB_TYPE, "job_payloads": [], "items": vector_items},
+        )
+        metrics = _metrics(tagging_rows, [])
+        _write_json(artifacts.metrics_json, metrics)
+        finished_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        summary = {
+            "ok": True,
+            "scenario": SCENARIO_NAME,
+            "stage": "tag",
+            "run_id": run_id,
+            "dataset": dataset_name,
+            "dataset_path": str(dataset_path),
+            "output_dir": str(artifacts.output_dir),
+            "api_url": context.summary["api_url"],
+            "item_count": len(working_dataset["items"]),
+            "batch_size": batch_size,
+            "tagging_job_ids": tagging_result["job_ids"],
+            "vector_upsert_input_json": str(artifacts.vector_upsert_input_json),
+            "started_at": started_at_wall.isoformat().replace("+00:00", "Z"),
+            "finished_at": finished_at,
+            "elapsed_seconds": round(time.monotonic() - started_at, 3),
+            "artifacts": _artifact_paths(artifacts),
+            "metrics": metrics,
+        }
+        _write_tagging_html(artifacts.tagging_report_html, tagging_rows=tagging_rows)
+        _write_json(artifacts.run_json, summary)
+    except Exception as exc:
+        _write_failure_run(
+            artifacts,
+            exc=exc,
+            run_id=run_id,
+            dataset_name=dataset_name,
+            dataset_path=dataset_path,
+            output_dir=artifacts.output_dir,
+            phase=phase,
+            context=context,
+            working_dataset=working_dataset,
+            batch_size=batch_size,
+            indexed_item_ids=[],
+            cleanup=False,
+            cleanup_error=None,
+            started_at=started_at,
+            started_at_wall=started_at_wall,
+            metrics=metrics,
+        )
+        raise
+
+    if json_output:
+        formatters.print_json(summary)
+        return
+    formatters.section("Asset Search Eval Tag")
+    print(f"dataset: {dataset_name} ({dataset_path})")
+    print(f"output_dir: {artifacts.output_dir}")
+    print(f"tagging_items: {artifacts.tagging_items_jsonl}")
+    print(f"vector_upsert_input: {artifacts.vector_upsert_input_json}")
+    print(f"tagging_report: {artifacts.tagging_report_html}")
+    formatters.print_table(
+        [
+            {
+                "ok": True,
+                "items": len(working_dataset["items"]),
+                "tag_required": metrics["tagging"]["required_match_rate"],
+                "elapsed_s": summary["elapsed_seconds"],
+            }
+        ],
+        columns=[
+            ("ok", "ok"),
+            ("items", "items"),
+            ("tag_required", "tag_required"),
+            ("elapsed_s", "elapsed_s"),
+        ],
+    )
+
+
+def index(
+    *,
+    confirm_run: bool,
+    confirm_cost: bool,
+    api_url: str | None,
+    env_file: str | None,
+    allow_remote_api: bool,
+    service_api_key: str | None,
+    caller_id: str,
+    timeout_seconds: int,
+    poll_interval_seconds: float,
+    vector_upsert_input: str | None,
+    batch_size: int,
+    output_dir: str | None,
+    json_output: bool,
+) -> None:
+    if not confirm_run:
+        raise FlowError("--confirm-run is required because this command writes vector rows", exit_code=2)
+    if not confirm_cost:
+        raise FlowError("--confirm-cost is required because this command calls real embedding providers", exit_code=2)
+    if batch_size < 1:
+        raise FlowError("--batch-size must be greater than or equal to 1", exit_code=2)
+
+    run_id = _run_id()
+    started_at = time.monotonic()
+    started_at_wall = datetime.now(UTC)
+    requested_output_dir = None if output_dir is None else _resolve_output_dir(output_dir, run_id=run_id)
+    vector_upsert_input_path = _resolve_vector_upsert_input_path(vector_upsert_input, output_dir=requested_output_dir)
+    artifacts = _artifacts(requested_output_dir or vector_upsert_input_path.parent)
+    artifacts.output_dir.mkdir(parents=True, exist_ok=True)
+    phase = "read_vector_upsert_input"
+    context: service_runtime.RuntimeContext | None = None
+    indexed_item_ids: list[str] = []
+    metrics: dict[str, Any] = {}
+    try:
+        vector_items = _load_vector_upsert_input(vector_upsert_input_path)
+        _write_json(
+            artifacts.vector_upsert_input_json,
+            {"job_type": UPSERT_JOB_TYPE, "job_payloads": [], "items": vector_items},
+        )
+        phase = "service_context"
+        context = job_runtime.resolve_job_context(
+            env_file=env_file,
+            api_url=api_url,
+            allow_remote_api=allow_remote_api,
+            caller_id=caller_id,
+            service_api_key=service_api_key,
+        )
+        if not context.summary["ready"]:
+            raise FlowError(f"smoke context is not ready: {context.summary['problems']}", exit_code=2)
+        headers = service_runtime.build_headers(context.app_env, caller_id=caller_id, service_api_key=service_api_key)
+        phase = "vector_upsert"
+        upsert_payloads, upsert_result = _submit_vector_upsert_batches(
+            context=context,
+            headers=headers,
+            vector_items=vector_items,
+            run_id=run_id,
+            batch_size=batch_size,
+            request_path=artifacts.vector_upsert_input_json,
+            indexed_item_ids=indexed_item_ids,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+        _write_json(
+            artifacts.vector_upsert_input_json,
+            {"job_type": UPSERT_JOB_TYPE, "job_payloads": upsert_payloads, "items": vector_items},
+        )
+        _write_json(artifacts.vector_upsert_result_json, upsert_result)
+        phase = "vector_exists"
+        exists_result = _assert_assets_exist(context=context, headers=headers, item_ids=indexed_item_ids)
+        _write_json(artifacts.vector_exists_result_json, exists_result)
+        state = _index_state(
+            run_id=run_id,
+            dataset_name="from_vector_upsert_input",
+            dataset_path=None,
+            vector_upsert_input_path=vector_upsert_input_path,
+            vector_items=vector_items,
+            upsert_result=upsert_result,
+            exists_result=exists_result,
+            artifacts=artifacts,
+        )
+        _write_json(artifacts.index_state_json, state)
+        finished_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        summary = {
+            "ok": True,
+            "scenario": SCENARIO_NAME,
+            "stage": "index",
+            "run_id": run_id,
+            "output_dir": str(artifacts.output_dir),
+            "api_url": context.summary["api_url"],
+            "vector_upsert_input_json": str(vector_upsert_input_path),
+            "index_state_json": str(artifacts.index_state_json),
+            "item_count": len(vector_items),
+            "batch_size": batch_size,
+            "vector_upsert_job_ids": upsert_result["job_ids"],
+            "started_at": started_at_wall.isoformat().replace("+00:00", "Z"),
+            "finished_at": finished_at,
+            "elapsed_seconds": round(time.monotonic() - started_at, 3),
+            "artifacts": _artifact_paths(artifacts),
+        }
+        _write_json(artifacts.run_json, summary)
+    except Exception as exc:
+        cleanup_error = None
+        if indexed_item_ids and context is not None:
+            try:
+                headers = service_runtime.build_headers(context.app_env, caller_id=caller_id, service_api_key=service_api_key)
+                cleanup_result = _cleanup(
+                    context=context,
+                    headers=headers,
+                    item_ids=indexed_item_ids,
+                    run_id=run_id,
+                    batch_size=batch_size,
+                    timeout_seconds=timeout_seconds,
+                    poll_interval_seconds=poll_interval_seconds,
+                )
+                _write_json(artifacts.vector_delete_result_json, cleanup_result)
+            except Exception as cleanup_exc:  # noqa: BLE001
+                cleanup_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+        _write_failure_run(
+            artifacts,
+            exc=exc,
+            run_id=run_id,
+            dataset_name="from_vector_upsert_input",
+            dataset_path=vector_upsert_input_path,
+            output_dir=artifacts.output_dir,
+            phase=phase,
+            context=context,
+            working_dataset=None,
+            batch_size=batch_size,
+            indexed_item_ids=indexed_item_ids,
+            cleanup=True,
+            cleanup_error=cleanup_error,
+            started_at=started_at,
+            started_at_wall=started_at_wall,
+            metrics=metrics,
+        )
+        if cleanup_error is not None:
+            exit_code = exc.exit_code if isinstance(exc, FlowError) else 1
+            raise FlowError(f"{exc}; cleanup_failed={cleanup_error}", exit_code=exit_code) from exc
+        raise
+
+    if json_output:
+        formatters.print_json(summary)
+        return
+    formatters.section("Asset Search Eval Index")
+    print(f"vector_upsert_input: {vector_upsert_input_path}")
+    print(f"output_dir: {artifacts.output_dir}")
+    print(f"index_state: {artifacts.index_state_json}")
+    formatters.print_table(
+        [{"ok": True, "items": summary["item_count"], "elapsed_s": summary["elapsed_seconds"]}],
+        columns=[("ok", "ok"), ("items", "items"), ("elapsed_s", "elapsed_s")],
+    )
+
+
+def search(
+    *,
+    confirm_cost: bool,
+    api_url: str | None,
+    env_file: str | None,
+    allow_remote_api: bool,
+    service_api_key: str | None,
+    caller_id: str,
+    dataset: str,
+    item_limit: int | None,
+    index_state: str | None,
+    output_dir: str | None,
+    json_output: bool,
+) -> None:
+    if not confirm_cost:
+        raise FlowError("--confirm-cost is required because search may call real embedding providers", exit_code=2)
+
+    run_id = _run_id()
+    started_at = time.monotonic()
+    started_at_wall = datetime.now(UTC)
+    artifacts = _artifacts(_resolve_output_dir(output_dir, run_id=run_id))
+    artifacts.output_dir.mkdir(parents=True, exist_ok=True)
+    dataset_name, dataset_path, _is_full_alias = _resolve_dataset_path(dataset)
+    phase = "load_dataset"
+    context: service_runtime.RuntimeContext | None = None
+    working_dataset: dict[str, Any] | None = None
+    metrics: dict[str, Any] = {}
+    index_state_path: Path | None = None
+    candidate_item_ids: list[str] = []
+    try:
+        dataset_name, dataset_path, working_dataset = _load_working_dataset(
+            dataset=dataset,
+            item_limit=item_limit,
+            confirm_full_batch=False,
+            require_full_confirmation=False,
+        )
+        _write_json(artifacts.dataset_snapshot_json, working_dataset)
+        phase = "load_index_state"
+        if index_state is not None:
+            state, index_state_path = _load_index_state(index_state)
+            candidate_item_ids = [str(item_id) for item_id in state["item_ids"]]
+        else:
+            candidate_item_ids = [str(item["item_id"]) for item in working_dataset["items"]]
+        _assert_index_covers_search_cases(
+            candidate_item_ids=candidate_item_ids,
+            search_cases=working_dataset["search_cases"],
+        )
+
+        phase = "service_context"
+        context = job_runtime.resolve_job_context(
+            env_file=env_file,
+            api_url=api_url,
+            allow_remote_api=allow_remote_api,
+            caller_id=caller_id,
+            service_api_key=service_api_key,
+        )
+        if not context.summary["ready"]:
+            raise FlowError(f"smoke context is not ready: {context.summary['problems']}", exit_code=2)
+        headers = service_runtime.build_headers(context.app_env, caller_id=caller_id, service_api_key=service_api_key)
+        phase = "vector_exists"
+        exists_result = _assert_assets_exist(context=context, headers=headers, item_ids=candidate_item_ids)
+        _write_json(artifacts.vector_exists_result_json, exists_result)
+        phase = "search"
+        search_rows = _run_search_cases(
+            context=context,
+            headers=headers,
+            dataset=working_dataset,
+            candidate_item_ids=candidate_item_ids,
+        )
+        _write_jsonl(artifacts.search_cases_jsonl, working_dataset["search_cases"])
+        _write_jsonl(artifacts.search_results_jsonl, search_rows)
+        metrics = _metrics([], search_rows)
+        _write_json(artifacts.metrics_json, metrics)
+        finished_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        summary = {
+            "ok": True,
+            "scenario": SCENARIO_NAME,
+            "stage": "search",
+            "run_id": run_id,
+            "dataset": dataset_name,
+            "dataset_path": str(dataset_path),
+            "index_state_json": None if index_state_path is None else str(index_state_path),
+            "output_dir": str(artifacts.output_dir),
+            "api_url": context.summary["api_url"],
+            "item_count": len(working_dataset["items"]),
+            "candidate_item_count": len(candidate_item_ids),
+            "search_case_count": len(working_dataset["search_cases"]),
+            "started_at": started_at_wall.isoformat().replace("+00:00", "Z"),
+            "finished_at": finished_at,
+            "elapsed_seconds": round(time.monotonic() - started_at, 3),
+            "artifacts": _artifact_paths(artifacts),
+            "metrics": metrics,
+        }
+        _write_html_reports(
+            artifacts,
+            run_summary=summary,
+            dataset=working_dataset,
+            tagging_rows=[],
+            search_rows=search_rows,
+            metrics=metrics,
+        )
+        _write_json(artifacts.run_json, summary)
+    except Exception as exc:
+        _write_failure_run(
+            artifacts,
+            exc=exc,
+            run_id=run_id,
+            dataset_name=dataset_name,
+            dataset_path=dataset_path,
+            output_dir=artifacts.output_dir,
+            phase=phase,
+            context=context,
+            working_dataset=working_dataset,
+            batch_size=0,
+            indexed_item_ids=candidate_item_ids,
+            cleanup=False,
+            cleanup_error=None,
+            started_at=started_at,
+            started_at_wall=started_at_wall,
+            metrics=metrics,
+        )
+        raise
+
+    if json_output:
+        formatters.print_json(summary)
+        return
+    formatters.section("Asset Search Eval Search")
+    print(f"dataset: {dataset_name} ({dataset_path})")
+    if index_state_path is not None:
+        print(f"index_state: {index_state_path}")
+    print(f"output_dir: {artifacts.output_dir}")
+    print(f"html_index: {artifacts.index_html}")
+    formatters.print_table(
+        [
+            {
+                "ok": True,
+                "search_cases": len(working_dataset["search_cases"]),
+                "candidates": len(candidate_item_ids),
+                "hit_at_1": metrics["search"]["hit_at_1"],
+                "hit_at_k": metrics["search"]["hit_at_k"],
+                "mrr": metrics["search"]["mrr"],
+            }
+        ],
+        columns=[
+            ("ok", "ok"),
+            ("search_cases", "search_cases"),
+            ("candidates", "candidates"),
+            ("hit_at_1", "hit@1"),
+            ("hit_at_k", "hit@k"),
+            ("mrr", "mrr"),
+        ],
+    )
+
+
+def cleanup_index(
+    *,
+    confirm_run: bool,
+    api_url: str | None,
+    env_file: str | None,
+    allow_remote_api: bool,
+    service_api_key: str | None,
+    caller_id: str,
+    timeout_seconds: int,
+    poll_interval_seconds: float,
+    index_state: str,
+    batch_size: int,
+    output_dir: str | None,
+    json_output: bool,
+) -> None:
+    if not confirm_run:
+        raise FlowError("--confirm-run is required because this command deletes vector rows", exit_code=2)
+    if batch_size < 1:
+        raise FlowError("--batch-size must be greater than or equal to 1", exit_code=2)
+    run_id = _run_id()
+    started_at = time.monotonic()
+    started_at_wall = datetime.now(UTC)
+    requested_output_dir = None if output_dir is None else _resolve_output_dir(output_dir, run_id=run_id)
+    index_state_path = _resolve_index_state_path(index_state)
+    artifacts = _artifacts(requested_output_dir or index_state_path.parent)
+    artifacts.output_dir.mkdir(parents=True, exist_ok=True)
+    phase = "load_index_state"
+    context: service_runtime.RuntimeContext | None = None
+    item_ids: list[str] = []
+    try:
+        state, index_state_path = _load_index_state(index_state)
+        item_ids = [str(item_id) for item_id in state["item_ids"]]
+        phase = "service_context"
+        context = job_runtime.resolve_job_context(
+            env_file=env_file,
+            api_url=api_url,
+            allow_remote_api=allow_remote_api,
+            caller_id=caller_id,
+            service_api_key=service_api_key,
+        )
+        if not context.summary["ready"]:
+            raise FlowError(f"smoke context is not ready: {context.summary['problems']}", exit_code=2)
+        headers = service_runtime.build_headers(context.app_env, caller_id=caller_id, service_api_key=service_api_key)
+        phase = "cleanup"
+        delete_result = _cleanup(
+            context=context,
+            headers=headers,
+            item_ids=item_ids,
+            run_id=run_id,
+            batch_size=batch_size,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+        _write_json(artifacts.vector_delete_result_json, delete_result)
+        finished_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        summary = {
+            "ok": True,
+            "scenario": SCENARIO_NAME,
+            "stage": "cleanup",
+            "run_id": run_id,
+            "index_state_json": str(index_state_path),
+            "output_dir": str(artifacts.output_dir),
+            "api_url": context.summary["api_url"],
+            "item_count": len(item_ids),
+            "batch_size": batch_size,
+            "vector_delete_job_ids": delete_result["job_ids"],
+            "started_at": started_at_wall.isoformat().replace("+00:00", "Z"),
+            "finished_at": finished_at,
+            "elapsed_seconds": round(time.monotonic() - started_at, 3),
+            "artifacts": _artifact_paths(artifacts),
+        }
+        _write_json(artifacts.run_json, summary)
+    except Exception as exc:
+        _write_failure_run(
+            artifacts,
+            exc=exc,
+            run_id=run_id,
+            dataset_name="from_index_state",
+            dataset_path=index_state_path,
+            output_dir=artifacts.output_dir,
+            phase=phase,
+            context=context,
+            working_dataset=None,
+            batch_size=batch_size,
+            indexed_item_ids=item_ids,
+            cleanup=True,
+            cleanup_error=None,
+            started_at=started_at,
+            started_at_wall=started_at_wall,
+            metrics={},
+        )
+        raise
+    if json_output:
+        formatters.print_json(summary)
+        return
+    formatters.section("Asset Search Eval Cleanup")
+    print(f"index_state: {index_state_path}")
+    print(f"output_dir: {artifacts.output_dir}")
+    formatters.print_table(
+        [{"ok": True, "deleted": len(item_ids), "elapsed_s": summary["elapsed_seconds"]}],
+        columns=[("ok", "ok"), ("deleted", "deleted"), ("elapsed_s", "elapsed_s")],
     )
 
 
@@ -1049,6 +1807,21 @@ def run(
         )
         _write_json(artifacts.vector_upsert_result_json, upsert_result)
 
+        phase = "vector_exists"
+        exists_result = _assert_assets_exist(context=context, headers=headers, item_ids=indexed_item_ids)
+        _write_json(artifacts.vector_exists_result_json, exists_result)
+        state = _index_state(
+            run_id=run_id,
+            dataset_name=dataset_name,
+            dataset_path=dataset_path,
+            vector_upsert_input_path=artifacts.vector_upsert_input_json,
+            vector_items=vector_items,
+            upsert_result=upsert_result,
+            exists_result=exists_result,
+            artifacts=artifacts,
+        )
+        _write_json(artifacts.index_state_json, state)
+
         phase = "search"
         search_rows = _run_search_cases(context=context, headers=headers, dataset=working_dataset)
         _write_jsonl(artifacts.search_cases_jsonl, working_dataset["search_cases"])
@@ -1127,17 +1900,7 @@ def run(
         "started_at": started_at_wall.isoformat().replace("+00:00", "Z"),
         "finished_at": finished_at,
         "elapsed_seconds": round(time.monotonic() - started_at, 3),
-        "artifacts": {
-            "run_json": str(artifacts.run_json),
-            "dataset_snapshot_json": str(artifacts.dataset_snapshot_json),
-            "tagging_result_json": str(artifacts.tagging_result_json),
-            "tagging_items_jsonl": str(artifacts.tagging_items_jsonl),
-            "vector_upsert_input_json": str(artifacts.vector_upsert_input_json),
-            "vector_upsert_result_json": str(artifacts.vector_upsert_result_json),
-            "search_results_jsonl": str(artifacts.search_results_jsonl),
-            "metrics_json": str(artifacts.metrics_json),
-            "index_html": str(artifacts.index_html),
-        },
+        "artifacts": _artifact_paths(artifacts),
         "metrics": metrics,
     }
     _write_html_reports(

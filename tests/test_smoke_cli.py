@@ -1342,6 +1342,13 @@ def test_smoke_list_outputs_standard_scenario_metadata():
     assert audio["entrypoints"] == ["audio-stem-separation run"]
     asset_eval = next(scenario for scenario in payload["scenarios"] if scenario["name"] == "asset-search-eval")
     assert {"image_provider", "embedding_provider"} <= set(asset_eval["dependencies"])
+    assert asset_eval["entrypoints"] == [
+        "asset-search-eval run-all",
+        "asset-search-eval tag",
+        "asset-search-eval index",
+        "asset-search-eval search",
+        "asset-search-eval cleanup",
+    ]
     assert asset_eval["standard_option_groups"] == ["job", "artifact"]
 
 
@@ -1372,6 +1379,7 @@ def test_asset_search_eval_cli_forwards_dataset_and_output_options(monkeypatch):
             "poc/asset-vector/reports/evals/latest",
             "--json",
             "asset-search-eval",
+            "run-all",
             "--confirm-run",
             "--confirm-cost",
             "--confirm-full-batch",
@@ -1407,6 +1415,174 @@ def test_asset_search_eval_cli_forwards_dataset_and_output_options(monkeypatch):
         "cleanup": False,
         "json_output": True,
     }
+
+
+def test_asset_search_eval_tag_cli_forwards_options(monkeypatch):
+    captured = {}
+
+    def fake_tag(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(asset_search_eval, "tag", fake_tag)
+
+    result = runner.invoke(
+        app,
+        [
+            "--base-url",
+            "http://127.0.0.1:18200",
+            "--env-file",
+            ".env",
+            "--service-api-key",
+            "test-token",
+            "--caller-id",
+            "default",
+            "--timeout",
+            "600",
+            "--poll-interval",
+            "0.5",
+            "--output-dir",
+            "poc/asset-vector/reports/evals/full-run",
+            "--json",
+            "asset-search-eval",
+            "tag",
+            "--confirm-run",
+            "--confirm-cost",
+            "--confirm-full-batch",
+            "--client-request-id",
+            "eval-client-1",
+            "--dataset",
+            "full",
+            "--limit",
+            "2",
+            "--batch-size",
+            "3",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "confirm_run": True,
+        "confirm_cost": True,
+        "confirm_full_batch": True,
+        "api_url": "http://127.0.0.1:18200",
+        "env_file": ".env",
+        "allow_remote_api": False,
+        "service_api_key": "test-token",
+        "caller_id": "default",
+        "timeout_seconds": 600,
+        "poll_interval_seconds": 0.5,
+        "client_request_id": "eval-client-1",
+        "dataset": "full",
+        "item_limit": 2,
+        "batch_size": 3,
+        "output_dir": "poc/asset-vector/reports/evals/full-run",
+        "json_output": True,
+    }
+
+
+def test_asset_search_eval_index_cli_forwards_vector_upsert_input(monkeypatch):
+    captured = {}
+
+    def fake_index(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(asset_search_eval, "index", fake_index)
+
+    result = runner.invoke(
+        app,
+        [
+            "--base-url",
+            "http://127.0.0.1:18200",
+            "--output-dir",
+            "poc/asset-vector/reports/evals/full-run",
+            "asset-search-eval",
+            "index",
+            "--confirm-run",
+            "--confirm-cost",
+            "--vector-upsert-input",
+            "poc/asset-vector/reports/evals/full-run/vector-upsert-input.json",
+            "--batch-size",
+            "4",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["confirm_run"] is True
+    assert captured["confirm_cost"] is True
+    assert captured["api_url"] == "http://127.0.0.1:18200"
+    assert captured["vector_upsert_input"] == "poc/asset-vector/reports/evals/full-run/vector-upsert-input.json"
+    assert captured["batch_size"] == 4
+    assert captured["output_dir"] == "poc/asset-vector/reports/evals/full-run"
+
+
+def test_asset_search_eval_search_cli_forwards_index_state(monkeypatch):
+    captured = {}
+
+    def fake_search(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(asset_search_eval, "search", fake_search)
+
+    result = runner.invoke(
+        app,
+        [
+            "--output-dir",
+            "poc/asset-vector/reports/evals/full-run/search-v1",
+            "asset-search-eval",
+            "search",
+            "--confirm-cost",
+            "--dataset",
+            "regression",
+            "--limit",
+            "5",
+            "--index-state",
+            "poc/asset-vector/reports/evals/full-run/index-state.json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["confirm_cost"] is True
+    assert captured["dataset"] == "regression"
+    assert captured["item_limit"] == 5
+    assert captured["index_state"] == "poc/asset-vector/reports/evals/full-run/index-state.json"
+    assert captured["output_dir"] == "poc/asset-vector/reports/evals/full-run/search-v1"
+
+
+def test_asset_search_eval_cleanup_cli_requires_index_state():
+    result = runner.invoke(app, ["asset-search-eval", "cleanup", "--confirm-run"])
+
+    assert result.exit_code == 2
+    assert "requires --index-state" in result.stderr
+
+
+def test_asset_search_eval_cleanup_cli_forwards_options(monkeypatch):
+    captured = {}
+
+    def fake_cleanup_index(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(asset_search_eval, "cleanup_index", fake_cleanup_index)
+
+    result = runner.invoke(
+        app,
+        [
+            "--output-dir",
+            "poc/asset-vector/reports/evals/full-run",
+            "asset-search-eval",
+            "cleanup",
+            "--confirm-run",
+            "--index-state",
+            "poc/asset-vector/reports/evals/full-run/index-state.json",
+            "--batch-size",
+            "4",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["confirm_run"] is True
+    assert captured["index_state"] == "poc/asset-vector/reports/evals/full-run/index-state.json"
+    assert captured["batch_size"] == 4
+    assert captured["output_dir"] == "poc/asset-vector/reports/evals/full-run"
 
 
 def test_smoke_list_outputs_human_readable_table():
