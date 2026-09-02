@@ -19,7 +19,7 @@ import numpy as np
 import typer
 import yaml
 
-from app.integrations.triton_audio_stem import (
+from app.tools.providers.triton_audio_stem import (
     TritonAudioStemClient,
     TritonAudioStemConfig,
     TritonAudioStemIntegrationError,
@@ -27,7 +27,7 @@ from app.integrations.triton_audio_stem import (
 from scripts.jobs import formatters
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-MODEL_ASSET_PATH = ROOT_DIR / "app/jobs/types/audio_stem_separation/model_asset.yaml"
+MODEL_ASSET_PATH = ROOT_DIR / "app/business_packages/audio_stem_separation/model_asset.yaml"
 DEFAULT_OUTPUT_DIR = ".run/triton-bench"
 DEFAULT_CONCURRENCY = "1,2,4"
 SAFE_MAX_CONCURRENCY = 4

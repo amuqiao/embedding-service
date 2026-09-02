@@ -10,7 +10,7 @@ from app.ai.capabilities import TEXT_GENERATION
 
 
 APP_DIR = Path(__file__).resolve().parents[2]
-JOB_MODEL_CONFIG_ROOT = APP_DIR / "jobs" / "types"
+JOB_MODEL_CONFIG_ROOT = APP_DIR / "business_packages"
 JOB_MODEL_CONFIG_FILENAME = "models.yaml"
 JOB_MODEL_CONFIG_TOP_LEVEL_KEYS = frozenset({"version", "job_type", "model_slots"})
 MODEL_SLOT_FIELDS = frozenset(
@@ -207,4 +207,3 @@ def poster_title_image_generation_allowed_model_ids() -> tuple[str, ...]:
 
 def poster_title_image_style_probe_model_id() -> str:
     return get_poster_title_image_model_selection().style_probe_model_id
-

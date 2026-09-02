@@ -8,20 +8,20 @@ import numpy as np
 import pytest
 import yaml
 
-from app.capabilities.media import audio_input as media_audio_input
+from app.tools.private import audio_input as media_audio_input
 from app.core.exceptions import AppError
-from app.integrations.object_storage import bare_sha256, sha256_digest
-from app.integrations.triton_audio_stem import TritonAudioStemConfig, TritonAudioStemClient, TritonAudioStemInferenceError
+from app.tools.private.object_storage_refs import bare_sha256, sha256_digest
+from app.tools.providers.triton_audio_stem import TritonAudioStemConfig, TritonAudioStemClient, TritonAudioStemInferenceError
 from app.jobs import registry as job_registry
-from app.jobs.types import audio_stem_shared
-from app.jobs.types import audio_stem_separation_triton as triton_pkg
-from app.jobs.types.audio_stem_separation import executor as audio_executor
-from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
-from app.jobs.types.audio_stem_separation.errors import AUDIO_STEM_RUNTIME_UNAVAILABLE
-from app.jobs.types.audio_stem_separation_triton import executor as triton_executor
-from app.jobs.types.audio_stem_separation_triton import storage_adapter as triton_storage_adapter
-from app.jobs.types.audio_stem_separation_triton.storage_adapter import AudioStemSeparationTritonStorageAdapter
-from app.jobs.types.audio_stem_separation_triton.storage_policy import AudioStemSeparationTritonStoragePolicy
+from app.business_packages.audio_stem_separation import shared as audio_stem_shared
+from app.business_packages import audio_stem_separation_triton as triton_pkg
+from app.business_packages.audio_stem_separation import executor as audio_executor
+from app.business_packages.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
+from app.business_packages.audio_stem_separation.errors import AUDIO_STEM_RUNTIME_UNAVAILABLE
+from app.business_packages.audio_stem_separation_triton import executor as triton_executor
+from app.business_packages.audio_stem_separation_triton import storage_adapter as triton_storage_adapter
+from app.business_packages.audio_stem_separation_triton.storage_adapter import AudioStemSeparationTritonStorageAdapter
+from app.business_packages.audio_stem_separation_triton.storage_policy import AudioStemSeparationTritonStoragePolicy
 from app.business_packages.register import register_all_business_packages
 from app.models.job import Job
 from app.schemas.jobs import AudioStemSeparationTritonParams, AudioStemSeparationTritonResult
@@ -67,7 +67,6 @@ def test_triton_storage_adapter_uses_settings_oss_endpoint_for_aliyun_config():
 def _media_input_plan(params: dict) -> dict:
     input_audio = params["input_audio"]
     return {
-        "capability_ref": "media.audio_input:2",
         "tool_refs": ("object_storage_read:1", "audio_decode_normalize:1"),
         "source": {
             "provider": "aliyun_oss",
@@ -420,7 +419,7 @@ def test_audio_stem_separation_triton_runtime_fields_reflect_model_asset(monkeyp
         "segment_seconds": 7.8,
         "overlap_ratio": 0.25,
     }
-    assert fields["media_input_plan"]["capability_ref"] == "media.audio_input:2"
+    assert fields["media_input_plan"]["tool_refs"] == ("object_storage_read:1", "audio_decode_normalize:1")
     assert fields["media_input_plan"]["source"]["content_hash"] == f"sha256:{ref['sha256']}"
     assert fields["media_input_plan"]["decode"] == {
         "source_content_type": "audio/wav",

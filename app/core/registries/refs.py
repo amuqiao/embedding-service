@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import re
 from typing import Literal
 
-RegistryRefKind = Literal["capability_ref", "tool_ref"]
+RegistryRefKind = Literal["tool_ref"]
 
 _KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 _VERSION_PATTERN = re.compile(r"^[1-9][0-9]*$")
@@ -33,10 +33,6 @@ def parse_versioned_ref(value: str, *, kind: RegistryRefKind) -> VersionedRegist
     if not _VERSION_PATTERN.fullmatch(version):
         raise ValueError(f"{kind} has invalid version: {value!r}")
     return VersionedRegistryRef(kind=kind, key=key, version=version)
-
-
-def require_capability_ref(value: str) -> str:
-    return parse_versioned_ref(value, kind="capability_ref").value
 
 
 def require_tool_ref(value: str) -> str:

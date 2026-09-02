@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.logging import LogEvent
 from app.ai.adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
-from app.integrations.image import (
+from app.tools.private.image import (
     POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
     POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES,
     POSTER_TITLE_IMAGE_REFERENCE_MAX_WIDTH,
@@ -25,16 +25,16 @@ from app.integrations.image import (
     transparent_title_layer_from_green_screen_oss_url,
     validate_image_bytes,
 )
-from app.integrations.object_storage import bare_sha256, sha256_digest
-from app.integrations.storage import LocalObjectStorage
-from app.jobs.types.poster_title_image import PosterTitleImageJob
-from app.jobs.types.poster_title_image.errors import (
+from app.tools.private.object_storage_refs import bare_sha256, sha256_digest
+from app.tools.private.storage import LocalObjectStorage
+from app.business_packages.poster_title_image import PosterTitleImageJob
+from app.business_packages.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
     POSTER_TITLE_IMAGE_REFERENCE_INVALID,
 )
-from app.jobs.types.poster_title_image import storage_adapter as poster_storage_adapter
-from app.jobs.types.poster_title_image.storage_policy import PosterTitleImageStoragePolicy
-from app.jobs.types.poster_title_image.storage_adapter import PosterTitleImageStorageAdapter
+from app.business_packages.poster_title_image import storage_adapter as poster_storage_adapter
+from app.business_packages.poster_title_image.storage_policy import PosterTitleImageStoragePolicy
+from app.business_packages.poster_title_image.storage_adapter import PosterTitleImageStorageAdapter
 from app.models.job import Job
 from app.schemas.billing import BillingEnvelope
 from app.schemas.jobs import (
@@ -88,7 +88,7 @@ def _storage_settings(
 
 def _patch_poster_executor_settings(monkeypatch, *, storage: SimpleNamespace | None = None) -> None:
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.settings",
+        "app.business_packages.poster_title_image.executor.settings",
         SimpleNamespace(
             job=_poster_job_settings(),
             registry=settings.registry,
@@ -429,15 +429,15 @@ def test_poster_title_image_params_apply_delivery_contract_constraints():
 
 
 def test_poster_title_image_runtime_fields_preserve_system_alias(monkeypatch):
-    from app.jobs.types.poster_title_image import (
+    from app.business_packages.poster_title_image import (
         PosterTitleImageGenerateItemJob,
         PosterTitleImageJoinJob,
         PosterTitleImageStyleProbeJob,
     )
 
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._image_adapter", lambda _model_id=None: "openai_responses")
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_route_config_hash", lambda _model_id: ROUTE_HASH)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._generation_route_config_hash", lambda _model_id: ROUTE_HASH)
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._image_adapter", lambda _model_id=None: "openai_responses")
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._style_probe_route_config_hash", lambda _model_id: ROUTE_HASH)
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._generation_route_config_hash", lambda _model_id: ROUTE_HASH)
     ref = _url_ref("reference/title.png", b"x")
     item = _params(ref)["items"][0]
     style_probe_params = {
@@ -499,7 +499,7 @@ def test_poster_title_image_params_still_reject_duplicate_item_id():
 
 
 def test_poster_title_image_title_prompt_allows_automatic_wrapping_without_newline():
-    from app.jobs.types.poster_title_image.executor import _title_prompt
+    from app.business_packages.poster_title_image.executor import _title_prompt
 
     ref = _url_ref("reference/title.png", b"x")
     item = PosterTitleImageParams.model_validate(_params(ref)).items[0]
@@ -524,7 +524,7 @@ def test_poster_title_image_title_prompt_allows_automatic_wrapping_without_newli
 
 
 def test_poster_title_image_title_prompt_uses_configured_max_title_lines(monkeypatch):
-    from app.jobs.types.poster_title_image import executor as poster_executor
+    from app.business_packages.poster_title_image import executor as poster_executor
 
     ref = _url_ref("reference/title.png", b"x")
     item = PosterTitleImageParams.model_validate(_params(ref)).items[0]
@@ -544,7 +544,7 @@ def test_poster_title_image_title_prompt_uses_configured_max_title_lines(monkeyp
 
 
 def test_poster_title_image_title_prompt_preserves_caller_hard_line_breaks():
-    from app.jobs.types.poster_title_image.executor import _title_prompt
+    from app.business_packages.poster_title_image.executor import _title_prompt
 
     ref = _url_ref("reference/title.png", b"x")
     params = _params(ref)
@@ -576,7 +576,7 @@ def test_poster_title_image_title_prompt_preserves_caller_hard_line_breaks():
 
 
 def test_poster_title_image_item_node_key_uses_stable_bare_hash_suffix():
-    from app.jobs.types.poster_title_image.executor import _item_node_key
+    from app.business_packages.poster_title_image.executor import _item_node_key
 
     assert _item_node_key("es") == f"item.es.{hashlib.sha256(b'es').hexdigest()[:16]}"
     assert "sha256:" not in _item_node_key("es")
@@ -640,7 +640,7 @@ def test_poster_title_image_params_rejects_log_and_path_unsafe_item_id(item_id):
 
 def test_poster_title_image_rejects_items_above_config(monkeypatch):
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.settings",
+        "app.business_packages.poster_title_image.executor.settings",
         SimpleNamespace(
             job=_poster_job_settings(max_items=1),
             registry=SimpleNamespace(
@@ -669,7 +669,7 @@ def test_poster_title_image_rejects_items_above_config(monkeypatch):
 
 def test_poster_title_image_rejects_draw_count_above_config(monkeypatch):
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.settings",
+        "app.business_packages.poster_title_image.executor.settings",
         SimpleNamespace(
             job=_poster_job_settings(max_draw_count=1),
             registry=SimpleNamespace(
@@ -695,7 +695,7 @@ def test_poster_title_image_rejects_draw_count_above_config(monkeypatch):
 
 def test_poster_title_image_accepts_configured_reference_oss_allowlist(monkeypatch):
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.settings",
+        "app.business_packages.poster_title_image.executor.settings",
         SimpleNamespace(
             job=_poster_job_settings(),
             registry=SimpleNamespace(
@@ -970,7 +970,7 @@ def test_poster_title_image_create_request_rejects_unavailable_configured_genera
     from app.services.jobs import _validate_create_request
 
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.settings",
+        "app.business_packages.poster_title_image.executor.settings",
         SimpleNamespace(
             job=_poster_job_settings(),
             registry=SimpleNamespace(
@@ -981,11 +981,11 @@ def test_poster_title_image_create_request_rejects_unavailable_configured_genera
         ),
     )
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.poster_title_image_generation_default_model_id",
+        "app.business_packages.poster_title_image.executor.poster_title_image_generation_default_model_id",
         lambda: "not-an-image-model",
     )
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.poster_title_image_generation_allowed_model_ids",
+        "app.business_packages.poster_title_image.executor.poster_title_image_generation_allowed_model_ids",
         lambda: ("not-an-image-model",),
     )
     register_all_business_packages()
@@ -1014,14 +1014,14 @@ def test_style_probe_response_model_supports_reference_image_input():
 
 
 def test_poster_title_image_response_model_requires_image_generation_tool(monkeypatch):
-    from app.jobs.types.poster_title_image.executor import _validate_style_probe_model
+    from app.business_packages.poster_title_image.executor import _validate_style_probe_model
 
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.poster_title_image_style_probe_model_id",
+        "app.business_packages.poster_title_image.executor.poster_title_image_style_probe_model_id",
         lambda: "gpt-4o",
     )
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor._image_adapter",
+        "app.business_packages.poster_title_image.executor._image_adapter",
         lambda _model_id=None: "openai_responses",
     )
 
@@ -1030,14 +1030,14 @@ def test_poster_title_image_response_model_requires_image_generation_tool(monkey
 
 
 def test_poster_title_image_images_adapter_does_not_require_image_generation_tool(monkeypatch):
-    from app.jobs.types.poster_title_image.executor import _validate_style_probe_model
+    from app.business_packages.poster_title_image.executor import _validate_style_probe_model
 
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.poster_title_image_style_probe_model_id",
+        "app.business_packages.poster_title_image.executor.poster_title_image_style_probe_model_id",
         lambda: "gpt-4o",
     )
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor._image_adapter",
+        "app.business_packages.poster_title_image.executor._image_adapter",
         lambda _model_id=None: "openai_images",
     )
 
@@ -1117,11 +1117,11 @@ def test_validate_image_bytes_accepts_png_jpeg_and_webp():
 
 
 def test_poster_title_image_reference_image_validation_uses_business_error(monkeypatch):
-    from app.jobs.types.poster_title_image.executor import _load_reference_image_from_ref
+    from app.business_packages.poster_title_image.executor import _load_reference_image_from_ref
 
     data = b"not an image"
     adapter = _FakePosterStorageAdapter(reference_data=data)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._storage_adapter", lambda: adapter)
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._storage_adapter", lambda: adapter)
 
     with pytest.raises(AppError) as exc:
         _load_reference_image_from_ref(_url_ref("reference/title.png", data))
@@ -1131,7 +1131,7 @@ def test_poster_title_image_reference_image_validation_uses_business_error(monke
 
 
 def test_poster_title_image_reference_read_uses_public_url_not_output_storage(monkeypatch):
-    from app.jobs.types.poster_title_image.executor import _load_reference_image_from_ref
+    from app.business_packages.poster_title_image.executor import _load_reference_image_from_ref
 
     data = _transparent_reference_png_bytes()
     ref = _url_ref("reference/title.png", data, bucket="cpp-rs-dev", region="ap-southeast-1")
@@ -1139,13 +1139,13 @@ def test_poster_title_image_reference_read_uses_public_url_not_output_storage(mo
     adapter = _FakePosterStorageAdapter(reference_data=data)
 
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.settings",
+        "app.business_packages.poster_title_image.executor.settings",
         SimpleNamespace(
             job=_poster_job_settings(),
             storage=_storage_settings(),
         ),
     )
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._storage_adapter", lambda: adapter)
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._storage_adapter", lambda: adapter)
 
     result = _load_reference_image_from_ref(ref)
 
@@ -1155,7 +1155,7 @@ def test_poster_title_image_reference_read_uses_public_url_not_output_storage(mo
 
 
 def test_poster_title_image_reference_accepts_configured_cdn_public_url(monkeypatch):
-    from app.jobs.types.poster_title_image.executor import _load_reference_image_from_ref
+    from app.business_packages.poster_title_image.executor import _load_reference_image_from_ref
 
     data = _transparent_reference_png_bytes()
     ref = _url_ref("reference/title.png", data, bucket="cpp-rs-dev", region="ap-southeast-1")
@@ -1163,7 +1163,7 @@ def test_poster_title_image_reference_accepts_configured_cdn_public_url(monkeypa
     adapter = _FakePosterStorageAdapter(reference_data=data)
 
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.settings",
+        "app.business_packages.poster_title_image.executor.settings",
         SimpleNamespace(
             job=_poster_job_settings(),
             storage=_storage_settings(
@@ -1173,7 +1173,7 @@ def test_poster_title_image_reference_accepts_configured_cdn_public_url(monkeypa
             ),
         ),
     )
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._storage_adapter", lambda: adapter)
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._storage_adapter", lambda: adapter)
 
     result = _load_reference_image_from_ref(ref)
 
@@ -1330,13 +1330,13 @@ def test_validate_image_bytes_rejects_oversized_bytes():
 
 
 def test_poster_title_image_missing_default_prompt_is_runtime_config_error(monkeypatch):
-    from app.jobs.types.poster_title_image.executor import _default_prompt_blocks
+    from app.business_packages.poster_title_image.executor import _default_prompt_blocks
 
     def fake_get_prompt_block_default(job_type, block_key):
         raise RuntimeError(f"missing prompt block: {block_key}")
 
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.get_prompt_block_default",
+        "app.business_packages.poster_title_image.executor.get_prompt_block_default",
         fake_get_prompt_block_default,
     )
 
@@ -1348,7 +1348,7 @@ def test_poster_title_image_missing_default_prompt_is_runtime_config_error(monke
 
 @pytest.mark.asyncio
 async def test_poster_title_image_generate_item_leaf_generates_transparent_title_layer(monkeypatch, tmp_path, caplog):
-    from app.jobs.types.poster_title_image import PosterTitleImageGenerateItemJob
+    from app.business_packages.poster_title_image import PosterTitleImageGenerateItemJob
 
     class RecordingLocalObjectStorage(LocalObjectStorage):
         def __init__(self, root):
@@ -1417,22 +1417,22 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
         output_target=output_target,
         public_endpoint="aigc-datas.epubgame.com",
     )
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._storage_adapter", lambda: storage_adapter)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_provider_model", lambda _model_id: "gpt-5.5")
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._storage_adapter", lambda: storage_adapter)
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._style_probe_provider_model", lambda _model_id: "gpt-5.5")
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor._image_adapter",
+        "app.business_packages.poster_title_image.executor._image_adapter",
         lambda _model_id=None: "openai_images",
     )
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._workflow_children", fake_workflow_children)
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.settings",
+        "app.business_packages.poster_title_image.executor.settings",
         SimpleNamespace(
             job=settings.job,
             storage=_storage_settings(public_endpoint="aigc-datas.epubgame.com"),
         ),
     )
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.generate_image_with_ledger",
+        "app.business_packages.poster_title_image.executor.generate_image_with_ledger",
         fake_generate_image_with_ledger,
     )
 
@@ -1472,7 +1472,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
         created_at=datetime.now(timezone.utc),
     )
 
-    caplog.set_level(logging.INFO, logger="app.jobs.types.poster_title_image.executor")
+    caplog.set_level(logging.INFO, logger="app.business_packages.poster_title_image.executor")
     result = await PosterTitleImageGenerateItemJob()._execute(job, object())
 
     item = result["item"]
@@ -1539,7 +1539,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
 
 @pytest.mark.asyncio
 async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeypatch, tmp_path):
-    from app.jobs.types.poster_title_image import PosterTitleImageGenerateItemJob
+    from app.business_packages.poster_title_image import PosterTitleImageGenerateItemJob
 
     class RecordingLocalObjectStorage(LocalObjectStorage):
         def __init__(self, root):
@@ -1611,11 +1611,11 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
         object_storage=local_storage,
         output_target=output_target,
     )
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._storage_adapter", lambda: storage_adapter)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._style_probe_provider_model", lambda _model_id: "gpt-5.5")
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._storage_adapter", lambda: storage_adapter)
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._style_probe_provider_model", lambda _model_id: "gpt-5.5")
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._workflow_children", fake_workflow_children)
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.generate_image_with_ledger",
+        "app.business_packages.poster_title_image.executor.generate_image_with_ledger",
         fake_generate_image_with_ledger,
     )
 
@@ -1686,8 +1686,8 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
 
 @pytest.mark.asyncio
 async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeypatch, caplog):
-    from app.jobs.types.poster_title_image import PosterTitleImageJoinJob
-    from app.jobs.types.poster_title_image.executor import _item_node_key
+    from app.business_packages.poster_title_image import PosterTitleImageJoinJob
+    from app.business_packages.poster_title_image.executor import _item_node_key
 
     ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
     params = _params(ref)
@@ -1722,7 +1722,7 @@ async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeyp
             ),
         ]
 
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._workflow_children", fake_workflow_children)
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._workflow_children", fake_workflow_children)
     root_id = uuid.uuid4()
     job = Job(
         id=uuid.uuid4(),
@@ -1737,7 +1737,7 @@ async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeyp
         created_at=datetime.now(timezone.utc),
     )
 
-    caplog.set_level(logging.INFO, logger="app.jobs.types.poster_title_image.executor")
+    caplog.set_level(logging.INFO, logger="app.business_packages.poster_title_image.executor")
     result = await PosterTitleImageJoinJob()._execute(job, object())
 
     assert result["batch_summary"] == {"total": 2, "succeeded": 2, "failed": 0, "running": 0, "pending": 0}
@@ -1759,8 +1759,8 @@ async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeyp
 
 @pytest.mark.asyncio
 async def test_poster_title_image_running_result_contains_only_succeeded_items(monkeypatch):
-    from app.jobs.types.poster_title_image import PosterTitleImageJob
-    from app.jobs.types.poster_title_image.executor import _item_node_key
+    from app.business_packages.poster_title_image import PosterTitleImageJob
+    from app.business_packages.poster_title_image.executor import _item_node_key
 
     ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
     params = _params(ref)
@@ -1829,7 +1829,7 @@ async def test_poster_title_image_running_result_contains_only_succeeded_items(m
 
 @pytest.mark.asyncio
 async def test_poster_title_image_running_result_is_null_before_first_succeeded_item(monkeypatch):
-    from app.jobs.types.poster_title_image import PosterTitleImageJob
+    from app.business_packages.poster_title_image import PosterTitleImageJob
 
     ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
     root_id = uuid.uuid4()
@@ -1862,8 +1862,8 @@ async def test_poster_title_image_running_result_is_null_before_first_succeeded_
 
 @pytest.mark.asyncio
 async def test_poster_title_image_failed_result_reuses_succeeded_item_subset(monkeypatch):
-    from app.jobs.types.poster_title_image import PosterTitleImageJob
-    from app.jobs.types.poster_title_image.executor import _item_node_key
+    from app.business_packages.poster_title_image import PosterTitleImageJob
+    from app.business_packages.poster_title_image.executor import _item_node_key
 
     ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
     params = _params(ref)
@@ -1924,8 +1924,8 @@ async def test_poster_title_image_failed_result_reuses_succeeded_item_subset(mon
 
 @pytest.mark.asyncio
 async def test_get_job_response_projects_poster_title_image_running_result(monkeypatch):
-    from app.jobs.types.poster_title_image import PosterTitleImageJob
-    from app.jobs.types.poster_title_image.executor import _item_node_key
+    from app.business_packages.poster_title_image import PosterTitleImageJob
+    from app.business_packages.poster_title_image.executor import _item_node_key
     from app.services.jobs import get_job_response
 
     ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
@@ -1988,8 +1988,8 @@ async def test_get_job_response_projects_poster_title_image_running_result(monke
 
 @pytest.mark.asyncio
 async def test_get_job_response_preserves_succeeded_items_when_poster_title_image_failed(monkeypatch):
-    from app.jobs.types.poster_title_image import PosterTitleImageJob
-    from app.jobs.types.poster_title_image.executor import _item_node_key
+    from app.business_packages.poster_title_image import PosterTitleImageJob
+    from app.business_packages.poster_title_image.executor import _item_node_key
     from app.services.jobs import get_job_response
 
     ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
@@ -2123,8 +2123,8 @@ def test_callback_body_preserves_poster_title_image_dimensions():
 
 @pytest.mark.asyncio
 async def test_callback_body_for_failed_poster_title_image_snapshot_preserves_dimensions(monkeypatch):
-    from app.jobs.types.poster_title_image import PosterTitleImageJob
-    from app.jobs.types.poster_title_image.executor import _item_node_key
+    from app.business_packages.poster_title_image import PosterTitleImageJob
+    from app.business_packages.poster_title_image.executor import _item_node_key
     from app.services.callbacks import build_callback_body_for_job
 
     ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
@@ -2204,7 +2204,7 @@ async def test_callback_body_for_failed_poster_title_image_snapshot_preserves_di
 
 @pytest.mark.asyncio
 async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, tmp_path, caplog):
-    from app.jobs.types.poster_title_image import PosterTitleImageStyleProbeJob
+    from app.business_packages.poster_title_image import PosterTitleImageStyleProbeJob
 
     local_storage = LocalObjectStorage(tmp_path)
     reference = _transparent_reference_png_bytes()
@@ -2225,8 +2225,8 @@ async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, 
         return "bold stone title letters"
 
     storage_adapter = _FakePosterStorageAdapter(reference_data=reference)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._storage_adapter", lambda: storage_adapter)
-    monkeypatch.setattr("app.jobs.types.poster_title_image.executor._probe_style", fake_probe_style)
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._storage_adapter", lambda: storage_adapter)
+    monkeypatch.setattr("app.business_packages.poster_title_image.executor._probe_style", fake_probe_style)
     root_id = uuid.uuid4()
     attempt_id = uuid.uuid4()
     job_id = uuid.uuid4()
@@ -2269,7 +2269,7 @@ async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, 
         created_at=datetime.now(timezone.utc),
     )
 
-    caplog.set_level(logging.INFO, logger="app.jobs.types.poster_title_image.executor")
+    caplog.set_level(logging.INFO, logger="app.business_packages.poster_title_image.executor")
     result = await PosterTitleImageStyleProbeJob()._execute(job, object())
 
     assert result["style_key"] == "style-1"
@@ -2295,7 +2295,7 @@ async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_style_probe_uses_ai_ledger(monkeypatch):
-    from app.jobs.types.poster_title_image.executor import _probe_style
+    from app.business_packages.poster_title_image.executor import _probe_style
 
     recorded = {}
 
@@ -2309,7 +2309,7 @@ async def test_style_probe_uses_ai_ledger(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor.generate_text_with_images_with_ledger",
+        "app.business_packages.poster_title_image.executor.generate_text_with_images_with_ledger",
         fake_generate_text_with_images_with_ledger,
     )
     job = Job(

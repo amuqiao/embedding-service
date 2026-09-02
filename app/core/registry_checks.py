@@ -5,13 +5,12 @@ import importlib
 from fastapi.routing import APIRoute
 
 from app.api.operations import all_operation_specs
-from app.capabilities import registry as capability_registry
 from app.core import prompt_templates
 from app.core.config import APPLICATION_ENV_FIELD_MAP
 from app.core.config import settings
 from app.core.error_registry import all_error_specs
 from app.core.logging import all_log_events
-from app.core.registries.refs import require_capability_ref, require_tool_ref
+from app.core.registries.refs import require_tool_ref
 from app.jobs.base import (
     ATTEMPT_PURPOSES,
     EXECUTION_MODES,
@@ -229,8 +228,8 @@ def validate_job_type_registry() -> None:
         missing_events = _missing(set(spec.log_events), known_events)
         if missing_events:
             raise ValueError(f"job_type {spec.job_type} references unknown log events: {missing_events}")
-        for capability_ref in spec.allowed_capability_refs:
-            require_capability_ref(capability_ref)
+        for tool_ref in spec.required_tool_refs:
+            require_tool_ref(tool_ref)
         referenced_schemas = {
             spec.params_schema,
             spec.runtime_fields_schema,
@@ -311,39 +310,18 @@ def validate_job_type_registry() -> None:
                 )
 
 
-def validate_capability_tool_registry() -> None:
+def validate_tool_registry() -> None:
     error_specs = all_error_specs()
     known_errors = set(error_specs)
     known_events = all_log_events()
     known_schemas = all_schema_names()
-    known_capability_refs = capability_registry.all_capability_refs()
     known_tool_refs = tool_registry.all_tool_refs()
     known_setting_paths = {".".join(path) for path in APPLICATION_ENV_FIELD_MAP.values()}
 
     for job_type, spec in job_registry.all_job_type_specs().items():
-        for capability_ref in spec.allowed_capability_refs:
-            normalized_ref = require_capability_ref(capability_ref)
-            if normalized_ref not in known_capability_refs:
-                raise ValueError(f"job_type {job_type} references unknown capability_ref: {normalized_ref}")
-
-    for capability_ref, definition in capability_registry.all_capability_definitions().items():
-        owner = f"capability {capability_ref}"
-        if capability_ref != definition.capability_ref:
-            raise ValueError(f"capability registry key mismatch: {capability_ref} != {definition.capability_ref}")
-        require_capability_ref(definition.capability_ref)
-        missing_schemas = _missing({definition.plan_schema, definition.result_schema}, known_schemas)
-        if missing_schemas:
-            raise ValueError(f"{owner} references unknown schemas: {missing_schemas}")
-        _resolve_entrypoint(definition.service_entrypoint, owner=owner, field_name="service_entrypoint")
-        missing_tools = _missing({require_tool_ref(ref) for ref in definition.allowed_tool_refs}, known_tool_refs)
+        missing_tools = _missing({require_tool_ref(ref) for ref in spec.required_tool_refs}, known_tool_refs)
         if missing_tools:
-            raise ValueError(f"{owner} references unknown tool_refs: {missing_tools}")
-        missing_errors = _missing(set(definition.error_codes), known_errors)
-        if missing_errors:
-            raise ValueError(f"{owner} references unknown errors: {missing_errors}")
-        missing_events = _missing(set(definition.log_events), known_events)
-        if missing_events:
-            raise ValueError(f"{owner} references unknown log events: {missing_events}")
+            raise ValueError(f"job_type {job_type} references unknown tool_refs: {missing_tools}")
 
     for tool_ref, definition in tool_registry.all_tool_definitions().items():
         owner = f"tool {tool_ref}"
@@ -523,7 +501,7 @@ def validate_all_registries(app=None) -> None:
     validate_error_registry()
     validate_operation_registry()
     validate_job_type_registry()
-    validate_capability_tool_registry()
+    validate_tool_registry()
     validate_workflow_registry()
     if app is not None:
         validate_app_route_operations(app)

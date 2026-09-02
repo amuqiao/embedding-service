@@ -355,5 +355,5 @@ def test_oss_cli_upload_image_prints_public_url_without_secret(tmp_path, capsys,
 def test_oss_cli_no_longer_imports_legacy_oss_paths():
     source = Path(oss_cli.__file__).read_text(encoding="utf-8")
 
-    assert "app.integrations.aliyun_oss" not in source
+    assert "app.tools.providers.aliyun_oss" not in source
     assert "smoke.flows.oss.image_upload" not in source

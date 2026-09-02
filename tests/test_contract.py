@@ -662,7 +662,7 @@ async def test_job_response_exposes_terminal_usage_projection(monkeypatch):
 
 
 def test_arithmetic_job_view_result_uses_registered_result_schema(monkeypatch):
-    from app.jobs.types.arithmetic import ArithmeticJob
+    from app.business_packages.arithmetic import ArithmeticJob
 
     monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: ArithmeticJob())
 

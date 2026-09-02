@@ -70,7 +70,7 @@ Smoke 全局选项统一放在场景命令前，例如 `--base-url`、`--env-fil
 
 当前场景以 `python -m smoke --json list` 为事实源；其中 `entrypoints` 是可直接执行的入口。业务 Job 场景会真实提交 Job、等待终态并查询结果证据；provider probe/helper 必须显式确认费用或上传副作用。
 
-`example-lifecycle-probe` 使用 `visibility=demo` 的标准探针 Job，仅用于 `local` / `dev` 平台链路验收；它不调用真实模型，不产生模型费用。Job 样板代码在 `app/jobs/types/example_lifecycle_probe/`，smoke 样板代码在 `smoke/flows/examples/lifecycle_probe.py`。配置 `--local-callback` 时可以验证 callbacker 投递；普通成功链路不会证明 reconciler 被触发。
+`example-lifecycle-probe` 使用 `visibility=demo` 的标准探针 Job，仅用于 `local` / `dev` 平台链路验收；它不调用真实模型，不产生模型费用。Job 样板代码在 `app/business_packages/example_lifecycle_probe/`，smoke 样板代码在 `smoke/flows/examples/lifecycle_probe.py`。配置 `--local-callback` 时可以验证 callbacker 投递；普通成功链路不会证明 reconciler 被触发。
 
 `example-reconciler-probe` 使用同一个标准探针 Job，但会在 Job 终态后注入“有 callback_url 但缺失 callback_outbox”的 local/dev 数据漂移，用来验收真实 `reconciler` 创建 callback outbox，再由真实 `callbacker` 投递到 receiver。该场景必须显式传入 `--confirm-run` 和 `--confirm-fault-injection`，只允许 loopback API 与 `APP_ENV=local|dev`。
 
@@ -173,7 +173,7 @@ smoke/scenarios.py
 scripts/smoke.sh
 ```
 
-其中 `smoke/harness/` 是不用动的公共层；`smoke/cli.py` 和 `smoke/scenarios.py` 是项目装配层。普通 FastAPI 项目复制后保留 `list/health/ready`，删除或替换当前 Job/业务命令即可，不需要复制 `smoke/jobs/` 和当前 `smoke/flows/<domain>/`。Job 服务项目再额外复制 `smoke/jobs/`、`smoke/flows/examples/lifecycle_probe.py` 和 `app/jobs/types/example_lifecycle_probe/` 这组标准样板。
+其中 `smoke/harness/` 是不用动的公共层；`smoke/cli.py` 和 `smoke/scenarios.py` 是项目装配层。普通 FastAPI 项目复制后保留 `list/health/ready`，删除或替换当前 Job/业务命令即可，不需要复制 `smoke/jobs/` 和当前 `smoke/flows/<domain>/`。Job 服务项目再额外复制 `smoke/jobs/`、`smoke/flows/examples/lifecycle_probe.py` 和 `app/business_packages/example_lifecycle_probe/` 这组标准样板。
 
 ## 维护规则
 

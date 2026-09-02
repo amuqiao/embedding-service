@@ -405,7 +405,7 @@ def _root_success_result(
 def _root_public_result(root_job: Job, canonical_result: dict[str, Any]) -> dict[str, Any]:
     if root_job.job_type != "poster_title_image":
         return canonical_result
-    from app.jobs.types.poster_title_image.executor import _extract_join_result
+    from app.business_packages.poster_title_image.executor import _extract_join_result
 
     return _extract_join_result(canonical_result)
 

@@ -67,7 +67,7 @@ tools.sh        无默认持久副作用的本地开发辅助工具和只读代�
 云模型厂商 API Key 可用性和账号远端模型列表归属 `ai.sh`。它会访问真实 provider 的 models list 接口，但不提交 Job、不读本项目 `models.yaml` 作为模型列表事实源、不执行模型推理、不产生推理费用。全局模型 catalog、pricing、resolver 和 job model policy 一致性归属 registry / `verify.sh check`。
 音视频素材探测、转码准备和业务输入格式校验归属 `media.sh`；它只处理本地素材文件，不下载模型、不执行推理、不提交 Job、不上传对象存储。
 Triton 直压归属 `triton-bench.sh`；它只直连推理服务，不创建 FastAPI Job，不访问 DB/Redis/OSS，不触发 callback，不替代 `load.sh` 的业务链路压测。
-已注册 tool、capability 和 job_type capability 关系归属 `tools.sh registry` 只读查看；当前治理事实见 `docs/current/registry-governance.md`。
+已注册 operation、job_type、workflow、tool 和 job_type tool 关系归属 `tools.sh registry` 只读查看；当前治理事实见 `docs/current/registry-governance.md`。
 Redis 连接、服务端版本、命令能力、内存、keyspace、Stream 和 broker key 证据归属 `redis.sh`。`k8s.sh`、`jobs.sh` 或业务脚本需要 Redis 证据时只编排或复用该入口，不各自维护 Redis 诊断逻辑。
 对象存储配置摘要、显式远端连通性和显式上传检查归属 `oss.sh`。`verify.sh oss-config` 只是 `oss.sh check` 的验证别名；`k8s.sh check oss --confirm` 只负责 Pod 环境确认和编排 `oss.sh check --remote --confirm`。运维权限不支持 `DeleteObject`，远端连通性检查只执行 `PUT / GET / HEAD`，检查对象会保留在 OSS。
 K8s Pod 内运维归属 `k8s.sh` 入口和 `scripts/k8s/` 下沉实现。`k8s.sh` 只维护 help、参数分发和命令合同，`scripts/k8s/ops.sh` 维护 PostgreSQL / Redis / OSS / dashboard / Alembic 原子动作。

@@ -3,10 +3,11 @@ from pathlib import Path
 import pytest
 
 from app.core.exceptions import AppError
-from app.integrations.object_storage.aliyun_url import parse_aliyun_oss_url
-from app.integrations.object_storage import bare_sha256, normalize_content_hash, sha256_digest
-from app.integrations.object_storage import CanonicalObjectRef
-from app.integrations.storage import AliyunObjectStorage, LocalObjectStorage
+from app.object_storage import PutObjectResult
+from app.tools.private.object_storage_refs.aliyun_url import parse_aliyun_oss_url
+from app.tools.private.object_storage_refs import bare_sha256, normalize_content_hash, sha256_digest
+from app.tools.private.object_storage_refs import CanonicalObjectRef
+from app.tools.private.storage import AliyunObjectStorage, LocalObjectStorage
 
 
 def test_local_object_storage_supports_bytes_and_legacy_text(tmp_path: Path):
@@ -37,11 +38,13 @@ def test_local_object_storage_supports_bytes_and_legacy_text(tmp_path: Path):
 def test_local_object_storage_rejects_path_traversal(tmp_path: Path):
     storage = LocalObjectStorage(tmp_path)
 
-    with pytest.raises(AppError, match="path traversal"):
+    with pytest.raises(AppError) as key_exc:
         storage.write_bytes(bucket="bucket", region="local", key="../escape.bin", data=b"x")
+    assert key_exc.value.code == "INVALID_INPUT"
 
-    with pytest.raises(AppError, match="path traversal"):
+    with pytest.raises(AppError) as bucket_exc:
         storage.write_bytes(bucket="../escape", region="local", key="object.bin", data=b"x")
+    assert bucket_exc.value.code == "INVALID_INPUT"
 
 
 def test_content_hash_helpers_are_strict():
@@ -65,21 +68,27 @@ def test_aliyun_object_storage_keeps_text_compatibility_contract():
             bucket = "bucket"
             region = "ap-southeast-1"
 
+        provider = "aliyun_oss"
         config = Config()
 
         def __init__(self):
             self.put_calls = []
 
-        def object_key(self, key):
-            return f"project/{key.strip('/')}"
-
-        def get_object(self, key):
-            assert key == "project/result.txt"
+        def get_bytes(self, ref):
+            assert ref.key == "project/result.txt"
             return "hello".encode("utf-8")
 
-        def put_object(self, key, data, *, content_type, content_disposition=None):
+        def put_bytes(self, key, data, *, content_type, content_disposition=None):
             self.put_calls.append((key, data, content_type, content_disposition))
-            return {}
+            return PutObjectResult(
+                provider="aliyun_oss",
+                bucket="bucket",
+                region="ap-southeast-1",
+                key=f"project/{key.strip('/')}",
+                content_type=content_type,
+                size_bytes=len(data),
+                sha256=bare_sha256(sha256_digest(data)),
+            )
 
     client = FakeClient()
     storage = AliyunObjectStorage(client)
@@ -103,15 +112,13 @@ def test_aliyun_object_storage_forwards_content_disposition():
             bucket = "bucket"
             region = "ap-southeast-1"
 
+        provider = "aliyun_oss"
         config = Config()
 
         def __init__(self):
             self.put_calls = []
 
-        def object_key(self, key):
-            return key
-
-        def put_object(self, key, data, *, content_type, content_disposition=None):
+        def put_bytes(self, key, data, *, content_type, content_disposition=None):
             self.put_calls.append(
                 {
                     "key": key,
@@ -120,7 +127,15 @@ def test_aliyun_object_storage_forwards_content_disposition():
                     "content_disposition": content_disposition,
                 }
             )
-            return {}
+            return PutObjectResult(
+                provider="aliyun_oss",
+                bucket="bucket",
+                region="ap-southeast-1",
+                key=key,
+                content_type=content_type,
+                size_bytes=len(data),
+                sha256=bare_sha256(sha256_digest(data)),
+            )
 
     client = FakeClient()
     storage = AliyunObjectStorage(client)

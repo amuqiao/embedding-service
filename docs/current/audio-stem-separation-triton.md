@@ -4,7 +4,7 @@
 
 ## 当前定位
 
-`audio_stem_separation_triton` 是 `visibility="demo"`、`role="root"` 的真实模型示例 Job。它用于验证本服务如何通过 capability/tool 注册、OSS 输入、Triton HTTP endpoint、对象存储输出和 Job result 表达音频源分离链路。
+`audio_stem_separation_triton` 是 `visibility="demo"`、`role="root"` 的真实模型示例 Job。它用于验证本服务如何通过业务包、tool 注册、OSS 输入、Triton HTTP endpoint、对象存储输出和 Job result 表达音频源分离链路。
 
 它不是模板 smoke 的低成本示例，也不是外部 Triton 部署手册。生产级 Triton model repository、PAI-EAS 服务、GPU 容量和模型镜像由外部运行环境负责。
 
@@ -28,7 +28,6 @@ Model repository
 ```text
 POST /jobs audio_stem_separation_triton
   -> schema validate
-  -> media.audio_input:2 capability
   -> object_storage_read:1 fetch audio input from OSS
   -> audio_decode_normalize:1 canonicalize to 44.1kHz stereo
   -> segment canonical audio
@@ -42,11 +41,11 @@ POST /jobs audio_stem_separation_triton
 
 | 层 | 文件 |
 |---|---|
-| Job executor | `app/jobs/types/audio_stem_separation_triton/executor.py` |
+| Job executor | `app/business_packages/audio_stem_separation_triton/executor.py` |
 | Job schema/result | `app/schemas/jobs.py` |
-| Triton client | `app/integrations/triton_audio_stem.py` |
-| Capability/tool 注册 | `app/capabilities/register.py`、`app/tools/register.py` |
-| 模型资产声明 | `app/jobs/types/audio_stem_separation_triton/model_asset.yaml` |
+| Triton client | `app/tools/providers/triton_audio_stem.py` |
+| Tool 注册 | `app/tools/register.py` |
+| 模型资产声明 | `app/business_packages/audio_stem_separation_triton/model_asset.yaml` |
 
 ## Job 合同边界
 
@@ -56,7 +55,7 @@ POST /jobs audio_stem_separation_triton
 
 - 输入音频来自 OSS 引用。
 - 当前支持 `audio/wav`、`audio/x-wav`、`audio/mpeg` 和 `audio/mp3` 输入；执行期统一规范化为当前模型需要的 44.1kHz stereo canonical audio。
-- 输入大小、时长和来源约束由 schema、job type `storage_policy.py`、默认 OSS 配置和 capability 校验共同约束。
+- 输入大小、时长和来源约束由 schema、job type `storage_policy.py`、默认 OSS 配置和工具执行校验共同约束。
 
 当前输出边界：
 

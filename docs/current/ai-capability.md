@@ -69,13 +69,13 @@ poster_title_image generate item
 
 `execution.routes.<capability>.provider` 是真实厂商身份，例如 `openai` 或 `dashscope`。`execution.routes.<capability>.adapter` 指向调用协议实现；`litellm` 当前复用 LiteLLM 文本生成调用，`openai_responses` 使用 OpenAI Responses API，`openai_images` 使用 OpenAI Images API 直连生图/编辑，`openai_compatible_embeddings` 预留给 OpenAI-compatible 向量接口。`provider_model` 是 provider 原始模型名，用于 pricing 匹配和审计；`adapter_model` 是传给 adapter 的模型标识。缺少 required env 的模型不会出现在 `GET /models` 返回中。
 
-`GET /models?job_type=<job_type>` 仍使用同一个公开模型投影；当对应 `app/jobs/types/<job_type>/models.yaml` 存在时，响应会按任务级 public model slot 过滤并返回任务级默认模型。没有业务专属 `models.yaml` 时，使用全局 `default_model_ids` 和 capability 过滤。
+`GET /models?job_type=<job_type>` 仍使用同一个公开模型投影；当对应 `app/business_packages/<job_type>/models.yaml` 存在时，响应会按任务级 public model slot 过滤并返回任务级默认模型。没有业务专属 `models.yaml` 时，使用全局 `default_model_ids` 和 capability 过滤。
 
-`poster_title_image` 的生图连接路径由全局 catalog 中图片模型 `image_edit` / `image_generation` route 的 `adapter` 控制，当前默认是 `openai_images`。业务级 `app/jobs/types/poster_title_image/models.yaml` 只声明 generation 和 style_probe 模型 slot。prompt 构造、绿底后处理、draw_count、Job workflow 和 billing scope 不随 adapter 选择改变。最终 adapter 和 route hash 会写入 Job runtime snapshot；修改 YAML 后只影响后续新建 Job，已创建 Job 和已生成的内部子任务继续使用入库时冻结的 runtime fields。
+`poster_title_image` 的生图连接路径由全局 catalog 中图片模型 `image_edit` / `image_generation` route 的 `adapter` 控制，当前默认是 `openai_images`。业务级 `app/business_packages/poster_title_image/models.yaml` 只声明 generation 和 style_probe 模型 slot。prompt 构造、绿底后处理、draw_count、Job workflow 和 billing scope 不随 adapter 选择改变。最终 adapter 和 route hash 会写入 Job runtime snapshot；修改 YAML 后只影响后续新建 Job，已创建 Job 和已生成的内部子任务继续使用入库时冻结的 runtime fields。
 
-Prompt 目录由 `PROMPT_CONFIG_PATH` 指向的基础配置和 `app/jobs/types/*/prompts.yaml` 的业务包内配置共同组成，加载逻辑在 `app/core/prompt_templates.py`。当前 Prompt registry 会进入 registry consistency 校验；正式业务 `job_type` 需要按自身 schema 引用 prompt refs，且不同配置文件之间不得重复声明同一个 prompt ref。
+Prompt 目录由 `PROMPT_CONFIG_PATH` 指向的基础配置和 `app/business_packages/*/prompts.yaml` 的业务包内配置共同组成，加载逻辑在 `app/core/prompt_templates.py`。当前 Prompt registry 会进入 registry consistency 校验；正式业务 `job_type` 需要按自身 schema 引用 prompt refs，且不同配置文件之间不得重复声明同一个 prompt ref。
 
-`tagged_text_translation` 不接入公开 Prompt 查询合同。它的 Prompt 构造位于 `app/jobs/types/tagged_text_translation/prompt.py`，作为 executor 私有实现细节使用；`GET /prompt-templates?job_type=tagged_text_translation` 不作为该能力的公开配置面。
+`tagged_text_translation` 不接入公开 Prompt 查询合同。它的 Prompt 构造位于 `app/business_packages/tagged_text_translation/prompt.py`，作为 executor 私有实现细节使用；`GET /prompt-templates?job_type=tagged_text_translation` 不作为该能力的公开配置面。
 
 价格目录由 `app/ai/pricing/pricing.yaml` 和 `app/ai/pricing/registry.py` 管理。`pricing_ref` 必须存在并与模型 route 的 `model_id`、`provider`、`provider_model` 匹配。
 

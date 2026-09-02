@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
-from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig
+from app.tools.providers.aliyun_oss import AliyunOSSClient, AliyunOSSConfig
 
 DEFAULT_TEST_CONTENT = "fastapi-best-ai-architecture aliyun oss connectivity check\n"
 
@@ -80,7 +80,7 @@ def main() -> int:
     client.put_object(args.key, content, content_type="text/plain; charset=utf-8")
     print_step("PUT", "OK", "uploaded test object")
 
-    body = client.get_object(args.key)
+    body = client.get_object(object_key)
     if body != content:
         raise RuntimeError("GET body does not match uploaded content")
     print_step("GET", "OK", f"bytes={len(body)}")
@@ -91,7 +91,7 @@ def main() -> int:
     if args.keep:
         print_step("DELETE", "SKIP", "kept by --keep")
     else:
-        client.delete_object(args.key)
+        client.delete_object(object_key)
         print_step("DELETE", "OK", "removed test object")
 
     return 0

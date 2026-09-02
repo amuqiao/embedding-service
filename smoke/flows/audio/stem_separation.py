@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSError
-from app.integrations.object_storage import sha256_digest
-from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
+from app.tools.private.object_storage_refs import sha256_digest
+from app.tools.providers.aliyun_oss import AliyunOSSClient, AliyunOSSError
+from smoke.flows.oss.url_ref import oss_url_ref_from_output_object
 from smoke.harness import formatters
 from scripts.media import audio as audio_media
 from smoke.flows.image import poster_title_image

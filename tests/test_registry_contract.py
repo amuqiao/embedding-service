@@ -19,13 +19,13 @@ from app.core.error_registry import (
 )
 from app.core.logging import LogEvent
 from app.core import prompt_templates
-from app.core.registries.refs import parse_versioned_ref, require_capability_ref, require_tool_ref
+from app.core.registries.refs import parse_versioned_ref, require_tool_ref
 from app.core.registry_checks import (
     validate_all_registries,
-    validate_capability_tool_registry,
     validate_error_registry,
     validate_job_type_registry,
     validate_operation_registry,
+    validate_tool_registry,
     validate_workflow_registry,
 )
 from app.main import app
@@ -37,15 +37,15 @@ from app.business_packages.register import (
     register_all_business_packages,
 )
 from app.jobs import registry as job_registry
-from app.jobs.types.poster_title_image.errors import (
+from app.business_packages.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
     POSTER_TITLE_IMAGE_REFERENCE_INVALID,
 )
-from app.jobs.types.audio_stem_separation.errors import (
+from app.business_packages.audio_stem_separation.errors import (
     AUDIO_STEM_INPUT_INVALID,
     AUDIO_STEM_MODEL_ASSET_MISSING,
 )
-from app.jobs.types.example_lifecycle_probe.errors import EXAMPLE_LIFECYCLE_PROBE_FORCED_FAILURE
+from app.business_packages.example_lifecycle_probe.errors import EXAMPLE_LIFECYCLE_PROBE_FORCED_FAILURE
 from app.workflows import registry as workflow_registry
 from app.workflows.registry import WorkflowDefinition
 
@@ -149,7 +149,7 @@ def _decorator_name(decorator: ast.expr) -> str:
 
 def _registered_job_type_names_in_source() -> set[str]:
     names: set[str] = set()
-    for path in (APP_DIR / "jobs" / "types").rglob("*.py"):
+    for path in (APP_DIR / "business_packages").rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         constants = _string_constants(tree)
         for node in ast.walk(tree):
@@ -209,7 +209,6 @@ def _resolve_import_from_module(path: Path, node: ast.ImportFrom) -> str:
 def _constructor_aliases(path: Path, tree: ast.Module, name: str) -> set[str]:
     modules = {
         "ToolDefinition": "app.tools.definitions",
-        "CapabilityDefinition": "app.capabilities.definitions",
     }
     aliases = {name}
     expected_module = modules[name]
@@ -466,14 +465,9 @@ def test_error_registry_covers_produced_error_reasons():
     assert _literal_error_reasons() <= all_error_reasons()
 
 
-def test_registry_ref_parser_accepts_versioned_capability_and_tool_refs():
-    capability_ref = parse_versioned_ref("media.audio_input:1", kind="capability_ref")
+def test_registry_ref_parser_accepts_versioned_tool_refs():
     tool_ref = parse_versioned_ref("ffmpeg:12", kind="tool_ref")
 
-    assert capability_ref.key == "media.audio_input"
-    assert capability_ref.version == "1"
-    assert capability_ref.value == "media.audio_input:1"
-    assert require_capability_ref("media.audio_input:1") == "media.audio_input:1"
     assert tool_ref.key == "ffmpeg"
     assert tool_ref.version == "12"
     assert tool_ref.value == "ffmpeg:12"
@@ -494,7 +488,7 @@ def test_registry_ref_parser_accepts_versioned_capability_and_tool_refs():
 )
 def test_registry_ref_parser_rejects_invalid_refs(value):
     with pytest.raises(ValueError):
-        require_capability_ref(value)
+        require_tool_ref(value)
 
 
 def _assert_default_retry_policy(retry_policy: dict):
@@ -712,7 +706,7 @@ def test_job_type_registry_exposes_required_metadata():
     _assert_default_retry_policy(audio_spec.retry_policy)
     assert audio_spec.side_effect_policy == "none"
     assert audio_spec.timeout_seconds == 2400
-    assert audio_spec.allowed_capability_refs == frozenset({"media.audio_input:2"})
+    assert audio_spec.required_tool_refs == frozenset({"object_storage_read:1", "audio_decode_normalize:1"})
     assert audio_spec.error_codes <= all_error_reasons()
     assert AUDIO_STEM_INPUT_INVALID in audio_spec.error_codes
     assert AUDIO_STEM_MODEL_ASSET_MISSING in audio_spec.error_codes
@@ -731,7 +725,7 @@ def test_job_type_registry_exposes_required_metadata():
     _assert_default_retry_policy(audio_triton_spec.retry_policy)
     assert audio_triton_spec.side_effect_policy == "none"
     assert audio_triton_spec.timeout_seconds == 2400
-    assert audio_triton_spec.allowed_capability_refs == frozenset({"media.audio_input:2"})
+    assert audio_triton_spec.required_tool_refs == frozenset({"object_storage_read:1", "audio_decode_normalize:1"})
     assert audio_triton_spec.error_codes <= all_error_reasons()
     assert AUDIO_STEM_INPUT_INVALID in audio_triton_spec.error_codes
     assert AUDIO_STEM_MODEL_ASSET_MISSING in audio_triton_spec.error_codes
@@ -775,15 +769,15 @@ def test_registered_job_type_names_are_layered_contract():
 
 def test_business_packages_are_explicit_lazy_composition_root():
     expected_modules = (
-        "app.jobs.types.arithmetic",
-        "app.jobs.types.examples",
-        "app.jobs.types.example_lifecycle_probe.register",
-        "app.jobs.types.job_real_llm_echo",
-        "app.jobs.types.job_real_llm_double_echo",
-        "app.jobs.types.poster_title_image.register",
-        "app.jobs.types.tagged_text_translation.register",
-        "app.jobs.types.audio_stem_separation.register",
-        "app.jobs.types.audio_stem_separation_triton.register",
+        "app.business_packages.arithmetic",
+        "app.business_packages.examples",
+        "app.business_packages.example_lifecycle_probe.register",
+        "app.business_packages.job_real_llm_echo",
+        "app.business_packages.job_real_llm_double_echo",
+        "app.business_packages.poster_title_image.register",
+        "app.business_packages.tagged_text_translation.register",
+        "app.business_packages.audio_stem_separation.register",
+        "app.business_packages.audio_stem_separation_triton.register",
     )
 
     assert business_package_modules() == expected_modules
@@ -806,14 +800,14 @@ def test_business_packages_are_explicit_lazy_composition_root():
     unexpected_job_type_import_strings = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module is not None:
-            if node.module.startswith("app.jobs.types.") and node.module != "app.jobs.types._registrar":
+            if node.module.startswith("app.jobs.types."):
                 direct_business_imports.append(node.module)
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name.startswith("app.jobs.types.") and alias.name != "app.jobs.types._registrar":
+                if alias.name.startswith("app.jobs.types."):
                     direct_business_imports.append(alias.name)
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if node.value.startswith("app.jobs.types.") and node.value not in expected_modules:
+            if node.value.startswith("app.jobs.types."):
                 unexpected_job_type_import_strings.append(node.value)
     assert direct_business_imports == []
     assert unexpected_job_type_import_strings == []
@@ -1092,34 +1086,63 @@ def test_register_job_type_decorator_is_marker_not_registration_side_effect():
     assert set(job_registry.all_job_types()) == before
 
 
-def test_tool_and_capability_definitions_only_live_in_composition_roots():
+def test_tool_definitions_only_live_in_composition_root():
     assert _constructor_call_locations("ToolDefinition") == {"app/tools/register.py"}
-    assert _constructor_call_locations("CapabilityDefinition") == {"app/capabilities/register.py"}
 
 
 def test_audio_job_does_not_import_other_audio_executor_private_helpers():
-    imported_modules = _imported_modules(APP_DIR / "jobs/types/audio_stem_separation_triton/executor.py")
+    imported_modules = _imported_modules(APP_DIR / "business_packages/audio_stem_separation_triton/executor.py")
 
-    assert "app.jobs.types.audio_stem_separation.executor" not in imported_modules
+    assert "app.business_packages.audio_stem_separation.executor" not in imported_modules
 
 
 def test_import_scanner_expands_from_import_aliases(tmp_path):
     absolute = tmp_path / "absolute.py"
-    relative = APP_DIR / "capabilities" / "example.py"
+    relative = APP_DIR / "tools" / "private" / "example.py"
 
     assert "app.jobs" in _imported_modules_from_tree(absolute, ast.parse("from app import jobs\n"))
-    assert "app.jobs" in _imported_modules_from_tree(relative, ast.parse("from .. import jobs\n"))
+    assert "app.tools.jobs" in _imported_modules_from_tree(relative, ast.parse("from .. import jobs\n"))
 
 
 def test_registry_layers_do_not_depend_on_callers():
     violations: list[str] = []
     rules = {
-        APP_DIR / "capabilities": ("app.jobs", "app.integrations"),
-        APP_DIR / "tools": ("app.jobs", "app.capabilities"),
-        APP_DIR / "integrations": ("app.jobs", "app.capabilities", "app.tools"),
+        APP_DIR / "tools": ("app.jobs", "app.business_packages", "app.integrations", "app.capabilities"),
+        APP_DIR / "object_storage": ("app.jobs", "app.business_packages", "app.integrations", "app.capabilities"),
     }
     for directory, forbidden_prefixes in rules.items():
         for path in directory.rglob("*.py"):
+            module_refs = _imported_modules(path)
+            forbidden = sorted(
+                ref
+                for ref in module_refs
+                if any(ref == prefix or ref.startswith(f"{prefix}.") for prefix in forbidden_prefixes)
+            )
+            if forbidden:
+                violations.append(f"{path.relative_to(ROOT)} imports {forbidden}")
+
+    assert violations == []
+
+
+def test_business_packages_do_not_import_object_storage_providers_directly():
+    violations: list[str] = []
+    forbidden_prefix = "app.object_storage.providers"
+    for path in (APP_DIR / "business_packages").rglob("*.py"):
+        module_refs = _imported_modules(path)
+        forbidden = sorted(
+            ref for ref in module_refs if ref == forbidden_prefix or ref.startswith(f"{forbidden_prefix}.")
+        )
+        if forbidden:
+            violations.append(f"{path.relative_to(ROOT)} imports {forbidden}")
+
+    assert violations == []
+
+
+def test_removed_architecture_modules_are_not_imported():
+    violations: list[str] = []
+    forbidden_prefixes = ("app.integrations", "app.capabilities", "app.jobs.types", "app.jobs.payload_adapters")
+    for root in (APP_DIR, ROOT / "smoke", ROOT / "examples", ROOT / "scripts"):
+        for path in root.rglob("*.py"):
             module_refs = _imported_modules(path)
             forbidden = sorted(
                 ref
@@ -1212,7 +1235,7 @@ def _job_type_spec(**overrides) -> JobTypeSpec:
         "error_codes": frozenset({"INVALID_INPUT"}),
         "log_events": (),
         "timeout_seconds": 60,
-        "allowed_capability_refs": frozenset(),
+        "required_tool_refs": frozenset(),
         "prompt_template_required_blocks": frozenset(),
     }
     values.update(overrides)
@@ -1320,28 +1343,28 @@ def test_validate_job_type_registry_rejects_internal_errors(monkeypatch):
         validate_job_type_registry()
 
 
-def test_validate_job_type_registry_rejects_invalid_capability_ref(monkeypatch):
+def test_validate_job_type_registry_rejects_invalid_tool_ref(monkeypatch):
     _patch_job_type_specs(
         monkeypatch,
-        {"example_pair": _job_type_spec(allowed_capability_refs=frozenset({"media_input"}))},
+        {"example_pair": _job_type_spec(required_tool_refs=frozenset({"media_input"}))},
     )
     monkeypatch.setattr(prompt_templates, "_load_prompt_config", lambda **_kwargs: {"version": "test", "job_types": {}})
 
-    with pytest.raises(ValueError, match="capability_ref"):
+    with pytest.raises(ValueError, match="tool_ref"):
         validate_job_type_registry()
 
 
-def test_validate_capability_tool_registry_rejects_unknown_capability_ref(monkeypatch):
+def test_validate_tool_registry_rejects_unknown_tool_ref(monkeypatch):
     _patch_job_type_specs(
         monkeypatch,
-        {"example_pair": _job_type_spec(allowed_capability_refs=frozenset({"media.input:1"}))},
+        {"example_pair": _job_type_spec(required_tool_refs=frozenset({"media.input:1"}))},
     )
 
-    with pytest.raises(ValueError, match="unknown capability_ref"):
-        validate_capability_tool_registry()
+    with pytest.raises(ValueError, match="unknown tool_refs"):
+        validate_tool_registry()
 
 
-def test_validate_capability_tool_registry_rejects_unknown_capability_ref_on_disabled_job_type(monkeypatch):
+def test_validate_tool_registry_rejects_unknown_tool_ref_on_disabled_job_type(monkeypatch):
     specs = {
         "tagged_text_translation": _job_type_spec(
             job_type="tagged_text_translation",
@@ -1352,7 +1375,7 @@ def test_validate_capability_tool_registry_rejects_unknown_capability_ref_on_dis
             job_type="disabled_job",
             visibility="public",
             role="root",
-            allowed_capability_refs=frozenset({"media.input:1"}),
+            required_tool_refs=frozenset({"media.input:1"}),
         ),
     }
     monkeypatch.setattr(job_registry, "all_job_type_specs", lambda: specs)
@@ -1362,8 +1385,8 @@ def test_validate_capability_tool_registry_rejects_unknown_capability_ref_on_dis
         lambda: {"tagged_text_translation": specs["tagged_text_translation"]},
     )
 
-    with pytest.raises(ValueError, match="unknown capability_ref"):
-        validate_capability_tool_registry()
+    with pytest.raises(ValueError, match="unknown tool_refs"):
+        validate_tool_registry()
 
 
 def _workflow_definition(**overrides) -> WorkflowDefinition:

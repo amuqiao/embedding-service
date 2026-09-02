@@ -14,7 +14,7 @@ from app.core.exceptions import AppError, InternalAppError, NotFoundAppError, Va
 from app.core.config import settings
 from app.core.error_registry import get_error_spec
 from app.core.prompt_templates import get_template
-from app.integrations.storage import sha256_digest, storage
+from app.tools.private.storage import sha256_digest, storage
 from app.models.job import Job
 from app.repositories.job_repo import JobRepo
 from app.schemas.errors import JobErrorDetail

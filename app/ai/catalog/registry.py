@@ -805,7 +805,7 @@ def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry
     enabled_job_types = set(job_registry.enabled_job_types())
     poster_job_type = job_models.POSTER_TITLE_IMAGE_JOB_TYPE
     if poster_job_type in enabled_job_types and not job_models.has_model_selection_config(poster_job_type):
-        raise RuntimeError("poster_title_image requires app/jobs/types/poster_title_image/models.yaml")
+        raise RuntimeError("poster_title_image requires app/business_packages/poster_title_image/models.yaml")
     model_by_id = {model.id: model for model in enabled_models}
     for path in sorted(job_models.JOB_MODEL_CONFIG_ROOT.glob(f"*/{job_models.JOB_MODEL_CONFIG_FILENAME}")):
         job_type = path.parent.name
@@ -832,7 +832,7 @@ def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry
         job_models.POSTER_TITLE_IMAGE_JOB_TYPE in enabled_job_types
         and job_models.has_model_selection_config(job_models.POSTER_TITLE_IMAGE_JOB_TYPE)
     ):
-        from app.integrations.image import POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES
+        from app.tools.private.image import POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES
 
         poster_selection = job_models.get_poster_title_image_model_selection()
         for model_id in poster_selection.generation_slot.allowed_model_ids:

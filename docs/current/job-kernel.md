@@ -320,7 +320,7 @@ job_execution_attempts = 某条 Job 的一次执行尝试
 
 因此直接提交 `root_or_leaf` job_type 时，它是 public root Job；被 workflow 创建时，它是 internal child Job。`root_or_leaf` 不表示“只有一个 Job”，也不表示自动创建 root + leaf。
 
-当前内置 `job_type` 标记如下；完整准入、schema、capability 和错误码事实以 registry 运行时输出为准。
+当前内置 `job_type` 标记如下；完整准入、schema、tool 和错误码事实以 registry 运行时输出为准。
 
 | job_type | visibility | role |
 |---|---|---|
@@ -345,7 +345,7 @@ job_execution_attempts = 某条 Job 的一次执行尝试
 
 `tagged_text_translation` 是当前 public root Job。它复用统一 Job 创建、查询、Callback 和 billing 链路，由 root Job 自己执行 custom executor，不创建 workflow child。执行器通过文本模型完成批量带标签文案翻译，并在公开结果中返回与请求 item 一一对应的 `items[]`。
 
-`audio_stem_separation` 和 `audio_stem_separation_triton` 当前都标记为 `visibility="demo"`，用于本地和开发环境验证音乐源分离真实模型链路；它们不是模板 smoke 示例。前者加载本地 ONNX 权重，后者调用 Triton HTTP endpoint，二者都会读取 OSS 音频输入，经 `media.audio_input:2` 规范化为 44.1kHz stereo canonical audio 后写出四条 WAV 音频 stem，因此使用前必须配置默认 OSS 连接、job type `storage_policy.py`、`ffmpeg` 和对应模型运行环境。
+`audio_stem_separation` 和 `audio_stem_separation_triton` 当前都标记为 `visibility="demo"`，用于本地和开发环境验证音乐源分离真实模型链路；它们不是模板 smoke 示例。前者加载本地 ONNX 权重，后者调用 Triton HTTP endpoint，二者都会读取 OSS 音频输入，经 `object_storage_read:1` 和 `audio_decode_normalize:1` 规范化为 44.1kHz stereo canonical audio 后写出四条 WAV 音频 stem，因此使用前必须配置默认 OSS 连接、job type `storage_policy.py`、`ffmpeg` 和对应模型运行环境。
 
 ### Workflow Lineage
 

@@ -13,10 +13,10 @@
 | [`runbooks/dashscope-calling-guide.md`](runbooks/dashscope-calling-guide.md) | DashScope 国内/国际 endpoint、OpenAI-compatible 与 native `/api/v1` 协议边界、chat、文本向量、多模态向量和 rerank 调用示例 |
 | [`current/ai-billing.md`](current/ai-billing.md) | 当前 AI call ledger、usage/cost 事实源、Job billing 聚合和非资金账本边界 |
 | [`current/job-kernel.md`](current/job-kernel.md) | 当前 Job、幂等键、Attempt、Dispatch outbox、Callback outbox、root/child lineage 和表设计边界 |
-| [`current/registry-governance.md`](current/registry-governance.md) | 当前 registry governance、capability/tool 注册、graph 校验、`./scripts/tools.sh registry` 查看入口和 `media.audio_input:2` 能力事实 |
+| [`current/registry-governance.md`](current/registry-governance.md) | 当前 registry governance、业务包/tool 注册、graph 校验、`./scripts/tools.sh registry` 查看入口和 job-tool 依赖事实 |
 | [`current/audio-stem-separation-triton.md`](current/audio-stem-separation-triton.md) | `audio_stem_separation_triton` 当前 Job、Triton endpoint 依赖、tensor I/O、配置和实现边界；不替代外部 Triton 部署手册 |
 | [`runbooks/job/job-kernel-explained.md`](runbooks/job/job-kernel-explained.md) | 跟一个请求走完整条 Job 链路的心智模型讲解，配套 `job-kernel.md` 的事实清单，不是独立事实源 |
-| [`runbooks/job/job-orchestration-examples.md`](runbooks/job/job-orchestration-examples.md) | 独立讲解 Job 编排心智模型，用 `audio_stem_separation_triton` 和 `poster_title_image` 对比单 executor、root/child workflow、tool/capability 接入和新增 Job 开发 |
+| [`runbooks/job/job-orchestration-examples.md`](runbooks/job/job-orchestration-examples.md) | 独立讲解 Job 编排心智模型，用 `audio_stem_separation_triton` 和 `poster_title_image` 对比单 executor、root/child workflow、tool 接入和新增 Job 开发 |
 | [`current/workflow-kernel.md`](current/workflow-kernel.md) | 当前 DAG-lite root/child workflow、child Job 执行、root 汇总和 billing scope 行为 |
 | [`current/observability.md`](current/observability.md) | 当前日志出口、request_id、业务事件白名单、本地 `logs/` 边界和新增日志代码规范 |
 | [`current/template-readiness.md`](current/template-readiness.md) | 当前仓库作为 AI Job 微服务模板的就绪边界、可复用能力和不承诺事项 |
@@ -48,7 +48,7 @@
 | [`api/业务语种规范.md`](api/业务语种规范.md) | CPP / AI / RS 三方共享语种代码、`in` 例外和 AI 服务语种目录接口规范 |
 | [`api/poster-title-image-delivery-api.md`](api/poster-title-image-delivery-api.md) | AI 标题图生成对接的当前交付接口合同、任务创建、查询、费用和 Callback 说明 |
 | [`plans/job-kernel-hardening.md`](plans/job-kernel-hardening.md) | 当前 Job kernel 可靠性、一致性和公开信息边界的短期硬化计划；完成后应归档 |
-| [`plans/template-drift-checklist.md`](plans/template-drift-checklist.md) | 当前模板骨架 operation/job_type/workflow/capability/tool 合同漂移的收口计划和验收条件 |
+| [`plans/template-drift-checklist.md`](plans/template-drift-checklist.md) | 当前模板骨架 operation/job_type/workflow/tool 合同漂移的收口计划和验收条件 |
 | [`plans/ops-dashboard-post-mvp.md`](plans/ops-dashboard-post-mvp.md) | `ops_dashboard` MVP 后的表格可用性、长窗口分析、Job Trace 可视化、环境诊断和安全边界后续优化计划 |
 | [`plans/job-observability-governance.md`](plans/job-observability-governance.md) | Job 日志、stage、adapter、链路 ID 和新 `job_type` 观测接入标准的治理计划；完成后沉淀到 current/API 文档 |
 | [`plans/ai-capability-governance.md`](plans/ai-capability-governance.md) | AI provider、adapter、model catalog、Job 模型策略、provider 诊断脚本和未来 DashScope 向量模型接入的目标架构规划；不是当前事实源 |

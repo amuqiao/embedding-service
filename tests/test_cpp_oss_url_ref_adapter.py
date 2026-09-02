@@ -1,8 +1,8 @@
 import pytest
 
 from app.core.exceptions import AppError
-from app.integrations.object_storage import CanonicalObjectRef
-from app.jobs.payload_adapters.cpp_oss_url_ref import (
+from app.tools.private.object_storage_refs import CanonicalObjectRef
+from smoke.flows.oss.url_ref import (
     canonical_ref_from_cpp_oss_url_ref,
     cpp_oss_url_ref_from_canonical,
 )
@@ -33,19 +33,16 @@ def test_cpp_oss_url_ref_adapter_normalizes_to_canonical_ref():
     assert ref.content_hash == f"sha256:{'c' * 64}"
 
 
-def test_cpp_oss_url_ref_adapter_accepts_signed_public_url_query():
-    ref = canonical_ref_from_cpp_oss_url_ref(
-        _payload(
-            public_url=(
-                "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/"
-                "ai-output/poster/title-layer.png?x-oss-signature=secret"
+def test_cpp_oss_url_ref_adapter_rejects_public_url_query():
+    with pytest.raises(AppError, match="query string or fragment"):
+        canonical_ref_from_cpp_oss_url_ref(
+            _payload(
+                public_url=(
+                    "https://cpp-rs-dev.oss-ap-southeast-1.aliyuncs.com/"
+                    "ai-output/poster/title-layer.png?x-oss-signature=secret"
+                )
             )
         )
-    )
-
-    assert ref.bucket == "cpp-rs-dev"
-    assert ref.region == "ap-southeast-1"
-    assert ref.key == "ai-output/poster/title-layer.png"
 
 
 def test_cpp_oss_url_ref_adapter_does_not_validate_input_internal_url():

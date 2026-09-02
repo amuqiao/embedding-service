@@ -26,7 +26,7 @@
 | `scripts/verify/env_config_check.py` | env 文件机器检查入口，从 `app/core/config.py` 读取 key manifest |
 | `app/ai/catalog/models.yaml` | 全局模型启停、默认模型、capability route 和 `/models` 公开投影 |
 | `app/ai/pricing/pricing.yaml` | 模型成本估算规则 |
-| `app/core/prompts.yaml` 和 `app/jobs/types/*/prompts.yaml` | 共享 Prompt 和业务包 Prompt |
+| `app/core/prompts.yaml` 和 `app/business_packages/*/prompts.yaml` | 共享 Prompt 和业务包 Prompt |
 
 `.env.example` 当前没有拆成多个模板文件。这样本地 `./scripts/run.sh up dev`、`docker compose` 和 smoke 都能共享一份 `.env`。代价是同一个文件内会同时出现 application key 和 launcher key，因此新增 key 时必须先判定分类。
 
@@ -212,7 +212,7 @@ job type `storage_policy.py` 的 OSS 策略按字段生效：未显式配置的�
 | `poc/` 独立验证脚本专用配置 | POC key + `.env.example`，不进入 `Settings` |
 | 模型启停、默认模型、provider route、公开模型投影 | `app/ai/catalog/models.yaml` |
 | 模型价格、usage 到成本估算规则 | `app/ai/pricing/pricing.yaml` |
-| 业务 Job 自己的模型范围或 prompt | `app/jobs/types/<job_type>/models.yaml` 或 `prompts.yaml` |
+| 业务 Job 自己的模型范围或 prompt | `app/business_packages/<job_type>/models.yaml` 或 `prompts.yaml` |
 | 由其他配置计算得到的 timeout、endpoint、内部窗口 | 代码 property / constant，加入 derived 禁用清单 |
 | 已删除或不再支持的旧 key | 加入 deprecated 禁用清单 |
 

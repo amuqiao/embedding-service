@@ -59,7 +59,6 @@ def test_tools_registry_help_describes_registered_graph():
     )
 
     assert "tool" in result.stdout
-    assert "capability" in result.stdout
     assert "job_type" in result.stdout
     assert "--json" in result.stdout
 
@@ -84,9 +83,7 @@ def test_tools_registry_prints_registered_graph():
     assert "Tools" in result.stdout
     assert "object_storage_read:1" in result.stdout
     assert "audio_decode_normalize:1" in result.stdout
-    assert "Capabilities" in result.stdout
-    assert "media.audio_input:2" in result.stdout
-    assert "Job Type Capabilities" in result.stdout
+    assert "Job Type Tools" in result.stdout
     assert "audio_stem_separation" in result.stdout
     assert "audio_stem_separation_triton" in result.stdout
 
@@ -108,8 +105,7 @@ def test_tools_registry_json_prints_registered_graph():
         "job_types",
         "workflows",
         "tools",
-        "capabilities",
-        "job_capabilities",
+        "job_tools",
     }
     assert set(data["operations"][0]) == {
         "operation_id",
@@ -145,7 +141,7 @@ def test_tools_registry_json_prints_registered_graph():
         "timeout_seconds",
         "retry_policy",
         "side_effect_policy",
-        "allowed_capability_refs",
+        "required_tool_refs",
         "prompt_specs",
         "prompt_template_required_blocks",
     }
@@ -158,15 +154,6 @@ def test_tools_registry_json_prints_registered_graph():
         "runtime_job_type_dependencies",
         "build",
     }
-    assert set(data["capabilities"][0]) == {
-        "capability_ref",
-        "plan_schema",
-        "result_schema",
-        "service_entrypoint",
-        "allowed_tool_refs",
-        "error_codes",
-        "log_events",
-    }
     assert set(data["tools"][0]) == {
         "tool_ref",
         "kind",
@@ -178,11 +165,11 @@ def test_tools_registry_json_prints_registered_graph():
         "error_codes",
         "log_events",
     }
-    assert set(data["job_capabilities"][0]) == {
+    assert set(data["job_tools"][0]) == {
         "job_type",
         "visibility",
         "role",
-        "allowed_capability_refs",
+        "required_tool_refs",
     }
     operations = {item["operation_id"]: item for item in data["operations"]}
     assert operations["create_ai_job"]["method"] == "POST"
@@ -211,20 +198,21 @@ def test_tools_registry_json_prints_registered_graph():
         "poster_title_image_style_probe",
     ]
 
-    capabilities = {item["capability_ref"]: item for item in data["capabilities"]}
-    assert capabilities["media.audio_input:2"]["allowed_tool_refs"] == [
-        "audio_decode_normalize:1",
-        "object_storage_read:1",
-    ]
     tools = {item["tool_ref"]: item for item in data["tools"]}
     assert tools["audio_decode_normalize:1"]["kind"] == "media_transform"
     assert tools["object_storage_read:1"]["required_settings"] == [
         "storage.backend",
         "job.oss_input_max_bytes",
     ]
-    job_capabilities = {item["job_type"]: item for item in data["job_capabilities"]}
-    assert job_capabilities["audio_stem_separation"]["allowed_capability_refs"] == ["media.audio_input:2"]
-    assert job_capabilities["audio_stem_separation_triton"]["allowed_capability_refs"] == ["media.audio_input:2"]
+    job_tools = {item["job_type"]: item for item in data["job_tools"]}
+    assert job_tools["audio_stem_separation"]["required_tool_refs"] == [
+        "audio_decode_normalize:1",
+        "object_storage_read:1",
+    ]
+    assert job_tools["audio_stem_separation_triton"]["required_tool_refs"] == [
+        "audio_decode_normalize:1",
+        "object_storage_read:1",
+    ]
 
 
 def test_tools_registry_rejects_unknown_argument():

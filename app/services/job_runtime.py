@@ -5,7 +5,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.exceptions import AppError
-from app.integrations.storage import storage
+from app.tools.private.storage import storage
 from app.models.job import Job
 
 

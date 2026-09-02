@@ -27,7 +27,7 @@ usage() {
 命令：
   secret              生成 URL-safe 随机 secret，适合 SERVICE_API_KEY 这类 Bearer token。
   env-url             生成 DATABASE_URL 或 REDIS_URL，并默认输出解析摘要。
-  registry            查看已注册 tool、capability 和 job_type capability 关系。
+  registry            查看已注册 operation、job_type、workflow、tool 和 job_type tool 关系。
   help                显示帮助。
 
 输出：
@@ -62,7 +62,7 @@ registry_usage() {
   ./scripts/tools.sh registry -h|--help
 
 说明：
-  查看当前代码注册的 tool、capability 和 job_type -> capability 关系。
+  查看当前代码注册的 operation、job_type、workflow、tool 和 job_type -> tool 关系。
   本命令只调用 registry composition root，不启动 API/worker，不访问网络，不修改 .env。
   composition root 可能读取应用配置；命令输出仍只展示代码注册事实。
 

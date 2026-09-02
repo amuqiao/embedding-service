@@ -10,7 +10,7 @@ def register_all_tools() -> None:
         ToolDefinition(
             tool_ref="object_storage_read:1",
             kind="object_storage",
-            entrypoint_path="app.tools.object_storage:read_object_bytes",
+            entrypoint_path="app.tools.private.object_storage_read:read_object_bytes",
             request_schema="CanonicalObjectRefSnapshot",
             result_schema=None,
             required_settings=("storage.backend", "job.oss_input_max_bytes"),
@@ -29,7 +29,7 @@ def register_all_tools() -> None:
         ToolDefinition(
             tool_ref="audio_decode_normalize:1",
             kind="media_transform",
-            entrypoint_path="app.tools.media_audio:decode_normalize_audio",
+            entrypoint_path="app.tools.private.media_audio:decode_normalize_audio",
             request_schema="AudioDecodeNormalizeRequest",
             error_codes=frozenset(
                 {

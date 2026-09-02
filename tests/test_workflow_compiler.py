@@ -20,9 +20,9 @@ from app.workflows import (
     task,
 )
 from app.workflows import registry as workflow_registry
-from app.jobs.types.example_catalog import all_example_workflow_mode_specs
+from app.business_packages.examples.catalog import all_example_workflow_mode_specs
 from app.business_packages.register import register_all_business_packages
-from app.jobs.types.poster_title_image.executor import _item_node_key
+from app.business_packages.poster_title_image.executor import _item_node_key
 
 
 def _nodes_by_key(plan):
@@ -212,7 +212,7 @@ def test_poster_title_image_workflow_allows_default_max_item_count():
 
 
 def test_poster_title_image_workflow_max_nodes_follows_configured_item_count(monkeypatch):
-    from app.jobs.types.poster_title_image import executor as poster_executor
+    from app.business_packages.poster_title_image import executor as poster_executor
 
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
@@ -335,7 +335,7 @@ def test_poster_title_image_workflow_freezes_image_adapter_in_child_params(monke
     workflow_registry.clear_for_tests()
     register_all_business_packages()
     monkeypatch.setattr(
-        "app.jobs.types.poster_title_image.executor._image_adapter",
+        "app.business_packages.poster_title_image.executor._image_adapter",
         lambda _model_id=None: "openai_images",
     )
     ref = {

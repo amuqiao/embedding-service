@@ -4,7 +4,7 @@ import tomllib
 
 import pytest
 
-from app.integrations.onnx_runtime import (
+from app.tools.providers.onnx_runtime import (
     CPU_EXECUTION_PROVIDER,
     CUDA_EXECUTION_PROVIDER,
     OnnxRuntimeIntegrationError,

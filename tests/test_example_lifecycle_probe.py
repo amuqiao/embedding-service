@@ -6,9 +6,9 @@ import uuid
 import pytest
 
 from app.core.exceptions import AppError
-from app.jobs.types.example_lifecycle_probe import executor as lifecycle_probe_executor
-from app.jobs.types.example_lifecycle_probe import ExampleLifecycleProbeJob
-from app.jobs.types.example_lifecycle_probe.errors import EXAMPLE_LIFECYCLE_PROBE_FORCED_FAILURE
+from app.business_packages.example_lifecycle_probe import executor as lifecycle_probe_executor
+from app.business_packages.example_lifecycle_probe import ExampleLifecycleProbeJob
+from app.business_packages.example_lifecycle_probe.errors import EXAMPLE_LIFECYCLE_PROBE_FORCED_FAILURE
 from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest, ExampleLifecycleProbeParams
 from app.services.job_runtime import payload_hash, write_runtime_json

@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
+from app.tools.providers.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
 
 
 def test_aliyun_oss_client_get_object_applies_project_root(monkeypatch):
@@ -35,7 +35,7 @@ def test_aliyun_oss_client_get_object_applies_project_root(monkeypatch):
 
 
 def test_aliyun_oss_client_signed_get_url_applies_project_root_and_hides_secret(monkeypatch):
-    monkeypatch.setattr("app.integrations.aliyun_oss.time.time", lambda: 1000)
+    monkeypatch.setattr("app.tools.providers.aliyun_oss.time.time", lambda: 1000)
     client = AliyunOSSClient(
         AliyunOSSConfig(
             bucket="bucket-a",
@@ -125,7 +125,7 @@ def test_aliyun_oss_client_explains_bucket_endpoint_mismatch(monkeypatch):
             fp=BytesIO(error_body),
         )
 
-    monkeypatch.setattr("app.integrations.aliyun_oss.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("app.tools.providers.aliyun_oss.urllib.request.urlopen", fake_urlopen)
 
     with pytest.raises(AliyunOSSError) as exc_info:
         client.put_object("key.png", b"png", content_type="image/png")

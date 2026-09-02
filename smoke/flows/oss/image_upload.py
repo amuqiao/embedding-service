@@ -9,12 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from app.core.oss_endpoint import normalize_oss_endpoint
-from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
-from app.integrations.object_storage import sha256_digest
-from app.jobs.payload_adapters.oss_url_ref import oss_url_ref_from_output_object
+from app.tools.private.object_storage_refs import sha256_digest
+from app.tools.providers.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
 from smoke.harness import formatters
 from smoke.harness import env_runtime
 from smoke.harness.errors import FlowError
+from smoke.flows.oss.url_ref import oss_url_ref_from_output_object
 ROOT_DIR = env_runtime.ROOT_DIR
 ALLOWED_IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
 DEFAULT_UPLOAD_PREFIX = "smoke/uploads/images"

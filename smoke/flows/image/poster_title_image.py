@@ -12,13 +12,13 @@ import urllib.request
 from urllib.parse import quote, urlsplit
 
 from app.core.exceptions import AppError
-from app.integrations.aliyun_oss import AliyunOSSClient, AliyunOSSError
-from app.integrations.image import (
+from app.tools.private.image import (
     POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
     POSTER_TITLE_IMAGE_REFERENCE_POLICY,
     validate_image_bytes,
 )
-from app.jobs.payload_adapters.oss_url_ref import canonical_ref_from_oss_url_ref
+from app.tools.providers.aliyun_oss import AliyunOSSClient, AliyunOSSError
+from smoke.flows.oss.url_ref import canonical_ref_from_oss_url_ref
 from smoke.harness import formatters
 from smoke.flows.oss import image_upload as oss_image_upload
 from smoke.harness import env_runtime

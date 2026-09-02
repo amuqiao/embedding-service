@@ -290,12 +290,12 @@ ADAPTER_IMAGE_PROBE_HELP_EPILOG = """\b
 常用示例：
   ./scripts/smoke.sh --json adapter-image-probe \\
     --confirm-cost \\
-    --models-config app/jobs/types/poster_title_image/models.yaml
+    --models-config app/business_packages/poster_title_image/models.yaml
 
 \b
   ./scripts/smoke.sh --json adapter-image-probe \\
     --confirm-cost \\
-    --models-config app/jobs/types/poster_title_image/models.yaml \\
+    --models-config app/business_packages/poster_title_image/models.yaml \\
     --prompt "Generate a simple transparent title image saying Hola" \\
     --size 1024x1024 \\
     --quality low

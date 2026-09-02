@@ -455,8 +455,8 @@ URL Ref JSON 示例：
 在 API Pod 内执行：
 
 ```bash
-grep -n "public_endpoint=settings.storage.oss_public_endpoint" /mnt/app/jobs/types/poster_title_image/executor.py
-test -f /mnt/app/jobs/payload_adapters/oss_url_ref.py && echo "has oss_url_ref adapter"
+grep -n "public_endpoint=settings.storage.oss_public_endpoint" /mnt/app/business_packages/poster_title_image/executor.py
+test -f /mnt/app/business_packages/poster_title_image/storage_adapter.py && echo "has poster_title_image storage adapter"
 ```
 
 再检查运行时配置：
@@ -464,7 +464,7 @@ test -f /mnt/app/jobs/payload_adapters/oss_url_ref.py && echo "has oss_url_ref a
 ```bash
 python - <<'PY'
 from app.core.config import settings
-from app.jobs.types.poster_title_image.storage_policy import (
+from app.business_packages.poster_title_image.storage_policy import (
     STORAGE_POLICY,
     allowed_input_buckets,
     allowed_input_regions,
@@ -478,7 +478,7 @@ PY
 
 判断：
 
-- 没有 `oss_url_ref.py`：远端 API 镜像代码没更新。
+- 没有 `poster_title_image/storage_adapter.py`：远端 API 镜像代码没更新。
 - `OSS_PUBLIC_ENDPOINT` 为空：远端没有注入 CDN 域名配置。
 - `allowed_buckets` / `allowed_regions` 不符合预期：检查远端镜像内 `poster_title_image/storage_policy.py` 或默认 OSS 配置。
 

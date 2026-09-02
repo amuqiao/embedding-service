@@ -14,7 +14,7 @@ from smoke.harness import env_runtime
 from smoke.harness.errors import FlowError
 ROOT_DIR = env_runtime.ROOT_DIR
 ADAPTERS = ("openai_images", "openai_responses")
-DEFAULT_MODELS_CONFIG = "app/jobs/types/poster_title_image/models.yaml"
+DEFAULT_MODELS_CONFIG = "app/business_packages/poster_title_image/models.yaml"
 
 
 def _resolve_repo_path(value: str) -> Path:

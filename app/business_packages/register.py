@@ -8,15 +8,15 @@ from app.business_packages.base import BusinessPackage, BusinessRouteCollector, 
 
 
 BUSINESS_PACKAGE_MODULES: tuple[str, ...] = (
-    "app.jobs.types.arithmetic",
-    "app.jobs.types.examples",
-    "app.jobs.types.example_lifecycle_probe.register",
-    "app.jobs.types.job_real_llm_echo",
-    "app.jobs.types.job_real_llm_double_echo",
-    "app.jobs.types.poster_title_image.register",
-    "app.jobs.types.tagged_text_translation.register",
-    "app.jobs.types.audio_stem_separation.register",
-    "app.jobs.types.audio_stem_separation_triton.register",
+    "app.business_packages.arithmetic",
+    "app.business_packages.examples",
+    "app.business_packages.example_lifecycle_probe.register",
+    "app.business_packages.job_real_llm_echo",
+    "app.business_packages.job_real_llm_double_echo",
+    "app.business_packages.poster_title_image.register",
+    "app.business_packages.tagged_text_translation.register",
+    "app.business_packages.audio_stem_separation.register",
+    "app.business_packages.audio_stem_separation_triton.register",
 )
 
 _route_mounts: tuple[BusinessRouteMount, ...] = ()
@@ -106,7 +106,6 @@ def registered_business_route_mounts() -> tuple[BusinessRouteMount, ...]:
 
 
 def register_all_business_packages() -> None:
-    from app.capabilities.register import register_all_capabilities
     from app.core.config import settings
     from app.jobs.registry import register
     from app.tools.register import register_all_tools
@@ -119,7 +118,6 @@ def register_all_business_packages() -> None:
     _validate_release_storage_requirements(settings, selected_packages)
 
     register_all_tools()
-    register_all_capabilities()
 
     ownership: dict[str, str] = {}
     route_collector = BusinessRouteCollector()

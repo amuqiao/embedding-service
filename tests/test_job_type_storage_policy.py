@@ -2,16 +2,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.jobs.types.audio_stem_separation.storage_policy import (
+from app.business_packages.audio_stem_separation.storage_policy import (
     AudioStemSeparationStoragePolicy,
     allowed_input_buckets as audio_allowed_input_buckets,
     allowed_input_regions as audio_allowed_input_regions,
     input_max_bytes as audio_input_max_bytes,
 )
-from app.jobs.types.audio_stem_separation_triton.storage_policy import (
+from app.business_packages.audio_stem_separation_triton.storage_policy import (
     AudioStemSeparationTritonStoragePolicy,
 )
-from app.jobs.types.poster_title_image.storage_policy import (
+from app.business_packages.poster_title_image.storage_policy import (
     PosterTitleImageStoragePolicy,
     allowed_input_buckets as poster_allowed_input_buckets,
     allowed_input_regions as poster_allowed_input_regions,

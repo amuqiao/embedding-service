@@ -23,7 +23,7 @@ async def test_example_collect_executes_configured_sleep(monkeypatch):
     async def fake_sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    monkeypatch.setattr("app.jobs.types.examples.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("app.business_packages.examples.asyncio.sleep", fake_sleep)
     job = Job(
         id=uuid.uuid4(),
         caller_id="caller-1",

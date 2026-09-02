@@ -12,7 +12,7 @@ PROMPT_CONFIG_JOB_TEMPLATE_VERSIONS_KEY = "_job_template_versions"
 PROMPT_CONFIG_FILE_TOP_LEVEL_KEYS = frozenset({"version", *PROMPT_CONFIG_SECTIONS})
 DEFAULT_PROMPT_TEMPLATE_JOB_TYPE = "poster_title_image"
 APP_DIR = Path(__file__).resolve().parents[1]
-JOB_PROMPT_CONFIG_ROOT = APP_DIR / "jobs" / "types"
+JOB_PROMPT_CONFIG_ROOT = APP_DIR / "business_packages"
 
 
 def _read_prompt_config_file(path: Path) -> dict[str, Any]:

@@ -350,7 +350,7 @@ docs/current/asset-vector.md
 docs/plans/image-search-tongyi-pgvector-architecture.md
 ```
 
-再从全局注册入口移除少量胶水即可。不要把同步 route、repository 和 service 都塞进 `app/jobs/types/asset_vector/`，因为同步搜索不是 Job type。
+再从全局注册入口移除少量胶水即可。不要把同步 route、repository 和 service 都塞进 `app/business_packages/asset_vector/`，因为同步搜索不是 Job type。
 
 ## 数据模型
 

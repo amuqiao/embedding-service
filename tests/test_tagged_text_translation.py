@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.exceptions import AppError
-from app.jobs.types.tagged_text_translation.executor import (
+from app.business_packages.tagged_text_translation.executor import (
     TaggedTextTranslationJob,
     _build_result,
     _parse_model_json,
@@ -72,7 +72,7 @@ def test_tagged_text_translation_rejects_text_over_configured_default_limit():
 
 
 def test_tagged_text_translation_rejects_text_over_custom_configured_limit(monkeypatch):
-    import app.jobs.types.tagged_text_translation.executor as executor
+    import app.business_packages.tagged_text_translation.executor as executor
 
     monkeypatch.setattr(
         executor,
@@ -103,7 +103,7 @@ def test_tagged_text_translation_rejects_text_over_custom_configured_limit(monke
 
 
 def test_tagged_text_translation_rejects_items_over_configured_limit(monkeypatch):
-    import app.jobs.types.tagged_text_translation.executor as executor
+    import app.business_packages.tagged_text_translation.executor as executor
 
     monkeypatch.setattr(
         executor,
@@ -137,7 +137,7 @@ def test_tagged_text_translation_rejects_items_over_configured_limit(monkeypatch
 
 
 def test_tagged_text_translation_rejects_total_text_over_configured_limit(monkeypatch):
-    import app.jobs.types.tagged_text_translation.executor as executor
+    import app.business_packages.tagged_text_translation.executor as executor
 
     monkeypatch.setattr(
         executor,
@@ -191,7 +191,7 @@ def test_tagged_text_translation_create_contract_preserves_config_limit_error_co
 
 def test_tagged_text_translation_runtime_fields_omit_empty_system(monkeypatch):
     route_hash = "sha256:" + "a" * 64
-    monkeypatch.setattr("app.jobs.types.tagged_text_translation.executor.resolve_route_config_hash", lambda **_kwargs: route_hash)
+    monkeypatch.setattr("app.business_packages.tagged_text_translation.executor.resolve_route_config_hash", lambda **_kwargs: route_hash)
     fields = TaggedTextTranslationJob().runtime_job_fields(
         {
             "target_language": "zh",
@@ -419,7 +419,7 @@ async def test_tagged_text_translation_executor_calls_text_ledger(monkeypatch):
         )()
 
     monkeypatch.setattr(
-        "app.jobs.types.tagged_text_translation.executor.generate_text_with_ledger",
+        "app.business_packages.tagged_text_translation.executor.generate_text_with_ledger",
         fake_generate_text_with_ledger,
     )
 

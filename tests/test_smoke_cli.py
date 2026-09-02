@@ -10,7 +10,7 @@ from PIL import Image
 from typer.testing import CliRunner
 
 from smoke.cli import app
-from app.integrations.aliyun_oss import AliyunOSSConfig
+from app.tools.providers.aliyun_oss import AliyunOSSConfig
 from app.ai.adapters.base import ImageGenerationResult
 from smoke.flows.audio import stem_separation as audio_stem_separation
 from smoke.flows.image import adapter_probe as adapter_image_probe
@@ -2383,7 +2383,7 @@ def test_adapter_image_probe_cli_accepts_adapter_options(monkeypatch):
             "adapter-image-probe",
             "--confirm-cost",
             "--models-config",
-            "app/jobs/types/poster_title_image/models.yaml",
+            "app/business_packages/poster_title_image/models.yaml",
             "--prompt",
             "draw a title",
             "--reference",
@@ -2409,7 +2409,7 @@ def test_adapter_image_probe_cli_accepts_adapter_options(monkeypatch):
     assert captured == {
         "confirm_cost": True,
         "env_file": "env_test/.env",
-        "models_config": "app/jobs/types/poster_title_image/models.yaml",
+        "models_config": "app/business_packages/poster_title_image/models.yaml",
         "prompt": "draw a title",
         "reference_image": ".data/title/reference.png",
         "reference_content_type": "image/png",

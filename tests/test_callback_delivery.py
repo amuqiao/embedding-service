@@ -361,7 +361,7 @@ async def test_build_callback_body_for_job_exposes_terminal_billing_projection(m
 
 
 def test_build_callback_body_uses_arithmetic_public_result_schema(monkeypatch):
-    from app.jobs.types.arithmetic import ArithmeticJob
+    from app.business_packages.arithmetic import ArithmeticJob
 
     monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: ArithmeticJob())
     job = _job()

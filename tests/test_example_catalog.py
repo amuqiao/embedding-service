@@ -2,7 +2,7 @@ import importlib
 import sys
 
 from app.jobs import registry as job_registry
-from app.jobs.types.example_catalog import all_example_workflow_mode_specs
+from app.business_packages.examples.catalog import all_example_workflow_mode_specs
 
 
 def test_example_workflow_mode_catalog_is_machine_readable_contract():

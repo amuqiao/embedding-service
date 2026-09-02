@@ -733,7 +733,6 @@ class AudioDecodeNormalizeRequest(StrictBaseModel):
 
 
 class AudioInputPlanSnapshot(StrictBaseModel):
-    capability_ref: Literal["media.audio_input:2"] = "media.audio_input:2"
     tool_refs: tuple[Literal["object_storage_read:1"], Literal["audio_decode_normalize:1"]] = (
         "object_storage_read:1",
         "audio_decode_normalize:1",

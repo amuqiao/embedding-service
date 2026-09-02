@@ -24,7 +24,7 @@
 ## Key Rules
 
 - `model_options.background` 只表达业务输出目标，例如 `transparent`；本接口不向 CPP 暴露 `chroma_key_color`、抠图方式或后处理参数。AI 服务内部负责生成可用的透明标题 PNG 或可合成产物。
-- 输入参考图和输出图片都使用 OSS URL ref；不直接传 base64 或本地路径。输入参考图如需对象存储签名，只放在 `public_url` query 中。
+- 输入参考图和输出图片都使用 OSS URL ref；不直接传 base64、本地路径或临时签名参数。
 - CPP 临时修改的提示词只对本次 Job 生效，不写回默认提示词模板。
 - `client_request_id` 使用 CPP 的 `requestID`，作为同一 caller 下的提交幂等键。
 - 轮询是主链路，Callback 是终态通知。终态 Job 查询和 Callback 可返回 Job 级总费用 `Cost` 和用量摘要 `Usage`；Callback 失败不改变 Job 终态。
@@ -51,14 +51,14 @@ CPP 传入参考图、AI 服务返回生成图片时都使用 `OSS URL Ref`。AI
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---:|---:|---|
-| `public_url` | string | 是 | 公网 HTTPS OSS URL 或服务端配置的 CDN/public endpoint URL；输入参考图可携带对象存储签名 query |
+| `public_url` | string | 是 | 公网 HTTPS OSS URL 或服务端配置的 CDN/public endpoint URL |
 | `internal_url` | string | 是 | 兼容保留字段；输入参考图不要求为 OSS internal URL，输出对象仍返回 AI 服务生成的内网 OSS URL |
 | `content_type` | string | 是 | MIME type，例如 `image/png`、`image/jpeg`、`image/webp` |
 | `sha256` | string | 是 | 同一个 OSS object 原始内容的小写 64 位 hex SHA-256，不带 `sha256:` 前缀 |
 
 OSS 责任边界：
 
-- URL 必须使用 `https`，不允许 fragment；输入参考图的 `public_url` 可以携带对象存储签名 query。
+- URL 必须使用 `https`，不允许 query string 或 fragment。
 - URL host 必须命中 OSS 官方公网域名，或命中服务端配置的当前 bucket/project 专用 CDN/public endpoint；不允许把该字段作为任意 URL 下载入口。
 - AI 服务读取输入对象时使用 `public_url`；输入参考图的 `internal_url` 只作为兼容字段保留，不参与读取和 OSS object 身份校验。
 - AI 服务读取输入对象后必须校验 MIME、大小和 `sha256`；校验失败返回 `INVALID_INPUT`。
@@ -148,7 +148,7 @@ Rules:
 
 CPP 可以调用 `GET /api/v1/ai-jobs/models?job_type=poster_title_image` 渲染标题图任务可选模型。该接口响应结构仍是共享 `ModelsResponse`，但 `data.default_model_id` 和 `data.models[]` 会按 `poster_title_image` 的任务级模型配置过滤。
 
-本文不定义 `/models` 的响应结构；该接口的权威合同以 [`service-contract.md`](service-contract.md) 为准。`poster_title_image` 允许调用方传入 `items[].model_id`，但必须命中 `app/jobs/types/poster_title_image/models.yaml` 中 public `generation` slot 的 `allowed_model_ids`。
+本文不定义 `/models` 的响应结构；该接口的权威合同以 [`service-contract.md`](service-contract.md) 为准。`poster_title_image` 允许调用方传入 `items[].model_id`，但必须命中 `app/business_packages/poster_title_image/models.yaml` 中 public `generation` slot 的 `allowed_model_ids`。
 
 ## 2. Shared Language Catalog
 
@@ -342,13 +342,13 @@ Job constraints:
 | `job_params.items[].item_id` | 1 到 64 个字符；同一 Job 内唯一；首字符必须是字母或数字，后续只允许字母、数字、`.`、`_`、`-` |
 | `job_params.items[].language` | 语种代码必须来自 [`业务语种规范.md`](业务语种规范.md)；同一 Job 内允许重复 |
 | `job_params.items[].title_text` | 1 到 200 个字符；仅支持 LF `\n` 作为调用方指定硬换行，LF 所在位置就是硬分行位置；最大硬分行行数由当前服务端校验限制控制，默认 2；可传 LF 数量由最大行数减 1 派生，默认最多 1 个 LF；不支持 CRLF、其它换行字符或 HTML `<br />` |
-| `job_params.items[].model_id` | 可省略；默认值和 allowlist 来自 `app/jobs/types/poster_title_image/models.yaml`；当前默认和 allowlist 均为 `gpt-image-2`；同一 Job 内必须一致 |
+| `job_params.items[].model_id` | 可省略；默认值和 allowlist 来自 `app/business_packages/poster_title_image/models.yaml`；当前默认和 allowlist 均为 `gpt-image-2`；同一 Job 内必须一致 |
 | `job_params.items[].model_options.size` | `1024x1024`、`1536x1024`、`1024x1536`、`auto` |
 | `job_params.items[].model_options.quality` | `low`、`medium`、`high`、`auto` |
 | `job_params.items[].model_options.draw_count` | 1 到 4，且不能超过服务端 `POSTER_TITLE_IMAGE_MAX_DRAW_COUNT` |
 | `job_params.items[].model_options.background` | `transparent` |
 | `job_params.items[].model_options.output_format` | `png` |
-| `job_params.items[].reference_image.public_url` | 必须，HTTPS OSS URL；输入参考图可携带对象存储签名 query |
+| `job_params.items[].reference_image.public_url` | 必须，HTTPS OSS URL；不允许 query string 或 fragment |
 | `job_params.items[].reference_image.internal_url` | 必须，兼容保留字段；输入参考图不要求为 OSS internal URL |
 | `job_params.items[].reference_image.content_type` | 必须，`image/png`、`image/jpeg` 或 `image/webp` |
 | `job_params.items[].reference_image.sha256` | 必须，同一个 OSS object 原始内容的小写 64 位 hex SHA-256 |
@@ -387,7 +387,7 @@ Forbidden request fields:
 - 不传外层 `model_id`、`model_options`、`source`、`render_options`、`prompt_overrides` 或 `batch_options`。
 - 不传 `items[].layout`；视觉排版由 item 级提示词和服务内部规则共同决定，换行结构由 `title_text` 和服务端派生换行合同决定。
 - `items[].title_text` 是唯一调用方硬分行来源。未传 LF `\n` 时服务端允许模型按标题区域、画布和可读性自动换行；传入 LF `\n` 时，LF 所在位置就是调用方指定硬分行位置，服务端会要求模型按这些硬分行位置渲染。硬分行最大行数由当前服务端校验限制控制，默认 2；允许 LF 数量由最大行数减 1 派生，默认最多 1 个 LF。`prompt_overrides.additional_prompt` 和 `prompt_overrides.layout_rules` 只能补充视觉或风格偏好，不能控制 `title_text` 的换行合同或调整硬分行位置。
-- 不传拆分的 `bucket`、`region`、`endpoint`、`object_key` 或独立临时签名字段；输入参考图只使用 `OSS URL Ref` 字段，签名参数只能包含在 `public_url` 内。
+- 不传拆分的 `bucket`、`region`、`endpoint`、`object_key` 或独立临时签名字段；输入参考图只使用 `OSS URL Ref` 字段。
 
 ### Accepted Response
 
@@ -770,7 +770,7 @@ Rules:
 
 ## 8. Error Codes
 
-错误 envelope 和计费错误语义沿用 [`service-contract.md`](service-contract.md)。`poster_title_image` 专属错误码由 `app/jobs/types/poster_title_image/errors.py` 声明，并注册到全局 error registry。
+错误 envelope 和计费错误语义沿用 [`service-contract.md`](service-contract.md)。`poster_title_image` 专属错误码由 `app/business_packages/poster_title_image/errors.py` 声明，并注册到全局 error registry。
 
 | reason | HTTP | 说明 |
 |---|---:|---|

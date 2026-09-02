@@ -23,7 +23,7 @@ AI 能力不应由每个业务 Job 自己拼接。业务 Job 只声明自己需�
 - 当前 AI kernel 在 `app/ai/kernel.py`，包含模型准入、provider 调用编排、usage normalizer、pricing resolver 和 ledger writer。
 - 当前 adapter registry 在 `app/ai/adapters/`，内置 `litellm`、`openai_responses`、`openai_images` 和 `openai_compatible_embeddings`。
 - 当前 LiteLLM 文本调用在 `app/ai/adapters/litellm_client.py`。
-- 当前业务级模型配置在 `app/jobs/types/<job_type>/models.yaml`，`poster_title_image` 已使用通用 `model_slots` 声明公开 generation slot 和内部 style_probe slot；最终 provider/adapter route 归全局 catalog。
+- 当前业务级模型配置在 `app/business_packages/<job_type>/models.yaml`，`poster_title_image` 已使用通用 `model_slots` 声明公开 generation slot 和内部 style_probe slot；最终 provider/adapter route 归全局 catalog。
 - 当前配置层保留 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`MODEL_CONFIG_PATH` 和 `PRICING_CONFIG_PATH`；默认模型和启停不再放入 `.env`。
 - 当前 `scripts/models.sh` 管本地模型资产下载、校验和 ONNX inspect；`scripts/smoke.sh` 管 Job/API/worker/callbacker E2E；`scripts/ai.sh` 管云模型厂商 API Key 可用性和远端模型列表检查。
 
@@ -109,7 +109,7 @@ app/ai/
     registry.py                # pricing_ref 加载、匹配和成本计算
 ```
 
-Prompt registry 当前仍按现状归属 `app/core/prompt_templates.py`、`app/core/prompts.yaml` 和 `app/jobs/types/*/prompts.yaml`。本计划不单独重构 prompt governance，但 `verify.sh check` 的一致性校验必须继续覆盖 prompt refs，避免 AI 模型治理和 Prompt 治理变成两套互相漂移的事实源。只有当 prompt 需要和模型 slot、provider capability 或 eval 策略绑定时，再评估把 prompt 入口纳入 `app/ai/`。
+Prompt registry 当前仍按现状归属 `app/core/prompt_templates.py`、`app/core/prompts.yaml` 和 `app/business_packages/*/prompts.yaml`。本计划不单独重构 prompt governance，但 `verify.sh check` 的一致性校验必须继续覆盖 prompt refs，避免 AI 模型治理和 Prompt 治理变成两套互相漂移的事实源。只有当 prompt 需要和模型 slot、provider capability 或 eval 策略绑定时，再评估把 prompt 入口纳入 `app/ai/`。
 
 脚本层只保留入口和输出合同：
 
@@ -223,7 +223,7 @@ app/ai/catalog/models.yaml
 app/ai/pricing/pricing.yaml
   -> pricing_ref、计价类型、币种、价格版本
 
-app/jobs/types/<job_type>/models.yaml
+app/business_packages/<job_type>/models.yaml
   -> 可选；只在该业务需要限定模型、设置业务默认模型或声明内部模型 slot 时添加
 
 .env
@@ -237,10 +237,10 @@ app/jobs/types/<job_type>/models.yaml
   -> 改全局 models.yaml 的 enabled: false
 
 禁用某个 job_type 使用某个模型
-  -> 从 app/jobs/types/<job_type>/models.yaml 的 allowed_model_ids 移除
+  -> 从 app/business_packages/<job_type>/models.yaml 的 allowed_model_ids 移除
 
 修改某个 job_type 的默认模型
-  -> 改 app/jobs/types/<job_type>/models.yaml 的 default_model_id
+  -> 改 app/business_packages/<job_type>/models.yaml 的 default_model_id
 
 没有 job_type 专属 models.yaml
   -> 使用全局 models.yaml 的 default_model_ids 和 enabled 模型，并按 required_capabilities 自动过滤
@@ -273,7 +273,7 @@ MODEL_CALL_TIMEOUT_SECONDS=300
 
 ### Job 模型策略
 
-业务模型策略放在 `app/jobs/types/<job_type>/models.yaml`。没有该文件时，Job 使用全局模型列表兜底，并按 executor 声明的 capability 自动过滤。
+业务模型策略放在 `app/business_packages/<job_type>/models.yaml`。没有该文件时，Job 使用全局模型列表兜底，并按 executor 声明的 capability 自动过滤。
 
 业务模型策略当前使用通用 `model_slots`：
 

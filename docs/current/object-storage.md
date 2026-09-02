@@ -157,7 +157,7 @@ Policy:
 业务不要在主流程里直接 import `providers/aliyun_oss.py` 或 `providers/local.py`。推荐每个业务模块维护自己的 storage adapter：
 
 ```text
-app/jobs/types/<job_type>/
+app/business_packages/<job_type>/
   processor.py
   storage_adapter.py
 

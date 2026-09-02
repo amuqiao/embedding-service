@@ -122,6 +122,6 @@ drums.wav + bass.wav + other.wav + vocals.wav
 
 代码位置：
 - 入参/出参 schema：[jobs.py](/Users/admin/Code/fastapi-best-ai-architecture/app/schemas/jobs.py:558)
-- executor 主流程：[executor.py](/Users/admin/Code/fastapi-best-ai-architecture/app/jobs/types/audio_stem_separation/executor.py:381)
-- 读取输入音频：[executor.py](/Users/admin/Code/fastapi-best-ai-architecture/app/jobs/types/audio_stem_separation/executor.py:313)
-- 加载模型 runner：[executor.py](/Users/admin/Code/fastapi-best-ai-architecture/app/jobs/types/audio_stem_separation/executor.py:283)
+- executor 主流程：[executor.py](/Users/admin/Code/fastapi-best-ai-architecture/app/business_packages/audio_stem_separation/executor.py:381)
+- 读取输入音频：[executor.py](/Users/admin/Code/fastapi-best-ai-architecture/app/business_packages/audio_stem_separation/executor.py:313)
+- 加载模型 runner：[executor.py](/Users/admin/Code/fastapi-best-ai-architecture/app/business_packages/audio_stem_separation/executor.py:283)

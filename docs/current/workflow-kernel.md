@@ -44,7 +44,7 @@ a -> b -> c
 
 ## 示例 Workflow Mode
 
-`example_workflow` 是 `visibility="demo"` 的模板示例 root。它的 mode catalog 由 `app.jobs.types.example_catalog.all_example_workflow_mode_specs()` 提供，测试和 smoke 从该 catalog 读取，不再手写第二份 mode 表。
+`example_workflow` 是 `visibility="demo"` 的模板示例 root。它的 mode catalog 由 `app.business_packages.examples.catalog.all_example_workflow_mode_specs()` 提供，测试和 smoke 从该 catalog 读取，不再手写第二份 mode 表。
 
 | mode | primitive | 节点形态 |
 |---|---|---|

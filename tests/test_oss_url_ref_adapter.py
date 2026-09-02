@@ -1,4 +1,7 @@
-from app.jobs.payload_adapters.oss_url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
+import pytest
+
+from app.core.exceptions import AppError
+from smoke.flows.oss.url_ref import canonical_ref_from_oss_url_ref, oss_url_ref_from_output_object
 
 
 def test_oss_url_ref_adapter_projects_cdn_public_url():
@@ -50,7 +53,7 @@ def test_oss_url_ref_adapter_parses_cdn_public_url_with_allowlist_identity():
 def test_oss_url_ref_adapter_does_not_validate_cdn_ref_internal_url():
     ref = canonical_ref_from_oss_url_ref(
         {
-            "public_url": "https://aigc-datas.epubgame.com/test-cms-poster-title/reference.png?token=secret",
+            "public_url": "https://aigc-datas.epubgame.com/test-cms-poster-title/reference.png",
             "internal_url": (
                 "https://aigc-datas.oss-us-west-1.aliyuncs.com/"
                 "test-cms-poster-title/other.png"
@@ -68,6 +71,21 @@ def test_oss_url_ref_adapter_does_not_validate_cdn_ref_internal_url():
     assert ref.bucket == "aigc-datas"
     assert ref.region == "us-west-1"
     assert ref.key == "test-cms-poster-title/reference.png"
+
+
+def test_oss_url_ref_adapter_rejects_cdn_public_url_query():
+    with pytest.raises(AppError, match="query string or fragment"):
+        canonical_ref_from_oss_url_ref(
+            {
+                "public_url": "https://aigc-datas.epubgame.com/test-cms-poster-title/reference.png?token=secret",
+                "internal_url": "https://example.com/not-used",
+                "content_type": "image/png",
+                "sha256": "c" * 64,
+            },
+            public_endpoint="aigc-datas.epubgame.com",
+            public_endpoint_bucket="aigc-datas",
+            public_endpoint_region="us-west-1",
+        )
 
 
 def test_oss_url_ref_adapter_accepts_public_endpoint_with_multi_value_allowlists():

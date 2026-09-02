@@ -20,7 +20,7 @@
 | AI 调用 | AI facade、model registry、prompt registry、pricing registry 和 AI call ledger |
 | Billing | `ai_call_ledger_entries` 聚合为 Job billing read model，不是资金账本 |
 | Workflow | `job_aggregates` 自索引表达 root/child，支持 DAG-lite demo workflow |
-| Registry governance | `job_type`、capability、tool、error、log event 注册检查 |
+| Registry governance | 业务包、`job_type`、tool、error、log event 注册检查 |
 | 运维读模型 | `scripts/jobs.sh`、`ops_dashboard` 和 Job 压测入口 |
 
 ## 能力可见性

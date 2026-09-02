@@ -9,7 +9,7 @@
 - HTTP 接口只负责提交、查询、Callback 和元信息读取。
 - Job 是调用方可见的异步资源。
 - Attempt、outbox、worker 和 recovery 负责执行可靠性。
-- executor、workflow、capability 和 tool 负责业务执行分层。
+- executor、workflow 和 tool 负责业务执行分层。
 - registry 和 verify 脚本负责让代码、OpenAPI、文档和扩展点不漂移。
 
 当前模板适合复制成一个具体 AI Job 微服务，不适合直接当作用户系统、项目管理系统、跨服务工作流平台或生产部署平台。模板就绪边界看 [`../current/template-readiness.md`](../current/template-readiness.md)。
@@ -34,9 +34,8 @@ OperationSpec
   -> Job / Attempt
   -> Taskiq worker
   -> executor 或 WorkflowDefinition
-  -> Capability
   -> Tool
-  -> Integration / AI provider / object storage
+  -> provider adapter / AI provider / object storage
   -> result / callback / billing
 ```
 
@@ -52,8 +51,7 @@ OperationSpec
 | `JobTypeSpec` | `job_type` 的代码级登记点 | [`../api/extension-guide.md`](../api/extension-guide.md#新增-job_type) |
 | `WorkflowDefinition` | root/child workflow 的入口、版本、失败策略和节点上限 | [`../current/workflow-kernel.md`](../current/workflow-kernel.md) |
 | `Job kernel` | Job、Attempt、dispatch outbox、callback outbox、recovery 和 lineage | [`../current/job-kernel.md`](../current/job-kernel.md) |
-| `Capability` | 可复用业务能力边界 | [`../current/registry-governance.md`](../current/registry-governance.md) |
-| `Tool` | 底层执行动作边界 | [`../api/extension-guide.md`](../api/extension-guide.md#新增-tool--capability) |
+| `Tool` | 底层执行动作边界 | [`../api/extension-guide.md`](../api/extension-guide.md#新增-tool) |
 | `AI gateway` | 模型调用入口、model / prompt / pricing registry 和 usage 记录 | [`../current/ai-capability.md`](../current/ai-capability.md) |
 | `Billing` | 从 AI call ledger 聚合 Job billing read model，不是资金账本 | [`../current/ai-billing.md`](../current/ai-billing.md) |
 | `scripts/verify.sh` | 模板一致性和最小验收入口 | [`../../scripts/README.md`](../../scripts/README.md) |
@@ -67,7 +65,7 @@ OperationSpec
 | 一个异步任务能在单个执行器内完成 | 新增 `job_type` + executor | 不要为了“显得可编排”拆 child Job |
 | 一个 root Job 需要拆多个内部步骤 | 新增 root `job_type` + internal child job + `WorkflowDefinition` | 不开放任意 DAG 给外部调用方 |
 | 新增公开 HTTP 能力 | 新增 `OperationSpec`，route decorator 消费 operation helper | 不在 route 上手写另一份 path / response / error metadata |
-| 复用一段业务处理能力 | 新增 capability | 不让 capability 直接改 Job 状态 |
+| 复用一段业务处理能力 | 业务包内 helper / adapter | 不把跨业务复合能力抽成全局模块 |
 | 封装底层 I/O、解码、SDK 或本地函数 | 新增 tool | 不让 tool 依赖 `app/jobs` |
 | 新增模型或 Prompt | 改 registry 配置或业务包内 prompt | 不在 route 或 executor 里临时拼 provider 参数 |
 | 新增大文件结果 | 写对象存储，result 返回 artifact metadata 或 ref | 不把大 payload 塞进 `job_result` |
@@ -103,7 +101,7 @@ OperationSpec
 ## 维护底线
 
 - 新能力先进入对应代码事实源，再进入 route、worker 或业务实现。
-- route、executor、capability、tool 保持单向依赖，不反向编排。
+- route、executor、tool 保持单向依赖，不反向编排。
 - 大输入、大结果和文件产物走对象存储引用，不走 response 大 payload。
 - 配置和 provider 异常应快速暴露，不新增 silent fallback。
 - 长期事实放 `docs/current/`，对外合同和扩展清单放 `docs/api/`，操作和心智模型放 `docs/runbooks/`，未来计划放 `docs/plans/`。

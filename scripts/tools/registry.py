@@ -14,7 +14,6 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 def registry_snapshot() -> dict[str, list[dict[str, Any]]]:
     from app.api.operations import all_operation_specs
-    from app.capabilities import registry as capability_registry
     from app.jobs import registry as job_registry
     from app.business_packages.register import register_all_business_packages
     from app.tools import registry as tool_registry
@@ -60,7 +59,7 @@ def registry_snapshot() -> dict[str, list[dict[str, Any]]]:
             "timeout_seconds": spec.timeout_seconds,
             "retry_policy": spec.retry_policy,
             "side_effect_policy": spec.side_effect_policy,
-            "allowed_capability_refs": sorted(spec.allowed_capability_refs),
+            "required_tool_refs": sorted(spec.required_tool_refs),
             "prompt_specs": [
                 {
                     "step_name": prompt.step_name,
@@ -103,38 +102,22 @@ def registry_snapshot() -> dict[str, list[dict[str, Any]]]:
         }
         for definition in sorted(tool_registry.all_tool_definitions().values(), key=lambda item: item.tool_ref)
     ]
-    capabilities = [
-        {
-            "capability_ref": definition.capability_ref,
-            "plan_schema": definition.plan_schema,
-            "result_schema": definition.result_schema,
-            "service_entrypoint": definition.service_entrypoint,
-            "allowed_tool_refs": sorted(definition.allowed_tool_refs),
-            "error_codes": sorted(definition.error_codes),
-            "log_events": list(definition.log_events),
-        }
-        for definition in sorted(
-            capability_registry.all_capability_definitions().values(),
-            key=lambda item: item.capability_ref,
-        )
-    ]
-    job_capabilities = [
+    job_tools = [
         {
             "job_type": job_type,
             "visibility": spec.visibility,
             "role": spec.role,
-            "allowed_capability_refs": sorted(spec.allowed_capability_refs),
+            "required_tool_refs": sorted(spec.required_tool_refs),
         }
         for job_type, spec in sorted(job_registry.all_job_type_specs().items())
-        if spec.allowed_capability_refs
+        if spec.required_tool_refs
     ]
     return {
         "operations": operations,
         "job_types": job_types,
         "workflows": workflows,
         "tools": tools,
-        "capabilities": capabilities,
-        "job_capabilities": job_capabilities,
+        "job_tools": job_tools,
     }
 
 
@@ -181,27 +164,18 @@ def print_human(snapshot: dict[str, list[dict[str, Any]]]) -> None:
             print(f"  startup_validators: {', '.join(tool['startup_validators'])}")
 
     print("")
-    print("Capabilities")
-    for capability in snapshot["capabilities"]:
-        print(f"- {capability['capability_ref']}")
-        print(f"  plan_schema: {capability['plan_schema']}")
-        print(f"  result_schema: {capability['result_schema']}")
-        print(f"  service_entrypoint: {capability['service_entrypoint']}")
-        print(f"  tools: {', '.join(capability['allowed_tool_refs'])}")
-
-    print("")
-    print("Job Type Capabilities")
-    for relation in snapshot["job_capabilities"]:
+    print("Job Type Tools")
+    for relation in snapshot["job_tools"]:
         print(f"- {relation['job_type']}")
         print(f"  visibility: {relation['visibility']}")
         print(f"  role: {relation['role']}")
-        print(f"  capabilities: {', '.join(relation['allowed_capability_refs'])}")
+        print(f"  tools: {', '.join(relation['required_tool_refs'])}")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="./scripts/tools.sh registry",
-        description="Print the registered operation, job_type, workflow, tool, and capability graph.",
+        description="Print the registered operation, job_type, workflow, and tool graph.",
     )
     parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
     return parser.parse_args(argv)

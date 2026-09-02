@@ -1,6 +1,6 @@
 # Job 编排与新增 Job 开发讲解
 
-本文是一份独立讲解文档，用 `audio_stem_separation_triton` 和 `poster_title_image` 两个现有 Job 说明：本项目如何组织 Job、什么时候用单 executor、什么时候拆 root/child workflow、如何接入 tool / capability，以及新增一个业务 Job 时应该怎么落代码。
+本文是一份独立讲解文档，用 `audio_stem_separation_triton` 和 `poster_title_image` 两个现有 Job 说明：本项目如何组织 Job、什么时候用单 executor、什么时候拆 root/child workflow、如何接入 tool，以及新增一个业务 Job 时应该怎么落代码。
 
 ## 一句话心智模型
 
@@ -118,7 +118,7 @@ class AudioStemSeparationTritonJob(JobExecutor):
     name = "audio_stem_separation_triton"
     role = "root"
     visibility = "demo"
-    allowed_capability_refs = {"media.audio_input:2"}
+    required_tool_refs = {"object_storage_read:1", "audio_decode_normalize:1"}
 
     def normalize_job_params(self, job_params):
         params = validate_params(job_params)
@@ -138,10 +138,10 @@ class AudioStemSeparationTritonJob(JobExecutor):
     def _execute_sync(self, job):
         runtime = load_runtime_fields(job)
 
-        # capability: 内部会调用 object_storage_read + audio_decode_normalize
+        # 业务包 helper 读取 frozen plan，并调用 object_storage_read + audio_decode_normalize
         audio = prepare_audio_input(runtime["media_input_plan"])
 
-        # integration: 调 Triton HTTP endpoint
+        # provider adapter: 调 Triton HTTP endpoint
         runner = get_triton_runner()
         separated = runner.separate(audio.data)
 
@@ -476,7 +476,7 @@ result
 目录可以这样放：
 
 ```text
-app/jobs/types/audio_report_triton/
+app/business_packages/audio_report_triton/
   __init__.py
   executor.py
 ```
@@ -509,7 +509,7 @@ class AudioReportTritonJob(JobExecutor):
     runtime_fields_schema_name = "AudioReportTritonRuntimeFields"
     canonical_result_schema = AudioReportTritonResult
     public_result_schema = AudioReportTritonResult
-    allowed_capability_refs = {"media.audio_input:2"}
+    required_tool_refs = {"object_storage_read:1", "audio_decode_normalize:1"}
 
     def normalize_job_params(self, job_params):
         params = AudioReportTritonParams.model_validate(job_params)
@@ -575,7 +575,7 @@ root result
 目录可以这样放：
 
 ```text
-app/jobs/types/video_analysis_report/
+app/business_packages/video_analysis_report/
   __init__.py
   executor.py
 ```
@@ -790,11 +790,11 @@ register(
 
 不要在业务 executor 里直接创建 `ToolDefinition`。统一放注册入口，便于 registry 检查和工具清单展示。
 
-## 如何接入 capability
+## 如何接入 tool
 
-capability 用来组合多个 tool，形成可复用业务能力。
+tool 用来封装可复用的底层执行边界。多个 tool 的组合逻辑应放在业务包自己的 helper / adapter 中，不再抽成跨业务复合 capability。
 
-例如 `media.audio_input:2` 的心智模型是：
+例如当前音频输入处理的心智模型是：
 
 ```text
 prepare_audio_input(plan)
@@ -809,20 +809,17 @@ prepare_audio_input(plan)
 PreparedAudioInput
 ```
 
-新增视频输入 capability 可以类似这样：
+新增视频输入处理可以类似这样：
 
 ```text
-media.video_input:1
-  |
-  +--> object_storage_read:1
-  +--> video_probe:1
-  +--> video_frame_extract:1
-  |
-  v
-PreparedVideoInput
+business_packages/video_analysis/input_adapter.py
+  -> object_storage_read:1
+  -> video_probe:1
+  -> video_frame_extract:1
+  -> PreparedVideoInput
 ```
 
-capability service 伪代码：
+业务包 helper 伪代码：
 
 ```python
 def prepare_video_input(plan):
@@ -850,11 +847,15 @@ def prepare_video_input(plan):
     )
 ```
 
-job executor 使用 capability：
+job executor 声明实际依赖的 tools：
 
 ```python
 class VideoAnalysisReportJob(JobExecutor):
-    allowed_capability_refs = {"media.video_input:1"}
+    required_tool_refs = {
+        "object_storage_read:1",
+        "video_probe:1",
+        "video_frame_extract:1",
+    }
 
     def runtime_job_fields(self, job_params):
         return {
@@ -867,7 +868,7 @@ class VideoAnalysisReportJob(JobExecutor):
         ...
 ```
 
-capability 的作用是让多个 Job 复用同一套输入读取、校验和转换逻辑，而不是每个 executor 都手写一遍。
+如果多个业务包确实长期复用同一段组合逻辑，优先抽成 `app/tools/private/` 下的小工具函数；只有底层动作需要进入注册图时，才新增 `ToolDefinition`。
 
 ## 新增 Job 的开发清单
 
@@ -879,7 +880,7 @@ capability 的作用是让多个 Job 复用同一套输入读取、校验和转�
 3. normalize_job_params() 做入参规范化
 4. runtime_job_fields() 冻结执行期需要的 plan / model / adapter
 5. _execute() 执行业务逻辑
-6. 如需复用底层能力，接 capability / tool
+6. 如需复用底层动作，接 tool 或业务包内 helper
 7. 在注册入口注册 JobExecutor
 8. 补测试和最小验证
 ```
@@ -898,13 +899,13 @@ workflow Job：
 9. 补 workflow 编排、child 执行和 root result 测试
 ```
 
-tool / capability：
+tool：
 
 ```text
 1. 底层动作放 tool
-2. 多个 tool 组合成可复用能力时放 capability
-3. Job executor 声明 allowed_capability_refs
-4. capability 读取 frozen plan，不直接改 Job 状态
+2. 多个 tool 的组合逻辑放业务包 helper / adapter
+3. Job executor 声明 required_tool_refs
+4. helper 读取 frozen plan，不直接改 Job 状态
 5. tool 不依赖 Job，也不写业务状态
 ```
 
@@ -928,7 +929,7 @@ tool / capability：
   +-- 有底层能力可复用？
         |
         v
-      tool / capability 分层
+      tool + 业务包 helper
 ```
 
 最常见的落地顺序是：
