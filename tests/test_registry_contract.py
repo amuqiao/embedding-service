@@ -951,6 +951,8 @@ def test_registered_job_type_names_are_layered_contract():
         "asset_image_tagging_join",
         "asset_vector_batch_delete",
         "asset_vector_batch_upsert",
+        "asset_vector_embed_item",
+        "asset_vector_upsert_join",
         "arithmetic",
         "job_real_llm_double_echo",
         "job_real_llm_echo",
@@ -979,6 +981,8 @@ def test_registered_job_type_names_are_layered_contract():
     assert {name for name, spec in specs.items() if spec.visibility == "internal"} >= {
         "asset_image_tagging_item",
         "asset_image_tagging_join",
+        "asset_vector_embed_item",
+        "asset_vector_upsert_join",
         "poster_title_image_generate_item",
         "poster_title_image_join",
         "poster_title_image_style_probe",
@@ -1162,17 +1166,21 @@ def test_business_packages_own_each_registered_job_type_once():
     assert owners["asset_image_tagging_item"] == "asset_image_tagging"
     assert owners["asset_image_tagging_join"] == "asset_image_tagging"
     assert owners["asset_vector_batch_upsert"] == "asset_vector"
+    assert owners["asset_vector_embed_item"] == "asset_vector"
+    assert owners["asset_vector_upsert_join"] == "asset_vector"
     assert owners["asset_vector_batch_delete"] == "asset_vector"
 
 
-def test_asset_vector_job_types_use_success_side_effects_for_index_mutation():
+def test_asset_vector_job_types_keep_index_mutation_inside_business_boundary():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
     register_all_business_packages()
 
     specs = job_registry.all_job_type_specs()
 
-    assert specs["asset_vector_batch_upsert"].side_effect_policy == "success_side_effect"
+    assert specs["asset_vector_batch_upsert"].side_effect_policy == "none"
+    assert specs["asset_vector_embed_item"].side_effect_policy == "none"
+    assert specs["asset_vector_upsert_join"].side_effect_policy == "none"
     assert specs["asset_vector_batch_delete"].side_effect_policy == "success_side_effect"
 
 

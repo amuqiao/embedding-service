@@ -94,6 +94,11 @@ Usage:
     --confirm-run \
     --confirm-cost
 
+  ENV_FILE=.env ./scripts/smoke.sh \
+    asset-vector \
+    --confirm-run \
+    --confirm-cost
+
   ./scripts/smoke.sh <command> -h
 
 扩展规范:

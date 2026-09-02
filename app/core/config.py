@@ -23,6 +23,8 @@ _JOB_STALE_RUNNING_BUFFER: int = 600
 _CALLBACK_DELIVERY_CLAIM_GRACE: int = 175
 _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_ITEMS: int = 100
 _ASSET_IMAGE_TAGGING_SCHEMA_MAX_ITEMS: int = 100
+_ASSET_VECTOR_SCHEMA_MAX_ITEMS: int = 500
+_ASSET_VECTOR_SCHEMA_MAX_TOP_K: int = 100
 _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TEXT_LENGTH: int = 10_000
 _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TOTAL_TEXT_LENGTH: int = (
     _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_ITEMS * _TAGGED_TEXT_TRANSLATION_SCHEMA_MAX_TEXT_LENGTH
@@ -87,6 +89,14 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "ASSET_IMAGE_TAGGING_MODEL_ADAPTER": ("job", "asset_image_tagging", "model_adapter"),
     "ASSET_IMAGE_TAGGING_MODEL_ID": ("job", "asset_image_tagging", "model_id"),
     "ASSET_IMAGE_TAGGING_MAX_ITEMS": ("job", "asset_image_tagging", "max_items"),
+    "ASSET_VECTOR_DASHSCOPE_API_KEY": ("job", "asset_vector", "dashscope_api_key"),
+    "ASSET_VECTOR_DASHSCOPE_BASE_URL": ("job", "asset_vector", "dashscope_base_url"),
+    "ASSET_VECTOR_EMBEDDING_MODEL": ("job", "asset_vector", "embedding_model"),
+    "ASSET_VECTOR_EMBEDDING_DIMENSION": ("job", "asset_vector", "embedding_dimension"),
+    "ASSET_VECTOR_MAX_ITEMS": ("job", "asset_vector", "max_items"),
+    "ASSET_VECTOR_DELETE_MAX_ITEMS": ("job", "asset_vector", "delete_max_items"),
+    "ASSET_VECTOR_SEARCH_DEFAULT_TOP_K": ("job", "asset_vector", "search_default_top_k"),
+    "ASSET_VECTOR_SEARCH_MAX_TOP_K": ("job", "asset_vector", "search_max_top_k"),
     "POSTER_TITLE_IMAGE_MAX_ITEMS": ("job", "poster_title_image", "max_items"),
     "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": ("job", "poster_title_image", "max_draw_count"),
     "AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER": ("job", "audio_stem_separation", "execution_provider"),
@@ -645,6 +655,62 @@ class AssetImageTaggingJobSettings(ConfigSection):
         return self
 
 
+class AssetVectorJobSettings(ConfigSection):
+    dashscope_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    dashscope_base_url: str = ""
+    embedding_model: str = "tongyi-embedding-vision-flash"
+    embedding_dimension: int = 768
+    max_items: int = 10
+    delete_max_items: int = 100
+    search_default_top_k: int = 20
+    search_max_top_k: int = 100
+
+    @model_validator(mode="after")
+    def validate_asset_vector(self) -> "AssetVectorJobSettings":
+        if self.dashscope_base_url != self.dashscope_base_url.strip():
+            raise ValueError("ASSET_VECTOR_DASHSCOPE_BASE_URL must not have leading or trailing whitespace")
+        if self.dashscope_base_url and "://" not in self.dashscope_base_url:
+            raise ValueError("ASSET_VECTOR_DASHSCOPE_BASE_URL must be an absolute URL")
+        if self.dashscope_base_url:
+            normalized_base_url = self.dashscope_base_url.rstrip("/")
+            if "/services/embeddings/" in normalized_base_url:
+                raise ValueError("ASSET_VECTOR_DASHSCOPE_BASE_URL must not include concrete embedding service path")
+            if not (
+                normalized_base_url.endswith("/api/v1")
+                or normalized_base_url.endswith("/compatible-mode/v1")
+            ):
+                raise ValueError("ASSET_VECTOR_DASHSCOPE_BASE_URL must end with /api/v1 or /compatible-mode/v1")
+        if not self.embedding_model.strip():
+            raise ValueError("ASSET_VECTOR_EMBEDDING_MODEL must not be empty")
+        if self.embedding_model != self.embedding_model.strip():
+            raise ValueError("ASSET_VECTOR_EMBEDDING_MODEL must not have leading or trailing whitespace")
+        positive_fields = {
+            "ASSET_VECTOR_EMBEDDING_DIMENSION": self.embedding_dimension,
+            "ASSET_VECTOR_MAX_ITEMS": self.max_items,
+            "ASSET_VECTOR_DELETE_MAX_ITEMS": self.delete_max_items,
+            "ASSET_VECTOR_SEARCH_DEFAULT_TOP_K": self.search_default_top_k,
+            "ASSET_VECTOR_SEARCH_MAX_TOP_K": self.search_max_top_k,
+        }
+        for name, value in positive_fields.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than 0")
+        if self.embedding_dimension != 768:
+            raise ValueError("ASSET_VECTOR_EMBEDDING_DIMENSION must be 768")
+        if self.max_items > _ASSET_VECTOR_SCHEMA_MAX_ITEMS:
+            raise ValueError(f"ASSET_VECTOR_MAX_ITEMS must be <= {_ASSET_VECTOR_SCHEMA_MAX_ITEMS}")
+        if self.delete_max_items > _ASSET_VECTOR_SCHEMA_MAX_ITEMS:
+            raise ValueError(f"ASSET_VECTOR_DELETE_MAX_ITEMS must be <= {_ASSET_VECTOR_SCHEMA_MAX_ITEMS}")
+        if self.search_default_top_k > self.search_max_top_k:
+            raise ValueError("ASSET_VECTOR_SEARCH_DEFAULT_TOP_K must be <= ASSET_VECTOR_SEARCH_MAX_TOP_K")
+        if self.search_max_top_k > _ASSET_VECTOR_SCHEMA_MAX_TOP_K:
+            raise ValueError(f"ASSET_VECTOR_SEARCH_MAX_TOP_K must be <= {_ASSET_VECTOR_SCHEMA_MAX_TOP_K}")
+        return self
+
+    @property
+    def dashscope_api_key_value(self) -> str:
+        return self.dashscope_api_key.get_secret_value()
+
+
 class AudioStemSeparationJobSettings(ConfigSection):
     execution_provider: str = "cpu"
     htdemucs_model_dir_raw: str = ".data/models/htdemucs-ft"
@@ -692,6 +758,7 @@ class JobSettings(ConfigSection):
         default_factory=TaggedTextTranslationJobSettings
     )
     asset_image_tagging: AssetImageTaggingJobSettings = Field(default_factory=AssetImageTaggingJobSettings)
+    asset_vector: AssetVectorJobSettings = Field(default_factory=AssetVectorJobSettings)
     poster_title_image: PosterTitleImageJobSettings = Field(default_factory=PosterTitleImageJobSettings)
     audio_stem_separation: AudioStemSeparationJobSettings = Field(default_factory=AudioStemSeparationJobSettings)
     audio_stem_triton: AudioStemTritonJobSettings = Field(default_factory=AudioStemTritonJobSettings)

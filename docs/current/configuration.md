@@ -57,6 +57,14 @@ ENABLED_BUSINESS_PACKAGES
 ASSET_IMAGE_TAGGING_MODEL_ADAPTER
 ASSET_IMAGE_TAGGING_MODEL_ID
 ASSET_IMAGE_TAGGING_MAX_ITEMS
+ASSET_VECTOR_DASHSCOPE_API_KEY
+ASSET_VECTOR_DASHSCOPE_BASE_URL
+ASSET_VECTOR_EMBEDDING_MODEL
+ASSET_VECTOR_EMBEDDING_DIMENSION
+ASSET_VECTOR_MAX_ITEMS
+ASSET_VECTOR_DELETE_MAX_ITEMS
+ASSET_VECTOR_SEARCH_DEFAULT_TOP_K
+ASSET_VECTOR_SEARCH_MAX_TOP_K
 MODEL_CALL_TIMEOUT_SECONDS
 MAX_ACTIVE_JOBS
 CALLBACK_TIMEOUT_SECONDS
@@ -77,6 +85,15 @@ OpenAI 多模态文本模型。图片打标使用 `OPENAI_API_KEY` / `OPENAI_BAS
 `DASHSCOPE_BASE_URL`。`ASSET_IMAGE_TAGGING_MAX_ITEMS` 控制单 Job 外部批量 items 数量上限，默认 `10`，超限
 在创建 Job 阶段返回业务错误。真实执行使用平台 workflow 按 item 拆分 child job；每个 child job 单独调用一次
 模型，并使用 OpenAI Responses `text.format=json_schema` 约束结构化输出。
+
+`asset_vector` 使用 DashScope 原生多模态向量接口。默认读取全局 `DASHSCOPE_API_KEY` / `DASHSCOPE_BASE_URL`；
+如需业务隔离，可用 `ASSET_VECTOR_DASHSCOPE_API_KEY` / `ASSET_VECTOR_DASHSCOPE_BASE_URL` 覆盖。`asset_vector`
+内部会把以 `/compatible-mode/v1` 结尾的 DashScope base URL 规范化为 `/api/v1` 后调用原生
+`/services/embeddings/multimodal-embedding/multimodal-embedding`。`ASSET_VECTOR_EMBEDDING_MODEL` 默认
+`tongyi-embedding-vision-flash`，`ASSET_VECTOR_EMBEDDING_DIMENSION` 当前固定为 `768`，必须与
+`asset_vector_items.embedding vector(768)` 保持一致。`ASSET_VECTOR_MAX_ITEMS` 控制批量新增/更新资源上限；
+`ASSET_VECTOR_DELETE_MAX_ITEMS` 控制批量删除资源上限；`ASSET_VECTOR_SEARCH_DEFAULT_TOP_K` 和
+`ASSET_VECTOR_SEARCH_MAX_TOP_K` 控制同步搜索返回数量。
 
 ### Launcher Key
 

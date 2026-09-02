@@ -260,14 +260,25 @@ ASSET_IMAGE_TAGGING_HELP_EPILOG = """\b
 
 ASSET_VECTOR_HELP_EPILOG = """\b
 常用示例：
-  ./scripts/smoke.sh asset-vector --confirm-run
-  ./scripts/smoke.sh --json asset-vector --confirm-run
-  ./scripts/smoke.sh asset-vector --confirm-run --no-cleanup
+  ./scripts/smoke.sh asset-vector --confirm-run --confirm-cost
+  ./scripts/smoke.sh --json asset-vector --confirm-run --confirm-cost
+  ./scripts/smoke.sh asset-vector --confirm-run --confirm-cost --no-cleanup
+
+\b
+  # 单 item 验证：仍走批量接口，只把 fixture 的 items 截断为 1 条。
+  ./scripts/smoke.sh asset-vector --confirm-run --confirm-cost --limit 1
+
+\b
+  # 指定独立 fixture；fixture 必须包含 job_params.items。
+  ./scripts/smoke.sh asset-vector \\
+    --confirm-run \\
+    --confirm-cost \\
+    --fixture smoke/fixtures/asset_vector/batch.zh.json
 
 \b
 说明：
   本场景提交 asset_vector_batch_upsert Job，随后验证 vector-assets:exists、vector-assets/ids、text/image/item_ids/hybrid 四种搜索，最后默认提交 asset_vector_batch_delete 清理 smoke 数据。
-  当前 smoke 使用业务包内确定性向量 adapter，不调用真实 AI provider，不产生模型费用。
+  本场景会调用真实 DashScope 多模态向量模型；DASHSCOPE_API_KEY / DASHSCOPE_BASE_URL 或 ASSET_VECTOR_DASHSCOPE_* 必须由服务进程真实加载。
 """
 
 LLM_JOB_BILLING_HELP_EPILOG = """\b
@@ -884,7 +895,16 @@ def asset_image_tagging_command(
 def asset_vector_command(
     ctx: typer.Context,
     confirm_run: ConfirmRunOption = False,
+    confirm_cost: ConfirmCostOption = False,
     client_request_id: ClientRequestIdOption = None,
+    fixture: Annotated[
+        str | None,
+        typer.Option("--fixture", help="asset_vector create-job fixture JSON；默认使用 smoke 内置真实 OSS 图片 fixture。"),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", min=1, help="从 fixture.items 开头截取 N 条提交；单条验证传 1。"),
+    ] = None,
     cleanup: Annotated[
         bool,
         typer.Option("--cleanup/--no-cleanup", help="smoke 结束时删除写入的测试资源向量。"),
@@ -897,6 +917,7 @@ def asset_vector_command(
     try:
         asset_vector.run(
             confirm_run=confirm_run,
+            confirm_cost=confirm_cost,
             api_url=options.api_url,
             env_file=options.env_file,
             allow_remote_api=options.allow_remote_api,
@@ -905,6 +926,8 @@ def asset_vector_command(
             timeout_seconds=options.timeout_seconds,
             poll_interval_seconds=options.poll_interval_seconds,
             client_request_id=client_request_id,
+            fixture_path=fixture,
+            item_limit=limit,
             cleanup=cleanup,
             json_output=options.json_output,
         )

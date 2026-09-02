@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.core.error_registry import ErrorSpec, register_error_specs
 
 QUERY_ITEM_NOT_INDEXED = "QUERY_ITEM_NOT_INDEXED"
+ASSET_VECTOR_ITEMS_EXCEEDS_LIMIT = "ASSET_VECTOR_ITEMS_EXCEEDS_LIMIT"
 
 ASSET_VECTOR_ERROR_SPECS: dict[str, ErrorSpec] = {
     QUERY_ITEM_NOT_INDEXED: ErrorSpec(
@@ -12,6 +13,14 @@ ASSET_VECTOR_ERROR_SPECS: dict[str, ErrorSpec] = {
         404,
         scope="http",
         owner="asset_vector_search",
+    ),
+    ASSET_VECTOR_ITEMS_EXCEEDS_LIMIT: ErrorSpec(
+        "114002",
+        ASSET_VECTOR_ITEMS_EXCEEDS_LIMIT,
+        "asset vector item count exceeds configured limit",
+        400,
+        scope="job",
+        owner="asset_vector_batch_upsert",
     ),
 }
 

@@ -277,6 +277,42 @@ def test_asset_image_tagging_model_id_config_defaults_and_overrides():
         _build_settings(ASSET_IMAGE_TAGGING_MAX_ITEMS=101)
 
 
+def test_asset_vector_settings_validate_dashscope_model_and_limits():
+    default_settings = _build_settings()
+    assert default_settings.job.asset_vector.embedding_model == "tongyi-embedding-vision-flash"
+    assert default_settings.job.asset_vector.embedding_dimension == 768
+    assert default_settings.job.asset_vector.max_items == 10
+    assert default_settings.job.asset_vector.search_default_top_k == 20
+
+    custom_settings = _build_settings(
+        ASSET_VECTOR_DASHSCOPE_BASE_URL="https://dashscope-intl.aliyuncs.com/api/v1",
+        ASSET_VECTOR_EMBEDDING_MODEL="tongyi-embedding-vision-flash",
+        ASSET_VECTOR_MAX_ITEMS=3,
+        ASSET_VECTOR_DELETE_MAX_ITEMS=20,
+        ASSET_VECTOR_SEARCH_DEFAULT_TOP_K=5,
+        ASSET_VECTOR_SEARCH_MAX_TOP_K=20,
+    )
+    assert custom_settings.job.asset_vector.dashscope_base_url == "https://dashscope-intl.aliyuncs.com/api/v1"
+    assert custom_settings.job.asset_vector.max_items == 3
+    assert custom_settings.job.asset_vector.search_max_top_k == 20
+
+    invalid_values = [
+        {"ASSET_VECTOR_DASHSCOPE_BASE_URL": "https://dashscope.aliyuncs.com/api/v1/services/embeddings/x"},
+        {"ASSET_VECTOR_DASHSCOPE_BASE_URL": "https://dashscope.aliyuncs.com"},
+        {"ASSET_VECTOR_EMBEDDING_MODEL": ""},
+        {"ASSET_VECTOR_EMBEDDING_MODEL": " tongyi-embedding-vision-flash"},
+        {"ASSET_VECTOR_EMBEDDING_DIMENSION": 1024},
+        {"ASSET_VECTOR_MAX_ITEMS": 0},
+        {"ASSET_VECTOR_MAX_ITEMS": 501},
+        {"ASSET_VECTOR_DELETE_MAX_ITEMS": 501},
+        {"ASSET_VECTOR_SEARCH_DEFAULT_TOP_K": 21, "ASSET_VECTOR_SEARCH_MAX_TOP_K": 20},
+        {"ASSET_VECTOR_SEARCH_MAX_TOP_K": 101},
+    ]
+    for overrides in invalid_values:
+        with pytest.raises(ValidationError):
+            _build_settings(**overrides)
+
+
 @pytest.mark.parametrize(
     "key",
     [

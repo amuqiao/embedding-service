@@ -110,6 +110,41 @@ class AssetVectorBatchDeleteRuntimeFields(RuntimeFieldsBase):
     item_count: int = Field(ge=1, le=ASSET_VECTOR_MAX_ITEMS)
 
 
+class AssetVectorEmbedItemParams(StrictBaseModel):
+    item: AssetVectorUpsertItemParams
+
+
+class AssetVectorEmbedItemRuntimeFields(RuntimeFieldsBase):
+    operation: Literal["asset_vector_embed_item"] = "asset_vector_embed_item"
+    item_id: str = Field(min_length=1, max_length=ASSET_VECTOR_MAX_ITEM_ID_LENGTH)
+
+
+class AssetVectorUpsertJoinParams(StrictBaseModel):
+    item_ids: list[str] = Field(min_length=1, max_length=ASSET_VECTOR_MAX_ITEMS)
+
+    @model_validator(mode="after")
+    def validate_item_ids(self) -> "AssetVectorUpsertJoinParams":
+        if any(not item_id for item_id in self.item_ids):
+            raise ValueError("item_ids[] must not be empty")
+        if len(self.item_ids) != len(set(self.item_ids)):
+            raise ValueError("item_ids[] must be unique")
+        return self
+
+
+class AssetVectorUpsertJoinRuntimeFields(RuntimeFieldsBase):
+    operation: Literal["asset_vector_upsert_join"] = "asset_vector_upsert_join"
+    item_count: int = Field(ge=1, le=ASSET_VECTOR_MAX_ITEMS)
+
+
+class AssetVectorEmbeddedItemResult(StrictBaseModel):
+    item: AssetVectorUpsertItemParams
+    embedding: list[float] = Field(min_length=1)
+    embedding_text: str = Field(min_length=1)
+    model_id: str = Field(min_length=1, max_length=255)
+    dimension: int = Field(gt=0)
+    input_sha256: str = Field(min_length=64, max_length=64)
+
+
 class AssetVectorIndexedInfo(StrictBaseModel):
     indexed_at: str = Field(min_length=1)
 
@@ -253,6 +288,11 @@ SCHEMAS = (
     AssetVectorBatchDeleteParams,
     AssetVectorBatchUpsertRuntimeFields,
     AssetVectorBatchDeleteRuntimeFields,
+    AssetVectorEmbedItemParams,
+    AssetVectorEmbedItemRuntimeFields,
+    AssetVectorUpsertJoinParams,
+    AssetVectorUpsertJoinRuntimeFields,
+    AssetVectorEmbeddedItemResult,
     AssetVectorIndexedInfo,
     AssetVectorUpsertResultItem,
     AssetVectorDeleteResultItem,

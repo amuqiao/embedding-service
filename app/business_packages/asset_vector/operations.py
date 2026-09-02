@@ -14,7 +14,8 @@ ASSET_VECTOR_SEARCH_OPERATION = OperationSpec(
     auth_boundary=ASSET_VECTOR_AUTH_BOUNDARY,
     request_schema="AssetVectorSearchRequest",
     response_data_schema="AssetVectorSearchResponse",
-    error_codes=ASSET_VECTOR_COMMON_ERRORS | frozenset({"QUERY_ITEM_NOT_INDEXED"}),
+    error_codes=ASSET_VECTOR_COMMON_ERRORS
+    | frozenset({"MODEL_CALL_FAILED", "MODEL_CALL_TIMEOUT", "MODEL_OUTPUT_INVALID", "QUERY_ITEM_NOT_INDEXED"}),
     idempotency_key=None,
     side_effects=(),
     log_events=("request_completed", "request_failed"),

@@ -1,68 +1,122 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import bindparam, delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.business_packages.asset_vector.embedding_adapter import cosine_similarity, item_embedding, item_index_text
-from app.business_packages.asset_vector.models import AssetVectorItem
-from app.business_packages.asset_vector.schemas import AssetVectorUpsertItemParams
+from app.business_packages.asset_vector.models import ASSET_VECTOR_EMBEDDING_DIMENSION, AssetVectorItem
+from app.business_packages.asset_vector.schemas import AssetVectorEmbeddedItemResult
 
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _vector_literal(vector: list[float]) -> str:
+    if len(vector) != ASSET_VECTOR_EMBEDDING_DIMENSION:
+        raise ValueError(
+            f"asset_vector embedding must have {ASSET_VECTOR_EMBEDDING_DIMENSION} dimensions, got {len(vector)}"
+        )
+    values: list[str] = []
+    for value in vector:
+        if not math.isfinite(value):
+            raise ValueError("asset_vector embedding values must be finite")
+        values.append(repr(float(value)))
+    return "[" + ",".join(values) + "]"
+
+
 def _embedding_from_db(value: Any) -> list[float]:
-    decoded = json.loads(value) if isinstance(value, str) else value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("["):
+            decoded = json.loads(stripped)
+        else:
+            decoded = [part for part in stripped.strip("()").split(",") if part]
+    else:
+        decoded = value
     if not isinstance(decoded, list):
-        raise ValueError("stored embedding must be a list")
-    return [float(item) for item in decoded]
+        raise ValueError("stored embedding must be a vector list")
+    vector = [float(item) for item in decoded]
+    if len(vector) != ASSET_VECTOR_EMBEDDING_DIMENSION:
+        raise ValueError(
+            f"stored embedding must have {ASSET_VECTOR_EMBEDDING_DIMENSION} dimensions, got {len(vector)}"
+        )
+    return vector
 
 
-async def upsert_items(
+async def upsert_embedded_items(
     db: AsyncSession,
     *,
     caller_id: str,
-    items: list[AssetVectorUpsertItemParams],
+    items: list[AssetVectorEmbeddedItemResult],
 ) -> list[tuple[str, str]]:
     indexed_at = _now_iso()
-    table = AssetVectorItem.__table__
-    statement = insert(table).values(
-        [
-            {
-                "caller_id": caller_id,
-                "item_id": item.item_id,
-                "item_name": item.item_name,
-                "asset": item.asset.model_dump(exclude_none=True),
-                "labels": [label.model_dump(exclude_none=True) for label in item.labels],
-                "metadata": {} if item.metadata is None else item.metadata,
-                "embedding": item_embedding(item),
-                "embedding_text": item_index_text(item),
-            }
-            for item in items
-        ]
-    )
+    rows = [
+        {
+            "caller_id": caller_id,
+            "item_id": item.item.item_id,
+            "item_name": item.item.item_name,
+            "asset": json.dumps(item.item.asset.model_dump(exclude_none=True), ensure_ascii=False),
+            "labels": json.dumps([label.model_dump(exclude_none=True) for label in item.item.labels], ensure_ascii=False),
+            "metadata": json.dumps({} if item.item.metadata is None else item.item.metadata, ensure_ascii=False),
+            "embedding": _vector_literal(item.embedding),
+            "embedding_text": item.embedding_text,
+            "embedding_model": item.model_id,
+            "embedding_dimension": item.dimension,
+            "input_sha256": item.input_sha256,
+        }
+        for item in items
+    ]
     await db.execute(
-        statement.on_conflict_do_update(
-            index_elements=[table.c.caller_id, table.c.item_id],
-            set_={
-                table.c.item_name: statement.excluded.item_name,
-                table.c.asset: statement.excluded.asset,
-                table.c.labels: statement.excluded.labels,
-                table.c.metadata: statement.excluded["metadata"],
-                table.c.embedding: statement.excluded.embedding,
-                table.c.embedding_text: statement.excluded.embedding_text,
-                table.c.updated_at: func.now(),
-            },
-        )
+        text(
+            """
+            INSERT INTO asset_vector_items (
+                caller_id,
+                item_id,
+                item_name,
+                asset,
+                labels,
+                metadata,
+                embedding,
+                embedding_text,
+                embedding_model,
+                embedding_dimension,
+                input_sha256
+            )
+            VALUES (
+                :caller_id,
+                :item_id,
+                :item_name,
+                CAST(:asset AS jsonb),
+                CAST(:labels AS jsonb),
+                CAST(:metadata AS jsonb),
+                CAST(:embedding AS vector),
+                :embedding_text,
+                :embedding_model,
+                :embedding_dimension,
+                :input_sha256
+            )
+            ON CONFLICT (caller_id, item_id) DO UPDATE SET
+                item_name = EXCLUDED.item_name,
+                asset = EXCLUDED.asset,
+                labels = EXCLUDED.labels,
+                metadata = EXCLUDED.metadata,
+                embedding = EXCLUDED.embedding,
+                embedding_text = EXCLUDED.embedding_text,
+                embedding_model = EXCLUDED.embedding_model,
+                embedding_dimension = EXCLUDED.embedding_dimension,
+                input_sha256 = EXCLUDED.input_sha256,
+                updated_at = now()
+            """
+        ),
+        rows,
     )
     await db.flush()
-    return [(item.item_id, indexed_at) for item in items]
+    return [(item.item.item_id, indexed_at) for item in items]
 
 
 async def delete_items(db: AsyncSession, *, caller_id: str, item_ids: list[str]) -> None:
@@ -119,12 +173,18 @@ async def vectors_for_item_ids(
 ) -> dict[str, list[float]]:
     if not item_ids:
         return {}
-    rows = await db.execute(
-        select(AssetVectorItem.item_id, AssetVectorItem.embedding).where(
-            AssetVectorItem.caller_id == caller_id,
-            AssetVectorItem.item_id.in_(item_ids),
+    statement = (
+        text(
+            """
+            SELECT item_id, embedding::text AS embedding
+            FROM asset_vector_items
+            WHERE caller_id = :caller_id
+              AND item_id IN :item_ids
+            """
         )
+        .bindparams(bindparam("item_ids", expanding=True))
     )
+    rows = await db.execute(statement, {"caller_id": caller_id, "item_ids": item_ids})
     return {str(row.item_id): _embedding_from_db(row.embedding) for row in rows}
 
 
@@ -136,20 +196,39 @@ async def search_by_vector(
     top_k: int,
     candidate_item_ids: list[str] | None,
 ) -> list[str]:
-    if candidate_item_ids is not None:
-        if not candidate_item_ids:
-            return []
-        statement = select(AssetVectorItem.item_id, AssetVectorItem.embedding).where(
-            AssetVectorItem.caller_id == caller_id,
-            AssetVectorItem.item_id.in_(candidate_item_ids),
+    if candidate_item_ids is not None and not candidate_item_ids:
+        return []
+    query = _vector_literal(query_vector)
+    if candidate_item_ids is None:
+        statement = text(
+            """
+            SELECT item_id
+            FROM asset_vector_items
+            WHERE caller_id = :caller_id
+            ORDER BY embedding <=> CAST(:query_vector AS vector), item_id ASC
+            LIMIT :top_k
+            """
         )
+        params = {"caller_id": caller_id, "query_vector": query, "top_k": top_k}
     else:
-        statement = select(AssetVectorItem.item_id, AssetVectorItem.embedding).where(
-            AssetVectorItem.caller_id == caller_id
+        statement = (
+            text(
+                """
+                SELECT item_id
+                FROM asset_vector_items
+                WHERE caller_id = :caller_id
+                  AND item_id IN :candidate_item_ids
+                ORDER BY embedding <=> CAST(:query_vector AS vector), item_id ASC
+                LIMIT :top_k
+                """
+            )
+            .bindparams(bindparam("candidate_item_ids", expanding=True))
         )
-    scored: list[tuple[float, str]] = []
-    for row in await db.execute(statement):
-        embedding = _embedding_from_db(row.embedding)
-        scored.append((cosine_similarity(query_vector, embedding), str(row.item_id)))
-    scored.sort(key=lambda item: (-item[0], item[1]))
-    return [item_id for _, item_id in scored[:top_k]]
+        params = {
+            "caller_id": caller_id,
+            "query_vector": query,
+            "candidate_item_ids": candidate_item_ids,
+            "top_k": top_k,
+        }
+    rows = await db.execute(statement, params)
+    return [str(row.item_id) for row in rows]

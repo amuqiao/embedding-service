@@ -95,7 +95,7 @@ SCENARIOS = [
         name="asset-vector",
         type="workflow",
         acceptance_class="business_e2e",
-        dependencies=["api", "worker", "db", "redis"],
+        dependencies=["api", "worker", "db", "redis", "embedding_provider"],
         entrypoints=["asset-vector"],
         standard_option_groups=["job"],
     ),

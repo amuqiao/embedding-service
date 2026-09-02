@@ -6,21 +6,43 @@ import uuid
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from app.business_packages.asset_vector.embedding_adapter import cosine_similarity, item_embedding, text_query_embedding
-from app.business_packages.asset_vector.executor import AssetVectorBatchDeleteJob
-from app.business_packages.asset_vector.repository import delete_items, list_item_ids, search_by_vector, upsert_items
+from app.business_packages.asset_vector.embedding_adapter import (
+    AssetVectorEmbeddingConfig,
+    DashScopeMultimodalEmbeddingAdapter,
+    average_embeddings,
+    extract_embedding,
+    item_embedding_content,
+    item_index_text,
+    normalize_dashscope_native_base_url,
+)
+from app.business_packages.asset_vector.executor import (
+    ASSET_VECTOR_BATCH_UPSERT_JOB_TYPE,
+    ASSET_VECTOR_EMBED_ITEM_JOB_TYPE,
+    ASSET_VECTOR_UPSERT_JOIN_JOB_TYPE,
+    ASSET_VECTOR_UPSERT_JOIN_NODE_KEY,
+    AssetVectorBatchDeleteJob,
+    AssetVectorBatchUpsertJob,
+    AssetVectorEmbedItemJob,
+    AssetVectorUpsertJoinJob,
+    register_asset_vector_workflow,
+)
+from app.business_packages.asset_vector.repository import delete_items, list_item_ids, search_by_vector, upsert_embedded_items
 from app.business_packages.asset_vector.models import AssetVectorItem
 from app.business_packages.asset_vector.router import _query_vector, search_asset_vectors
 from app.business_packages.asset_vector.schemas import (
     AssetVectorBatchDeleteResult,
     AssetVectorBatchUpsertParams,
+    AssetVectorBatchUpsertResult,
+    AssetVectorEmbeddedItemResult,
     AssetVectorSearchResponse,
     AssetVectorSearchRequest,
-    AssetVectorTextQuery,
 )
 from app.core.exceptions import AppError
+from app.jobs.registry import register as register_job_executor
 from app.models.job import Job
 from app.services.job_runtime import build_runtime_snapshot, payload_hash, write_runtime_json
+from app.workflows import clear_for_tests as clear_workflows_for_tests
+from app.workflows import compile_registered_workflow
 
 
 class _ScalarResult:
@@ -104,6 +126,24 @@ def _upsert_params() -> AssetVectorBatchUpsertParams:
     )
 
 
+def _embedding(value: float) -> list[float]:
+    return [value] * 768
+
+
+def _embedded_items() -> list[AssetVectorEmbeddedItemResult]:
+    return [
+        AssetVectorEmbeddedItemResult(
+            item=item,
+            embedding=_embedding(float(index + 1)),
+            embedding_text=item_index_text(item),
+            model_id="tongyi-embedding-vision-flash",
+            dimension=768,
+            input_sha256=f"{index:064x}",
+        )
+        for index, item in enumerate(_upsert_params().items)
+    ]
+
+
 def _delete_job(item_ids: list[str]) -> Job:
     job_params = {"item_ids": item_ids}
     job_params_hash = payload_hash(job_params)
@@ -129,15 +169,83 @@ def _delete_job(item_ids: list[str]) -> Job:
     )
 
 
-def test_asset_vector_text_query_matches_label_enriched_item_better():
+def test_asset_vector_item_embedding_content_uses_name_image_and_labels_without_stable_ids():
     params = _upsert_params()
-    query = text_query_embedding(AssetVectorTextQuery(query="champagne celebration bottle"))
-    scores = {
-        item.item_id: cosine_similarity(query, item_embedding(item))
-        for item in params.items
-    }
+    content = item_embedding_content(params.items[0])
 
-    assert scores["asset_champagne"] > scores["asset_apple"]
+    assert content["image"] == "https://example.com/assets/champagne.png"
+    assert "champagne bottle" in content["text"]
+    assert "A champagne bottle for celebration scenes." in content["text"]
+    assert "asset_champagne" not in content["text"]
+    assert "https://example.com/assets/champagne.png" not in content["text"]
+
+
+def test_asset_vector_dashscope_base_url_normalizes_native_and_compatible_modes():
+    assert (
+        normalize_dashscope_native_base_url("https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+        == "https://dashscope-intl.aliyuncs.com/api/v1"
+    )
+    assert (
+        normalize_dashscope_native_base_url("https://ws-iugft7wkq31tyi40.ap-southeast-1.maas.aliyuncs.com/api/v1/")
+        == "https://ws-iugft7wkq31tyi40.ap-southeast-1.maas.aliyuncs.com/api/v1"
+    )
+
+
+def test_asset_vector_extract_embedding_rejects_dimension_mismatch():
+    with pytest.raises(AppError) as exc_info:
+        extract_embedding({"output": {"embeddings": [{"embedding": [0.1, 0.2]}]}}, expected_dimension=768)
+
+    assert exc_info.value.code == "MODEL_OUTPUT_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_asset_vector_dashscope_adapter_rejects_non_json_response(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            raise ValueError("not json")
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout: int) -> None:
+            assert timeout == 3
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def post(self, url, *, headers, json):
+            assert url.endswith("/services/embeddings/multimodal-embedding/multimodal-embedding")
+            assert headers["Authorization"] == "Bearer test-key"
+            assert json["model"] == "tongyi-embedding-vision-flash"
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        "app.business_packages.asset_vector.embedding_adapter.httpx.AsyncClient",
+        FakeAsyncClient,
+    )
+
+    adapter = DashScopeMultimodalEmbeddingAdapter(
+        AssetVectorEmbeddingConfig(
+            api_key="test-key",
+            base_url="https://dashscope.aliyuncs.com/api/v1",
+            model_id="tongyi-embedding-vision-flash",
+            dimension=768,
+            timeout_seconds=3,
+        )
+    )
+    with pytest.raises(AppError) as exc_info:
+        await adapter.embed({"text": "gift"})
+
+    assert exc_info.value.code == "MODEL_OUTPUT_INVALID"
+
+
+def test_asset_vector_average_embeddings_normalizes_result():
+    vector = average_embeddings([[1.0, 0.0], [1.0, 0.0]])
+
+    assert vector == [1.0, 0.0]
 
 
 def test_asset_vector_search_mode_rejects_mixed_text_request():
@@ -178,6 +286,9 @@ def test_asset_vector_item_model_declares_business_table_shape():
         "metadata",
         "embedding",
         "embedding_text",
+        "embedding_model",
+        "embedding_dimension",
+        "input_sha256",
         "created_at",
         "updated_at",
     }
@@ -201,10 +312,10 @@ async def test_asset_vector_search_by_vector_returns_empty_for_empty_candidate_p
 async def test_asset_vector_upsert_items_uses_business_package_model():
     db = _RecordingAsyncSession()
 
-    result = await upsert_items(
+    result = await upsert_embedded_items(
         db,
         caller_id="caller-a",
-        items=_upsert_params().items,
+        items=_embedded_items(),
     )
 
     assert [item_id for item_id, _indexed_at in result] == ["asset_champagne", "asset_apple"]
@@ -214,17 +325,14 @@ async def test_asset_vector_upsert_items_uses_business_package_model():
     assert len(db.executed) == 1
 
     statement, params = db.executed[0]
-    assert params is None
-    assert statement.table is AssetVectorItem.__table__
-
-    compiled = statement.compile(
-        dialect=postgresql.dialect(),
-        compile_kwargs={"render_postcompile": True},
-    )
-    sql = str(compiled)
+    assert isinstance(params, list)
+    assert params[0]["embedding"].startswith("[")
+    assert params[0]["embedding_model"] == "tongyi-embedding-vision-flash"
+    sql = str(statement)
     assert "INSERT INTO asset_vector_items" in sql
+    assert "CAST(:embedding AS vector)" in sql
     assert "ON CONFLICT (caller_id, item_id) DO UPDATE SET" in sql
-    assert "metadata = excluded.metadata" in sql
+    assert "metadata = EXCLUDED.metadata" in sql
 
 
 @pytest.mark.asyncio
@@ -232,10 +340,10 @@ async def test_asset_vector_upsert_items_propagates_flush_failure():
     db = _RecordingAsyncSession(flush_error=RuntimeError("flush failed"))
 
     with pytest.raises(RuntimeError, match="flush failed"):
-        await upsert_items(
+        await upsert_embedded_items(
             db,
             caller_id="caller-a",
-            items=_upsert_params().items[:1],
+            items=_embedded_items()[:1],
         )
 
     assert db.flush_calls == 1
@@ -332,9 +440,10 @@ async def test_asset_vector_query_item_ids_raise_when_seed_item_is_not_indexed(m
 async def test_asset_vector_search_passes_caller_id_to_repository(monkeypatch):
     calls: dict[str, object] = {}
 
-    def fake_text_query_embedding(text: AssetVectorTextQuery) -> list[float]:
-        assert text.query == "champagne"
-        return [1.0, 0.0]
+    class FakeAdapter:
+        async def embed(self, content):
+            calls["content"] = content
+            return _embedding(1.0)
 
     async def fake_search_by_vector(db, *, caller_id: str, query_vector, top_k: int, candidate_item_ids):
         calls["caller_id"] = caller_id
@@ -344,8 +453,8 @@ async def test_asset_vector_search_passes_caller_id_to_repository(monkeypatch):
         return ["asset-1"]
 
     monkeypatch.setattr(
-        "app.business_packages.asset_vector.router.text_query_embedding",
-        fake_text_query_embedding,
+        "app.business_packages.asset_vector.router.DashScopeMultimodalEmbeddingAdapter",
+        FakeAdapter,
     )
     monkeypatch.setattr(
         "app.business_packages.asset_vector.router.search_by_vector",
@@ -365,8 +474,69 @@ async def test_asset_vector_search_passes_caller_id_to_repository(monkeypatch):
 
     assert response == AssetVectorSearchResponse(item_ids=["asset-1"])
     assert calls == {
+        "content": {"text": "champagne"},
         "caller_id": "caller-a",
-        "query_vector": [1.0, 0.0],
+        "query_vector": average_embeddings([_embedding(1.0)]),
         "top_k": 5,
         "candidate_item_ids": ["asset-1", "asset-2"],
     }
+
+
+def test_asset_vector_workflow_compiles_one_child_per_item_and_join():
+    register_job_executor(AssetVectorBatchUpsertJob())
+    register_job_executor(AssetVectorEmbedItemJob())
+    register_job_executor(AssetVectorUpsertJoinJob())
+    clear_workflows_for_tests()
+    register_asset_vector_workflow()
+
+    params = _upsert_params()
+    plan = compile_registered_workflow(ASSET_VECTOR_BATCH_UPSERT_JOB_TYPE, params.model_dump(exclude_none=True))
+    nodes = {node["key"]: node for node in plan["nodes"]}
+
+    assert plan["workflow_type"] == ASSET_VECTOR_BATCH_UPSERT_JOB_TYPE
+    assert plan["node_count"] == 3
+    assert nodes["item.0"]["job_type"] == ASSET_VECTOR_EMBED_ITEM_JOB_TYPE
+    assert nodes["item.1"]["job_type"] == ASSET_VECTOR_EMBED_ITEM_JOB_TYPE
+    assert nodes[ASSET_VECTOR_UPSERT_JOIN_NODE_KEY]["job_type"] == ASSET_VECTOR_UPSERT_JOIN_JOB_TYPE
+    assert nodes[ASSET_VECTOR_UPSERT_JOIN_NODE_KEY]["depends_on"] == ["item.0", "item.1"]
+    assert nodes[ASSET_VECTOR_UPSERT_JOIN_NODE_KEY]["job_params"]["item_ids"] == [
+        "asset_champagne",
+        "asset_apple",
+    ]
+
+
+def test_asset_vector_upsert_public_result_extracts_join_result_from_workflow_envelope():
+    join_result = AssetVectorBatchUpsertResult(
+        batch_summary={"total": 1, "succeeded": 1},
+        items=[
+            {
+                "item_id": "asset_champagne",
+                "status": "succeeded",
+                "indexed": {"indexed_at": "2026-09-02T00:00:00Z"},
+            }
+        ],
+    ).model_dump(exclude_none=True)
+    canonical_result = {
+        "schema_version": 1,
+        "job_type": ASSET_VECTOR_BATCH_UPSERT_JOB_TYPE,
+        "workflow": {
+            "workflow_type": ASSET_VECTOR_BATCH_UPSERT_JOB_TYPE,
+            "workflow_version": 1,
+            "outcome": "success",
+            "failure_policy": "fail_fast",
+            "node_count": 2,
+            "succeeded": 2,
+            "failed": 0,
+            "nodes": [
+                {
+                    "node_key": ASSET_VECTOR_UPSERT_JOIN_NODE_KEY,
+                    "job_id": "join-job-id",
+                    "job_type": ASSET_VECTOR_UPSERT_JOIN_JOB_TYPE,
+                    "status": "succeeded",
+                    "result": join_result,
+                }
+            ],
+        },
+    }
+
+    assert AssetVectorBatchUpsertJob().public_result(canonical_result) == join_result

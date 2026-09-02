@@ -5,9 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.operations import operation_route_kwargs_for_spec
 from app.business_packages.asset_vector.embedding_adapter import (
-    asset_query_embedding,
+    DashScopeMultimodalEmbeddingAdapter,
+    asset_query_content,
     average_embeddings,
-    text_query_embedding,
+    text_query_content,
 )
 from app.business_packages.asset_vector.errors import QUERY_ITEM_NOT_INDEXED
 from app.business_packages.asset_vector.operations import (
@@ -22,7 +23,6 @@ from app.business_packages.asset_vector.repository import (
     vectors_for_item_ids,
 )
 from app.business_packages.asset_vector.schemas import (
-    ASSET_VECTOR_DEFAULT_TOP_K,
     ASSET_VECTOR_MAX_ITEM_ID_LENGTH,
     ASSET_VECTOR_MAX_ITEMS,
     AssetVectorExistsItem,
@@ -32,8 +32,9 @@ from app.business_packages.asset_vector.schemas import (
     AssetVectorSearchRequest,
     AssetVectorSearchResponse,
 )
+from app.core.config import settings
 from app.core.database import get_db
-from app.core.exceptions import AppError
+from app.core.exceptions import AppError, ValidationAppError
 from app.core.security import require_service_auth
 
 router = APIRouter(tags=["asset-vector"])
@@ -41,10 +42,11 @@ router = APIRouter(tags=["asset-vector"])
 
 async def _query_vector(payload: AssetVectorSearchRequest, db: AsyncSession, caller_id: str) -> list[float]:
     vectors: list[list[float]] = []
+    adapter = DashScopeMultimodalEmbeddingAdapter()
     if payload.text is not None:
-        vectors.append(text_query_embedding(payload.text))
+        vectors.append(await adapter.embed(text_query_content(payload.text)))
     if payload.asset is not None:
-        vectors.append(asset_query_embedding(payload.asset))
+        vectors.append(await adapter.embed(asset_query_content(payload.asset)))
     if payload.item_ids is not None:
         stored_vectors = await vectors_for_item_ids(db, caller_id=caller_id, item_ids=payload.item_ids)
         missing = sorted(set(payload.item_ids) - set(stored_vectors))
@@ -67,12 +69,19 @@ async def search_asset_vectors(
     db: AsyncSession = Depends(get_db),
     caller_id: str = Depends(require_service_auth),
 ) -> AssetVectorSearchResponse:
+    top_k = payload.top_k or settings.job.asset_vector.search_default_top_k
+    if top_k > settings.job.asset_vector.search_max_top_k:
+        raise ValidationAppError(
+            "INVALID_INPUT",
+            "asset_vector top_k exceeds configured limit",
+            {"top_k": top_k, "max_top_k": settings.job.asset_vector.search_max_top_k},
+        )
     query_vector = await _query_vector(payload, db, caller_id)
     item_ids = await search_by_vector(
         db,
         caller_id=caller_id,
         query_vector=query_vector,
-        top_k=payload.top_k or ASSET_VECTOR_DEFAULT_TOP_K,
+        top_k=top_k,
         candidate_item_ids=payload.candidate_item_ids,
     )
     return AssetVectorSearchResponse(item_ids=item_ids)
