@@ -15,7 +15,7 @@ from app.services.job_runtime import (
 
 def test_write_runtime_json_stores_small_runtime_payload_inline(monkeypatch):
     monkeypatch.setattr(
-        "app.services.job_runtime.storage.write_text",
+        "app.services.job_runtime.object_storage.write_text",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("runtime payload should not use storage")),
     )
     job = Job(id=uuid.uuid4(), job_type="test.echo")
@@ -62,7 +62,7 @@ def test_runtime_helpers_read_payload_from_refs(monkeypatch):
         assert region == "region"
         return json.dumps(objects[key], ensure_ascii=False)
 
-    monkeypatch.setattr("app.services.job_runtime.storage.read_text", fake_read_text)
+    monkeypatch.setattr("app.services.job_runtime.object_storage.read_text", fake_read_text)
 
     job = Job(
         id=uuid.uuid4(),
@@ -79,7 +79,7 @@ def test_job_params_hash_mismatch_fails_fast(monkeypatch):
     def fake_read_text(*, bucket, key, region):
         return json.dumps({"value": "tampered"}, ensure_ascii=False)
 
-    monkeypatch.setattr("app.services.job_runtime.storage.read_text", fake_read_text)
+    monkeypatch.setattr("app.services.job_runtime.object_storage.read_text", fake_read_text)
 
     job = Job(
         id=uuid.uuid4(),

@@ -14,6 +14,7 @@ def register_all_tools() -> None:
             request_schema="CanonicalObjectRefSnapshot",
             result_schema=None,
             required_settings=("storage.backend", "job.oss_input_max_bytes"),
+            startup_validators=("app.tools.private.object_storage_read:validate_configuration",),
             error_codes=frozenset(
                 {
                     "INPUT_TOO_LARGE",

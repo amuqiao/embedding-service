@@ -204,6 +204,9 @@ def test_tools_registry_json_prints_registered_graph():
         "storage.backend",
         "job.oss_input_max_bytes",
     ]
+    assert tools["object_storage_read:1"]["startup_validators"] == [
+        "app.tools.private.object_storage_read:validate_configuration",
+    ]
     job_tools = {item["job_type"]: item for item in data["job_tools"]}
     assert job_tools["audio_stem_separation"]["required_tool_refs"] == [
         "audio_decode_normalize:1",

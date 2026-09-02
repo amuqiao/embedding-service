@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Protocol
 
 from app.core.exceptions import AppError
-from app.tools.private.image.png_chroma_key import ProcessedImage, remove_green_background
-from app.tools.private.object_storage_refs.aliyun_url import parse_aliyun_oss_url
+from app.business_packages.poster_title_image.png_chroma_key import ProcessedImage, remove_green_background
+from app.object_storage.aliyun_url import parse_aliyun_oss_url
 
 
 class ObjectStorageReader(Protocol):

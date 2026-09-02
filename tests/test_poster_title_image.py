@@ -14,19 +14,23 @@ from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.logging import LogEvent
 from app.ai.adapters.base import ImageGenerationResult, ImageInput, TextGenerationResult
-from app.tools.private.image import (
+from app.business_packages.poster_title_image.image_policy import (
     POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
     POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES,
     POSTER_TITLE_IMAGE_REFERENCE_MAX_WIDTH,
     POSTER_TITLE_IMAGE_REFERENCE_POLICY,
-    remove_green_background,
+)
+from app.business_packages.poster_title_image.png_chroma_key import remove_green_background
+from app.business_packages.poster_title_image.title_layer import (
     transparent_title_layer_from_green_screen_bytes,
     transparent_title_layer_from_green_screen_file,
     transparent_title_layer_from_green_screen_oss_url,
+)
+from app.tools.private.image import (
     validate_image_bytes,
 )
-from app.tools.private.object_storage_refs import bare_sha256, sha256_digest
-from app.tools.private.storage import LocalObjectStorage
+from app.services.object_storage import LocalObjectStorage
+from app.object_storage import bare_sha256, sha256_digest
 from app.business_packages.poster_title_image.executor import PosterTitleImageJob
 from app.business_packages.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,

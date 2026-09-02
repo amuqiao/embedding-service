@@ -8,9 +8,9 @@ import numpy as np
 import pytest
 import yaml
 
-from app.tools.private import audio_input as media_audio_input
+from app.business_packages.audio_stem_separation import audio_io as media_audio_input
 from app.core.exceptions import AppError
-from app.tools.private.object_storage_refs import bare_sha256, sha256_digest
+from app.object_storage import bare_sha256, sha256_digest
 from app.tools.providers.triton_audio_stem import TritonAudioStemConfig, TritonAudioStemClient, TritonAudioStemInferenceError
 from app.jobs import registry as job_registry
 from app.business_packages.audio_stem_separation import shared as audio_stem_shared
@@ -187,7 +187,7 @@ class FakeStorage:
             "oss_bucket": bucket,
             "oss_region": region,
             "oss_key": key,
-            "content_hash": sha256_digest(data),
+            "content_hash": f"sha256:{sha256_digest(data)}",
         }
 
     def write_stem(self, *, job: Job, stem: str, data: bytes, content_disposition: str) -> dict[str, str]:

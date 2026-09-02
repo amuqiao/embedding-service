@@ -18,7 +18,6 @@ from app.object_storage import (
     ObjectStorageValidationError,
     PutObjectResult,
 )
-from app.tools.private.object_storage_refs import sha256_digest
 
 
 class ObjectStorage(Protocol):
@@ -221,7 +220,7 @@ def _build_storage() -> ObjectStorage:
     }
     missing = [key for key, value in required.items() if not value]
     if missing:
-        raise RuntimeError(f"missing Aliyun OSS config: {', '.join(missing)}")
+        raise ObjectStorageConfigError(f"missing Aliyun OSS config: {', '.join(missing)}")
     try:
         repository = AliyunOSSRepository(
             AliyunOSSConfig(
@@ -237,8 +236,40 @@ def _build_storage() -> ObjectStorage:
             )
         )
     except (ObjectStorageConfigError, ObjectStorageValidationError) as exc:
-        raise RuntimeError(f"invalid Aliyun OSS config: {exc}") from exc
+        raise ObjectStorageConfigError(f"invalid Aliyun OSS config: {exc}") from exc
     return AliyunObjectStorage(repository)
 
 
-storage = _build_storage()
+def validate_configuration() -> None:
+    _build_storage()
+
+
+def read_bytes(*, bucket: str, key: str, region: str) -> bytes:
+    return _build_storage().read_bytes(bucket=bucket, key=key, region=region)
+
+
+def write_bytes(
+    *,
+    bucket: str,
+    key: str,
+    region: str,
+    data: bytes,
+    content_type: str = "application/octet-stream",
+    content_disposition: str | None = None,
+) -> dict:
+    return _build_storage().write_bytes(
+        bucket=bucket,
+        key=key,
+        region=region,
+        data=data,
+        content_type=content_type,
+        content_disposition=content_disposition,
+    )
+
+
+def read_text(*, bucket: str, key: str, region: str) -> str:
+    return _build_storage().read_text(bucket=bucket, key=key, region=region)
+
+
+def write_text(*, bucket: str, key: str, region: str, content: str) -> dict:
+    return _build_storage().write_text(bucket=bucket, key=key, region=region, content=content)

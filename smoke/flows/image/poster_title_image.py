@@ -12,9 +12,11 @@ import urllib.request
 from urllib.parse import quote, urlsplit
 
 from app.core.exceptions import AppError
-from app.tools.private.image import (
+from app.business_packages.poster_title_image.image_policy import (
     POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
     POSTER_TITLE_IMAGE_REFERENCE_POLICY,
+)
+from app.tools.private.image import (
     validate_image_bytes,
 )
 from app.tools.providers.aliyun_oss import AliyunOSSClient, AliyunOSSError

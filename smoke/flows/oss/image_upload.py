@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from app.core.oss_endpoint import normalize_oss_endpoint
-from app.tools.private.object_storage_refs import sha256_digest
 from app.tools.providers.aliyun_oss import AliyunOSSClient, AliyunOSSConfig, AliyunOSSError
 from smoke.harness import formatters
 from smoke.harness import env_runtime
@@ -108,7 +107,7 @@ def upload_image(
     except AliyunOSSError as exc:
         raise FlowError(f"failed to upload image to Aliyun OSS or generate signed URL: {exc}", exit_code=4) from exc
 
-    content_hash = sha256_digest(data)
+    content_hash = f"sha256:{bare_sha256(data)}"
     url_ref = oss_url_ref_from_output_object(
         bucket=config.bucket,
         region=config.region,

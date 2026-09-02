@@ -1,8 +1,8 @@
 import pytest
 
 from app.core.exceptions import AppError
-from app.tools.private.object_storage_refs import CanonicalObjectRef
 from smoke.flows.oss.url_ref import (
+    CanonicalObjectRef,
     canonical_ref_from_cpp_oss_url_ref,
     cpp_oss_url_ref_from_canonical,
 )

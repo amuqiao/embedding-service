@@ -6,10 +6,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from app.tools.private import audio_input
 from app.tools.private import media_audio
 from app.core.exceptions import AppError
-from app.tools.private.object_storage_refs import bare_sha256, sha256_digest
+from app.object_storage import bare_sha256, sha256_digest
+from app.object_storage import ObjectStorageValidationError
+from app.business_packages.audio_stem_separation import storage_adapter as audio_storage_adapter
 from app.business_packages.audio_stem_separation.storage_adapter import AudioStemSeparationStorageAdapter
 from app.business_packages.audio_stem_separation.schemas import AudioStemSeparationInputObject
 
@@ -106,7 +107,7 @@ def test_prepare_audio_input_reads_frozen_object_ref_and_normalizes(monkeypatch)
             "region": "local",
             "key": "input.mp3",
             "content_type": "audio/mpeg",
-            "content_hash": sha256_digest(data),
+            "content_hash": f"sha256:{sha256_digest(data)}",
         },
         "fetch": {
             "read_mode": "object_storage",
@@ -122,8 +123,15 @@ def test_prepare_audio_input_reads_frozen_object_ref_and_normalizes(monkeypatch)
         "max_duration_seconds": 10,
     }
 
-    def fake_read_object_bytes(*, bucket: str, region: str, key: str, max_bytes: int | None = None):
-        captured.update({"bucket": bucket, "region": region, "key": key, "max_bytes": max_bytes})
+    def fake_read_object(spec):
+        captured.update(
+            {
+                "bucket": spec.ref.bucket,
+                "region": spec.ref.region,
+                "key": spec.ref.key,
+                "max_bytes": spec.policy.max_bytes,
+            }
+        )
         return data
 
     def fake_decode_normalize_audio(
@@ -143,10 +151,11 @@ def test_prepare_audio_input_reads_frozen_object_ref_and_normalizes(monkeypatch)
             duration_seconds=4 / 44100,
         )
 
-    monkeypatch.setattr(audio_input, "read_object_bytes", fake_read_object_bytes)
-    monkeypatch.setattr(audio_input, "decode_normalize_audio", fake_decode_normalize_audio)
+    adapter = AudioStemSeparationStorageAdapter.from_settings(FakeSettings())
+    monkeypatch.setattr(adapter, "read_object", fake_read_object)
+    monkeypatch.setattr(audio_storage_adapter, "decode_normalize_audio", fake_decode_normalize_audio)
 
-    result = audio_input.prepare_audio_input(plan)
+    result = adapter.prepare_audio_input(plan)
 
     assert captured == {"bucket": "local-dev", "region": "local", "key": "input.mp3", "max_bytes": 1024}
     assert result.data.shape == (2, 4)
@@ -164,7 +173,7 @@ def test_prepare_audio_input_rejects_decode_source_content_type_mismatch(monkeyp
             "region": "local",
             "key": "input.mp3",
             "content_type": "audio/mpeg",
-            "content_hash": sha256_digest(data),
+            "content_hash": f"sha256:{sha256_digest(data)}",
         },
         "fetch": {
             "read_mode": "object_storage",
@@ -178,10 +187,11 @@ def test_prepare_audio_input_rejects_decode_source_content_type_mismatch(monkeyp
             "target_channels": 2,
         },
     }
-    monkeypatch.setattr(audio_input, "read_object_bytes", lambda **_kwargs: data)
+    adapter = AudioStemSeparationStorageAdapter.from_settings(FakeSettings())
+    monkeypatch.setattr(adapter, "read_object", lambda _spec: data)
 
     with pytest.raises(AppError) as exc_info:
-        audio_input.prepare_audio_input(plan)
+        adapter.prepare_audio_input(plan)
 
     assert exc_info.value.code == "AUDIO_STEM_INPUT_INVALID"
 
@@ -209,10 +219,14 @@ def test_prepare_audio_input_rejects_hash_mismatch(monkeypatch):
             "target_channels": 2,
         },
     }
-    monkeypatch.setattr(audio_input, "read_object_bytes", lambda **_kwargs: b"different")
+    def fail_sha256(_spec):
+        raise ObjectStorageValidationError("object sha256 mismatch")
+
+    adapter = AudioStemSeparationStorageAdapter.from_settings(FakeSettings())
+    monkeypatch.setattr(adapter, "read_object", fail_sha256)
 
     with pytest.raises(AppError) as exc_info:
-        audio_input.prepare_audio_input(plan)
+        adapter.prepare_audio_input(plan)
 
     assert exc_info.value.code == "INPUT_HASH_MISMATCH"
 

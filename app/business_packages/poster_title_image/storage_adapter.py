@@ -7,10 +7,12 @@ from urllib.parse import quote, unquote, urlsplit
 from app.ai.adapters.base import ImageInput
 from app.core.config import settings as app_settings
 from app.core.exceptions import AppError
-from app.tools.private.image import (
+from app.business_packages.poster_title_image.image_policy import (
     POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES,
     POSTER_TITLE_IMAGE_REFERENCE_MAX_BYTES,
     POSTER_TITLE_IMAGE_REFERENCE_POLICY,
+)
+from app.tools.private.image import (
     validate_image_bytes,
 )
 from app.models.job import Job

@@ -15,7 +15,7 @@ from app.ai.capabilities import IMAGE_EDIT, MULTIMODAL_TEXT_GENERATION
 from app.ai.resolver import resolve_model, resolve_route_config_hash
 from app.core.prompt_templates import get_prompt_block_default
 from app.ai.adapters.base import ImageInput
-from app.tools.private.image import (
+from app.business_packages.poster_title_image.title_layer import (
     transparent_title_layer_from_green_screen_bytes,
 )
 from app.jobs.base import ExecutionRetryPolicy, JobExecutor, JobRetryPolicy

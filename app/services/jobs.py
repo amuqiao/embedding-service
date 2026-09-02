@@ -14,7 +14,7 @@ from app.core.exceptions import AppError, InternalAppError, NotFoundAppError, Va
 from app.core.config import settings
 from app.core.error_registry import get_error_spec
 from app.core.prompt_templates import get_template
-from app.tools.private.storage import sha256_digest, storage
+from app.services import object_storage
 from app.models.job import Job
 from app.repositories.job_repo import JobRepo
 from app.schemas.errors import JobErrorDetail
@@ -40,6 +40,10 @@ from app.workflows.registry import (
 logger = logging.getLogger(__name__)
 _JOB_RESULT_UNSET = object()
 _MAX_ACTIVE_JOBS_GATE_LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtext('max_active_jobs_gate'))")
+
+
+def _sha256_content_hash(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def _status_url(job_id: uuid.UUID) -> str:
@@ -653,7 +657,7 @@ def _load_input_text(job: Job) -> str:
     oss_payload = source_payload.get("oss") or source_payload
 
     try:
-        text = storage.read_text(
+        text = object_storage.read_text(
             bucket=source_payload.get("oss_bucket") or _configured_oss_bucket(),
             key=oss_payload["oss_key"],
             region=source_payload.get("oss_region") or _configured_oss_region(),
@@ -667,7 +671,7 @@ def _load_input_text(job: Job) -> str:
     if len(data) > settings.job.oss_input_max_bytes:
         raise AppError("INPUT_TOO_LARGE", "OSS input exceeds service limit")
     expected_hash = oss_payload.get("content_hash")
-    if expected_hash and sha256_digest(data) != expected_hash:
+    if expected_hash and _sha256_content_hash(data) != expected_hash:
         raise AppError("INPUT_HASH_MISMATCH", "OSS input content_hash mismatch")
     return text
 
@@ -700,7 +704,7 @@ def _persist_large_artifact_payload(
             continue
         if output_target is None:
             output_target = output_target_from_job(job)
-        stored = storage.write_text(
+        stored = object_storage.write_text(
             bucket=output_target["oss_bucket"],
             key=_artifact_key(output_target, artifact_key, scope=scope),
             region=output_target["oss_region"],

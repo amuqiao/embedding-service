@@ -37,6 +37,9 @@ Construction:
 
 Public input reader:
   public_url.py              # PublicUrlInputReader, PublicUrlReader
+
+Provider URL helpers:
+  aliyun_url.py              # Aliyun OSS virtual-host URL parsing
 ```
 
 ## Mental Model
@@ -82,6 +85,7 @@ Policy:
 - 新 `job_type` 只能依赖 `app.object_storage`；旧 OSS 链路冻结维护，不再扩展新业务能力。
 - provider 配置只接受声明过的字段；未知字段必须 fail-fast。
 - 读取校验策略必须显式使用 `ObjectReadPolicy`，不要在业务主流程里散落手写 size 或 sha256 校验。
+- Job runtime 的 legacy artifact 读写不属于本模块；放在服务层或业务 adapter 中。
 
 允许直接使用 provider 的位置：
 

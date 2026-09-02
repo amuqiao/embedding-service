@@ -832,7 +832,7 @@ def _validate_job_model_selection_configs(enabled_models: list[ModelCatalogEntry
         job_models.POSTER_TITLE_IMAGE_JOB_TYPE in enabled_job_types
         and job_models.has_model_selection_config(job_models.POSTER_TITLE_IMAGE_JOB_TYPE)
     ):
-        from app.tools.private.image import POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES
+        from app.business_packages.poster_title_image.image_policy import POSTER_TITLE_IMAGE_REFERENCE_ALLOWED_CONTENT_TYPES
 
         poster_selection = job_models.get_poster_title_image_model_selection()
         for model_id in poster_selection.generation_slot.allowed_model_ids:

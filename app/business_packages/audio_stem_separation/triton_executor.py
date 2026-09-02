@@ -8,7 +8,6 @@ from typing import Any
 
 import numpy as np
 
-from app.tools.private.audio_input import AUDIO_DECODE_NORMALIZE_TOOL_REF, OBJECT_STORAGE_READ_TOOL_REF
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.tools.providers.triton_audio_stem import (
@@ -27,6 +26,10 @@ from app.business_packages.audio_stem_separation.shared import (
     make_transition_window as _make_transition_window,
     segment_ranges as _segment_ranges,
     wav_bytes as _wav_bytes,
+)
+from app.business_packages.audio_stem_separation.audio_io import (
+    AUDIO_DECODE_NORMALIZE_TOOL_REF,
+    OBJECT_STORAGE_READ_TOOL_REF,
 )
 from app.business_packages.audio_stem_separation.triton_storage_adapter import AudioStemSeparationTritonStorageAdapter
 from app.business_packages.audio_stem_separation.errors import (

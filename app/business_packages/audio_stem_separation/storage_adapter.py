@@ -4,7 +4,6 @@ from collections.abc import Collection, Mapping
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
 
-from app.tools.private.audio_input import AUDIO_INPUT_CONTENT_TYPES, AUDIO_WAV_CONTENT_TYPE, PreparedAudioInput
 from app.core.config import settings as app_settings
 from app.core.exceptions import AppError
 from app.models.job import Job
@@ -34,6 +33,7 @@ from app.tools.private.audio_contracts import (
 from app.services.job_runtime import output_target_from_job
 from app.tools.private.media_audio import decode_normalize_audio
 
+from .audio_io import AUDIO_INPUT_CONTENT_TYPES, AUDIO_WAV_CONTENT_TYPE, PreparedAudioInput
 from .errors import AUDIO_STEM_INPUT_INVALID
 from .storage_policy import (
     STORAGE_POLICY,

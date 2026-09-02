@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from app.tools.private.object_storage_refs import sha256_digest
 from app.tools.providers.aliyun_oss import AliyunOSSClient, AliyunOSSError
 from smoke.flows.oss.url_ref import oss_url_ref_from_output_object
 from smoke.harness import formatters
@@ -228,7 +227,7 @@ def _upload_audio_to_aliyun_oss(
         signed_url = client.signed_get_url(object_key, expires_seconds=signed_url_expires_seconds)
     except AliyunOSSError as exc:
         raise FlowError(f"failed to upload audio to Aliyun OSS or generate signed URL: {exc}", exit_code=4) from exc
-    content_hash = sha256_digest(data)
+    content_hash = f"sha256:{_bare_sha256(data)}"
     return {
         "provider": "aliyun_oss",
         "bucket": config.bucket,

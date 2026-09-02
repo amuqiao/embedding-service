@@ -1,12 +1,33 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from app.core.exceptions import AppError
-from app.tools.private.object_storage_refs import CanonicalObjectRef, bare_sha256
-from app.tools.private.object_storage_refs.aliyun_url import AliyunOSSObjectLocation, parse_aliyun_oss_url
+from app.object_storage.aliyun_url import AliyunOSSObjectLocation, parse_aliyun_oss_url
+from app.object_storage import bare_sha256
+
+
+@dataclass(frozen=True)
+class CanonicalObjectRef:
+    provider: str
+    bucket: str
+    region: str
+    key: str
+    content_type: str | None = None
+    content_hash: str | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in ("provider", "bucket", "region", "key"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise AppError("INVALID_INPUT", f"object ref requires {field_name}")
+        if self.content_type is not None and not self.content_type.strip():
+            raise AppError("INVALID_INPUT", "object ref content_type must not be empty")
+        if self.content_hash is not None:
+            object.__setattr__(self, "content_hash", f"sha256:{bare_sha256(self.content_hash)}")
 
 
 def canonical_ref_from_oss_url_ref(
