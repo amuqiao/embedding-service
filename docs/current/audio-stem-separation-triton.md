@@ -28,7 +28,7 @@ Model repository
 ```text
 POST /jobs audio_stem_separation_triton
   -> schema validate
-  -> object_storage_read:1 fetch audio input from OSS
+  -> audio business storage adapter reads audio input from OSS
   -> audio_decode_normalize:1 canonicalize to 44.1kHz stereo
   -> segment canonical audio
   -> TritonAudioStemClient infer

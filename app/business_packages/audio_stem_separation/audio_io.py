@@ -8,7 +8,6 @@ from app.tools.private.media_audio import SUPPORTED_AUDIO_INPUT_CONTENT_TYPES
 
 AUDIO_WAV_CONTENT_TYPE = "audio/wav"
 AUDIO_INPUT_CONTENT_TYPES = SUPPORTED_AUDIO_INPUT_CONTENT_TYPES
-OBJECT_STORAGE_READ_TOOL_REF = "object_storage_read:1"
 AUDIO_DECODE_NORMALIZE_TOOL_REF = "audio_decode_normalize:1"
 
 
@@ -23,6 +22,5 @@ __all__ = [
     "AUDIO_DECODE_NORMALIZE_TOOL_REF",
     "AUDIO_INPUT_CONTENT_TYPES",
     "AUDIO_WAV_CONTENT_TYPE",
-    "OBJECT_STORAGE_READ_TOOL_REF",
     "PreparedAudioInput",
 ]

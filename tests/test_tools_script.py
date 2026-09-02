@@ -81,7 +81,6 @@ def test_tools_registry_prints_registered_graph():
     assert "Workflows" in result.stdout
     assert "poster_title_image" in result.stdout
     assert "Tools" in result.stdout
-    assert "object_storage_read:1" in result.stdout
     assert "audio_decode_normalize:1" in result.stdout
     assert "Job Type Tools" in result.stdout
     assert "audio_stem_separation" in result.stdout
@@ -200,22 +199,9 @@ def test_tools_registry_json_prints_registered_graph():
 
     tools = {item["tool_ref"]: item for item in data["tools"]}
     assert tools["audio_decode_normalize:1"]["kind"] == "media_transform"
-    assert tools["object_storage_read:1"]["required_settings"] == [
-        "storage.backend",
-        "job.oss_input_max_bytes",
-    ]
-    assert tools["object_storage_read:1"]["startup_validators"] == [
-        "app.tools.private.object_storage_read:validate_configuration",
-    ]
     job_tools = {item["job_type"]: item for item in data["job_tools"]}
-    assert job_tools["audio_stem_separation"]["required_tool_refs"] == [
-        "audio_decode_normalize:1",
-        "object_storage_read:1",
-    ]
-    assert job_tools["audio_stem_separation_triton"]["required_tool_refs"] == [
-        "audio_decode_normalize:1",
-        "object_storage_read:1",
-    ]
+    assert job_tools["audio_stem_separation"]["required_tool_refs"] == ["audio_decode_normalize:1"]
+    assert job_tools["audio_stem_separation_triton"]["required_tool_refs"] == ["audio_decode_normalize:1"]
 
 
 def test_tools_registry_rejects_unknown_argument():

@@ -5,7 +5,6 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.exceptions import AppError
-from app.services import object_storage
 from app.models.job import Job
 
 
@@ -75,16 +74,7 @@ def read_runtime_json(ref: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(value, dict):
             raise AppError("RUNTIME_REF_INVALID", "运行时内联引用必须包含 JSON object payload")
         return value
-    try:
-        text = object_storage.read_text(bucket=ref["oss_bucket"], key=ref["oss_key"], region=ref["oss_region"])
-        value = json.loads(text)
-    except AppError:
-        raise
-    except Exception as exc:
-        raise AppError("RUNTIME_REF_INVALID", "运行时引用读取失败") from exc
-    if not isinstance(value, dict):
-        raise AppError("RUNTIME_REF_INVALID", "运行时引用必须是 JSON object")
-    return value
+    raise AppError("RUNTIME_REF_INVALID", "运行时引用只支持 db_inline")
 
 
 def job_params_from_job(job: Job) -> dict[str, Any]:

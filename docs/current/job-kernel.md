@@ -345,7 +345,7 @@ job_execution_attempts = 某条 Job 的一次执行尝试
 
 `tagged_text_translation` 是当前 public root Job。它复用统一 Job 创建、查询、Callback 和 billing 链路，由 root Job 自己执行 custom executor，不创建 workflow child。执行器通过文本模型完成批量带标签文案翻译，并在公开结果中返回与请求 item 一一对应的 `items[]`。
 
-`audio_stem_separation` 和 `audio_stem_separation_triton` 当前都标记为 `visibility="demo"`，用于本地和开发环境验证音乐源分离真实模型链路；它们不是模板 smoke 示例。前者加载本地 ONNX 权重，后者调用 Triton HTTP endpoint，二者都会读取 OSS 音频输入，经 `object_storage_read:1` 和 `audio_decode_normalize:1` 规范化为 44.1kHz stereo canonical audio 后写出四条 WAV 音频 stem，因此使用前必须配置默认 OSS 连接、job type `storage_policy.py`、`ffmpeg` 和对应模型运行环境。
+`audio_stem_separation` 和 `audio_stem_separation_triton` 当前都标记为 `visibility="demo"`，用于本地和开发环境验证音乐源分离真实模型链路；它们不是模板 smoke 示例。前者加载本地 ONNX 权重，后者调用 Triton HTTP endpoint，二者都会通过音频业务 storage adapter 读取 OSS 音频输入，并经 `audio_decode_normalize:1` 规范化为 44.1kHz stereo canonical audio 后写出四条 WAV 音频 stem，因此使用前必须配置默认 OSS 连接、job type `storage_policy.py`、`ffmpeg` 和对应模型运行环境。
 
 ### Workflow Lineage
 
@@ -726,7 +726,7 @@ job_audit_events         排障时间线，不参与状态推进
 关键 schema 约束：
 
 - public root 固定为 `root_job_id IS NULL + workflow_node_key IS NULL + client_request_id IS NOT NULL`；workflow child 固定为 `root_job_id IS NOT NULL + workflow_node_key IS NOT NULL + client_request_id IS NULL`。
-- `job_params_ref` 和 `job_params_hash` 对每条 Job 必填；公开 result 和 canonical result 保存在 JSONB，外部大文件只通过 result 内部 artifact ref 表达。
+- `job_params_ref`、`runtime_ref` 和 `job_params_hash` 对每条 Job 必填；`job_params_ref` 与 `runtime_ref` 当前只支持 `storage="db_inline"`，不再支持 OSS runtime JSON ref；公开 result 和 canonical result 保存在 JSONB，外部大文件只通过 result 内部 artifact ref 表达。
 - terminal Job 必须清空 `active_attempt_id`；`active_attempt_id` 通过复合 FK 约束为同一 `job_id` 的 execution attempt，避免跨 Job 执行权指针污染。
 - `dispatch_outbox` 不保存 `job_id`，只通过 `attempt_id` 关联 execution attempt；它保留 `unique(event_id)`、`unique(attempt_id, task_name)`、`pending/leased/published/retrying/dead_letter` status 枚举、publish attempt 计数和 `publish_retry_policy_snapshot`。数据库约束要求 lease 字段与 `leased` 状态一致，`pending/retrying/published` 有 `next_attempt_at`，`dead_letter` 与 `dead_lettered_at` 双向一致。
 - `callback_outbox` 保留 `unique(job_id, event_type)`、`unique(event_id)`、`pending/leased/delivered/retrying/skipped/dead_letter` status 枚举、delivery attempt 计数和 `delivery_retry_policy_snapshot`；callback 投递失败不会回写或改变 Job 终态。数据库约束要求 lease 字段与 `leased` 状态一致，`pending/retrying` 有 `next_attempt_at`，terminal callback 状态清空 `next_attempt_at`，`delivered_at` / `dead_lettered_at` 与对应终态双向一致。

@@ -11,7 +11,7 @@ from app.business_packages.audio_stem_separation.schemas import (
 )
 from app.schemas.common import StrictBaseModel
 from app.schemas.jobs import RuntimeFieldsBase
-from app.tools.private.audio_contracts import AudioInputPlanSnapshot
+from app.business_packages.audio_stem_separation.audio_contracts import AudioInputPlanSnapshot
 
 
 class AudioStemSeparationTritonParams(AudioStemSeparationParams):

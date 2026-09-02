@@ -86,8 +86,8 @@ AudioStemSeparationTritonJob executor
   |
   +--> 读取输入音频
   |      |
-  |      +--> object_storage_read:1
-  |            从 OSS 读取 bytes
+  |      +--> 音频业务 storage adapter
+  |            使用 app/object_storage 从 OSS 读取 bytes
   |
   +--> 解码和规范化
   |      |
@@ -118,7 +118,7 @@ class AudioStemSeparationTritonJob(JobExecutor):
     name = "audio_stem_separation_triton"
     role = "root"
     visibility = "demo"
-    required_tool_refs = {"object_storage_read:1", "audio_decode_normalize:1"}
+    required_tool_refs = {"audio_decode_normalize:1"}
 
     def normalize_job_params(self, job_params):
         params = validate_params(job_params)
@@ -509,7 +509,7 @@ class AudioReportTritonJob(JobExecutor):
     runtime_fields_schema_name = "AudioReportTritonRuntimeFields"
     canonical_result_schema = AudioReportTritonResult
     public_result_schema = AudioReportTritonResult
-    required_tool_refs = {"object_storage_read:1", "audio_decode_normalize:1"}
+    required_tool_refs = {"audio_decode_normalize:1"}
 
     def normalize_job_params(self, job_params):
         params = AudioReportTritonParams.model_validate(job_params)
@@ -799,8 +799,8 @@ tool 用来封装可复用的底层执行边界。多个 tool 的组合逻辑应
 ```text
 prepare_audio_input(plan)
   |
-  +--> object_storage_read:1
-  |     读取 OSS bytes
+  +--> app/object_storage
+  |     由业务 adapter 读取 OSS bytes
   |
   +--> audio_decode_normalize:1
         解码、校验、规范化
@@ -813,7 +813,7 @@ PreparedAudioInput
 
 ```text
 business_packages/video_analysis/input_adapter.py
-  -> object_storage_read:1
+  -> app/object_storage
   -> video_probe:1
   -> video_frame_extract:1
   -> PreparedVideoInput
@@ -852,7 +852,6 @@ job executor 声明实际依赖的 tools：
 ```python
 class VideoAnalysisReportJob(JobExecutor):
     required_tool_refs = {
-        "object_storage_read:1",
         "video_probe:1",
         "video_frame_extract:1",
     }

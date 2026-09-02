@@ -24,14 +24,13 @@ from app.object_storage import (
 from app.business_packages.audio_stem_separation.schemas import (
     AudioStemSeparationInputObject,
 )
-from app.tools.private.audio_contracts import (
-    AudioDecodeNormalizeSpec,
+from app.business_packages.audio_stem_separation.audio_contracts import (
+    AudioInputFetchSpec,
+    AudioInputObjectSnapshot,
     AudioInputPlanSnapshot,
-    CanonicalObjectRefSnapshot,
-    MediaFetchSpec,
 )
 from app.services.job_runtime import output_target_from_job
-from app.tools.private.media_audio import decode_normalize_audio
+from app.tools.private.media_audio import AudioDecodeNormalizeSpec, decode_normalize_audio
 
 from .audio_io import AUDIO_INPUT_CONTENT_TYPES, AUDIO_WAV_CONTENT_TYPE, PreparedAudioInput
 from app.business_packages.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
@@ -96,7 +95,7 @@ class AudioStemSeparationTritonStorageAdapter(BaseObjectStorageAdapter):
     ) -> dict:
         ref = _canonical_input_ref(input_audio, settings=self._settings, storage_policy=self._storage_policy)
         plan = AudioInputPlanSnapshot(
-            source=CanonicalObjectRefSnapshot(
+            source=AudioInputObjectSnapshot(
                 provider=ref["provider"],
                 bucket=ref["bucket"],
                 region=ref["region"],
@@ -104,7 +103,7 @@ class AudioStemSeparationTritonStorageAdapter(BaseObjectStorageAdapter):
                 content_type=ref["content_type"],
                 content_hash=f"sha256:{ref['sha256']}",
             ),
-            fetch=MediaFetchSpec(max_bytes=input_max_bytes(self._storage_policy, self._settings)),
+            fetch=AudioInputFetchSpec(max_bytes=input_max_bytes(self._storage_policy, self._settings)),
             decode=AudioDecodeNormalizeSpec(source_content_type=ref["content_type"]),
             max_duration_seconds=max_duration_seconds,
         )

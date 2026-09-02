@@ -10,7 +10,7 @@ from app.schemas.jobs import (
     RuntimeSystemFields,
 )
 from app.schemas.meta import LanguagesResponse, ModelsResponse, PromptTemplateResponseData
-from app.tools.private.audio_contracts import SCHEMAS as AUDIO_TOOL_SCHEMAS
+from app.tools.private.media_audio import SCHEMAS as AUDIO_TOOL_SCHEMAS
 
 COMMON_SCHEMAS: tuple[type[BaseModel], ...] = (
     CreateJobRequest,

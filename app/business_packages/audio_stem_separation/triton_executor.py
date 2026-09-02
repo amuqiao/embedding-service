@@ -29,7 +29,6 @@ from app.business_packages.audio_stem_separation.shared import (
 )
 from app.business_packages.audio_stem_separation.audio_io import (
     AUDIO_DECODE_NORMALIZE_TOOL_REF,
-    OBJECT_STORAGE_READ_TOOL_REF,
 )
 from app.business_packages.audio_stem_separation.triton_storage_adapter import AudioStemSeparationTritonStorageAdapter
 from app.business_packages.audio_stem_separation.errors import (
@@ -51,7 +50,7 @@ from app.business_packages.audio_stem_separation.triton_schemas import (
     AudioStemSeparationTritonResult,
     AudioStemSeparationTritonRuntimeFields,
 )
-from app.tools.private.audio_contracts import AudioInputPlanSnapshot
+from app.business_packages.audio_stem_separation.audio_contracts import AudioInputPlanSnapshot
 from app.services.job_runtime import runtime_fields_from_job
 
 _RUNNER_CACHE: dict[tuple[str, str, str, float], "HTDemucsTritonRunner"] = {}
@@ -194,7 +193,7 @@ class AudioStemSeparationTritonJob(JobExecutor):
     public_result_schema = AudioStemSeparationTritonResult
     allow_callback = True
     timeout_seconds = DEFAULT_TIMEOUT_SECONDS
-    required_tool_refs = frozenset({OBJECT_STORAGE_READ_TOOL_REF, AUDIO_DECODE_NORMALIZE_TOOL_REF})
+    required_tool_refs = frozenset({AUDIO_DECODE_NORMALIZE_TOOL_REF})
     allowed_error_codes = frozenset(
         {
             "INVALID_INPUT",

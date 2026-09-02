@@ -54,7 +54,6 @@ def test_audio_input_plan_freezes_canonical_source_and_decode_policy(monkeypatch
     )
 
     assert plan == {
-        "tool_refs": ("object_storage_read:1", "audio_decode_normalize:1"),
         "source": {
             "provider": "aliyun_oss",
             "bucket": "local-dev",
@@ -63,12 +62,7 @@ def test_audio_input_plan_freezes_canonical_source_and_decode_policy(monkeypatch
             "content_type": "audio/mpeg",
             "content_hash": f"sha256:{ref.sha256}",
         },
-        "fetch": {
-            "read_mode": "object_storage",
-            "endpoint_key": "canonical_object_ref",
-            "max_bytes": 5_242_880,
-            "redirect_policy": "forbid",
-        },
+        "fetch": {"max_bytes": 5_242_880},
         "decode": {
             "source_content_type": "audio/mpeg",
             "target_sample_rate": 44100,
@@ -100,7 +94,6 @@ def test_prepare_audio_input_reads_frozen_object_ref_and_normalizes(monkeypatch)
     data = b"audio-bytes"
     captured: dict[str, object] = {}
     plan = {
-        "tool_refs": ("object_storage_read:1", "audio_decode_normalize:1"),
         "source": {
             "provider": "aliyun_oss",
             "bucket": "local-dev",
@@ -109,12 +102,7 @@ def test_prepare_audio_input_reads_frozen_object_ref_and_normalizes(monkeypatch)
             "content_type": "audio/mpeg",
             "content_hash": f"sha256:{sha256_digest(data)}",
         },
-        "fetch": {
-            "read_mode": "object_storage",
-            "endpoint_key": "canonical_object_ref",
-            "max_bytes": 1024,
-            "redirect_policy": "forbid",
-        },
+        "fetch": {"max_bytes": 1024},
         "decode": {
             "source_content_type": "audio/mpeg",
             "target_sample_rate": 44100,
@@ -166,7 +154,6 @@ def test_prepare_audio_input_reads_frozen_object_ref_and_normalizes(monkeypatch)
 def test_prepare_audio_input_rejects_decode_source_content_type_mismatch(monkeypatch):
     data = b"audio-bytes"
     plan = {
-        "tool_refs": ("object_storage_read:1", "audio_decode_normalize:1"),
         "source": {
             "provider": "aliyun_oss",
             "bucket": "local-dev",
@@ -175,12 +162,7 @@ def test_prepare_audio_input_rejects_decode_source_content_type_mismatch(monkeyp
             "content_type": "audio/mpeg",
             "content_hash": f"sha256:{sha256_digest(data)}",
         },
-        "fetch": {
-            "read_mode": "object_storage",
-            "endpoint_key": "canonical_object_ref",
-            "max_bytes": 1024,
-            "redirect_policy": "forbid",
-        },
+        "fetch": {"max_bytes": 1024},
         "decode": {
             "source_content_type": "audio/wav",
             "target_sample_rate": 44100,
@@ -198,7 +180,6 @@ def test_prepare_audio_input_rejects_decode_source_content_type_mismatch(monkeyp
 
 def test_prepare_audio_input_rejects_hash_mismatch(monkeypatch):
     plan = {
-        "tool_refs": ("object_storage_read:1", "audio_decode_normalize:1"),
         "source": {
             "provider": "aliyun_oss",
             "bucket": "local-dev",
@@ -207,12 +188,7 @@ def test_prepare_audio_input_rejects_hash_mismatch(monkeypatch):
             "content_type": "audio/wav",
             "content_hash": f"sha256:{'0' * 64}",
         },
-        "fetch": {
-            "read_mode": "object_storage",
-            "endpoint_key": "canonical_object_ref",
-            "max_bytes": 1024,
-            "redirect_policy": "forbid",
-        },
+        "fetch": {"max_bytes": 1024},
         "decode": {
             "source_content_type": "audio/wav",
             "target_sample_rate": 44100,

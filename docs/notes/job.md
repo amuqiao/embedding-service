@@ -116,7 +116,7 @@ Capability 层
 
 Tool 层
   拥有具体副作用边界
-  例如 object_storage_read:1
+  例如 audio_decode_normalize:1
   不写 Job 状态
   不决定 retry
   不投影 public result

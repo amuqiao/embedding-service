@@ -36,6 +36,7 @@ from app.business_packages.register import (
     job_type_business_package_names,
     load_business_packages,
     register_all_business_packages,
+    validate_business_package_config,
 )
 from app.jobs import registry as job_registry
 from app.schemas.registry import all_schema_names
@@ -708,7 +709,7 @@ def test_job_type_registry_exposes_required_metadata():
     _assert_default_retry_policy(audio_spec.retry_policy)
     assert audio_spec.side_effect_policy == "none"
     assert audio_spec.timeout_seconds == 2400
-    assert audio_spec.required_tool_refs == frozenset({"object_storage_read:1", "audio_decode_normalize:1"})
+    assert audio_spec.required_tool_refs == frozenset({"audio_decode_normalize:1"})
     assert audio_spec.error_codes <= all_error_reasons()
     assert AUDIO_STEM_INPUT_INVALID in audio_spec.error_codes
     assert AUDIO_STEM_MODEL_ASSET_MISSING in audio_spec.error_codes
@@ -727,7 +728,7 @@ def test_job_type_registry_exposes_required_metadata():
     _assert_default_retry_policy(audio_triton_spec.retry_policy)
     assert audio_triton_spec.side_effect_policy == "none"
     assert audio_triton_spec.timeout_seconds == 2400
-    assert audio_triton_spec.required_tool_refs == frozenset({"object_storage_read:1", "audio_decode_normalize:1"})
+    assert audio_triton_spec.required_tool_refs == frozenset({"audio_decode_normalize:1"})
     assert audio_triton_spec.error_codes <= all_error_reasons()
     assert AUDIO_STEM_INPUT_INVALID in audio_triton_spec.error_codes
     assert AUDIO_STEM_MODEL_ASSET_MISSING in audio_triton_spec.error_codes
@@ -951,7 +952,19 @@ def test_business_packages_default_external_job_types_exclude_demo_in_release_en
         SimpleNamespace(
             runtime=SimpleNamespace(is_release_env=True),
             registry=SimpleNamespace(enabled_business_packages=()),
-            storage=SimpleNamespace(backend="aliyun_oss"),
+            storage=SimpleNamespace(
+                backend="aliyun_oss",
+                local_object_storage_path="storage/objects",
+                oss_public_endpoint="",
+                oss_bucket="bucket",
+                oss_region="ap-southeast-1",
+                oss_access_key_id="access-key",
+                oss_access_key_secret_value="secret-key",
+                oss_project_root="",
+                oss_endpoint="",
+                oss_endpoint_style="virtual_host",
+                oss_scheme="https",
+            ),
         ),
     )
 
@@ -1085,7 +1098,19 @@ def test_enabled_business_package_registers_static_workflow_children(monkeypatch
         SimpleNamespace(
             runtime=SimpleNamespace(is_release_env=False),
             registry=SimpleNamespace(enabled_business_packages=("poster_title_image",)),
-            storage=SimpleNamespace(backend="aliyun_oss"),
+            storage=SimpleNamespace(
+                backend="aliyun_oss",
+                local_object_storage_path="storage/objects",
+                oss_public_endpoint="",
+                oss_bucket="bucket",
+                oss_region="ap-southeast-1",
+                oss_access_key_id="access-key",
+                oss_access_key_secret_value="secret-key",
+                oss_project_root="",
+                oss_endpoint="",
+                oss_endpoint_style="virtual_host",
+                oss_scheme="https",
+            ),
         ),
     )
 
@@ -1150,6 +1175,29 @@ def test_enabled_business_packages_release_local_storage_rejects_object_storage_
 
     with pytest.raises(ValueError, match="STORAGE_BACKEND=local"):
         register_all_business_packages()
+
+
+def test_enabled_business_packages_validate_object_storage_config():
+    fake_settings = SimpleNamespace(
+        runtime=SimpleNamespace(is_release_env=False),
+        registry=SimpleNamespace(enabled_business_packages=("poster_title_image",)),
+        storage=SimpleNamespace(
+            backend="aliyun_oss",
+            local_object_storage_path="storage/objects",
+            oss_public_endpoint="",
+            oss_bucket="bucket",
+            oss_region="ap-southeast-1",
+            oss_access_key_id="",
+            oss_access_key_secret_value="",
+            oss_project_root="",
+            oss_endpoint="",
+            oss_endpoint_style="virtual_host",
+            oss_scheme="https",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="valid object storage config"):
+        validate_business_package_config(fake_settings)
 
 
 def test_register_job_type_decorator_is_marker_not_registration_side_effect():

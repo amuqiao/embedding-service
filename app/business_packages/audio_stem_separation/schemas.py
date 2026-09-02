@@ -7,7 +7,11 @@ from pydantic import Field, field_validator
 
 from app.schemas.common import StrictBaseModel
 from app.schemas.jobs import RuntimeFieldsBase
-from app.tools.private.audio_contracts import AudioInputContentType, AudioInputPlanSnapshot
+from app.business_packages.audio_stem_separation.audio_contracts import (
+    SCHEMAS as AUDIO_INPUT_SCHEMAS,
+    AudioInputPlanSnapshot,
+)
+from app.tools.private.media_audio import AudioInputContentType
 
 BARE_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -80,7 +84,7 @@ class AudioStemSeparationResult(StrictBaseModel):
     duration_ms: AudioStemSeparationDurationMs
 
 
-SCHEMAS = (
+SCHEMAS = AUDIO_INPUT_SCHEMAS + (
     AudioStemSeparationInputObject,
     AudioStemSeparationParams,
     AudioStemSeparationRuntimeFields,

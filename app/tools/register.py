@@ -8,26 +8,6 @@ def register_all_tools() -> None:
 
     register(
         ToolDefinition(
-            tool_ref="object_storage_read:1",
-            kind="object_storage",
-            entrypoint_path="app.tools.private.object_storage_read:read_object_bytes",
-            request_schema="CanonicalObjectRefSnapshot",
-            result_schema=None,
-            required_settings=("storage.backend", "job.oss_input_max_bytes"),
-            startup_validators=("app.tools.private.object_storage_read:validate_configuration",),
-            error_codes=frozenset(
-                {
-                    "INPUT_TOO_LARGE",
-                    "OSS_BUCKET_NOT_CONFIGURED",
-                    "OSS_FETCH_FAILED",
-                    "OSS_OBJECT_NOT_FOUND",
-                    "OSS_REGION_NOT_CONFIGURED",
-                }
-            ),
-        )
-    )
-    register(
-        ToolDefinition(
             tool_ref="audio_decode_normalize:1",
             kind="media_transform",
             entrypoint_path="app.tools.private.media_audio:decode_normalize_audio",

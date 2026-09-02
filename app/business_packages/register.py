@@ -66,6 +66,62 @@ def _validate_release_storage_requirements(settings, packages: tuple[BusinessPac
         )
 
 
+def _validate_object_storage_configuration(settings, packages: tuple[BusinessPackage, ...]) -> None:
+    requiring_storage = sorted(package.name for package in packages if package.requires_object_storage)
+    if not requiring_storage:
+        return
+    try:
+        from app.core.oss_endpoint import normalize_oss_endpoint
+        from app.object_storage import ObjectStorageConfig, build_repository
+    except Exception as exc:
+        raise ValueError("object storage module is unavailable") from exc
+
+    def public_base_url(value: str) -> str:
+        endpoint = normalize_oss_endpoint(value)
+        if not endpoint:
+            return ""
+        return f"https://{endpoint}"
+
+    backend = settings.storage.backend
+    if backend == "local":
+        config = ObjectStorageConfig(
+            provider="local",
+            options={
+                "root": settings.storage.local_object_storage_path,
+                "bucket": settings.storage.oss_bucket or "local-dev",
+                "region": settings.storage.oss_region or "local",
+                "public_base_url": public_base_url(settings.storage.oss_public_endpoint),
+            },
+        )
+    elif backend == "aliyun_oss":
+        config = ObjectStorageConfig(
+            provider="aliyun_oss",
+            options={
+                "bucket": settings.storage.oss_bucket,
+                "region": settings.storage.oss_region,
+                "access_key_id": settings.storage.oss_access_key_id,
+                "access_key_secret": settings.storage.oss_access_key_secret_value,
+                "key_prefix": settings.storage.oss_project_root,
+                "endpoint": settings.storage.oss_endpoint,
+                "endpoint_style": settings.storage.oss_endpoint_style,
+                "public_base_url": public_base_url(settings.storage.oss_public_endpoint),
+                "scheme": settings.storage.oss_scheme,
+            },
+        )
+    else:
+        raise ValueError(
+            "enabled business packages require object storage but STORAGE_BACKEND is unsupported: "
+            f"{backend}"
+        )
+    try:
+        build_repository(config)
+    except Exception as exc:
+        raise ValueError(
+            "enabled business packages require valid object storage config: "
+            f"{requiring_storage}"
+        ) from exc
+
+
 def validate_business_package_config(settings) -> None:
     all_packages = load_business_packages()
     selected_packages = _selected_business_packages(
@@ -73,6 +129,7 @@ def validate_business_package_config(settings) -> None:
         settings.registry.enabled_business_packages,
     )
     _validate_release_storage_requirements(settings, selected_packages)
+    _validate_object_storage_configuration(settings, selected_packages)
 
 
 def _configure_job_type_access(
@@ -129,6 +186,7 @@ def register_all_business_packages() -> None:
         settings.registry.enabled_business_packages,
     )
     _validate_release_storage_requirements(settings, selected_packages)
+    _validate_object_storage_configuration(settings, selected_packages)
 
     register_all_tools()
 

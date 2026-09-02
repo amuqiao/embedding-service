@@ -6,14 +6,16 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from app.core.exceptions import AppError
-from app.tools.private.audio_contracts import AudioDecodeNormalizeRequest
+from app.schemas.common import StrictBaseModel
 
 SUPPORTED_AUDIO_INPUT_CONTENT_TYPES = frozenset({"audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3"})
+AudioInputContentType = Literal["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3"]
 _CONTENT_TYPE_SUFFIX = {
     "audio/wav": ".wav",
     "audio/x-wav": ".wav",
@@ -23,6 +25,18 @@ _CONTENT_TYPE_SUFFIX = {
 _FFPROBE_TIMEOUT_SECONDS = 60
 _FFMPEG_TIMEOUT_SECONDS = 1800
 _MAX_DECODE_DURATION_SECONDS = 3600.0
+
+
+class AudioDecodeNormalizeSpec(StrictBaseModel):
+    source_content_type: AudioInputContentType
+    target_sample_rate: Literal[44100] = 44100
+    target_channels: Literal[2] = 2
+
+
+class AudioDecodeNormalizeRequest(StrictBaseModel):
+    data: bytes
+    decode: AudioDecodeNormalizeSpec
+    max_duration_seconds: float | None = Field(default=None, gt=0, le=3600)
 
 
 @dataclass(frozen=True)
@@ -221,3 +235,9 @@ def _sample_count(raw: bytes, *, target_channels: int) -> int:
             details={"size_bytes": len(raw), "frame_size": frame_size},
         )
     return len(raw) // frame_size
+
+
+SCHEMAS = (
+    AudioDecodeNormalizeSpec,
+    AudioDecodeNormalizeRequest,
+)

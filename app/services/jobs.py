@@ -10,11 +10,21 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.callback_security import validate_callback_url_security
-from app.core.exceptions import AppError, InternalAppError, NotFoundAppError, ValidationAppError
 from app.core.config import settings
 from app.core.error_registry import get_error_spec
+from app.core.exceptions import AppError, InternalAppError, NotFoundAppError, ValidationAppError
+from app.core.oss_endpoint import normalize_oss_endpoint
 from app.core.prompt_templates import get_template
-from app.services import object_storage
+from app.object_storage import (
+    ObjectRef,
+    ObjectStorageBackendError,
+    ObjectStorageConfig,
+    ObjectStorageConfigError,
+    ObjectStorageNotFoundError,
+    ObjectStorageValidationError,
+    PutObjectResult,
+    build_repository,
+)
 from app.models.job import Job
 from app.repositories.job_repo import JobRepo
 from app.schemas.errors import JobErrorDetail
@@ -82,6 +92,116 @@ def _configured_oss_bucket() -> str:
 
 def _configured_oss_region() -> str:
     return settings.storage.oss_region or "local"
+
+
+def _public_base_url(value: str) -> str:
+    endpoint = normalize_oss_endpoint(value)
+    if not endpoint:
+        return ""
+    return f"https://{endpoint}"
+
+
+def _repository_config(*, bucket: str, region: str) -> ObjectStorageConfig:
+    backend = settings.storage.backend
+    if backend == "local":
+        return ObjectStorageConfig(
+            provider="local",
+            options={
+                "root": settings.storage.local_object_storage_path,
+                "bucket": bucket,
+                "region": region,
+                "public_base_url": _public_base_url(settings.storage.oss_public_endpoint),
+            },
+        )
+    if backend == "aliyun_oss":
+        _assert_configured_aliyun_target(bucket=bucket, region=region)
+        return ObjectStorageConfig(
+            provider="aliyun_oss",
+            options={
+                "bucket": bucket,
+                "region": region,
+                "access_key_id": settings.storage.oss_access_key_id,
+                "access_key_secret": settings.storage.oss_access_key_secret_value,
+                "key_prefix": settings.storage.oss_project_root,
+                "endpoint": settings.storage.oss_endpoint,
+                "endpoint_style": settings.storage.oss_endpoint_style,
+                "public_base_url": _public_base_url(settings.storage.oss_public_endpoint),
+                "scheme": settings.storage.oss_scheme,
+            },
+        )
+    raise ObjectStorageConfigError("STORAGE_BACKEND must be local or aliyun_oss")
+
+
+def _assert_configured_aliyun_target(*, bucket: str, region: str) -> None:
+    if bucket != settings.storage.oss_bucket:
+        raise AppError(
+            "OSS_BUCKET_NOT_CONFIGURED",
+            "OSS bucket does not match configured Aliyun OSS bucket",
+            details={"oss_bucket": bucket, "configured_bucket": settings.storage.oss_bucket},
+        )
+    if region != settings.storage.oss_region:
+        raise AppError(
+            "OSS_REGION_NOT_CONFIGURED",
+            "OSS region does not match configured Aliyun OSS region",
+            details={"oss_region": region, "configured_region": settings.storage.oss_region},
+        )
+
+
+def _object_write_result(written: PutObjectResult) -> dict[str, object]:
+    return {
+        "oss_bucket": written.bucket,
+        "oss_key": written.key,
+        "oss_region": written.region,
+        "content_hash": _sha256_content_hash_from_hex(written.sha256),
+        "content_size_bytes": written.size_bytes,
+    }
+
+
+def _sha256_content_hash_from_hex(value: str) -> str:
+    return value if value.startswith("sha256:") else f"sha256:{value}"
+
+
+def _read_text_object(*, bucket: str, key: str, region: str) -> str:
+    try:
+        repository = build_repository(_repository_config(bucket=bucket, region=region))
+        data = repository.get_bytes(ObjectRef(provider=repository.provider, bucket=bucket, region=region, key=key))
+    except ObjectStorageNotFoundError as exc:
+        raise AppError(
+            "OSS_OBJECT_NOT_FOUND",
+            "OSS object not found",
+            details={"oss_bucket": bucket, "oss_key": key, "oss_region": region},
+        ) from exc
+    except ObjectStorageValidationError as exc:
+        raise AppError("INVALID_INPUT", str(exc)) from exc
+    except (ObjectStorageConfigError, ObjectStorageBackendError) as exc:
+        raise AppError(
+            "OSS_FETCH_FAILED",
+            "OSS 对象读取失败",
+            details={"oss_bucket": bucket, "oss_key": key, "oss_region": region},
+        ) from exc
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise AppError("INVALID_INPUT", "OSS object must be UTF-8 text") from exc
+
+
+def _write_text_object(*, bucket: str, key: str, region: str, content: str) -> dict[str, object]:
+    try:
+        repository = build_repository(_repository_config(bucket=bucket, region=region))
+        written = repository.put_bytes(
+            key,
+            content.encode("utf-8"),
+            content_type="text/plain; charset=utf-8",
+        )
+    except ObjectStorageValidationError as exc:
+        raise AppError("INVALID_INPUT", str(exc)) from exc
+    except (ObjectStorageConfigError, ObjectStorageBackendError) as exc:
+        raise AppError(
+            "OSS_WRITE_FAILED",
+            "Failed to write OSS object",
+            details={"oss_bucket": bucket, "oss_key": key, "oss_region": region},
+        ) from exc
+    return _object_write_result(written)
 
 
 def _canonical_callback(callback: Any) -> dict[str, Any] | None:
@@ -657,7 +777,7 @@ def _load_input_text(job: Job) -> str:
     oss_payload = source_payload.get("oss") or source_payload
 
     try:
-        text = object_storage.read_text(
+        text = _read_text_object(
             bucket=source_payload.get("oss_bucket") or _configured_oss_bucket(),
             key=oss_payload["oss_key"],
             region=source_payload.get("oss_region") or _configured_oss_region(),
@@ -704,7 +824,7 @@ def _persist_large_artifact_payload(
             continue
         if output_target is None:
             output_target = output_target_from_job(job)
-        stored = object_storage.write_text(
+        stored = _write_text_object(
             bucket=output_target["oss_bucket"],
             key=_artifact_key(output_target, artifact_key, scope=scope),
             region=output_target["oss_region"],

@@ -28,8 +28,13 @@ from app.business_packages.poster_title_image.title_layer import (
 from app.tools.private.image import (
     validate_image_bytes,
 )
-from app.services.object_storage import LocalObjectStorage
-from app.object_storage import bare_sha256, sha256_digest
+from app.object_storage import (
+    LocalObjectStorageRepository,
+    LocalStorageConfig,
+    ObjectRef,
+    bare_sha256,
+    sha256_digest,
+)
 from app.business_packages.poster_title_image.executor import PosterTitleImageJob
 from app.business_packages.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
@@ -100,6 +105,43 @@ def _patch_poster_executor_settings(monkeypatch, *, storage: SimpleNamespace | N
             storage=storage or _storage_settings(),
         ),
     )
+
+
+class LocalObjectStorage:
+    def __init__(self, root):
+        self.root = root
+
+    def _repository(self, *, bucket: str, region: str) -> LocalObjectStorageRepository:
+        return LocalObjectStorageRepository(LocalStorageConfig(root=self.root, bucket=bucket, region=region))
+
+    def write_bytes(
+        self,
+        *,
+        bucket,
+        key,
+        region,
+        data,
+        content_type="application/octet-stream",
+        content_disposition=None,
+    ):
+        repository = self._repository(bucket=bucket, region=region)
+        written = repository.put_bytes(
+            key,
+            data,
+            content_type=content_type,
+            content_disposition=content_disposition,
+        )
+        return {
+            "oss_bucket": written.bucket,
+            "oss_key": written.key,
+            "oss_region": written.region,
+            "content_hash": f"sha256:{written.sha256}",
+            "content_size_bytes": written.size_bytes,
+        }
+
+    def read_bytes(self, *, bucket, key, region):
+        repository = self._repository(bucket=bucket, region=region)
+        return repository.get_bytes(ObjectRef(provider=repository.provider, bucket=bucket, region=region, key=key))
 
 
 def test_poster_storage_adapter_uses_settings_oss_endpoint_for_aliyun_config():

@@ -79,7 +79,6 @@ def test_audio_storage_adapter_uses_settings_oss_endpoint_for_aliyun_config():
 def _media_input_plan(params: dict) -> dict:
     input_audio = params["input_audio"]
     return {
-        "tool_refs": ("object_storage_read:1", "audio_decode_normalize:1"),
         "source": {
             "provider": "aliyun_oss",
             "bucket": "local-dev",
@@ -88,12 +87,7 @@ def _media_input_plan(params: dict) -> dict:
             "content_type": input_audio["content_type"],
             "content_hash": f"sha256:{input_audio['sha256']}",
         },
-        "fetch": {
-            "read_mode": "object_storage",
-            "endpoint_key": "canonical_object_ref",
-            "max_bytes": 5_242_880,
-            "redirect_policy": "forbid",
-        },
+        "fetch": {"max_bytes": 5_242_880},
         "decode": {
             "source_content_type": input_audio["content_type"],
             "target_sample_rate": 44100,
@@ -363,7 +357,6 @@ def test_audio_stem_separation_runtime_fields_reflect_model_asset(monkeypatch):
         "segment_seconds": 7.8,
         "overlap_ratio": 0.25,
     }
-    assert fields["media_input_plan"]["tool_refs"] == ("object_storage_read:1", "audio_decode_normalize:1")
     assert fields["media_input_plan"]["source"]["content_hash"] == f"sha256:{ref['sha256']}"
     assert fields["media_input_plan"]["decode"] == {
         "source_content_type": "audio/wav",

@@ -76,6 +76,7 @@ API startup 和 worker startup 都执行同一组注册和校验。`app/business
 - `runtime_job_type_dependencies` 必须引用已注册且 child-capable 的 `job_type`。
 - import direction 由 registry contract 测试覆盖：`app/tools` 和 `app/object_storage` 不反向依赖 `app/jobs`、`app/business_packages`、旧 `app/integrations` 或旧 `app/capabilities`。
 - operation registry、job type registry、prompt config、route operation 和 error code 唯一性仍按既有规则校验。
+- 启用的业务包如果声明 `requires_object_storage=True`，启动校验会用 `app/object_storage` 构建当前 `STORAGE_BACKEND` repository 配置；OSS 配置错误必须在启动/验证阶段 fail-fast。
 
 校验失败会中止启动或测试，不做自动跳过、silent fallback 或动态降级。
 
@@ -85,14 +86,12 @@ API startup 和 worker startup 都执行同一组注册和校验。`app/business
 
 | `tool_ref` | kind | entrypoint | request schema | result schema |
 |---|---|---|---|---|
-| `object_storage_read:1` | `object_storage` | `app.tools.private.object_storage_read:read_object_bytes` | `CanonicalObjectRefSnapshot` | - |
 | `audio_decode_normalize:1` | `media_transform` | `app.tools.private.media_audio:decode_normalize_audio` | `AudioDecodeNormalizeRequest` | - |
 
 `audio_stem_separation` 和 `audio_stem_separation_triton` 都声明：
 
 ```text
 required_tool_refs = [
-  object_storage_read:1,
   audio_decode_normalize:1
 ]
 ```
@@ -103,9 +102,8 @@ required_tool_refs = [
 
 ```text
 AudioInputPlanSnapshot
-  tool_refs = [object_storage_read:1, audio_decode_normalize:1]
   source = provider / bucket / region / key / content_type / content_hash
-  fetch = object_storage / canonical_object_ref / max_bytes / forbid redirects
+  fetch = max_bytes
   decode = source_content_type / target_sample_rate=44100 / target_channels=2
   max_duration_seconds = request policy snapshot
 ```
