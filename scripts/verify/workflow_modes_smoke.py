@@ -21,7 +21,7 @@ from scripts.verify.job_workflow_smoke import (
     load_dotenv,
     request_json,
 )
-from app.business_packages.examples.catalog import all_example_workflow_mode_specs
+from app.business_packages.example_jobs.catalog import all_example_workflow_mode_specs
 
 
 @dataclass(frozen=True)

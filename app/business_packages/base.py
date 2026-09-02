@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app.api.operations import OperationSpec
 from app.jobs.base import JobExecutor
 
 RegisterJobExecutor = Callable[[JobExecutor], JobExecutor]
@@ -36,4 +37,5 @@ class BusinessPackage:
     register: Callable[[RegisterJobExecutor], None]
     register_routes: Callable[[BusinessRouteCollector], None] | None = None
     requires_object_storage: bool = False
+    operations: tuple[OperationSpec, ...] = ()
     schemas: tuple[type[BaseModel], ...] = ()

@@ -33,7 +33,7 @@ from scripts.verify.env_config_check import (
     default_env_files,
 )
 from scripts.verify.job_workflow_smoke import job_from_envelope
-from app.business_packages.examples.catalog import all_example_workflow_mode_specs
+from app.business_packages.example_jobs.catalog import all_example_workflow_mode_specs
 from scripts.verify.workflow_modes_smoke import WORKFLOW_MODE_CASES, _validate_result
 
 

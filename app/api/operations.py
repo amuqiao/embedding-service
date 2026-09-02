@@ -38,7 +38,7 @@ class OperationSpec:
 _SERVICE_AUTH_ERRORS = frozenset({"UNAUTHORIZED", "FORBIDDEN", "INTERNAL_ERROR"})
 _SERVICE_AUTH_BOUNDARY = "service bearer token (locally disable-able) + caller id header (optionally ignored)"
 
-_OPERATIONS: dict[str, OperationSpec] = {
+_CORE_OPERATIONS: dict[str, OperationSpec] = {
     OperationID.LIST_MODELS: OperationSpec(
         operation_id=OperationID.LIST_MODELS,
         channel="http",
@@ -157,17 +157,58 @@ _OPERATIONS: dict[str, OperationSpec] = {
     ),
 }
 
+_business_operations: dict[str, OperationSpec] = {}
+
+
+def _http_route_key(spec: OperationSpec) -> tuple[str, str] | None:
+    if spec.channel != "http":
+        return None
+    return spec.method.upper(), spec.path
+
+
+def replace_business_operation_specs(specs: tuple[OperationSpec, ...]) -> None:
+    operations: dict[str, OperationSpec] = {}
+    routes: dict[tuple[str, str], str] = {
+        route_key: spec.operation_id
+        for spec in _CORE_OPERATIONS.values()
+        if (route_key := _http_route_key(spec)) is not None
+    }
+    for spec in specs:
+        if not isinstance(spec, OperationSpec):
+            raise TypeError("business operation must be OperationSpec")
+        if spec.operation_id in _CORE_OPERATIONS:
+            raise ValueError(f"business operation duplicates core operation: {spec.operation_id}")
+        if spec.operation_id in operations:
+            raise ValueError(f"duplicate business operation: {spec.operation_id}")
+        route_key = _http_route_key(spec)
+        if route_key is not None:
+            existing_operation_id = routes.get(route_key)
+            if existing_operation_id is not None:
+                method, path = route_key
+                raise ValueError(
+                    "business operation duplicates http route: "
+                    f"{method} {path} ({existing_operation_id})"
+                )
+            routes[route_key] = spec.operation_id
+        operations[spec.operation_id] = spec
+    global _business_operations
+    _business_operations = operations
+
+
+def business_operation_specs() -> dict[str, OperationSpec]:
+    return dict(_business_operations)
+
 
 def get_operation_spec(operation_id: str) -> OperationSpec:
-    return _OPERATIONS[operation_id]
+    return all_operation_specs()[operation_id]
 
 
 def all_operation_specs() -> dict[str, OperationSpec]:
-    return dict(_OPERATIONS)
+    return {**_CORE_OPERATIONS, **_business_operations}
 
 
 def all_operation_ids() -> set[str]:
-    return set(_OPERATIONS)
+    return set(all_operation_specs())
 
 
 def operation_path(operation_id: str) -> str:
@@ -175,10 +216,14 @@ def operation_path(operation_id: str) -> str:
 
 
 def operation_responses(operation_id: str) -> dict[int, dict[str, object]]:
+    return operation_responses_for_spec(get_operation_spec(operation_id))
+
+
+def operation_responses_for_spec(spec: OperationSpec) -> dict[int, dict[str, object]]:
     from app.core.error_registry import get_error_spec
 
     grouped: dict[int, list[str]] = {}
-    for reason in sorted(get_operation_spec(operation_id).error_codes):
+    for reason in sorted(spec.error_codes):
         status = get_error_spec(reason).http_status
         grouped.setdefault(status, []).append(reason)
     return {
@@ -188,14 +233,17 @@ def operation_responses(operation_id: str) -> dict[int, dict[str, object]]:
 
 
 def operation_route_kwargs(operation_id: str) -> dict[str, Any]:
+    return operation_route_kwargs_for_spec(get_operation_spec(operation_id))
+
+
+def operation_route_kwargs_for_spec(spec: OperationSpec) -> dict[str, Any]:
     from app.schemas.registry import get_schema
 
-    spec = get_operation_spec(operation_id)
     kwargs: dict[str, Any] = {
         "operation_id": spec.operation_id,
         "response_model": get_schema(spec.response_data_schema),
         "status_code": spec.success_status,
-        "responses": operation_responses(operation_id),
+        "responses": operation_responses_for_spec(spec),
     }
     if spec.response_model_exclude_none:
         kwargs["response_model_exclude_none"] = True

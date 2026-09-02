@@ -15,7 +15,7 @@ Operation
 Business Package
   -> one or more Job Types
   -> Workflow Definition
-  -> Package-local errors / routes / storage policy
+  -> Package-local errors / routes / operations / storage policy
   -> required_tool_refs
 
 Tool
@@ -31,14 +31,14 @@ Tool
 |---|---|---|
 | Ref parser | `app/core/registries/refs.py` | 校验 `tool_ref` 的 `<key>:<version>` 格式 |
 | Tool registry | `app/tools/registry.py`、`app/tools/register.py` | 注册 `ToolDefinition`，支持 freeze 和测试清理 |
-| Business package registry | `app/business_packages/base.py`、`app/business_packages/register.py` | 维护业务包清单，按 `ENABLED_BUSINESS_PACKAGES` 启用业务包，并收集业务包 routes 和 schema |
+| Business package registry | `app/business_packages/base.py`、`app/business_packages/register.py` | 维护业务包清单，按 `ENABLED_BUSINESS_PACKAGES` 启用业务包，并收集业务包 routes、operations 和 schema |
 | Job Type registry | `app/jobs/registry.py`、`app/jobs/base.py` | `JobTypeSpec.required_tool_refs` 声明 job type 依赖的工具 |
 | Workflow registry | `app/workflows/registry.py` | `WorkflowDefinition` 声明 workflow type、root job type、版本、失败策略、节点上限和 runtime child job type 依赖 |
-| Operation registry | `app/api/operations.py` | `OperationSpec` 声明 HTTP operation path、method、成功状态、schema、错误码和副作用 |
+| Operation registry | `app/api/operations.py` | `OperationSpec` 声明 HTTP operation path、method、成功状态、schema、错误码和副作用；中心表只维护平台接口，业务接口由业务包声明后注册 |
 | Error registry | `app/core/error_registry.py` | `ErrorSpec` 包含 `visibility` 和 `projection_targets` 元数据 |
 | Registry check | `app/core/registry_checks.py`、`tests/test_registry_contract.py` | 校验 error、operation、job type、tool、schema、log event、entrypoint、settings、error projection、注册入口、import direction 和 route operation |
 
-API startup 和 worker startup 都执行同一组注册和校验。`app/business_packages/register.py` 是当前业务包 composition root：它先注册平台工具，再通过 `BUSINESS_PACKAGE_MODULES` 懒加载各业务包的 `PACKAGE = BusinessPackage(...)` registrar。业务包的 `register.py` 只暴露轻量 package metadata 和 schema 声明，executor 必须在 `register_job_package()` 内部延迟导入；业务包 `__init__.py` 不 re-export executor。业务包 registrar 内聚注册本包 error、job type、workflow definition，并可按需注册本包 HTTP routes；API startup 会在 `validate_all_registries(application)` 前挂载业务包 routes，worker startup 只注册执行侧能力，不挂载 routes。
+API startup 和 worker startup 都执行同一组注册和校验。`app/business_packages/register.py` 是当前业务包 composition root：它先注册平台工具，再通过 `BUSINESS_PACKAGE_MODULES` 懒加载各业务包的 `PACKAGE = BusinessPackage(...)` registrar。业务包的 `register.py` 只暴露轻量 package metadata、schema 声明和 operation 声明，executor 必须在 `register_job_package()` 内部延迟导入；业务包 `__init__.py` 不 re-export executor。业务包 registrar 内聚注册本包 error、job type、workflow definition，并可按需注册本包 HTTP routes 和 HTTP operations；API startup 会在 `validate_all_registries(application)` 前挂载启用业务包的 routes，worker startup 只注册执行侧能力，不挂载 routes。
 
 注册完成后 API/worker 会 freeze error 和 tool registry；freeze 后相同 definition 可幂等重复注册，变更 definition 会失败。
 
@@ -65,6 +65,9 @@ API startup 和 worker startup 都执行同一组注册和校验。`app/business
 - error `visibility` 只能是 `public` / `internal`。
 - internal error 的 `projection_targets` 必须指向已注册 public error。
 - public HTTP operation 不能引用 internal error。
+- 业务包 HTTP operation 必须由对应 `BusinessPackage.operations` 声明；中心 `app/api/operations.py` 只保留平台接口。
+- 业务包 HTTP operation 不能复用已有 `operation_id` 或 `method + path`；重复会在业务包注册阶段 fail-fast。
+- 启用业务包的 routes 必须与 operation registry 双向一致：挂载 route 的 `operation_id` 必须已注册，已注册 operation 也必须有对应 route。
 - job type public error contract 不能声明 internal error。
 - 源码中 `@register_job_type` 声明的 job type 必须全部由某个 `BusinessPackage` registrar 注册，并出现在 `app/business_packages/register.py` composition root 的注册结果中。
 - 每个业务包必须通过 `BusinessPackage.schemas` 声明自己的 request/runtime/result schema；公共 `app/schemas/jobs.py` 不定义业务专属 schema。
@@ -114,17 +117,63 @@ AudioInputPlanSnapshot
 
 新增 `job_type` 必须在 executor 上使用 `@register_job_type` 源码标记，并通过业务包 `PACKAGE = BusinessPackage(...)` 注册。正式业务包使用 `app/business_packages/<package>/register.py` 内聚 errors、workflow definition 和 schema 声明；executor 放在业务包内并只在 `register_job_package()` 内部导入。中心 `app/business_packages/register.py` 只维护 `BUSINESS_PACKAGE_MODULES` 显式清单并懒加载 package registrar，不直接 import 业务 executor。`@register_job_type` 不产生 import-time 注册副作用；源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 business package registrar 注册结果；新增文件但忘记接入 package registrar、`BusinessPackage.schemas` 或中心 business package module 清单会失败。
 
-`ENABLED_BUSINESS_PACKAGES` 是当前服务实例的业务包启用开关。为空表示启用全部静态注册业务包；显式配置时，composition root 仍全量注册 executor catalog、workflow definition 和错误码，用于 schema 校验、历史 Job 查询和 public projection，但只有列出的业务包进入 enabled/external 准入集合，并且只有列出的业务包会挂载 HTTP routes。
+`ENABLED_BUSINESS_PACKAGES` 是当前服务实例的业务包启用开关。为空表示启用全部静态注册业务包；显式配置时，composition root 仍全量注册 executor catalog、workflow definition 和错误码，用于 schema 校验、历史 Job 查询和 public projection，但只有列出的业务包进入 enabled/external 准入集合，并且只有列出的业务包会挂载 HTTP routes 和注册业务 HTTP operations。
+
+业务包级 HTTP operation 的最小形态：
+
+```text
+app/business_packages/<package>/register.py
+  PACKAGE = BusinessPackage(
+    name="<package>",
+    register=register_job_package,
+    register_routes=register_routes,
+    operations=OPERATIONS,
+    schemas=SCHEMAS,
+  )
+```
+
+业务 routes 可以直接使用本包的 `OperationSpec` 常量生成 route metadata，避免 import-time 依赖全局 operation registry 的注册时序：
+
+```text
+@router.post(
+  ASSET_VECTOR_SEARCH_OPERATION.path,
+  **operation_route_kwargs_for_spec(ASSET_VECTOR_SEARCH_OPERATION),
+)
+```
+
+同一业务包被关闭时，其业务 routes 和业务 operations 都不会进入当前 API 实例；这保证移除或禁用业务包时，不需要到中心 API registry 清理业务接口。
+
+Schema registry 是进程内校验和历史 Job 投影目录，不等同于当前 API 暴露面。即使某个业务包未启用，它声明的 schema 仍可以进入 schema catalog，用于校验历史 Job、错误投影或文档生成；调用方能看到和调用的接口以当前挂载的 route 和已注册 operation 为准。
+
+当前仓库保留一个最小同步接口示例包：
+
+```text
+app/business_packages/example_business_package/
+  operations.py  # 声明 OperationSpec
+  router.py      # 使用 operation_route_kwargs_for_spec() 绑定 route metadata
+  schemas.py     # 声明业务 response schema
+  register.py    # 通过 BusinessPackage 注册 routes / operations / schemas
+```
+
+该示例只用于证明业务包级 HTTP operation 注册链路，不包含 job_type、workflow、OSS 或 AI 调用。
+
+当前示例包分工：
+
+| 示例包 | 覆盖场景 | 不承担 |
+|---|---|---|
+| `example_jobs` | Job、workflow、child job 的最小示例 | 不作为同步 HTTP 接口范例 |
+| `example_lifecycle_probe` | Job 生命周期、失败投影、错误诊断示例 | 不作为真实业务功能范例 |
+| `example_business_package` | 业务包自带 HTTP operation、route、schema 的最小示例 | 不接 OSS、AI、DB，不代表具体业务 |
 
 新增 tool 必须通过 `app/tools/register.py` 创建 `ToolDefinition`。不要在业务 executor、tool 实现或测试外路径中直接散落 definition 构造。
 
 `ToolDefinition.startup_validators` 只允许表达进程级必需依赖；可选模型链路、demo job 或特定业务运行时依赖必须在对应执行路径或专项 smoke / verify 中显式失败，不能扩大为 API/worker 全局启动依赖。
 
-当前 registry 治理保持轻量：不做数据库 catalog、动态插件加载、运行时工具开关、管理后台或 public registry API。
+当前 registry 治理保持轻量：不做数据库 catalog、动态插件加载、运行时工具开关、管理后台或 public registry API。业务包清单仍是代码静态清单，避免运行时动态导入带来的不可诊断失败。
 
 ## 当前边界
 
-业务包拥有业务语义、Job schema、executor、workflow、业务错误、业务 routes 和业务 storage policy。业务包可以依赖平台 Job 内核、AI gateway、对象存储仓储层和工具包；业务包之间不互相 import，确实属于同一业务语义的多个 `job_type` 应放入同一个业务包。工具包不能反向依赖业务包或 Job 层。
+业务包拥有业务语义、Job schema、executor、workflow、业务错误、业务 routes、业务 operations 和业务 storage policy。业务包可以依赖平台 Job 内核、AI gateway、对象存储仓储层和工具包；业务包之间不互相 import，确实属于同一业务语义的多个 `job_type` 应放入同一个业务包。工具包不能反向依赖业务包或 Job 层。
 
 Tool 不拥有 Job 状态、attempt、lease、heartbeat、retry、dispatch、callback 或 billing。Tool 不写 Job 状态，不投影 public result，不决定 retry。需要独立调度、恢复、取消或查询的步骤仍应建模为 internal child Job / workflow node。
 

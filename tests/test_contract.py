@@ -752,6 +752,12 @@ def test_openapi_declares_bearer_auth_for_protected_routes(monkeypatch):
     assert {"HTTPBearer": []} in languages["security"]
     prompt_templates = schema["paths"][f"{API_PREFIX}/prompt-templates"]["get"]
     assert {"HTTPBearer": []} in prompt_templates["security"]
+    example_business_package = schema["paths"][f"{API_PREFIX}/example-business-package/ping"]["get"]
+    assert example_business_package["operationId"] == "example_business_package_ping"
+    assert {"HTTPBearer": []} in example_business_package["security"]
+    success_schema = example_business_package["responses"]["200"]["content"]["application/json"]["schema"]
+    assert success_schema["properties"]["data"]["$ref"].endswith("/ExampleBusinessPackagePingResponse")
+    assert "401" in example_business_package["responses"]
 
 
 def test_openapi_declares_prompt_templates_job_type_query_parameter(monkeypatch):

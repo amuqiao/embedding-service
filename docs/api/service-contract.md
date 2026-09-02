@@ -186,6 +186,21 @@ CallbackResponseEnvelope
 
 `204`、空 body、非 JSON body、缺少 `accepted`、`accepted` 不是 boolean，或 `accepted=false` 都会被视为未接受。非 2xx、超时、网络错误或未接受响应会触发 Callback 重试，直到成功或达到最大尝试次数。
 
+## 示例业务包同步接口
+
+```http
+GET /api/v1/ai-jobs/example-business-package/ping
+```
+
+该接口是模板内置的最小业务包同步接口示例，用于证明业务包可以自带 HTTP operation、route 和 schema。它不代表真实业务能力，不接 OSS、AI、DB，也不改变 Job 合同。
+
+成功响应：
+
+```text
+HttpEnvelope[ExampleBusinessPackagePingResponse]
+  data.message
+```
+
 ## 模型、语种与 Prompt 元信息
 
 ```http

@@ -5,12 +5,14 @@ from importlib import import_module
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from app.api.operations import replace_business_operation_specs
 from app.business_packages.base import BusinessPackage, BusinessRouteCollector, BusinessRouteMount
 
 
 BUSINESS_PACKAGE_MODULES: tuple[str, ...] = (
     "app.business_packages.arithmetic.register",
-    "app.business_packages.examples.register",
+    "app.business_packages.example_jobs.register",
+    "app.business_packages.example_business_package.register",
     "app.business_packages.example_lifecycle_probe.register",
     "app.business_packages.job_real_llm_echo.register",
     "app.business_packages.job_real_llm_double_echo.register",
@@ -208,6 +210,8 @@ def register_all_business_packages() -> None:
         package.register(register_package_executor)
 
     selected_package_names = frozenset(package.name for package in selected_packages)
+    selected_operations = tuple(operation for package in selected_packages for operation in package.operations)
+
     for package in selected_packages:
         if package.register_routes is not None:
             package.register_routes(route_collector)
@@ -219,6 +223,7 @@ def register_all_business_packages() -> None:
     )
 
     global _route_mounts, _registered_package_names, _job_type_package_names
+    replace_business_operation_specs(selected_operations)
     _route_mounts = route_collector.route_mounts()
     _registered_package_names = tuple(package.name for package in selected_packages)
     _job_type_package_names = dict(ownership)

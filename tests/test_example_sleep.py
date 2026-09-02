@@ -5,8 +5,8 @@ import uuid
 import pytest
 
 from app.core.exceptions import AppError
-from app.business_packages.examples import executor as examples_executor
-from app.business_packages.examples.executor import ExampleSleepJob
+from app.business_packages.example_jobs import executor as examples_executor
+from app.business_packages.example_jobs.executor import ExampleSleepJob
 from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest
 from app.services.job_runtime import payload_hash, write_runtime_json

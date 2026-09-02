@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.business_packages.examples.catalog import all_example_workflow_mode_specs
+from app.business_packages.example_jobs.catalog import all_example_workflow_mode_specs
 from scripts.load.support import LoadError, ROOT_DIR, ensure_parent
 
 

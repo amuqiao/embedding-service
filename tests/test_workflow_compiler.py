@@ -20,7 +20,7 @@ from app.workflows import (
     task,
 )
 from app.workflows import registry as workflow_registry
-from app.business_packages.examples.catalog import all_example_workflow_mode_specs
+from app.business_packages.example_jobs.catalog import all_example_workflow_mode_specs
 from app.business_packages.register import register_all_business_packages
 from app.business_packages.poster_title_image.executor import _item_node_key
 

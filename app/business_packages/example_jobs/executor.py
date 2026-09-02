@@ -6,8 +6,8 @@ from typing import Any
 from app.core.exceptions import AppError
 from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
-from app.business_packages.examples.catalog import all_example_workflow_mode_specs
-from app.business_packages.examples.schemas import (
+from app.business_packages.example_jobs.catalog import all_example_workflow_mode_specs
+from app.business_packages.example_jobs.schemas import (
     ExampleCollectParams,
     ExampleCollectResult,
     ExampleCollectRuntimeFields,

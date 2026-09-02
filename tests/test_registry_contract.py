@@ -8,8 +8,10 @@ from types import SimpleNamespace
 from fastapi.routing import APIRoute
 import pytest
 
-from app.api.operations import all_operation_ids, all_operation_specs
+from app.api.operations import all_operation_ids, all_operation_specs, business_operation_specs
 from app.api.operations import OperationSpec
+from app.api.operations import replace_business_operation_specs
+from app.business_packages.base import BusinessPackage
 from app.core.error_registry import (
     ErrorSpec,
     all_error_reasons,
@@ -366,6 +368,209 @@ def test_validate_operation_registry_allows_internal_service_errors(monkeypatch)
     monkeypatch.setattr("app.core.registry_checks.all_operation_specs", lambda: {"test_internal_operation": spec})
 
     validate_operation_registry()
+
+
+def test_example_business_package_registers_http_operation():
+    route_operation_ids = {
+        route.operation_id
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        and route.include_in_schema
+        and route.path == "/api/v1/ai-jobs/example-business-package/ping"
+    }
+
+    operation = all_operation_specs()["example_business_package_ping"]
+
+    assert route_operation_ids == {"example_business_package_ping"}
+    assert operation.path == "/example-business-package/ping"
+    assert operation.response_data_schema == "ExampleBusinessPackagePingResponse"
+    assert "ExampleBusinessPackagePingResponse" in all_schema_names()
+    assert business_operation_specs()["example_business_package_ping"] == operation
+
+
+def test_unselected_business_package_operations_are_not_registered(monkeypatch):
+    previous_operations = business_operation_specs()
+    operation = OperationSpec(
+        operation_id="test_business_operation",
+        channel="http",
+        method="GET",
+        path="/test-business",
+        success_status=200,
+        auth_boundary="test",
+        request_schema=None,
+        response_data_schema="JobResponseData",
+        error_codes=frozenset({"INVALID_INPUT"}),
+        idempotency_key=None,
+        side_effects=(),
+        log_events=("request_completed", "request_failed"),
+    )
+    package = BusinessPackage(
+        name="test_business",
+        register=lambda _register: None,
+        operations=(operation,),
+    )
+    selected_package = BusinessPackage(
+        name="selected_business",
+        register=lambda _register: None,
+    )
+    monkeypatch.setattr("app.business_packages.register.load_business_packages", lambda: (package, selected_package))
+    monkeypatch.setattr(
+        "app.core.config.settings",
+        SimpleNamespace(
+            runtime=SimpleNamespace(is_release_env=False),
+            registry=SimpleNamespace(enabled_business_packages=("selected_business",)),
+            storage=SimpleNamespace(backend="local"),
+        ),
+    )
+
+    try:
+        register_all_business_packages()
+
+        assert "test_business_operation" not in business_operation_specs()
+    finally:
+        monkeypatch.undo()
+        register_all_business_packages()
+        replace_business_operation_specs(tuple(previous_operations.values()))
+
+
+def test_business_package_operations_reject_duplicate_core_operation(monkeypatch):
+    previous_operations = business_operation_specs()
+    package = BusinessPackage(
+        name="test_business",
+        register=lambda _register: None,
+        operations=(
+            OperationSpec(
+                operation_id="create_ai_job",
+                channel="http",
+                method="POST",
+                path="/test-business",
+                success_status=200,
+                auth_boundary="test",
+                request_schema=None,
+                response_data_schema="JobResponseData",
+                error_codes=frozenset({"INVALID_INPUT"}),
+                idempotency_key=None,
+                side_effects=(),
+                log_events=("request_completed", "request_failed"),
+            ),
+        ),
+    )
+    monkeypatch.setattr("app.business_packages.register.load_business_packages", lambda: (package,))
+    monkeypatch.setattr(
+        "app.core.config.settings",
+        SimpleNamespace(
+            runtime=SimpleNamespace(is_release_env=False),
+            registry=SimpleNamespace(enabled_business_packages=("test_business",)),
+            storage=SimpleNamespace(backend="local"),
+        ),
+    )
+
+    try:
+        with pytest.raises(ValueError, match="duplicates core operation"):
+            register_all_business_packages()
+        assert business_operation_specs() == previous_operations
+    finally:
+        monkeypatch.undo()
+        register_all_business_packages()
+        replace_business_operation_specs(tuple(previous_operations.values()))
+
+
+def test_business_package_operations_reject_duplicate_business_operation(monkeypatch):
+    previous_operations = business_operation_specs()
+    operation = OperationSpec(
+        operation_id="test_business_operation",
+        channel="http",
+        method="GET",
+        path="/test-business",
+        success_status=200,
+        auth_boundary="test",
+        request_schema=None,
+        response_data_schema="JobResponseData",
+        error_codes=frozenset({"INVALID_INPUT"}),
+        idempotency_key=None,
+        side_effects=(),
+        log_events=("request_completed", "request_failed"),
+    )
+    monkeypatch.setattr(
+        "app.business_packages.register.load_business_packages",
+        lambda: (
+            BusinessPackage(name="test_business_a", register=lambda _register: None, operations=(operation,)),
+            BusinessPackage(name="test_business_b", register=lambda _register: None, operations=(operation,)),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.core.config.settings",
+        SimpleNamespace(
+            runtime=SimpleNamespace(is_release_env=False),
+            registry=SimpleNamespace(enabled_business_packages=()),
+            storage=SimpleNamespace(backend="local"),
+        ),
+    )
+
+    try:
+        with pytest.raises(ValueError, match="duplicate business operation"):
+            register_all_business_packages()
+        assert business_operation_specs() == previous_operations
+    finally:
+        monkeypatch.undo()
+        register_all_business_packages()
+        replace_business_operation_specs(tuple(previous_operations.values()))
+
+
+def test_business_package_operations_reject_duplicate_http_route(monkeypatch):
+    previous_operations = business_operation_specs()
+    operation_a = OperationSpec(
+        operation_id="test_business_operation_a",
+        channel="http",
+        method="GET",
+        path="/test-business",
+        success_status=200,
+        auth_boundary="test",
+        request_schema=None,
+        response_data_schema="JobResponseData",
+        error_codes=frozenset({"INVALID_INPUT"}),
+        idempotency_key=None,
+        side_effects=(),
+        log_events=("request_completed", "request_failed"),
+    )
+    operation_b = OperationSpec(
+        operation_id="test_business_operation_b",
+        channel="http",
+        method="GET",
+        path="/test-business",
+        success_status=200,
+        auth_boundary="test",
+        request_schema=None,
+        response_data_schema="JobResponseData",
+        error_codes=frozenset({"INVALID_INPUT"}),
+        idempotency_key=None,
+        side_effects=(),
+        log_events=("request_completed", "request_failed"),
+    )
+    monkeypatch.setattr(
+        "app.business_packages.register.load_business_packages",
+        lambda: (
+            BusinessPackage(name="test_business_a", register=lambda _register: None, operations=(operation_a,)),
+            BusinessPackage(name="test_business_b", register=lambda _register: None, operations=(operation_b,)),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.core.config.settings",
+        SimpleNamespace(
+            runtime=SimpleNamespace(is_release_env=False),
+            registry=SimpleNamespace(enabled_business_packages=()),
+            storage=SimpleNamespace(backend="local"),
+        ),
+    )
+
+    try:
+        with pytest.raises(ValueError, match="duplicates http route"):
+            register_all_business_packages()
+        assert business_operation_specs() == previous_operations
+    finally:
+        monkeypatch.undo()
+        register_all_business_packages()
+        replace_business_operation_specs(tuple(previous_operations.values()))
 
 
 def test_validate_operation_registry_rejects_unsupported_success_status(monkeypatch):
@@ -773,7 +978,8 @@ def test_registered_job_type_names_are_layered_contract():
 def test_business_packages_are_explicit_lazy_composition_root():
     expected_modules = (
         "app.business_packages.arithmetic.register",
-        "app.business_packages.examples.register",
+        "app.business_packages.example_jobs.register",
+        "app.business_packages.example_business_package.register",
         "app.business_packages.example_lifecycle_probe.register",
         "app.business_packages.job_real_llm_echo.register",
         "app.business_packages.job_real_llm_double_echo.register",
@@ -786,7 +992,8 @@ def test_business_packages_are_explicit_lazy_composition_root():
     packages = load_business_packages()
     assert [package.name for package in packages] == [
         "arithmetic",
-        "examples",
+        "example_jobs",
+        "example_business_package",
         "example_lifecycle_probe",
         "job_real_llm_echo",
         "job_real_llm_double_echo",
@@ -821,7 +1028,8 @@ def test_business_packages_declare_schema_contracts():
 
     assert package_names == {
         "arithmetic",
-        "examples",
+        "example_jobs",
+        "example_business_package",
         "example_lifecycle_probe",
         "job_real_llm_echo",
         "job_real_llm_double_echo",
@@ -833,6 +1041,7 @@ def test_business_packages_declare_schema_contracts():
     assert {
         "ArithmeticParams",
         "ExampleWorkflowParams",
+        "ExampleBusinessPackagePingResponse",
         "ExampleLifecycleProbeParams",
         "JobRealLlmEchoParams",
         "JobRealLlmDoubleEchoParams",
@@ -1046,11 +1255,14 @@ def test_api_startup_accepts_enabled_business_package_subset():
     code = """
 from app.main import app
 from app.jobs import registry as job_registry
+from app.api.operations import all_operation_ids
 
 assert app.title
 assert set(job_registry.enabled_job_types()) == {"tagged_text_translation"}
 assert "poster_title_image" in set(job_registry.all_job_types())
 assert "poster_title_image" not in set(job_registry.external_job_types())
+assert "example_business_package_ping" not in all_operation_ids()
+assert all(route.path != "/api/v1/ai-jobs/example-business-package/ping" for route in app.routes)
 print("ok")
 """
     result = subprocess.run(
@@ -1133,7 +1345,7 @@ def test_enabled_business_package_does_not_expose_workflow_leaf_children(monkeyp
         "app.core.config.settings",
         SimpleNamespace(
             runtime=SimpleNamespace(is_release_env=False),
-            registry=SimpleNamespace(enabled_business_packages=("examples",)),
+            registry=SimpleNamespace(enabled_business_packages=("example_jobs",)),
             storage=SimpleNamespace(backend="local"),
         ),
     )
