@@ -1,0 +1,90 @@
+app/business_packages/asset_vector/schemas.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-270
+app/business_packages/asset_vector/__init__.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1
+app/business_packages/asset_image_tagging/executor.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-115
+docs/api/asset-vector-api.md
+  s_2b711e4b96f18e::t_633d007caf3cb8 64,133-134,205,347,452,468,472,480,523,525,527-528,530,564,581,586-587,595,597,600,865,872-873,1057,1087,1102
+alembic/versions/0021_add_asset_vector_items.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-39
+app/business_packages/asset_vector/register.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-33
+smoke/scenarios.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 86-101
+app/business_packages/asset_image_tagging/register.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-16
+app/business_packages/asset_vector/models.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-30
+smoke/flows/asset/vector.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-331
+app/business_packages/asset_image_tagging/prompt_builder.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-62
+tests/test_contract.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 762-779
+app/business_packages/asset_vector/router.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-113
+app/business_packages/register.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 22-23
+tests/test_asset_vector.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-372
+tests/test_asset_image_tagging.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-101
+smoke/cli.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 239-261,824-890
+  s_2b711e4b96f18e::t_1d1c6c98c5e36a 891-892
+app/business_packages/asset_image_tagging/errors.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-18
+smoke/flows/asset/__init__.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1
+tests/test_registry_contract.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 949-951,971-973,995-996,1011-1012,1049-1050,1064-1066,1157-1170
+app/business_packages/asset_vector/executor.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-164
+app/business_packages/asset_vector/errors.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-20
+app/business_packages/asset_image_tagging/schemas.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-286
+app/business_packages/asset_vector/embedding_adapter.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-86
+app/business_packages/asset_image_tagging/__init__.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1
+smoke/flows/asset/image_tagging.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-150
+app/business_packages/asset_vector/operations.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-57
+app/business_packages/asset_vector/repository.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-155
+docs/api/service-contract.md
+  s_2b711e4b96f18e::t_633d007caf3cb8 189-200
+app/business_packages/asset_image_tagging/model_adapter.py
+  s_2b711e4b96f18e::t_633d007caf3cb8 1-238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "a1b24d9f7e4adba9878e38681242879e400d5b08",
+  "prompts": {},
+  "sessions": {
+    "s_2b711e4b96f18e": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a97d94131955f2f6cec2bab",
+        "model": "Doubao-Seed-2.1-pro__dev"
+      },
+      "human_author": "wangqiao <wangqiao@crazymaplestudio.com>",
+      "custom_attributes": {
+        "tool_use_id": "6a97d94731955f2f6cec2bb6",
+        "operation_id": "6a97d94731955f2f6cec2bb6",
+        "session_id": "6a97d94131955f2f6cec2bab",
+        "source_scene": "agent",
+        "external_session_id": "6a97d94131955f2f6cec2bab",
+        "edit_kind": "bash",
+        "display_model_name": "Doubao-Seed-2.1-Pro",
+        "runtime_client": "trae-tob-git-ai",
+        "tool_name": "Shell",
+        "client_type": "ide"
+      }
+    }
+  }
+}
