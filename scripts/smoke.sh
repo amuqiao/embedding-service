@@ -62,6 +62,8 @@ Usage:
   tagged-text-translation 提交 tagged_text_translation Job，校验标签和占位符保留；人读输出翻译前后 preview。
   poster-title-image      提交 poster_title_image Job，轮询终态并校验输出。
   audio-stem-separation   提交 audio_stem_separation / audio_stem_separation_triton Job。
+  asset-image-tagging     提交 asset_image_tagging Job，验证批量素材打标签链路。
+  asset-vector            提交 asset_vector Job，验证素材向量更新、删除、搜索和对账链路。
   adapter-image-probe     直连 image adapter 的 provider probe。
   oss-upload-image        显式上传本地图片，生成 URL Ref 输入。
 
@@ -86,6 +88,11 @@ Usage:
     --confirm-run \
     --confirm-fault-injection \
     --local-callback
+
+  ENV_FILE=.env ./scripts/smoke.sh \
+    asset-image-tagging \
+    --confirm-run \
+    --confirm-cost
 
   ./scripts/smoke.sh <command> -h
 

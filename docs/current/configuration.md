@@ -54,6 +54,8 @@ MODEL_CONFIG_PATH
 PRICING_CONFIG_PATH
 PROMPT_CONFIG_PATH
 ENABLED_BUSINESS_PACKAGES
+ASSET_IMAGE_TAGGING_MODEL_ADAPTER
+ASSET_IMAGE_TAGGING_MODEL_ID
 MODEL_CALL_TIMEOUT_SECONDS
 MAX_ACTIVE_JOBS
 CALLBACK_TIMEOUT_SECONDS
@@ -67,6 +69,11 @@ LOG_LEVEL
 - 在启动校验中覆盖非法值或跨字段不变量。
 - 在 `.env.example` 中给出占位值或默认值。
 - 被 `./scripts/verify.sh env-config` 和相关测试覆盖。
+
+`ASSET_IMAGE_TAGGING_MODEL_ADAPTER` 是 `asset_image_tagging` 业务包自己的模型 adapter 选择项，当前只支持
+`openai_responses`。`ASSET_IMAGE_TAGGING_MODEL_ID` 是该 adapter 调用的视觉理解模型 ID，默认对齐当前模型目录中的
+OpenAI 多模态文本模型。图片打标使用 `OPENAI_API_KEY` / `OPENAI_BASE_URL`，不使用 `DASHSCOPE_API_KEY` /
+`DASHSCOPE_BASE_URL`。
 
 ### Launcher Key
 

@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from app.business_packages.asset_image_tagging.errors import ASSET_IMAGE_TAGGING_ALL_ITEMS_FAILED
 from app.business_packages.asset_image_tagging.model_adapter import (
-    DeterministicAssetImageTaggingModelAdapter,
+    asset_image_tagging_model_adapter_from_settings,
     build_batch_summary,
 )
 from app.business_packages.asset_image_tagging.schemas import (
@@ -88,7 +88,7 @@ class AssetImageTaggingJob(JobExecutor):
                 },
             )
 
-        result_items = await DeterministicAssetImageTaggingModelAdapter().tag(params)
+        result_items = await asset_image_tagging_model_adapter_from_settings().tag(params)
         batch_summary = build_batch_summary(result_items)
         if batch_summary.failed == batch_summary.total:
             raise AppError(

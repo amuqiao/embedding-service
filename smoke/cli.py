@@ -238,13 +238,24 @@ EXAMPLE_RECONCILER_PROBE_HELP_EPILOG = """\b
 
 ASSET_IMAGE_TAGGING_HELP_EPILOG = """\b
 常用示例：
-  ./scripts/smoke.sh asset-image-tagging --confirm-run
-  ./scripts/smoke.sh --json asset-image-tagging --confirm-run
+  ./scripts/smoke.sh asset-image-tagging --confirm-run --confirm-cost
+  ./scripts/smoke.sh --json asset-image-tagging --confirm-run --confirm-cost
+
+\b
+  # 单 item 验证：仍走批量接口，只把 fixture 的 items 截断为 1 条。
+  ./scripts/smoke.sh asset-image-tagging --confirm-run --confirm-cost --limit 1
+
+\b
+  # 指定独立 fixture；fixture 必须包含 job_params.items 和 job_params.label_snapshot。
+  ./scripts/smoke.sh asset-image-tagging \\
+    --confirm-run \\
+    --confirm-cost \\
+    --fixture smoke/fixtures/asset_image_tagging/batch.zh.json
 
 \b
 说明：
   本场景提交 asset_image_tagging Job，验证批量素材打标签接口合同、Job 创建、worker 执行和轮询。
-  当前 smoke 使用确定性本地 stub，不调用真实 AI provider，不产生模型费用。
+  本场景会调用真实 OpenAI 视觉理解模型；OPENAI_API_KEY / OPENAI_BASE_URL 必须由服务进程真实加载。
 """
 
 ASSET_VECTOR_HELP_EPILOG = """\b
@@ -829,7 +840,16 @@ def example_reconciler_probe_command(
 def asset_image_tagging_command(
     ctx: typer.Context,
     confirm_run: ConfirmRunOption = False,
+    confirm_cost: ConfirmCostOption = False,
     client_request_id: ClientRequestIdOption = None,
+    fixture: Annotated[
+        str | None,
+        typer.Option("--fixture", help="asset_image_tagging create-job fixture JSON；默认使用 smoke 内置真实 OSS 图片 fixture。"),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", min=1, help="从 fixture.items 开头截取 N 条提交；单条验证传 1。"),
+    ] = None,
 ) -> None:
     from smoke.flows.asset import image_tagging as asset_image_tagging
 
@@ -838,6 +858,7 @@ def asset_image_tagging_command(
     try:
         asset_image_tagging.run(
             confirm_run=confirm_run,
+            confirm_cost=confirm_cost,
             api_url=options.api_url,
             env_file=options.env_file,
             allow_remote_api=options.allow_remote_api,
@@ -846,6 +867,8 @@ def asset_image_tagging_command(
             timeout_seconds=options.timeout_seconds,
             poll_interval_seconds=options.poll_interval_seconds,
             client_request_id=client_request_id,
+            fixture_path=fixture,
+            item_limit=limit,
             json_output=options.json_output,
         )
     except asset_image_tagging.FlowError as exc:

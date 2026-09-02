@@ -87,7 +87,7 @@ SCENARIOS = [
         name="asset-image-tagging",
         type="workflow",
         acceptance_class="business_e2e",
-        dependencies=["api", "worker", "db", "redis"],
+        dependencies=["api", "worker", "db", "redis", "image_provider"],
         entrypoints=["asset-image-tagging"],
         standard_option_groups=["job"],
     ),

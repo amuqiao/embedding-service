@@ -83,6 +83,8 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "TAGGED_TEXT_TRANSLATION_MAX_ITEMS": ("job", "tagged_text_translation", "max_items"),
     "TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH": ("job", "tagged_text_translation", "max_text_length"),
     "TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH": ("job", "tagged_text_translation", "max_total_text_length"),
+    "ASSET_IMAGE_TAGGING_MODEL_ADAPTER": ("job", "asset_image_tagging", "model_adapter"),
+    "ASSET_IMAGE_TAGGING_MODEL_ID": ("job", "asset_image_tagging", "model_id"),
     "POSTER_TITLE_IMAGE_MAX_ITEMS": ("job", "poster_title_image", "max_items"),
     "POSTER_TITLE_IMAGE_MAX_DRAW_COUNT": ("job", "poster_title_image", "max_draw_count"),
     "AUDIO_STEM_SEPARATION_EXECUTION_PROVIDER": ("job", "audio_stem_separation", "execution_provider"),
@@ -614,6 +616,25 @@ class PosterTitleImageJobSettings(ConfigSection):
         return self
 
 
+class AssetImageTaggingJobSettings(ConfigSection):
+    model_adapter: str = "openai_responses"
+    model_id: str = "gpt-5.5"
+
+    @model_validator(mode="after")
+    def validate_asset_image_tagging(self) -> "AssetImageTaggingJobSettings":
+        if not self.model_adapter.strip():
+            raise ValueError("ASSET_IMAGE_TAGGING_MODEL_ADAPTER must not be empty")
+        if self.model_adapter != self.model_adapter.strip():
+            raise ValueError("ASSET_IMAGE_TAGGING_MODEL_ADAPTER must not have leading or trailing whitespace")
+        if self.model_adapter not in {"openai_responses"}:
+            raise ValueError("ASSET_IMAGE_TAGGING_MODEL_ADAPTER must be openai_responses")
+        if not self.model_id.strip():
+            raise ValueError("ASSET_IMAGE_TAGGING_MODEL_ID must not be empty")
+        if self.model_id != self.model_id.strip():
+            raise ValueError("ASSET_IMAGE_TAGGING_MODEL_ID must not have leading or trailing whitespace")
+        return self
+
+
 class AudioStemSeparationJobSettings(ConfigSection):
     execution_provider: str = "cpu"
     htdemucs_model_dir_raw: str = ".data/models/htdemucs-ft"
@@ -660,6 +681,7 @@ class JobSettings(ConfigSection):
     tagged_text_translation: TaggedTextTranslationJobSettings = Field(
         default_factory=TaggedTextTranslationJobSettings
     )
+    asset_image_tagging: AssetImageTaggingJobSettings = Field(default_factory=AssetImageTaggingJobSettings)
     poster_title_image: PosterTitleImageJobSettings = Field(default_factory=PosterTitleImageJobSettings)
     audio_stem_separation: AudioStemSeparationJobSettings = Field(default_factory=AudioStemSeparationJobSettings)
     audio_stem_triton: AudioStemTritonJobSettings = Field(default_factory=AudioStemTritonJobSettings)

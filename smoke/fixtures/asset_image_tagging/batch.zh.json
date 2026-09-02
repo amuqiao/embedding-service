@@ -1,0 +1,232 @@
+{
+  "description": "asset_image_tagging real smoke fixture copied from POC OSS manifest samples and reduced label snapshot groups.",
+  "job_params": {
+    "tagging_language": "zh",
+    "items": [
+      {
+        "item_id": "物件/CBTB_Cris_7_p1",
+        "item_name": "CBTB_Cris_7_p1",
+        "category_id": "object",
+        "category_name": "物件",
+        "asset": {
+          "public_url": "https://cms-aicg-sz.epubgame.com/aicg/dev_root/cms_poster_title/asset-vector-poc/assets/%E7%89%A9%E4%BB%B6/CBTB_Cris_7_p1.png",
+          "content_type": "image/png"
+        }
+      },
+      {
+        "item_id": "背景/270000020",
+        "item_name": "270000020",
+        "category_id": "scene",
+        "category_name": "场景",
+        "asset": {
+          "public_url": "https://cms-aicg-sz.epubgame.com/aicg/dev_root/cms_poster_title/asset-vector-poc/assets/%E8%83%8C%E6%99%AF/270000020.jpg",
+          "content_type": "image/jpeg"
+        }
+      },
+      {
+        "item_id": "角色-发型/hair_10_1",
+        "item_name": "hair_10_1",
+        "category_id": "character_hair",
+        "category_name": "角色-发型",
+        "asset": {
+          "public_url": "https://cms-aicg-sz.epubgame.com/aicg/dev_root/cms_poster_title/asset-vector-poc/assets/%E8%A7%92%E8%89%B2-%E5%8F%91%E5%9E%8B/hair_10_1.png",
+          "content_type": "image/png"
+        }
+      }
+    ],
+    "label_snapshot": [
+      {
+        "category_id": "object",
+        "category_name": "物件",
+        "selection_mode": "single",
+        "labels": [
+          {
+            "label_id": "object_type_weapon",
+            "label_name": "武器",
+            "definition": "物件属于攻击或防御用武器"
+          },
+          {
+            "label_id": "object_type_furniture",
+            "label_name": "家具",
+            "definition": "物件属于室内家具"
+          },
+          {
+            "label_id": "object_type_vehicle",
+            "label_name": "交通工具",
+            "definition": "物件属于代步或运输工具"
+          },
+          {
+            "label_id": "object_type_food",
+            "label_name": "食物",
+            "definition": "物件属于食物类"
+          },
+          {
+            "label_id": "object_type_gift",
+            "label_name": "礼物",
+            "definition": "物件为礼物、礼盒类"
+          }
+        ]
+      },
+      {
+        "category_id": "object",
+        "category_name": "物件",
+        "selection_mode": "multiple",
+        "labels": [
+          {
+            "label_id": "object_material_wood",
+            "label_name": "木",
+            "definition": "材质为木质"
+          },
+          {
+            "label_id": "object_material_metal",
+            "label_name": "金属",
+            "definition": "材质为金属"
+          },
+          {
+            "label_id": "object_material_glass",
+            "label_name": "玻璃",
+            "definition": "材质为玻璃"
+          },
+          {
+            "label_id": "object_material_ceramic",
+            "label_name": "陶瓷",
+            "definition": "材质为陶瓷"
+          },
+          {
+            "label_id": "object_material_leather",
+            "label_name": "皮革",
+            "definition": "材质为皮革"
+          }
+        ]
+      },
+      {
+        "category_id": "scene",
+        "category_name": "场景",
+        "selection_mode": "single",
+        "labels": [
+          {
+            "label_id": "scene_background_theme_style_modern_city",
+            "label_name": "现代都市",
+            "definition": "背景为当代都市世界观"
+          },
+          {
+            "label_id": "scene_background_theme_style_fantasy",
+            "label_name": "奇幻幻想",
+            "definition": "背景为魔法、异世界等奇幻世界观"
+          },
+          {
+            "label_id": "scene_background_theme_style_historical_ancient",
+            "label_name": "古风历史",
+            "definition": "背景为古代或历史时期世界观"
+          },
+          {
+            "label_id": "scene_background_theme_style_campus_school",
+            "label_name": "校园",
+            "definition": "背景为校园生活世界观"
+          },
+          {
+            "label_id": "scene_background_theme_style_sci_fi_futuristic",
+            "label_name": "未来科幻",
+            "definition": "背景为未来科技、太空等科幻世界观"
+          }
+        ]
+      },
+      {
+        "category_id": "scene",
+        "category_name": "场景",
+        "selection_mode": "multiple",
+        "labels": [
+          {
+            "label_id": "scene_specific_location_bedroom",
+            "label_name": "卧室",
+            "definition": "场景位于卧室"
+          },
+          {
+            "label_id": "scene_specific_location_living_room",
+            "label_name": "客厅",
+            "definition": "场景位于客厅"
+          },
+          {
+            "label_id": "scene_specific_location_mansion_manor",
+            "label_name": "庄园/古堡豪宅",
+            "definition": "老式风格的庄园或豪华宅邸"
+          },
+          {
+            "label_id": "scene_specific_location_kitchen",
+            "label_name": "厨房",
+            "definition": "场景位于厨房"
+          },
+          {
+            "label_id": "scene_specific_location_street",
+            "label_name": "街道",
+            "definition": "场景位于街道"
+          }
+        ]
+      },
+      {
+        "category_id": "character_hair",
+        "category_name": "角色-发型",
+        "selection_mode": "single",
+        "labels": [
+          {
+            "label_id": "character_hair_length_bald",
+            "label_name": "光头",
+            "definition": "头部完全没有头发，头皮裸露"
+          },
+          {
+            "label_id": "character_hair_length_short_hair",
+            "label_name": "短发",
+            "definition": "发长在耳部以上或齐耳附近"
+          },
+          {
+            "label_id": "character_hair_length_medium_hair",
+            "label_name": "中发",
+            "definition": "发长约到肩部左右"
+          },
+          {
+            "label_id": "character_hair_length_long_hair",
+            "label_name": "长发",
+            "definition": "发长超过肩部，垂至背部"
+          },
+          {
+            "label_id": "character_hair_length_extra_long_hair",
+            "label_name": "超长发",
+            "definition": "发长远超肩背，可达腰部以下"
+          }
+        ]
+      },
+      {
+        "category_id": "character_hair",
+        "category_name": "角色-发型",
+        "selection_mode": "single",
+        "labels": [
+          {
+            "label_id": "character_hair_texture_straight",
+            "label_name": "直发",
+            "definition": "发丝顺直无弯曲"
+          },
+          {
+            "label_id": "character_hair_texture_curly",
+            "label_name": "卷发",
+            "definition": "发丝呈明显卷曲状"
+          },
+          {
+            "label_id": "character_hair_texture_wavy",
+            "label_name": "波浪发",
+            "definition": "发丝呈自然波浪起伏"
+          },
+          {
+            "label_id": "character_hair_texture_loose_waves",
+            "label_name": "大波浪",
+            "definition": "卷曲弧度大而松散的波浪卷"
+          },
+          {
+            "label_id": "character_hair_texture_tight_curls",
+            "label_name": "小卷",
+            "definition": "卷曲紧密细小的卷发"
+          }
+        ]
+      }
+    ]
+  }
+}

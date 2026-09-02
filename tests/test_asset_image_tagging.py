@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
-from app.business_packages.asset_image_tagging.model_adapter import build_result_item
+from app.core.exceptions import AppError
+from app.business_packages.asset_image_tagging.model_adapter import (
+    OpenAIResponsesAssetImageTaggingModelAdapter,
+    asset_image_tagging_model_adapter_from_settings,
+    build_result_item,
+    build_result_items_from_model_payload,
+)
 from app.business_packages.asset_image_tagging.prompt_builder import build_batch_prompt_payload
 from app.business_packages.asset_image_tagging.schemas import (
     AssetImageTaggingAssetRef,
@@ -10,6 +18,14 @@ from app.business_packages.asset_image_tagging.schemas import (
     AssetImageTaggingLabelSnapshotGroup,
     AssetImageTaggingParams,
 )
+from smoke.flows.asset import image_tagging as image_tagging_flow
+from smoke.flows.asset.image_tagging import (
+    DEFAULT_FIXTURE_PATH,
+    _assert_result,
+    _result_rows,
+    build_payload,
+)
+from smoke.harness.errors import FlowError
 
 
 def _item(category_id: str = "hair") -> AssetImageTaggingItemParams:
@@ -99,3 +115,425 @@ def test_asset_image_tagging_prompt_payload_keeps_item_category_scope():
     assert payload["tagging_language"] == "zh"
     assert payload["items"][0]["item"]["category_id"] == "hair"
     assert payload["items"][0]["label_groups"][0]["selection_mode"] == "single"
+
+
+def test_asset_image_tagging_adapter_uses_openai_settings(monkeypatch):
+    fake_settings = SimpleNamespace(
+        ai_provider=SimpleNamespace(
+            openai_api_key_value="openai-key",
+            openai_base_url="https://openai.example/v1",
+            model_call_timeout_seconds=42,
+        ),
+        job=SimpleNamespace(
+            asset_image_tagging=SimpleNamespace(
+                model_adapter="openai_responses",
+                model_id="gpt-4o",
+            )
+        ),
+    )
+    monkeypatch.setattr("app.business_packages.asset_image_tagging.model_adapter.settings", fake_settings)
+
+    adapter = asset_image_tagging_model_adapter_from_settings()
+
+    assert isinstance(adapter, OpenAIResponsesAssetImageTaggingModelAdapter)
+    assert adapter.api_key == "openai-key"
+    assert adapter.base_url == "https://openai.example/v1"
+    assert adapter.model_id == "gpt-4o"
+    assert adapter.timeout_seconds == 42
+
+
+async def test_asset_image_tagging_adapter_requires_openai_api_key():
+    adapter = OpenAIResponsesAssetImageTaggingModelAdapter(
+        api_key="",
+        base_url=None,
+        model_id="gpt-4o",
+        timeout_seconds=42,
+    )
+
+    with pytest.raises(AppError, match="OPENAI_API_KEY"):
+        await adapter.tag(AssetImageTaggingParams(tagging_language="zh", items=[_item()], label_snapshot=[_label_group()]))
+
+
+def test_asset_image_tagging_maps_model_label_ids_back_to_snapshot():
+    params = AssetImageTaggingParams(
+        tagging_language="zh",
+        items=[_item()],
+        label_snapshot=[_label_group()],
+    )
+
+    result_items = build_result_items_from_model_payload(
+        params=params,
+        payload={
+            "items": [
+                {
+                    "item_id": "asset_001",
+                    "asset_description": "一张棕色中长卷发素材。",
+                    "label_group_selections": [
+                        {
+                            "label_snapshot_index": 0,
+                            "labels": [
+                                {
+                                    "label_id": "hair_color_brown",
+                                    "weight": 0.91,
+                                    "reason": "图片主体发色偏棕。",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert result_items[0].status == "succeeded"
+    label = result_items[0].label_group_selections[0].labels[0]
+    assert label.label_id == "hair_color_brown"
+    assert label.label_name == "棕色"
+    assert label.definition == "头发主体颜色为棕色或棕褐色"
+
+
+def test_asset_image_tagging_marks_extra_label_group_index_as_partial_success():
+    params = AssetImageTaggingParams(
+        tagging_language="zh",
+        items=[_item()],
+        label_snapshot=[_label_group()],
+    )
+
+    result_items = build_result_items_from_model_payload(
+        params=params,
+        payload={
+            "items": [
+                {
+                    "item_id": "asset_001",
+                    "asset_description": "一张棕色中长卷发素材。",
+                    "label_group_selections": [
+                        {
+                            "label_snapshot_index": 0,
+                            "labels": [
+                                {
+                                    "label_id": "hair_color_brown",
+                                    "weight": 0.91,
+                                    "reason": "图片主体发色偏棕。",
+                                }
+                            ],
+                        },
+                        {
+                            "label_snapshot_index": 99,
+                            "labels": [
+                                {
+                                    "label_id": "made_up",
+                                    "weight": 0.8,
+                                    "reason": "非法跨分类标签组。",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert result_items[0].status == "partial_success"
+    assert result_items[0].validation_issues[0].issue == "model_response_invalid"
+    assert result_items[0].validation_issues[0].label_snapshot_index == 99
+
+
+def test_asset_image_tagging_rejects_empty_single_selection():
+    params = AssetImageTaggingParams(
+        tagging_language="zh",
+        items=[_item()],
+        label_snapshot=[_label_group(selection_mode="single")],
+    )
+
+    result_items = build_result_items_from_model_payload(
+        params=params,
+        payload={
+            "items": [
+                {
+                    "item_id": "asset_001",
+                    "asset_description": "一张棕色中长卷发素材。",
+                    "label_group_selections": [{"label_snapshot_index": 0, "labels": []}],
+                }
+            ]
+        },
+    )
+
+    assert result_items[0].status == "failed"
+    assert result_items[0].error is not None
+    assert result_items[0].error.code == "NO_LABEL_SELECTED"
+    assert result_items[0].validation_issues[0].issue == "model_single_selection_invalid"
+
+
+def test_asset_image_tagging_default_smoke_fixture_is_valid_batch_payload():
+    payload, fixture_path = build_payload(
+        client_request_id="test-asset-image-tagging",
+        fixture_path=None,
+        item_limit=2,
+    )
+
+    assert fixture_path == DEFAULT_FIXTURE_PATH
+    assert payload["job_type"] == "asset_image_tagging"
+    params = AssetImageTaggingParams.model_validate(payload["job_params"])
+    assert len(params.items) == 2
+    item_category_ids = {item.category_id for item in params.items}
+    snapshot_category_ids = {group.category_id for group in params.label_snapshot}
+    assert snapshot_category_ids == item_category_ids
+
+
+def test_asset_image_tagging_smoke_payload_does_not_send_fixture_path():
+    payload, _fixture_path = build_payload(
+        client_request_id="test-asset-image-tagging",
+        fixture_path=None,
+        item_limit=1,
+    )
+
+    assert payload["metadata"] == {"source": "scripts/smoke.sh asset-image-tagging"}
+
+
+def test_asset_image_tagging_smoke_human_output_prints_fixture_path_outside_summary_table(monkeypatch, capsys):
+    captured: dict[str, dict] = {}
+
+    monkeypatch.setattr(
+        image_tagging_flow.job_runtime,
+        "resolve_job_context",
+        lambda **_kwargs: SimpleNamespace(
+            app_env="test",
+            summary={
+                "ready": True,
+                "problems": [],
+                "jobs_url": "http://127.0.0.1:8100/api/v1/ai-jobs/jobs",
+                "api_url": "http://127.0.0.1:8100",
+            },
+        ),
+    )
+    monkeypatch.setattr(image_tagging_flow.service_runtime, "build_headers", lambda *_args, **_kwargs: {})
+
+    def fake_request_json(url, *, method, headers, payload=None, timeout_seconds=10):
+        captured["request"] = payload
+        return {
+            "code": "0",
+            "data": {"job": {"job_id": "job-asset-tagging-1", "job_status": "queued"}},
+        }
+
+    def fake_poll_job_envelope(**_kwargs):
+        request_payload = captured["request"]
+        item = request_payload["job_params"]["items"][0]
+        return {
+            "code": "0",
+            "data": {
+                "job": {
+                    "job_id": "job-asset-tagging-1",
+                    "job_status": "succeeded",
+                    "job_result": {
+                        "job_type": "asset_image_tagging",
+                        "batch_summary": {"total": 1, "succeeded": 1, "partial_success": 0, "failed": 0},
+                        "items": [
+                            {
+                                "item_id": item["item_id"],
+                                "status": "succeeded",
+                                "asset_description": {"text": "一张礼物物件素材。"},
+                                "label_group_selections": [
+                                    {
+                                        "label_snapshot_index": 0,
+                                        "category_id": item["category_id"],
+                                        "labels": [{"label_id": "object_type_gift", "label_name": "礼物"}],
+                                    }
+                                ],
+                                "validation_issues": [],
+                            }
+                        ],
+                    },
+                }
+            },
+        }
+
+    monkeypatch.setattr(image_tagging_flow.http_runtime, "request_json", fake_request_json)
+    monkeypatch.setattr(image_tagging_flow.job_runtime, "poll_job_envelope", fake_poll_job_envelope)
+
+    image_tagging_flow.run(
+        confirm_run=True,
+        confirm_cost=True,
+        api_url=None,
+        env_file=None,
+        allow_remote_api=False,
+        service_api_key=None,
+        caller_id="smoke-cli",
+        timeout_seconds=1,
+        poll_interval_seconds=0.1,
+        client_request_id="test-asset-image-tagging",
+        fixture_path=None,
+        item_limit=1,
+        json_output=False,
+    )
+
+    output = capsys.readouterr().out
+    assert f"fixture: {DEFAULT_FIXTURE_PATH}" in output
+    assert not any(line.startswith("fixture") and "job_id" in line for line in output.splitlines())
+    assert "input_relative_path" in output
+    assert "tagging_labels" in output
+    assert "物件/CBTB_Cris_7_p1" in output
+    assert "礼物" in output
+
+
+def test_asset_image_tagging_smoke_result_rows_include_relative_path_and_label_names():
+    rows = _result_rows(
+        [
+            {
+                "item_id": "物件/CBTB_Cris_7_p1",
+                "status": "succeeded",
+                "validation_issues": [],
+                "label_group_selections": [
+                    {
+                        "labels": [
+                            {
+                                "label_id": "object_type_gift",
+                                "label_name": "礼物",
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert rows == [
+        {
+            "item_id": "物件/CBTB_Cris_7_p1",
+            "input_relative_path": "物件/CBTB_Cris_7_p1",
+            "status": "succeeded",
+            "selected": "object_type_gift",
+            "tagging_labels": "礼物",
+            "issue_count": 0,
+        }
+    ]
+
+
+def test_asset_image_tagging_smoke_rejects_cross_category_selection():
+    request_payload, _fixture_path = build_payload(
+        client_request_id="test-asset-image-tagging",
+        fixture_path=None,
+        item_limit=2,
+    )
+    first_item = request_payload["job_params"]["items"][0]
+    second_item = request_payload["job_params"]["items"][1]
+    second_group_index = next(
+        index
+        for index, group in enumerate(request_payload["job_params"]["label_snapshot"])
+        if group["category_id"] == second_item["category_id"]
+    )
+    second_label = request_payload["job_params"]["label_snapshot"][second_group_index]["labels"][0]
+
+    with pytest.raises(FlowError, match="cross-category selection"):
+        _assert_result(
+            {
+                "job_status": "succeeded",
+                "job_result": {
+                    "job_type": "asset_image_tagging",
+                    "batch_summary": {"total": 2, "succeeded": 2, "partial_success": 0, "failed": 0},
+                    "items": [
+                        {
+                            "item_id": first_item["item_id"],
+                            "status": "succeeded",
+                            "asset_description": {"text": "第一张素材描述"},
+                            "label_group_selections": [
+                                {
+                                    "label_snapshot_index": second_group_index,
+                                    "category_id": second_item["category_id"],
+                                    "labels": [{"label_id": second_label["label_id"]}],
+                                }
+                            ],
+                            "validation_issues": [],
+                        },
+                        {
+                            "item_id": second_item["item_id"],
+                            "status": "succeeded",
+                            "asset_description": {"text": "第二张素材描述"},
+                            "label_group_selections": [
+                                {
+                                    "label_snapshot_index": second_group_index,
+                                    "category_id": second_item["category_id"],
+                                    "labels": [{"label_id": second_label["label_id"]}],
+                                }
+                            ],
+                            "validation_issues": [],
+                        },
+                    ],
+                },
+            },
+            request_payload=request_payload,
+        )
+
+
+def test_asset_image_tagging_smoke_rejects_partial_success_result():
+    request_payload, _fixture_path = build_payload(
+        client_request_id="test-asset-image-tagging",
+        fixture_path=None,
+        item_limit=1,
+    )
+    request_item = request_payload["job_params"]["items"][0]
+    group = request_payload["job_params"]["label_snapshot"][0]
+    label = group["labels"][0]
+
+    with pytest.raises(FlowError, match="did not succeed"):
+        _assert_result(
+            {
+                "job_status": "succeeded",
+                "job_result": {
+                    "job_type": "asset_image_tagging",
+                    "batch_summary": {"total": 1, "succeeded": 0, "partial_success": 1, "failed": 0},
+                    "items": [
+                        {
+                            "item_id": request_item["item_id"],
+                            "status": "partial_success",
+                            "asset_description": {"text": "素材描述"},
+                            "label_group_selections": [
+                                {
+                                    "label_snapshot_index": 0,
+                                    "category_id": request_item["category_id"],
+                                    "labels": [{"label_id": label["label_id"]}],
+                                }
+                            ],
+                            "validation_issues": [{"issue": "model_response_invalid"}],
+                        }
+                    ],
+                },
+            },
+            request_payload=request_payload,
+        )
+
+
+def test_asset_image_tagging_smoke_rejects_missing_asset_description():
+    request_payload, _fixture_path = build_payload(
+        client_request_id="test-asset-image-tagging",
+        fixture_path=None,
+        item_limit=1,
+    )
+    request_item = request_payload["job_params"]["items"][0]
+    group = request_payload["job_params"]["label_snapshot"][0]
+    label = group["labels"][0]
+
+    with pytest.raises(FlowError, match="missing asset_description"):
+        _assert_result(
+            {
+                "job_status": "succeeded",
+                "job_result": {
+                    "job_type": "asset_image_tagging",
+                    "batch_summary": {"total": 1, "succeeded": 1, "partial_success": 0, "failed": 0},
+                    "items": [
+                        {
+                            "item_id": request_item["item_id"],
+                            "status": "succeeded",
+                            "label_group_selections": [
+                                {
+                                    "label_snapshot_index": 0,
+                                    "category_id": request_item["category_id"],
+                                    "labels": [{"label_id": label["label_id"]}],
+                                }
+                            ],
+                            "validation_issues": [],
+                        }
+                    ],
+                },
+            },
+            request_payload=request_payload,
+        )
