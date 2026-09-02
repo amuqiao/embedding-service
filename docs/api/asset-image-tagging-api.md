@@ -50,7 +50,7 @@ Content-Type: application/json
 | 查询接口 | `GET /api/v1/ai-jobs/jobs/{job_id}` |
 | Callback | 支持，可选 |
 | Billing | 支持，可选查询 |
-| 批量形态 | `job_params.items[]` 一次提交多个素材；单素材是批量特例；默认最多 10 个，受服务端 `ASSET_IMAGE_TAGGING_MAX_ITEMS` 配置限制 |
+| 批量形态 | `job_params.items[]` 一次提交多个素材；单素材是批量特例；单次 Job 默认最多 10 个，具体上限以联调环境配置为准 |
 | 状态保存 | AI 服务只保存 Job 执行状态和结果快照；不保存为业务标签事实 |
 
 ## 调用流程
@@ -59,19 +59,16 @@ Content-Type: application/json
 业务后端素材库 + 业务后端标签库
   -> 业务后端组装 items[] + label_snapshot[]
   -> 创建 asset_image_tagging Job
-  -> AI 服务读取 items[].asset 指向的图片资源
+  -> AI 服务使用 items[].asset 指向的图片资源
   -> AI 服务按 items[].category_id 匹配 label_snapshot[] 中对应分类的标签组
-  -> AI 服务内部按 item 拆分并发 child job
-  -> AI 服务内部把 label_id 转为临时标签编号
-  -> 模型只基于临时编号 / 标签名 / 标签定义选择标签
-  -> AI 服务把临时编号映射回 label_id，并按 single / multiple 校验选择结果
+  -> AI 服务返回每个素材的标签选择结果、素材描述和 item 级状态
   -> 业务后端轮询或接收 Callback
   -> 业务后端审核、采信或写库
 ```
 
-## 标签选择模型
+## 标签选择规则
 
-图片打标的核心输入是“素材 + 标签组快照”。`label_snapshot[]` 是业务方为本次打标准备的标签组列表，每个标签组声明自己适用的素材分类。模型只能从当前素材分类匹配到的标签组里选择标签，不能创建新标签。
+图片打标的核心输入是“素材 + 标签组快照”。`label_snapshot[]` 是业务方为本次打标准备的标签组列表，每个标签组声明自己适用的素材分类。AI 服务只会从当前素材分类匹配到的标签组里选择标签，不能创建新标签。
 
 ```text
 items[]
@@ -258,7 +255,7 @@ POST /api/v1/ai-jobs/jobs
 | 字段 | 类型 | 必填 | 说明 |
 |---|---:|---:|---|
 | `tagging_language` | string | 是 | 本次打标使用的标签语言，例如 `zh`、`en` |
-| `items` | object[] | 是 | 待打标素材列表，至少 1 个；默认最多 10 个，受服务端 `ASSET_IMAGE_TAGGING_MAX_ITEMS` 配置限制 |
+| `items` | object[] | 是 | 待打标素材列表，至少 1 个；单次 Job 默认最多 10 个，具体上限以联调环境配置为准；超出上限时返回 `ASSET_IMAGE_TAGGING_ITEMS_EXCEEDS_LIMIT` |
 | `label_snapshot` | object[] | 是 | 业务后端组装后的标签组快照，至少 1 组；必须覆盖所有 `items[].category_id` |
 
 ### Item Fields
@@ -826,7 +823,7 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/jobs/018f9a7f-2b7d-7
 ## 处理规则
 
 - AI 服务不从业务后端拉素材库或标签库；每个 Job 必须携带本次打标需要的完整 `items[]` 和 `label_snapshot[]` 快照。
-- `items[]` 数量受服务端 `ASSET_IMAGE_TAGGING_MAX_ITEMS` 限制，默认最多 10 个；超出限制时创建 Job 失败。
+- `items[]` 数量受服务端限制，单次 Job 默认最多 10 个，具体上限以联调环境配置为准；超出限制时创建 Job 失败，`job_error.reason` 或错误 Reason 为 `ASSET_IMAGE_TAGGING_ITEMS_EXCEEDS_LIMIT`。
 - `label_snapshot[]` 是标签组列表，不是分类树；同一个 `category_id` 可以出现多次，表示同一分类下有多个标签组。
 - 每个 `items[].category_id` 必须能在 `label_snapshot[].category_id` 中找到至少一个标签组；否则请求参数非法。
 - AI 服务处理单个素材时，只使用 `category_id` 匹配到的标签组，不使用其他分类的标签组参与判断。
@@ -836,9 +833,8 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/jobs/018f9a7f-2b7d-7
 - 同一 Job 内 `label_snapshot[].labels[].label_id` 必须全局唯一。
 - 每个标签组必须声明 `selection_mode`。`single` 表示最多选 1 个，`multiple` 表示可选多个。
 - 成功和部分成功 item 的 `label_group_selections[]` 必须按当前 item 匹配到的 `label_snapshot[]` 顺序全量返回；未选中标签的组返回 `labels=[]`，不能省略整个组。
-- `selection_mode=single` 的结果中，`labels[]` 长度只能是 0 或 1。模型输出多个候选时，AI 服务必须把该 item 标记为 `failed`，不能向业务方返回违反合同的多个标签。
+- `selection_mode=single` 的结果中，`labels[]` 长度只能是 0 或 1。若单选标签组结果出现多个标签，AI 服务必须把该 item 标记为 `failed`，不能向业务方返回违反合同的多个标签。
 - `labels[].reason` 和 `items[].asset_description` 是服务端输出策略，不作为创建 Job 的入参开关；业务方不能通过请求参数要求开启或关闭。
-- 真实 `label_id` 是业务标签事实源，只在请求和结果合同中出现；AI 服务调用模型时应转为临时内部编号，模型不得直接看到或返回真实 `label_id`。
 - 当前图片打标要求 `items[].asset.content_type` 必须是图片 MIME，图片必须通过公网 URL 传入，不接受裸 base64。
 - 本 Job 不写业务资源表，不写业务标签表。
 
@@ -855,11 +851,6 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/jobs/018f9a7f-2b7d-7
 | `CLIENT_REQUEST_ID_CONFLICT` | 409 | 同一 caller 下重复 `client_request_id` 但请求内容不一致 | no |
 | `JOB_NOT_FOUND` | 404 | 查询的 Job 不存在或不属于当前 caller | no |
 | `QUEUE_FULL` | 503 | 服务当前接单容量已满 | yes |
-| `UNSUPPORTED_LANGUAGE` | 400 | `tagging_language` 不支持 | no |
-| `ASSET_LABEL_SCHEMA_INVALID` | 400 | 标签组结构非法，例如 `selection_mode` 不支持、`label_id` 重复 | no |
-| `ASSET_REF_INVALID` | 400 | 素材资源引用非法，例如 `asset.public_url`、`asset.content_type` 格式不符合要求，或可选 `asset.sha256` 格式不符合要求 | no |
-| `INPUT_HASH_MISMATCH` | 400 | 请求传入可选 `asset.sha256` 且素材内容 hash 校验不一致 | no |
-| `INPUT_TOO_LARGE` | 400 | 素材大小、图片宽高或像素超过限制 | no |
 | `MODEL_CALL_FAILED` | 502 | 调用模型失败 | yes |
 | `MODEL_CALL_TIMEOUT` | 504 | 调用模型超时 | yes |
 | `MODEL_OUTPUT_INVALID` | 502 | 模型输出不符合合同，例如 JSON 非法、未知标签引用、字段缺失、单选标签组返回多个标签 | no |
