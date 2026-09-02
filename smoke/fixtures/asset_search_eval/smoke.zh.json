@@ -1,0 +1,1178 @@
+{
+  "dataset_id": "asset-search-eval-smoke-zh-v1",
+  "dataset_range": "smoke",
+  "description": "Self-contained asset search eval dataset copied from POC public OSS manifest and label snapshot.",
+  "expected_labels": {
+    "eval/smoke/物件/CBTB_Cris_7_p1": [
+      "object_type_miscellaneous_prop"
+    ],
+    "eval/smoke/背景/270000020": [
+      "scene_background_theme_style_wedding"
+    ],
+    "eval/smoke/角色-发型/hair_10_1": [
+      "character_hair_texture_wavy"
+    ]
+  },
+  "items": [
+    {
+      "asset": {
+        "content_type": "image/png",
+        "public_url": "https://cms-aicg-sz.epubgame.com/aicg/dev_root/cms_poster_title/asset-vector-poc/assets/%E7%89%A9%E4%BB%B6/CBTB_Cris_7_p1.png"
+      },
+      "category_id": "object",
+      "category_name": "物件",
+      "item_id": "eval/smoke/物件/CBTB_Cris_7_p1",
+      "item_name": "CBTB_Cris_7_p1",
+      "metadata": {
+        "relative_path": "物件/CBTB_Cris_7_p1.png",
+        "source_manifest_resource_id": "物件/CBTB_Cris_7_p1"
+      }
+    },
+    {
+      "asset": {
+        "content_type": "image/jpeg",
+        "public_url": "https://cms-aicg-sz.epubgame.com/aicg/dev_root/cms_poster_title/asset-vector-poc/assets/%E8%83%8C%E6%99%AF/270000020.jpg"
+      },
+      "category_id": "scene",
+      "category_name": "场景",
+      "item_id": "eval/smoke/背景/270000020",
+      "item_name": "270000020",
+      "metadata": {
+        "relative_path": "背景/270000020.jpg",
+        "source_manifest_resource_id": "背景/270000020"
+      }
+    },
+    {
+      "asset": {
+        "content_type": "image/png",
+        "public_url": "https://cms-aicg-sz.epubgame.com/aicg/dev_root/cms_poster_title/asset-vector-poc/assets/%E8%A7%92%E8%89%B2-%E5%8F%91%E5%9E%8B/hair_10_1.png"
+      },
+      "category_id": "character_hair",
+      "category_name": "角色-发型",
+      "item_id": "eval/smoke/角色-发型/hair_10_1",
+      "item_name": "hair_10_1",
+      "metadata": {
+        "relative_path": "角色-发型/hair_10_1.png",
+        "source_manifest_resource_id": "角色-发型/hair_10_1"
+      }
+    }
+  ],
+  "label_snapshot": [
+    {
+      "category_id": "character_hair",
+      "category_name": "角色-发型",
+      "labels": [
+        {
+          "definition": "头部完全没有头发，头皮裸露",
+          "label_id": "character_hair_length_bald",
+          "label_name": "光头"
+        },
+        {
+          "definition": "头顶部分头发脱落稀疏，非完全光头",
+          "label_id": "character_hair_length_balding",
+          "label_name": "秃顶"
+        },
+        {
+          "definition": "头发极短且长度均匀，贴近头皮",
+          "label_id": "character_hair_length_buzz_cut",
+          "label_name": "寸头"
+        },
+        {
+          "definition": "发长在耳部以上或齐耳附近",
+          "label_id": "character_hair_length_short_hair",
+          "label_name": "短发"
+        },
+        {
+          "definition": "发长约到肩部左右",
+          "label_id": "character_hair_length_medium_hair",
+          "label_name": "中发"
+        },
+        {
+          "definition": "发长超过肩部，垂至背部",
+          "label_id": "character_hair_length_long_hair",
+          "label_name": "长发"
+        },
+        {
+          "definition": "发长远超肩背，可达腰部以下",
+          "label_id": "character_hair_length_extra_long_hair",
+          "label_name": "超长发"
+        }
+      ],
+      "selection_mode": "single"
+    },
+    {
+      "category_id": "character_hair",
+      "category_name": "角色-发型",
+      "labels": [
+        {
+          "definition": "发丝顺直无弯曲",
+          "label_id": "character_hair_texture_straight",
+          "label_name": "直发"
+        },
+        {
+          "definition": "发丝呈明显卷曲状",
+          "label_id": "character_hair_texture_curly",
+          "label_name": "卷发"
+        },
+        {
+          "definition": "发丝呈自然波浪起伏",
+          "label_id": "character_hair_texture_wavy",
+          "label_name": "波浪发"
+        },
+        {
+          "definition": "卷曲弧度大而松散的波浪卷",
+          "label_id": "character_hair_texture_loose_waves",
+          "label_name": "大波浪"
+        },
+        {
+          "definition": "卷曲紧密细小的卷发",
+          "label_id": "character_hair_texture_tight_curls",
+          "label_name": "小卷"
+        }
+      ],
+      "selection_mode": "single"
+    },
+    {
+      "category_id": "character_hair",
+      "category_name": "角色-发型",
+      "labels": [
+        {
+          "definition": "头发向后梳理并贴伏，整齐光亮",
+          "label_id": "character_hair_style_slicked_back",
+          "label_name": "背头"
+        },
+        {
+          "definition": "头顶头发向上梳高并向后固定，有光泽感",
+          "label_id": "character_hair_style_pompadour",
+          "label_name": "油头"
+        },
+        {
+          "definition": "前额头发向上竖起并向后卷翘，形似机头",
+          "label_id": "character_hair_style_quiff",
+          "label_name": "飞机头"
+        },
+        {
+          "definition": "两侧头发剃光，中间留一条竖立发带",
+          "label_id": "character_hair_style_mohawk",
+          "label_name": "莫西干"
+        },
+        {
+          "definition": "头顶头发短而平整，两侧渐渐剪短",
+          "label_id": "character_hair_style_crew_cut",
+          "label_name": "板寸"
+        },
+        {
+          "definition": "整头发型极短且均匀贴合头型",
+          "label_id": "character_hair_style_butch_cut",
+          "label_name": "圆寸"
+        },
+        {
+          "definition": "短发带有蓬松毛绒质感",
+          "label_id": "character_hair_style_fuzzy_crop",
+          "label_name": "毛寸"
+        },
+        {
+          "definition": "发长恰好垂至肩部",
+          "label_id": "character_hair_style_shoulder_length_hair",
+          "label_name": "披肩发"
+        },
+        {
+          "definition": "头发在后脑束起下垂",
+          "label_id": "character_hair_style_ponytail",
+          "label_name": "马尾"
+        },
+        {
+          "definition": "头发在头顶高位束起",
+          "label_id": "character_hair_style_high_ponytail",
+          "label_name": "高马尾"
+        },
+        {
+          "definition": "头发在后脑低位束起",
+          "label_id": "character_hair_style_low_ponytail",
+          "label_name": "低马尾"
+        },
+        {
+          "definition": "头发盘绕束成球状发髻",
+          "label_id": "character_hair_style_bun",
+          "label_name": "丸子头"
+        },
+        {
+          "definition": "头发编成交叉辫状",
+          "label_id": "character_hair_style_braid",
+          "label_name": "麻花辫"
+        },
+        {
+          "definition": "头发盘绕固定于头顶或后脑，呈盘卷造型",
+          "label_id": "character_hair_style_updo",
+          "label_name": "盘发"
+        },
+        {
+          "definition": "齐肩或齐颌短发，发型整齐利落",
+          "label_id": "character_hair_style_bob",
+          "label_name": "波波头"
+        },
+        {
+          "definition": "发长恰好到锁骨位置",
+          "label_id": "character_hair_style_collarbone_length_hair",
+          "label_name": "锁骨发"
+        },
+        {
+          "definition": "头发结成一股股绳状发辫",
+          "label_id": "character_hair_style_dreadlocks",
+          "label_name": "脏辫"
+        },
+        {
+          "definition": "头发呈蓬松圆球状自然卷曲",
+          "label_id": "character_hair_style_afro",
+          "label_name": "爆炸头"
+        },
+        {
+          "definition": "头发分成方块状细密编织的辫子",
+          "label_id": "character_hair_style_box_braids",
+          "label_name": "非洲辫"
+        },
+        {
+          "definition": "细密多股编织的雷鬼风格辫发",
+          "label_id": "character_hair_style_reggae_braids",
+          "label_name": "雷鬼头"
+        },
+        {
+          "definition": "头发左右两侧对称各扎一束下垂",
+          "label_id": "character_hair_style_pigtails_twin_tails",
+          "label_name": "双马尾"
+        },
+        {
+          "definition": "头顶部分头发扎起，其余头发自然垂落",
+          "label_id": "character_hair_style_half_up",
+          "label_name": "半扎头发"
+        }
+      ],
+      "selection_mode": "single"
+    },
+    {
+      "category_id": "character_hair",
+      "category_name": "角色-发型",
+      "labels": [
+        {
+          "definition": "刘海平直剪齐，覆盖整片额头",
+          "label_id": "character_hair_bangs_blunt_bangs",
+          "label_name": "齐刘海"
+        },
+        {
+          "definition": "刘海斜向一侧偏分，露出部分额头",
+          "label_id": "character_hair_bangs_side_swept_bangs",
+          "label_name": "斜刘海"
+        },
+        {
+          "definition": "刘海中间分开，两侧自然下垂，形似八字",
+          "label_id": "character_hair_bangs_curtain_bangs",
+          "label_name": "八字刘海"
+        },
+        {
+          "definition": "头发全部向后梳理或不设刘海，额头完全露出",
+          "label_id": "character_hair_bangs_no_bangs",
+          "label_name": "无刘海"
+        }
+      ],
+      "selection_mode": "single"
+    },
+    {
+      "category_id": "character_hair",
+      "category_name": "角色-发型",
+      "labels": [
+        {
+          "definition": "发色为纯黑色",
+          "label_id": "character_hair_hair_color_black",
+          "label_name": "黑色"
+        },
+        {
+          "definition": "发色为较深的棕色",
+          "label_id": "character_hair_hair_color_dark_brown",
+          "label_name": "深棕色"
+        },
+        {
+          "definition": "发色为中等棕色",
+          "label_id": "character_hair_hair_color_brown",
+          "label_name": "棕色"
+        },
+        {
+          "definition": "发色为较浅的棕色",
+          "label_id": "character_hair_hair_color_light_brown",
+          "label_name": "浅棕色"
+        },
+        {
+          "definition": "发色为金黄色",
+          "label_id": "character_hair_hair_color_blonde",
+          "label_name": "金色"
+        },
+        {
+          "definition": "发色为纯白色",
+          "label_id": "character_hair_hair_color_white",
+          "label_name": "白色"
+        },
+        {
+          "definition": "发色为灰色",
+          "label_id": "character_hair_hair_color_gray",
+          "label_name": "灰色"
+        },
+        {
+          "definition": "黑白发丝混杂，呈斑白状态",
+          "label_id": "character_hair_hair_color_salt_and_pepper",
+          "label_name": "花白"
+        },
+        {
+          "definition": "发色为红色",
+          "label_id": "character_hair_hair_color_red",
+          "label_name": "红色"
+        },
+        {
+          "definition": "发色为粉色",
+          "label_id": "character_hair_hair_color_pink",
+          "label_name": "粉色"
+        },
+        {
+          "definition": "发色为蓝色",
+          "label_id": "character_hair_hair_color_blue",
+          "label_name": "蓝色"
+        },
+        {
+          "definition": "发色为紫色",
+          "label_id": "character_hair_hair_color_purple",
+          "label_name": "紫色"
+        },
+        {
+          "definition": "发色为绿色",
+          "label_id": "character_hair_hair_color_green",
+          "label_name": "绿色"
+        },
+        {
+          "definition": "部分发丝染成与主发色不同的颜色，形成层次",
+          "label_id": "character_hair_hair_color_highlights",
+          "label_name": "挑染"
+        },
+        {
+          "definition": "发色从发根到发尾呈渐变过渡",
+          "label_id": "character_hair_hair_color_ombre",
+          "label_name": "渐变"
+        },
+        {
+          "definition": "发色为浅灰白色调，带柔和灰调",
+          "label_id": "character_hair_hair_color_granny_gray",
+          "label_name": "奶奶灰"
+        }
+      ],
+      "selection_mode": "single"
+    },
+    {
+      "category_id": "character_hair",
+      "category_name": "角色-发型",
+      "labels": [
+        {
+          "definition": "头发密度高，蓬松厚重",
+          "label_id": "character_hair_features_thick_volume",
+          "label_name": "发量多"
+        },
+        {
+          "definition": "头发密度低，稀薄贴头",
+          "label_id": "character_hair_features_thin_volume",
+          "label_name": "发量少"
+        },
+        {
+          "definition": "发丝顺滑有光泽，整齐贴伏",
+          "label_id": "character_hair_features_sleek",
+          "label_name": "顺滑"
+        },
+        {
+          "definition": "发丝蓬乱不服帖，缺乏光泽",
+          "label_id": "character_hair_features_frizzy",
+          "label_name": "毛躁"
+        },
+        {
+          "definition": "头发从头顶正中分开",
+          "label_id": "character_hair_features_center_part",
+          "label_name": "中分"
+        },
+        {
+          "definition": "头发按三七比例偏分",
+          "label_id": "character_hair_features_side_part_30_70",
+          "label_name": "三七分"
+        },
+        {
+          "definition": "头发按二八比例偏分",
+          "label_id": "character_hair_features_side_part_20_80",
+          "label_name": "二八分"
+        },
+        {
+          "definition": "头发几乎全部偏向一侧分开",
+          "label_id": "character_hair_features_side_part_10_90",
+          "label_name": "一九分"
+        },
+        {
+          "definition": "头发没有明显分线",
+          "label_id": "character_hair_features_no_part",
+          "label_name": "无分界"
+        }
+      ],
+      "selection_mode": "multiple"
+    },
+    {
+      "category_id": "object",
+      "category_name": "物件",
+      "labels": [
+        {
+          "definition": "物件属于攻击或防御用武器",
+          "label_id": "object_type_weapon",
+          "label_name": "武器"
+        },
+        {
+          "definition": "物件属于室内家具",
+          "label_id": "object_type_furniture",
+          "label_name": "家具"
+        },
+        {
+          "definition": "物件属于建筑结构组成部分",
+          "label_id": "object_type_architectural_piece",
+          "label_name": "建筑构件"
+        },
+        {
+          "definition": "物件属于代步或运输工具",
+          "label_id": "object_type_vehicle",
+          "label_name": "交通工具"
+        },
+        {
+          "definition": "物件属于盛装用容器",
+          "label_id": "object_type_container",
+          "label_name": "容器"
+        },
+        {
+          "definition": "物件属于书本或卷轴类",
+          "label_id": "object_type_book_scroll",
+          "label_name": "书籍卷轴"
+        },
+        {
+          "definition": "物件属于食物类",
+          "label_id": "object_type_food",
+          "label_name": "食物"
+        },
+        {
+          "definition": "物件属于货币类",
+          "label_id": "object_type_currency",
+          "label_name": "货币"
+        },
+        {
+          "definition": "物件属于植物类",
+          "label_id": "object_type_plant",
+          "label_name": "植物"
+        },
+        {
+          "definition": "物件属于活物动物类型",
+          "label_id": "object_type_animal",
+          "label_name": "动物"
+        },
+        {
+          "definition": "物件为戒指类首饰",
+          "label_id": "object_type_ring",
+          "label_name": "戒指"
+        },
+        {
+          "definition": "物件为项链类首饰",
+          "label_id": "object_type_necklace",
+          "label_name": "项链"
+        },
+        {
+          "definition": "物件为耳环类首饰",
+          "label_id": "object_type_earrings",
+          "label_name": "耳环"
+        },
+        {
+          "definition": "物件为手镯或手链类首饰",
+          "label_id": "object_type_bracelet",
+          "label_name": "手镯/手链"
+        },
+        {
+          "definition": "物件为胸针或别针类首饰",
+          "label_id": "object_type_brooch_pin",
+          "label_name": "胸针/别针"
+        },
+        {
+          "definition": "物件为其他类型首饰，如皇冠、发饰等",
+          "label_id": "object_type_other_jewelry",
+          "label_name": "其他首饰/珠宝"
+        },
+        {
+          "definition": "物件为电子设备，如手机、相机、电脑",
+          "label_id": "object_type_electronics",
+          "label_name": "电子产品"
+        },
+        {
+          "definition": "物件为展示文字或时间信息的道具，如告示牌、铭牌、时钟显示",
+          "label_id": "object_type_text_prop",
+          "label_name": "文字类道具"
+        },
+        {
+          "definition": "物件为信件、便签或纸质文档",
+          "label_id": "object_type_notes_letters",
+          "label_name": "信件/便签"
+        },
+        {
+          "definition": "物件为玩具类",
+          "label_id": "object_type_toys",
+          "label_name": "玩具"
+        },
+        {
+          "definition": "物件为情趣或BDSM相关道具",
+          "label_id": "object_type_bdsm_prop",
+          "label_name": "情趣/BDSM道具"
+        },
+        {
+          "definition": "物件为礼物、礼盒类",
+          "label_id": "object_type_gift",
+          "label_name": "礼物"
+        },
+        {
+          "definition": "物件为其他无法归入以上类别的功能性或场景道具",
+          "label_id": "object_type_miscellaneous_prop",
+          "label_name": "其他功能道具"
+        }
+      ],
+      "selection_mode": "single"
+    },
+    {
+      "category_id": "object",
+      "category_name": "物件",
+      "labels": [
+        {
+          "definition": "材质为木质",
+          "label_id": "object_material_wood",
+          "label_name": "木"
+        },
+        {
+          "definition": "材质为金属",
+          "label_id": "object_material_metal",
+          "label_name": "金属"
+        },
+        {
+          "definition": "材质为石质",
+          "label_id": "object_material_stone",
+          "label_name": "石"
+        },
+        {
+          "definition": "材质为布料",
+          "label_id": "object_material_fabric",
+          "label_name": "布"
+        },
+        {
+          "definition": "材质为纸质",
+          "label_id": "object_material_paper",
+          "label_name": "纸"
+        },
+        {
+          "definition": "材质为玻璃",
+          "label_id": "object_material_glass",
+          "label_name": "玻璃"
+        },
+        {
+          "definition": "材质为陶瓷",
+          "label_id": "object_material_ceramic",
+          "label_name": "陶瓷"
+        },
+        {
+          "definition": "材质为皮革",
+          "label_id": "object_material_leather",
+          "label_name": "皮革"
+        }
+      ],
+      "selection_mode": "multiple"
+    },
+    {
+      "category_id": "object",
+      "category_name": "物件",
+      "labels": [
+        {
+          "definition": "物件体积较小",
+          "label_id": "object_size_small",
+          "label_name": "小型"
+        },
+        {
+          "definition": "物件体积中等",
+          "label_id": "object_size_medium",
+          "label_name": "中型"
+        },
+        {
+          "definition": "物件体积较大",
+          "label_id": "object_size_large",
+          "label_name": "大型"
+        },
+        {
+          "definition": "物件体积极大，超出常规尺寸",
+          "label_id": "object_size_extra_large",
+          "label_name": "超大型"
+        }
+      ],
+      "selection_mode": "single"
+    },
+    {
+      "category_id": "object",
+      "category_name": "物件",
+      "labels": [
+        {
+          "definition": "物件以真实质感呈现",
+          "label_id": "object_style_realistic",
+          "label_name": "写实"
+        },
+        {
+          "definition": "物件带有奇幻元素设计",
+          "label_id": "object_style_fantasy",
+          "label_name": "奇幻"
+        },
+        {
+          "definition": "物件整体设计风格阴暗",
+          "label_id": "object_style_dark",
+          "label_name": "暗黑"
+        },
+        {
+          "definition": "物件设计带有梦幻朦胧感",
+          "label_id": "object_style_dreamy",
+          "label_name": "梦幻"
+        },
+        {
+          "definition": "物件以卡通风格呈现",
+          "label_id": "object_style_cartoon",
+          "label_name": "卡通"
+        },
+        {
+          "definition": "物件带有未来科技设计元素",
+          "label_id": "object_style_sci_fi",
+          "label_name": "未来科幻"
+        }
+      ],
+      "selection_mode": "multiple"
+    },
+    {
+      "category_id": "object",
+      "category_name": "物件",
+      "labels": [
+        {
+          "definition": "物件设计简单朴素，几乎无装饰",
+          "label_id": "object_ornateness_level_plain",
+          "label_name": "朴素"
+        },
+        {
+          "definition": "物件设计简洁，仅有少量装饰细节",
+          "label_id": "object_ornateness_level_simple",
+          "label_name": "简约"
+        },
+        {
+          "definition": "物件做工精细，带有明显装饰细节",
+          "label_id": "object_ornateness_level_refined",
+          "label_name": "精致"
+        },
+        {
+          "definition": "物件装饰繁复考究，视觉效果丰富",
+          "label_id": "object_ornateness_level_ornate",
+          "label_name": "华丽"
+        },
+        {
+          "definition": "物件极尽奢华，镶嵌或雕琢极为繁复",
+          "label_id": "object_ornateness_level_extravagant",
+          "label_name": "奢华"
+        }
+      ],
+      "selection_mode": "single"
+    },
+    {
+      "category_id": "scene",
+      "category_name": "场景",
+      "labels": [
+        {
+          "definition": "背景为当代都市世界观",
+          "label_id": "scene_background_theme_style_modern_city",
+          "label_name": "现代都市"
+        },
+        {
+          "definition": "背景为魔法、异世界等奇幻世界观",
+          "label_id": "scene_background_theme_style_fantasy",
+          "label_name": "奇幻幻想"
+        },
+        {
+          "definition": "背景为古代或历史时期世界观",
+          "label_id": "scene_background_theme_style_historical_ancient",
+          "label_name": "古风历史"
+        },
+        {
+          "definition": "背景为校园生活世界观",
+          "label_id": "scene_background_theme_style_campus_school",
+          "label_name": "校园"
+        },
+        {
+          "definition": "背景为未来科技、太空等科幻世界观",
+          "label_id": "scene_background_theme_style_sci_fi_futuristic",
+          "label_name": "未来科幻"
+        },
+        {
+          "definition": "背景整体阴暗神秘，具哥特风格",
+          "label_id": "scene_background_theme_style_gothic_dark",
+          "label_name": "暗黑哥特"
+        },
+        {
+          "definition": "背景为乡村、田园生活世界观",
+          "label_id": "scene_background_theme_style_rural_pastoral",
+          "label_name": "田园乡村"
+        },
+        {
+          "definition": "背景为蒸汽机械美学的复古未来世界观",
+          "label_id": "scene_background_theme_style_steampunk",
+          "label_name": "蒸汽朋克"
+        },
+        {
+          "definition": "背景为梦境或架空的异世界",
+          "label_id": "scene_background_theme_style_otherworldly_dreamlike",
+          "label_name": "异世界梦幻"
+        },
+        {
+          "definition": "场景为举行婚礼仪式的场合，可发生于教堂、花园、宴会厅等不同具体地点，画面通常带有仪式感或庄重装饰元素",
+          "label_id": "scene_background_theme_style_wedding",
+          "label_name": "婚礼主题"
+        },
+        {
+          "definition": "背景整体氛围恐怖或充满悬疑感",
+          "label_id": "scene_background_theme_style_horror_mystery",
+          "label_name": "恐怖悬疑"
+        }
+      ],
+      "selection_mode": "single"
+    },
+    {
+      "category_id": "scene",
+      "category_name": "场景",
+      "labels": [
+        {
+          "definition": "场景位于卧室",
+          "label_id": "scene_specific_location_bedroom",
+          "label_name": "卧室"
+        },
+        {
+          "definition": "场景位于客厅",
+          "label_id": "scene_specific_location_living_room",
+          "label_name": "客厅"
+        },
+        {
+          "definition": "现代风格的公寓或顶层豪华公寓室内空间",
+          "label_id": "scene_specific_location_apartment_penthouse",
+          "label_name": "公寓/顶层公寓"
+        },
+        {
+          "definition": "老式风格的庄园或豪华宅邸",
+          "label_id": "scene_specific_location_mansion_manor",
+          "label_name": "庄园/古堡豪宅"
+        },
+        {
+          "definition": "体育场馆、球场或运动场地",
+          "label_id": "scene_specific_location_sports_venue",
+          "label_name": "运动场馆"
+        },
+        {
+          "definition": "场景位于厨房",
+          "label_id": "scene_specific_location_kitchen",
+          "label_name": "厨房"
+        },
+        {
+          "definition": "场景位于车辆内部，如驾驶座、后座视角",
+          "label_id": "scene_specific_location_car_interior",
+          "label_name": "车内"
+        },
+        {
+          "definition": "场景位于车辆外部或停靠路边",
+          "label_id": "scene_specific_location_car_exterior_roadside",
+          "label_name": "车外/路边"
+        },
+        {
+          "definition": "场景位于浴室",
+          "label_id": "scene_specific_location_bathroom",
+          "label_name": "浴室"
+        },
+        {
+          "definition": "场景位于警察局，如办公区、审讯室",
+          "label_id": "scene_specific_location_police_station",
+          "label_name": "警察局"
+        },
+        {
+          "definition": "场景位于监狱关押区域",
+          "label_id": "scene_specific_location_prison",
+          "label_name": "监狱"
+        },
+        {
+          "definition": "带有情趣或BDSM主题装饰的密室空间，如镣铐、皮革软垫等元素",
+          "label_id": "scene_specific_location_bdsm_dungeon",
+          "label_name": "情趣密室"
+        },
+        {
+          "definition": "场景位于教室",
+          "label_id": "scene_specific_location_classroom",
+          "label_name": "教室"
+        },
+        {
+          "definition": "场景位于图书馆",
+          "label_id": "scene_specific_location_library",
+          "label_name": "图书馆"
+        },
+        {
+          "definition": "场景位于办公室",
+          "label_id": "scene_specific_location_office",
+          "label_name": "办公室"
+        },
+        {
+          "definition": "场景位于会议室",
+          "label_id": "scene_specific_location_meeting_room",
+          "label_name": "会议室"
+        },
+        {
+          "definition": "场景位于咖啡厅",
+          "label_id": "scene_specific_location_cafe",
+          "label_name": "咖啡厅"
+        },
+        {
+          "definition": "场景位于餐厅",
+          "label_id": "scene_specific_location_restaurant",
+          "label_name": "餐厅"
+        },
+        {
+          "definition": "场景位于商店或商场",
+          "label_id": "scene_specific_location_shop_mall",
+          "label_name": "商店/商场"
+        },
+        {
+          "definition": "场景位于医院",
+          "label_id": "scene_specific_location_hospital",
+          "label_name": "医院"
+        },
+        {
+          "definition": "场景位于更衣室",
+          "label_id": "scene_specific_location_changing_room",
+          "label_name": "更衣室"
+        },
+        {
+          "definition": "场景位于走廊",
+          "label_id": "scene_specific_location_corridor",
+          "label_name": "走廊"
+        },
+        {
+          "definition": "场景位于礼堂",
+          "label_id": "scene_specific_location_auditorium",
+          "label_name": "礼堂"
+        },
+        {
+          "definition": "场景位于画室或音乐室",
+          "label_id": "scene_specific_location_art_music_room",
+          "label_name": "画室/音乐室"
+        },
+        {
+          "definition": "场景位于舞厅或宴会厅",
+          "label_id": "scene_specific_location_ballroom_banquet_hall",
+          "label_name": "舞厅/宴会厅"
+        },
+        {
+          "definition": "场景位于地下室",
+          "label_id": "scene_specific_location_basement",
+          "label_name": "地下室"
+        },
+        {
+          "definition": "场景位于书房",
+          "label_id": "scene_specific_location_study_room",
+          "label_name": "书房"
+        },
+        {
+          "definition": "场景位于酒吧或夜店",
+          "label_id": "scene_specific_location_bar_nightclub",
+          "label_name": "酒吧/夜店"
+        },
+        {
+          "definition": "场景位于电影院",
+          "label_id": "scene_specific_location_cinema",
+          "label_name": "影院"
+        },
+        {
+          "definition": "场景位于电梯内",
+          "label_id": "scene_specific_location_elevator",
+          "label_name": "电梯"
+        },
+        {
+          "definition": "场景位于公园",
+          "label_id": "scene_specific_location_park",
+          "label_name": "公园"
+        },
+        {
+          "definition": "场景位于街道",
+          "label_id": "scene_specific_location_street",
+          "label_name": "街道"
+        },
+        {
+          "definition": "场景位于小巷",
+          "label_id": "scene_specific_location_alley",
+          "label_name": "小巷"
+        },
+        {
+          "definition": "场景位于校园内",
+          "label_id": "scene_specific_location_campus_field_rooftop",
+          "label_name": "校园"
+        },
+        {
+          "definition": "场景位于广场",
+          "label_id": "scene_specific_location_square_plaza",
+          "label_name": "广场"
+        },
+        {
+          "definition": "场景位于住宅区",
+          "label_id": "scene_specific_location_residential_area",
+          "label_name": "住宅区"
+        },
+        {
+          "definition": "场景位于商业街",
+          "label_id": "scene_specific_location_commercial_street",
+          "label_name": "商业街"
+        },
+        {
+          "definition": "场景位于车站",
+          "label_id": "scene_specific_location_station",
+          "label_name": "车站"
+        },
+        {
+          "definition": "场景位于地铁站",
+          "label_id": "scene_specific_location_subway_station",
+          "label_name": "地铁站"
+        },
+        {
+          "definition": "场景位于桥上",
+          "label_id": "scene_specific_location_on_a_bridge",
+          "label_name": "桥上"
+        },
+        {
+          "definition": "场景位于停车场",
+          "label_id": "scene_specific_location_parking_lot",
+          "label_name": "停车场"
+        },
+        {
+          "definition": "场景位于码头",
+          "label_id": "scene_specific_location_dock_pier",
+          "label_name": "码头"
+        },
+        {
+          "definition": "场景位于海滩",
+          "label_id": "scene_specific_location_beach",
+          "label_name": "海滩"
+        },
+        {
+          "definition": "场景位于森林",
+          "label_id": "scene_specific_location_forest",
+          "label_name": "森林"
+        },
+        {
+          "definition": "场景位于山地",
+          "label_id": "scene_specific_location_mountain",
+          "label_name": "山地"
+        },
+        {
+          "definition": "场景位于庭院或花园",
+          "label_id": "scene_specific_location_courtyard_garden_backyard",
+          "label_name": "庭院/花园/后院"
+        },
+        {
+          "definition": "场景位于屋顶",
+          "label_id": "scene_specific_location_rooftop",
+          "label_name": "屋顶"
+        },
+        {
+          "definition": "场景位于田野",
+          "label_id": "scene_specific_location_field",
+          "label_name": "田野"
+        },
+        {
+          "definition": "场景位于废弃遗迹",
+          "label_id": "scene_specific_location_ruins",
+          "label_name": "废墟"
+        },
+        {
+          "definition": "场景位于建筑内的楼梯间",
+          "label_id": "scene_specific_location_stairwell",
+          "label_name": "楼梯间"
+        },
+        {
+          "definition": "场景位于公司场所（如大堂，前台、走廊、门口等），不特指具体房间",
+          "label_id": "scene_specific_location_company_premises",
+          "label_name": "公司"
+        }
+      ],
+      "selection_mode": "multiple"
+    },
+    {
+      "category_id": "scene",
+      "category_name": "场景",
+      "labels": [
+        {
+          "definition": "建筑呈古代传统风格",
+          "label_id": "scene_architecture_style_classical",
+          "label_name": "古典"
+        },
+        {
+          "definition": "建筑呈当代简洁风格",
+          "label_id": "scene_architecture_style_modern",
+          "label_name": "现代"
+        },
+        {
+          "definition": "建筑呈未来科技风格",
+          "label_id": "scene_architecture_style_futuristic",
+          "label_name": "未来"
+        },
+        {
+          "definition": "建筑呈东方传统风格",
+          "label_id": "scene_architecture_style_eastern",
+          "label_name": "东方"
+        },
+        {
+          "definition": "建筑呈西方传统风格",
+          "label_id": "scene_architecture_style_western",
+          "label_name": "西方"
+        },
+        {
+          "definition": "建筑呈破败废弃状态",
+          "label_id": "scene_architecture_style_abandoned",
+          "label_name": "废弃"
+        },
+        {
+          "definition": "场景中不包含建筑元素",
+          "label_id": "scene_architecture_style_none",
+          "label_name": "无建筑"
+        }
+      ],
+      "selection_mode": "multiple"
+    },
+    {
+      "category_id": "scene",
+      "category_name": "场景",
+      "labels": [
+        {
+          "definition": "天气晴朗无云",
+          "label_id": "scene_weather_clear",
+          "label_name": "晴"
+        },
+        {
+          "definition": "天气为降雨状态",
+          "label_id": "scene_weather_rain",
+          "label_name": "雨"
+        },
+        {
+          "definition": "天气为降雪状态",
+          "label_id": "scene_weather_snow",
+          "label_name": "雪"
+        },
+        {
+          "definition": "天气为大雾弥漫状态",
+          "label_id": "scene_weather_fog",
+          "label_name": "雾"
+        },
+        {
+          "definition": "天气为狂风暴雨状态",
+          "label_id": "scene_weather_storm",
+          "label_name": "风暴"
+        },
+        {
+          "definition": "天气为沙尘弥漫状态",
+          "label_id": "scene_weather_sandstorm",
+          "label_name": "沙尘"
+        },
+        {
+          "definition": "图片中存在房屋树木等可燃物着火的痕迹，并且可能带有浓烟",
+          "label_id": "scene_weather_fire",
+          "label_name": "火灾"
+        },
+        {
+          "definition": "图中无法判断天气信息",
+          "label_id": "scene_weather_none",
+          "label_name": "无"
+        }
+      ],
+      "selection_mode": "single"
+    },
+    {
+      "category_id": "scene",
+      "category_name": "场景",
+      "labels": [
+        {
+          "definition": "场景呈现春季特征，如新绿萌发",
+          "label_id": "scene_season_spring",
+          "label_name": "春"
+        },
+        {
+          "definition": "场景呈现夏季特征，如绿荫浓密",
+          "label_id": "scene_season_summer",
+          "label_name": "夏"
+        },
+        {
+          "definition": "场景呈现秋季特征，如落叶枯黄",
+          "label_id": "scene_season_autumn",
+          "label_name": "秋"
+        },
+        {
+          "definition": "场景呈现冬季特征，如积雪严寒",
+          "label_id": "scene_season_winter",
+          "label_name": "冬"
+        },
+        {
+          "definition": "图中无法判断季节信息",
+          "label_id": "scene_season_none",
+          "label_name": "无"
+        }
+      ],
+      "selection_mode": "single"
+    }
+  ],
+  "search_cases": [
+    {
+      "case_id": "text-red-sequin-dress",
+      "expected_item_ids": [
+        "eval/smoke/物件/CBTB_Cris_7_p1"
+      ],
+      "search_mode": "text",
+      "text": {
+        "query": "红色 亮片 礼服 裙子 red sequin dress"
+      },
+      "top_k": 5
+    },
+    {
+      "case_id": "image-red-sequin-dress",
+      "expected_item_ids": [
+        "eval/smoke/物件/CBTB_Cris_7_p1"
+      ],
+      "query_item_id": "eval/smoke/物件/CBTB_Cris_7_p1",
+      "search_mode": "image",
+      "top_k": 5
+    },
+    {
+      "case_id": "item-red-sequin-dress",
+      "expected_item_ids": [
+        "eval/smoke/物件/CBTB_Cris_7_p1"
+      ],
+      "item_ids": [
+        "eval/smoke/物件/CBTB_Cris_7_p1"
+      ],
+      "search_mode": "item_ids",
+      "top_k": 5
+    },
+    {
+      "case_id": "hybrid-red-sequin-dress",
+      "expected_item_ids": [
+        "eval/smoke/物件/CBTB_Cris_7_p1"
+      ],
+      "item_ids": [
+        "eval/smoke/物件/CBTB_Cris_7_p1"
+      ],
+      "query_item_id": "eval/smoke/物件/CBTB_Cris_7_p1",
+      "search_mode": "hybrid",
+      "text": {
+        "query": "红色 亮片 礼服 dress"
+      },
+      "top_k": 5
+    }
+  ],
+  "tagging_language": "zh"
+}

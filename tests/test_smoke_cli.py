@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from smoke.cli import app
 from app.object_storage import AliyunOSSConfig, PutObjectResult
 from app.ai.adapters.base import ImageGenerationResult
+from smoke.flows.asset import search_eval as asset_search_eval
 from smoke.flows.audio import stem_separation as audio_stem_separation
 from smoke.flows.image import adapter_probe as adapter_image_probe
 from smoke.flows.image import poster_title_image
@@ -1339,6 +1340,73 @@ def test_smoke_list_outputs_standard_scenario_metadata():
     assert reconciler_probe["standard_option_groups"] == ["job", "callback", "fault-injection"]
     audio = next(scenario for scenario in payload["scenarios"] if scenario["name"] == "audio-stem-separation")
     assert audio["entrypoints"] == ["audio-stem-separation run"]
+    asset_eval = next(scenario for scenario in payload["scenarios"] if scenario["name"] == "asset-search-eval")
+    assert {"image_provider", "embedding_provider"} <= set(asset_eval["dependencies"])
+    assert asset_eval["standard_option_groups"] == ["job", "artifact"]
+
+
+def test_asset_search_eval_cli_forwards_dataset_and_output_options(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(asset_search_eval, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "--base-url",
+            "http://127.0.0.1:18200",
+            "--env-file",
+            ".env",
+            "--service-api-key",
+            "test-token",
+            "--caller-id",
+            "default",
+            "--timeout",
+            "600",
+            "--poll-interval",
+            "0.5",
+            "--output-dir",
+            "poc/asset-vector/reports/evals/latest",
+            "--json",
+            "asset-search-eval",
+            "--confirm-run",
+            "--confirm-cost",
+            "--confirm-full-batch",
+            "--client-request-id",
+            "eval-client-1",
+            "--dataset",
+            "regression",
+            "--limit",
+            "2",
+            "--batch-size",
+            "3",
+            "--no-cleanup",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "confirm_run": True,
+        "confirm_cost": True,
+        "confirm_full_batch": True,
+        "api_url": "http://127.0.0.1:18200",
+        "env_file": ".env",
+        "allow_remote_api": False,
+        "service_api_key": "test-token",
+        "caller_id": "default",
+        "timeout_seconds": 600,
+        "poll_interval_seconds": 0.5,
+        "client_request_id": "eval-client-1",
+        "dataset": "regression",
+        "item_limit": 2,
+        "batch_size": 3,
+        "output_dir": "poc/asset-vector/reports/evals/latest",
+        "cleanup": False,
+        "json_output": True,
+    }
 
 
 def test_smoke_list_outputs_human_readable_table():

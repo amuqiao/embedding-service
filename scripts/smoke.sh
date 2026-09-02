@@ -64,6 +64,7 @@ Usage:
   audio-stem-separation   提交 audio_stem_separation / audio_stem_separation_triton Job。
   asset-image-tagging     提交 asset_image_tagging Job，验证批量素材打标签链路。
   asset-vector            提交 asset_vector Job，验证素材向量更新、删除、搜索和对账链路。
+  asset-search-eval       编排 AI 打标、向量入库、搜索评估，并输出 JSON/HTML 复盘报告。
   adapter-image-probe     直连 image adapter 的 provider probe。
   oss-upload-image        显式上传本地图片，生成 URL Ref 输入。
 
@@ -96,6 +97,12 @@ Usage:
 
   ENV_FILE=.env ./scripts/smoke.sh \
     asset-vector \
+    --confirm-run \
+    --confirm-cost
+
+  ENV_FILE=.env ./scripts/smoke.sh \
+    --output-dir poc/asset-vector/reports/evals/latest \
+    asset-search-eval \
     --confirm-run \
     --confirm-cost
 

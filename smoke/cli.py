@@ -281,6 +281,43 @@ ASSET_VECTOR_HELP_EPILOG = """\b
   本场景会调用真实 DashScope 多模态向量模型；DASHSCOPE_API_KEY / DASHSCOPE_BASE_URL 或 ASSET_VECTOR_DASHSCOPE_* 必须由服务进程真实加载。
 """
 
+ASSET_SEARCH_EVAL_HELP_EPILOG = """\b
+常用示例：
+  ./scripts/smoke.sh \\
+    --output-dir poc/asset-vector/reports/evals/latest \\
+    asset-search-eval \\
+    --confirm-run \\
+    --confirm-cost
+
+\b
+  # 使用 regression 测试集。
+  ./scripts/smoke.sh \\
+    --timeout 600 \\
+    asset-search-eval \\
+    --confirm-run \\
+    --confirm-cost \\
+    --dataset regression
+
+\b
+  # 调整每批提交数量；默认 10。
+  ./scripts/smoke.sh asset-search-eval --confirm-run --confirm-cost --batch-size 5
+
+\b
+  # 全量测试集必须显式确认；会调用真实打标模型和真实向量模型。
+  ./scripts/smoke.sh \\
+    --timeout 1800 \\
+    asset-search-eval \\
+    --confirm-run \\
+    --confirm-cost \\
+    --dataset full \\
+    --confirm-full-batch
+
+\b
+说明：
+  本场景编排 asset_image_tagging 与 asset_vector，生成标签中间结果、向量入库结果、搜索结果、聚合指标和 HTML 报告。
+  默认测试集是 smoke/fixtures/asset_search_eval/smoke.zh.json；可用 --dataset smoke|regression|full 或自定义 JSON 路径。
+"""
+
 LLM_JOB_BILLING_HELP_EPILOG = """\b
 常用示例：
   ./scripts/smoke.sh llm-job-billing --confirm-cost --model-id gpt-5.4-mini
@@ -932,6 +969,70 @@ def asset_vector_command(
             json_output=options.json_output,
         )
     except asset_vector.FlowError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(exc.exit_code) from exc
+
+
+@app.command(
+    "asset-search-eval",
+    help="编排 AI 打标、向量入库、搜索评估，并输出 JSON/HTML 复盘报告。",
+    epilog=ASSET_SEARCH_EVAL_HELP_EPILOG,
+)
+def asset_search_eval_command(
+    ctx: typer.Context,
+    confirm_run: ConfirmRunOption = False,
+    confirm_cost: ConfirmCostOption = False,
+    client_request_id: ClientRequestIdOption = None,
+    dataset: Annotated[
+        str,
+        typer.Option("--dataset", help="测试集别名 smoke|regression|full，或自定义 dataset JSON 路径。"),
+    ] = "smoke",
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", min=1, help="从测试集 items 开头截取 N 条；搜索用例会同步裁剪。"),
+    ] = None,
+    batch_size: Annotated[
+        int,
+        typer.Option("--batch-size", min=1, help="打标和向量入库 Job 的每批 item 数；默认 10。"),
+    ] = 10,
+    confirm_full_batch: Annotated[
+        bool,
+        typer.Option("--confirm-full-batch", help="确认执行 full 测试集全量真实模型调用。"),
+    ] = False,
+    cleanup: Annotated[
+        bool,
+        typer.Option("--cleanup/--no-cleanup", help="评估结束时删除写入的测试资源向量。"),
+    ] = True,
+) -> None:
+    from smoke.flows.asset import search_eval as asset_search_eval
+
+    _validate_global_options(
+        ctx,
+        "asset-search-eval",
+        cli_contract.GLOBAL_CONTEXT_OPTIONS | cli_contract.GLOBAL_OUTPUT_OPTIONS,
+    )
+    options = _smoke_options(ctx)
+    try:
+        asset_search_eval.run(
+            confirm_run=confirm_run,
+            confirm_cost=confirm_cost,
+            confirm_full_batch=confirm_full_batch,
+            api_url=options.api_url,
+            env_file=options.env_file,
+            allow_remote_api=options.allow_remote_api,
+            service_api_key=options.service_api_key,
+            caller_id=options.caller_id,
+            timeout_seconds=options.timeout_seconds,
+            poll_interval_seconds=options.poll_interval_seconds,
+            client_request_id=client_request_id,
+            dataset=dataset,
+            item_limit=limit,
+            batch_size=batch_size,
+            output_dir=options.output_dir,
+            cleanup=cleanup,
+            json_output=options.json_output,
+        )
+    except asset_search_eval.FlowError as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(exc.exit_code) from exc
 

@@ -100,6 +100,14 @@ SCENARIOS = [
         standard_option_groups=["job"],
     ),
     SmokeScenario(
+        name="asset-search-eval",
+        type="workflow",
+        acceptance_class="business_e2e",
+        dependencies=["api", "worker", "db", "redis", "image_provider", "embedding_provider"],
+        entrypoints=["asset-search-eval"],
+        standard_option_groups=["job", "artifact"],
+    ),
+    SmokeScenario(
         name="adapter-image-probe",
         type="provider_probe",
         acceptance_class="exploratory",
