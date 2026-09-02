@@ -8,7 +8,7 @@ from app.business_packages.audio_stem_separation.storage_policy import (
     allowed_input_regions as audio_allowed_input_regions,
     input_max_bytes as audio_input_max_bytes,
 )
-from app.business_packages.audio_stem_separation_triton.storage_policy import (
+from app.business_packages.audio_stem_separation.triton_storage_policy import (
     AudioStemSeparationTritonStoragePolicy,
 )
 from app.business_packages.poster_title_image.storage_policy import (

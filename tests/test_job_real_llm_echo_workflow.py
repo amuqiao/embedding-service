@@ -5,11 +5,13 @@ import pytest
 
 from app.core.exceptions import AppError
 from app.jobs.runner import execute_job
-from app.business_packages.job_real_llm_double_echo import JobRealLlmDoubleEchoJob
-from app.business_packages.job_real_llm_echo import JobRealLlmEchoJob
+from app.business_packages.job_real_llm_double_echo.executor import JobRealLlmDoubleEchoJob
+from app.business_packages.job_real_llm_echo.executor import JobRealLlmEchoJob
 from app.business_packages.register import register_all_business_packages
 from app.models.job import Job, JobAttempt
-from app.schemas.jobs import CreateJobRequest, JobRealLlmDoubleEchoParams, JobRealLlmEchoParams, JobResult
+from app.business_packages.job_real_llm_double_echo.schemas import JobRealLlmDoubleEchoParams
+from app.business_packages.job_real_llm_echo.schemas import JobRealLlmEchoParams
+from app.schemas.jobs import CreateJobRequest, JobResult
 from app.services.job_runtime import payload_hash
 from app.services.jobs import validate_create_contract
 
@@ -55,7 +57,10 @@ def _business_attempt(job: Job, *, lease_token: uuid.UUID | None = None) -> tupl
 
 def test_job_real_llm_echo_builds_model_runtime_fields(monkeypatch):
     handler = JobRealLlmEchoJob()
-    monkeypatch.setattr("app.business_packages.job_real_llm_echo.resolve_route_config_hash", lambda **_kwargs: ROUTE_HASH)
+    monkeypatch.setattr(
+        "app.business_packages.job_real_llm_echo.executor.resolve_route_config_hash",
+        lambda **_kwargs: ROUTE_HASH,
+    )
 
     runtime_fields = handler.runtime_job_fields(
         {
@@ -97,7 +102,10 @@ def test_job_real_llm_double_echo_rejects_large_inline_input():
 
 def test_job_real_llm_double_echo_builds_runtime_fields(monkeypatch):
     handler = JobRealLlmDoubleEchoJob()
-    monkeypatch.setattr("app.business_packages.job_real_llm_double_echo.resolve_route_config_hash", lambda **_kwargs: ROUTE_HASH)
+    monkeypatch.setattr(
+        "app.business_packages.job_real_llm_double_echo.executor.resolve_route_config_hash",
+        lambda **_kwargs: ROUTE_HASH,
+    )
 
     runtime_fields = handler.runtime_job_fields(
         {
@@ -292,7 +300,7 @@ async def test_job_real_llm_double_echo_calls_ledger_twice(monkeypatch):
         return type("Result", (), {"text": f"message-{index}"})()
 
     monkeypatch.setattr(
-        "app.business_packages.job_real_llm_double_echo.generate_text_with_ledger",
+        "app.business_packages.job_real_llm_double_echo.executor.generate_text_with_ledger",
         fake_generate_text_with_ledger,
     )
 
@@ -392,7 +400,7 @@ async def test_internal_real_llm_double_echo_bills_root_scope(monkeypatch):
         return type("Result", (), {"text": f"message-{index}"})()
 
     monkeypatch.setattr(
-        "app.business_packages.job_real_llm_double_echo.generate_text_with_ledger",
+        "app.business_packages.job_real_llm_double_echo.executor.generate_text_with_ledger",
         fake_generate_text_with_ledger,
     )
 

@@ -11,7 +11,7 @@ from app.tools.private import media_audio
 from app.core.exceptions import AppError
 from app.tools.private.object_storage_refs import bare_sha256, sha256_digest
 from app.business_packages.audio_stem_separation.storage_adapter import AudioStemSeparationStorageAdapter
-from app.schemas.jobs import AudioStemSeparationInputObject
+from app.business_packages.audio_stem_separation.schemas import AudioStemSeparationInputObject
 
 
 def _url_ref(key: str, data: bytes, *, content_type: str = "audio/wav") -> dict:

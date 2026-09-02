@@ -41,15 +41,15 @@ POST /jobs audio_stem_separation_triton
 
 | 层 | 文件 |
 |---|---|
-| Job executor | `app/business_packages/audio_stem_separation_triton/executor.py` |
-| Job schema/result | `app/schemas/jobs.py` |
+| Job executor | `app/business_packages/audio_stem_separation/triton_executor.py` |
+| Job schema/result | `app/business_packages/audio_stem_separation/triton_schemas.py` |
 | Triton client | `app/tools/providers/triton_audio_stem.py` |
 | Tool 注册 | `app/tools/register.py` |
-| 模型资产声明 | `app/business_packages/audio_stem_separation_triton/model_asset.yaml` |
+| 模型资产声明 | `app/business_packages/audio_stem_separation/model_asset.yaml` |
 
 ## Job 合同边界
 
-`audio_stem_separation_triton` 复用 Job API 的统一提交、查询和 Callback 合同。它的参数和结果 schema 由 `app/schemas/jobs.py` 定义；本文不重复维护完整字段表。
+`audio_stem_separation_triton` 复用 Job API 的统一提交、查询和 Callback 合同。它的参数和结果 schema 由 `app/business_packages/audio_stem_separation/triton_schemas.py` 定义；本文不重复维护完整字段表。
 
 当前输入边界：
 
@@ -87,10 +87,10 @@ Triton 推理失败、输出形状不符合预期或 stem 无法写入对象存�
 | 配置 | 当前用途 |
 |---|---|
 | `AUDIO_STEM_TRITON_URL` | Triton HTTP endpoint |
-| `AUDIO_STEM_TRITON_MODEL_NAME` | Triton model name |
-| `AUDIO_STEM_TRITON_MODEL_VERSION` | 可选 model version |
+| `AUDIO_STEM_TRITON_MODEL_VERSION` | Triton model repository 中加载的模型版本目录 |
+| `AUDIO_STEM_TRITON_REQUEST_TIMEOUT_SECONDS` | 单次 Triton infer HTTP 请求超时 |
 | `AUDIO_STEM_TRITON_TOKEN` | 可选鉴权 token，以 `Authorization` header 传给 Triton client |
-| `storage_policy.py` | 输入来源、输出 namespace、校验和读取策略 |
+| `triton_storage_policy.py` | 输入来源、输出 namespace、校验和读取策略 |
 | `OSS_*` | 输出 artifact 写入对象存储 |
 
 token 不应写入 result、runtime fields 或日志。Triton endpoint 是运行环境依赖，不能通过 silent fallback 改为本地模型路径。

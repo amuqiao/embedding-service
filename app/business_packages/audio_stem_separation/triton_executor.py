@@ -28,7 +28,7 @@ from app.business_packages.audio_stem_separation.shared import (
     segment_ranges as _segment_ranges,
     wav_bytes as _wav_bytes,
 )
-from app.business_packages.audio_stem_separation_triton.storage_adapter import AudioStemSeparationTritonStorageAdapter
+from app.business_packages.audio_stem_separation.triton_storage_adapter import AudioStemSeparationTritonStorageAdapter
 from app.business_packages.audio_stem_separation.errors import (
     AUDIO_STEM_DURATION_EXCEEDS_LIMIT,
     AUDIO_STEM_INFERENCE_FAILED,
@@ -38,15 +38,17 @@ from app.business_packages.audio_stem_separation.errors import (
     AUDIO_STEM_RUNTIME_UNAVAILABLE,
 )
 from app.models.job import Job
-from app.schemas.jobs import (
-    AudioInputPlanSnapshot,
-    AudioStemSeparationInputObject,
+from app.business_packages.audio_stem_separation.schemas import (
     AudioStemSeparationDurationMs,
+    AudioStemSeparationInputObject,
     AudioStemSeparationStemOutputs,
+)
+from app.business_packages.audio_stem_separation.triton_schemas import (
     AudioStemSeparationTritonParams,
     AudioStemSeparationTritonResult,
     AudioStemSeparationTritonRuntimeFields,
 )
+from app.tools.private.audio_contracts import AudioInputPlanSnapshot
 from app.services.job_runtime import runtime_fields_from_job
 
 _RUNNER_CACHE: dict[tuple[str, str, str, float], "HTDemucsTritonRunner"] = {}

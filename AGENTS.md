@@ -146,9 +146,12 @@
 - 有联动关系的值必须由代码派生，并在启动时做 fail-fast 校验。
 - 新增或暴露配置项前，必须确认真实生效、默认值合理、非法值会报错、安全边界不会被 silent fallback 绕过。
 - 修改配置项时必须同步检查 `app/core/config.py`、`.env.example`、部署文档和相关测试。
-- OSS 接入规则：`.env` 只放默认 OSS 事实，job type `storage_policy.py` 放业务策略，job adapter 合成 `app/object_storage` payload。
+- OSS 接入规则：`.env` 只放默认 OSS 事实，业务包内聚自己的 storage policy / adapter，并由业务 adapter 合成 `app/object_storage` payload；`app/object_storage` 不感知具体业务。
 - 脚本类配置文件选择遵循：显式 `--env-file` 或 `ENV_FILE` 表示指定配置文件为事实源，脚本不得再用当前 shell 同名环境变量覆盖该文件；只有默认读取 `.env` 时，才允许当前 shell 环境变量覆盖 `.env`，用于本地临时调试。
 - 业务包治理遵循：代码维护静态业务包全集，运行时按 `ENABLED_BUSINESS_PACKAGES` 启用业务包子集，pytest 默认验证全集，smoke 场景列表展示支持全集，执行时按当前 enabled 业务包 fail-fast。全量 executor catalog 仍注册，用于历史 Job 查询、schema 校验和结果投影；`job_type` 是业务包内部注册事实，不通过全局 env 单独裁剪。
+- 业务包目录规则：正式业务包放在 `app/business_packages/<package>/`，业务 schema 放 `schemas.py` 或包内同级 schema 文件并通过 `BusinessPackage.schemas` 声明，executor 放在包内 executor 文件，注册入口放 `register.py`。业务包可以拥有多个 `job_type`，但必须由同一个业务包 registrar 统一注册。业务包 `__init__.py` 只保留轻量包说明，不 re-export executor；`register.py` 顶层只导入 metadata、schema 和 error 注册函数，executor 在 `register_job_package()` 内部延迟导入。
+- 业务包之间不互相 import。确实属于同一业务语义的多个 `job_type` 应放入同一个业务包；多个业务包都需要且无业务语义的代码才允许沉到 `app/tools/private` 或 `app/tools/providers`。
+- 公共 schema 规则：`app/schemas/jobs.py` 只保留平台 Job envelope、callback、progress、billing 关联的公共合同；业务专属 Params、Runtime fields 和 Result schema 不放入公共 schema 模块。
 
 ## 代码修改规则
 
@@ -159,6 +162,7 @@
 - 不要引入无关重构、依赖升级或目录迁移。
 
 - `app/object_storage` 不适配业务，业务 adapter 适配 `app/object_storage`。
+- 不新增跨业务“复合能力”目录。可复用但无业务语义的代码放 `app/tools/private`；第三方 SDK/client 适配放 `app/tools/providers`；业务语义、HTTP routes、Job schema、executor、workflow、错误码和 storage adapter 都留在业务包内。
 
 ## 文档规则
 

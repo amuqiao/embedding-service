@@ -11,7 +11,8 @@ from app.core.prompt_templates import list_prompt_templates
 from app.core.security import require_service_auth
 from app.main import API_PREFIX, app
 from app.schemas.errors import build_error_envelope
-from app.schemas.jobs import CreateJobRequest, JobResult, PosterTitleImageItemParams, PosterTitleImagePromptOverrides
+from app.business_packages.poster_title_image.schemas import PosterTitleImageItemParams, PosterTitleImagePromptOverrides
+from app.schemas.jobs import CreateJobRequest, JobResult
 from app.schemas.meta import ModelOut, ModelParameterOut, ModelsResponse
 from app.services.executor import _prompt_messages
 from app.services.jobs import _validate_create_request, validate_job_status_payload
@@ -662,7 +663,7 @@ async def test_job_response_exposes_terminal_usage_projection(monkeypatch):
 
 
 def test_arithmetic_job_view_result_uses_registered_result_schema(monkeypatch):
-    from app.business_packages.arithmetic import ArithmeticJob
+    from app.business_packages.arithmetic.executor import ArithmeticJob
 
     monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: ArithmeticJob())
 

@@ -11,7 +11,7 @@ import numpy as np
 from pydantic import ValidationError
 
 from app.core.exceptions import AppError
-from app.schemas.jobs import AudioDecodeNormalizeRequest
+from app.tools.private.audio_contracts import AudioDecodeNormalizeRequest
 
 SUPPORTED_AUDIO_INPUT_CONTENT_TYPES = frozenset({"audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3"})
 _CONTENT_TYPE_SUFFIX = {

@@ -13,7 +13,7 @@ Operation
   -> Route / OpenAPI / service contract
 
 Business Package
-  -> Job Type
+  -> one or more Job Types
   -> Workflow Definition
   -> Package-local errors / routes / storage policy
   -> required_tool_refs
@@ -23,7 +23,7 @@ Tool
   -> provider adapter when needed
 ```
 
-业务能力通过 `app/business_packages/<package>/` 内聚。工具不是业务包，也不表达跨业务复合能力；它只封装可复用的底层执行边界，例如对象存储读取、音频解码、图片处理或第三方 provider client。
+业务能力通过 `app/business_packages/<package>/` 内聚。一个业务包可以注册多个同一业务语义下的 `job_type`，例如 `audio_stem_separation` 包同时注册本地 ONNX 和 Triton 两种执行形态。工具不是业务包，也不表达跨业务复合能力；它只封装可复用的底层执行边界，例如对象存储读取、音频解码、图片处理或第三方 provider client。
 
 ## 当前入口
 
@@ -31,14 +31,14 @@ Tool
 |---|---|---|
 | Ref parser | `app/core/registries/refs.py` | 校验 `tool_ref` 的 `<key>:<version>` 格式 |
 | Tool registry | `app/tools/registry.py`、`app/tools/register.py` | 注册 `ToolDefinition`，支持 freeze 和测试清理 |
-| Business package registry | `app/business_packages/base.py`、`app/business_packages/register.py` | 维护业务包清单，按 `ENABLED_BUSINESS_PACKAGES` 启用业务包，并收集业务包 routes |
+| Business package registry | `app/business_packages/base.py`、`app/business_packages/register.py` | 维护业务包清单，按 `ENABLED_BUSINESS_PACKAGES` 启用业务包，并收集业务包 routes 和 schema |
 | Job Type registry | `app/jobs/registry.py`、`app/jobs/base.py` | `JobTypeSpec.required_tool_refs` 声明 job type 依赖的工具 |
 | Workflow registry | `app/workflows/registry.py` | `WorkflowDefinition` 声明 workflow type、root job type、版本、失败策略、节点上限和 runtime child job type 依赖 |
 | Operation registry | `app/api/operations.py` | `OperationSpec` 声明 HTTP operation path、method、成功状态、schema、错误码和副作用 |
 | Error registry | `app/core/error_registry.py` | `ErrorSpec` 包含 `visibility` 和 `projection_targets` 元数据 |
 | Registry check | `app/core/registry_checks.py`、`tests/test_registry_contract.py` | 校验 error、operation、job type、tool、schema、log event、entrypoint、settings、error projection、注册入口、import direction 和 route operation |
 
-API startup 和 worker startup 都执行同一组注册和校验。`app/business_packages/register.py` 是当前业务包 composition root：它先注册平台工具，再通过 `BUSINESS_PACKAGE_MODULES` 懒加载各业务包的 `PACKAGE = BusinessPackage(...)` registrar。业务包 registrar 内聚注册本包 error、job type、workflow definition，并可按需注册本包 HTTP routes；API startup 会在 `validate_all_registries(application)` 前挂载业务包 routes，worker startup 只注册执行侧能力，不挂载 routes。
+API startup 和 worker startup 都执行同一组注册和校验。`app/business_packages/register.py` 是当前业务包 composition root：它先注册平台工具，再通过 `BUSINESS_PACKAGE_MODULES` 懒加载各业务包的 `PACKAGE = BusinessPackage(...)` registrar。业务包的 `register.py` 只暴露轻量 package metadata 和 schema 声明，executor 必须在 `register_job_package()` 内部延迟导入；业务包 `__init__.py` 不 re-export executor。业务包 registrar 内聚注册本包 error、job type、workflow definition，并可按需注册本包 HTTP routes；API startup 会在 `validate_all_registries(application)` 前挂载业务包 routes，worker startup 只注册执行侧能力，不挂载 routes。
 
 注册完成后 API/worker 会 freeze error 和 tool registry；freeze 后相同 definition 可幂等重复注册，变更 definition 会失败。
 
@@ -57,7 +57,7 @@ API startup 和 worker startup 都执行同一组注册和校验。`app/business
 
 - `tool_ref` 格式合法。
 - `job_type.required_tool_refs` 引用已注册 tool。
-- tool 引用的 schema 存在于 `app/schemas/registry.py`。
+- tool 引用的 schema 存在于 `app/schemas/registry.py`。工具合同 schema 放在对应 tool 模块附近，业务 schema 放在对应业务包的 schema 文件并通过 `BusinessPackage.schemas` 声明，公共 `app/schemas/jobs.py` 只承载平台 Job 合同。
 - tool 引用的 error reason 存在于 error registry。
 - tool 引用的 log event 存在于日志事件白名单。
 - tool entrypoint 和 startup validator 可导入。
@@ -67,6 +67,8 @@ API startup 和 worker startup 都执行同一组注册和校验。`app/business
 - public HTTP operation 不能引用 internal error。
 - job type public error contract 不能声明 internal error。
 - 源码中 `@register_job_type` 声明的 job type 必须全部由某个 `BusinessPackage` registrar 注册，并出现在 `app/business_packages/register.py` composition root 的注册结果中。
+- 每个业务包必须通过 `BusinessPackage.schemas` 声明自己的 request/runtime/result schema；公共 `app/schemas/jobs.py` 不定义业务专属 schema。
+- 冷导入 `app.schemas.registry` 不得导入任何 `app.business_packages.*.executor` 模块，也不得写入 job/workflow registry。
 - `ToolDefinition(...)` 只允许出现在 `app/tools/register.py`。
 - route decorator 从 `OperationSpec` 派生 path、`operation_id`、`response_model`、成功状态和错误响应描述；registry check 会校验 route/OpenAPI 与 operation metadata 对齐。
 - registered workflow 必须声明 `root_job_type`，且当前 `root_job_type` 必须与 `workflow_type` 相同，因为外部提交路径用 `job_type` 查找 workflow definition。
@@ -112,7 +114,7 @@ AudioInputPlanSnapshot
 
 ## 当前准入规则
 
-新增 `job_type` 必须在 executor 上使用 `@register_job_type` 源码标记，并通过业务包 `PACKAGE = BusinessPackage(...)` 注册。正式业务包使用 `app/business_packages/<package>/register.py` 内聚 executor、errors 和 workflow definition 注册；中心 `app/business_packages/register.py` 只维护 `BUSINESS_PACKAGE_MODULES` 显式清单并懒加载 package registrar，不直接 import 业务 executor。`@register_job_type` 不产生 import-time 注册副作用；源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 business package registrar 注册结果；新增文件但忘记接入 package registrar 或中心 business package module 清单会失败。
+新增 `job_type` 必须在 executor 上使用 `@register_job_type` 源码标记，并通过业务包 `PACKAGE = BusinessPackage(...)` 注册。正式业务包使用 `app/business_packages/<package>/register.py` 内聚 errors、workflow definition 和 schema 声明；executor 放在业务包内并只在 `register_job_package()` 内部导入。中心 `app/business_packages/register.py` 只维护 `BUSINESS_PACKAGE_MODULES` 显式清单并懒加载 package registrar，不直接 import 业务 executor。`@register_job_type` 不产生 import-time 注册副作用；源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 business package registrar 注册结果；新增文件但忘记接入 package registrar、`BusinessPackage.schemas` 或中心 business package module 清单会失败。
 
 `ENABLED_BUSINESS_PACKAGES` 是当前服务实例的业务包启用开关。为空表示启用全部静态注册业务包；显式配置时，composition root 仍全量注册 executor catalog、workflow definition 和错误码，用于 schema 校验、历史 Job 查询和 public projection，但只有列出的业务包进入 enabled/external 准入集合，并且只有列出的业务包会挂载 HTTP routes。
 
@@ -124,7 +126,7 @@ AudioInputPlanSnapshot
 
 ## 当前边界
 
-业务包拥有业务语义、Job schema、executor、workflow、业务错误、业务 routes 和业务 storage policy。业务包可以依赖平台 Job 内核、AI gateway、对象存储仓储层和工具包；工具包不能反向依赖业务包或 Job 层。
+业务包拥有业务语义、Job schema、executor、workflow、业务错误、业务 routes 和业务 storage policy。业务包可以依赖平台 Job 内核、AI gateway、对象存储仓储层和工具包；业务包之间不互相 import，确实属于同一业务语义的多个 `job_type` 应放入同一个业务包。工具包不能反向依赖业务包或 Job 层。
 
 Tool 不拥有 Job 状态、attempt、lease、heartbeat、retry、dispatch、callback 或 billing。Tool 不写 Job 状态，不投影 public result，不决定 retry。需要独立调度、恢复、取消或查询的步骤仍应建模为 internal child Job / workflow node。
 

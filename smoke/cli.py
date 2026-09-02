@@ -537,7 +537,15 @@ def list_command(ctx: typer.Context) -> None:
         return
     formatters.print_table(
         SCENARIOS,
-        columns=["name", "entrypoints", "type", "acceptance_class", "dependencies", "destructive", "supports_resume"],
+        columns=[
+            ("name", "name"),
+            ("entrypoints", "entrypoints"),
+            ("type", "type"),
+            ("acceptance_class", "acceptance_class"),
+            ("dependencies", "dependencies"),
+            ("destructive", "destructive"),
+            ("supports_resume", "supports_resume"),
+        ],
     )
 
 
@@ -575,7 +583,7 @@ def health_command(ctx: typer.Context) -> None:
     if options.json_output:
         formatters.print_json(result)
     else:
-        formatters.print_table([result], columns=["ready", "base_url", "health"])
+        formatters.print_table([result], columns=[("ready", "ready"), ("base_url", "base_url"), ("health", "health")])
     if not result["ready"]:
         raise typer.Exit(3)
 

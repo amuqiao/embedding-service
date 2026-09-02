@@ -72,7 +72,7 @@ API 进程的 PostgreSQL async engine 和 session factory 由 FastAPI lifespan �
 | 层 | 当前 owner | 职责 |
 |---|---|---|
 | API routes | `app/api/routes/` | HTTP route、operation id、认证依赖和 response data schema |
-| Schemas | `app/schemas/` | `HttpEnvelope` 内层 data、Job、Callback、Billing、Error 合同 |
+| Schemas | `app/schemas/`、`app/business_packages/*/schemas.py`、`app/tools/private/*_contracts.py` | `HttpEnvelope` 内层 data、平台 Job、Callback、Billing、Error 合同；业务包和工具拥有自己的 schema |
 | Job kernel | `app/models/job.py`、`app/repositories/job_repo.py`、`app/tasks/jobs.py`、`app/tasks/recovery.py` | Job 聚合、Attempt、Dispatch outbox、Callback outbox、状态迁移和恢复 |
 | Job extension | `app/jobs/`、`app/services/job_runtime.py`、`app/services/executor.py` | `job_type` 注册、运行时快照、executor 执行和结果投影 |
 | Business package / Tool registry | `app/business_packages/`、`app/tools/private/`、`app/tools/providers/`、`app/core/registries/`、`app/core/registry_checks.py` | 业务包注册 `job_type` / workflow，`JobTypeSpec.required_tool_refs` 声明工具依赖，tool 封装底层执行边界并在启动期 fail-fast 校验 |

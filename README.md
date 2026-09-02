@@ -112,7 +112,7 @@ Prompt 配置文件由 `PROMPT_CONFIG_PATH` 指定，默认是 `app/core/prompts
 
 模型配置文件由 `MODEL_CONFIG_PATH` 指定，默认是 `app/core/models.yaml`。新增或停用模型时优先修改该 YAML。顶层字段维护运行时服务配置，例如 `adapter`、`provider_model`、`adapter_model`、`pricing_ref`、所需环境变量和内部模型调用参数；`public` 块维护 `/models` 返回的调用方可见投影，例如稳定模型 ID 对应的展示名、`model_type`、公开 provider 标签、`capabilities`、`input_media_types`、`output_media_types`、`limits` / `features` 类型化元信息和公开 `parameters`。
 
-`poster_title_image` 的调用方可选模型和内部 style probe 模型由 `app/jobs/types/poster_title_image/models.yaml` 配置。`MODEL_CONFIG_PATH` 仍是模型事实源，任务级配置只引用模型 ID；这些模型都必须存在于模型目录并满足对应能力约束。
+`poster_title_image` 的调用方可选模型和内部 style probe 模型由 `app/business_packages/poster_title_image/models.yaml` 配置。`MODEL_CONFIG_PATH` 仍是模型事实源，任务级配置只引用模型 ID；这些模型都必须存在于模型目录并满足对应能力约束。
 
 `tagged_text_translation` 的输入规模由 `TAGGED_TEXT_TRANSLATION_MAX_ITEMS`、`TAGGED_TEXT_TRANSLATION_MAX_TEXT_LENGTH` 和 `TAGGED_TEXT_TRANSLATION_MAX_TOTAL_TEXT_LENGTH` 配置，默认分别为 100、200 和 20000。字符数按原始 `text` 的 Unicode code point 计算，包含 HTML 标签、占位符、标点和空白；这些配置缺省时使用代码默认值，并受 schema 或 schema 派生硬上限保护。
 

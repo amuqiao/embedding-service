@@ -1341,6 +1341,15 @@ def test_smoke_list_outputs_standard_scenario_metadata():
     assert audio["entrypoints"] == ["audio-stem-separation run"]
 
 
+def test_smoke_list_outputs_human_readable_table():
+    result = runner.invoke(app, ["list"])
+
+    assert result.exit_code == 0
+    assert "name" in result.stdout
+    assert "entrypoints" in result.stdout
+    assert "example-lifecycle-probe" in result.stdout
+
+
 def test_smoke_health_checks_service_health_endpoint(tmp_path, monkeypatch):
     captured = {}
 
@@ -1363,6 +1372,25 @@ def test_smoke_health_checks_service_health_endpoint(tmp_path, monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["ready"] is True
     assert payload["health"]["status"] == "ok"
+
+
+def test_smoke_health_outputs_human_readable_table(tmp_path, monkeypatch):
+    for name in ["API_URL", "API_HOST", "API_PORT"]:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(env_runtime, "ROOT_DIR", tmp_path)
+    (tmp_path / ".env").write_text("API_URL=http://127.0.0.1:18123\n", encoding="utf-8")
+    monkeypatch.setattr(
+        http_runtime,
+        "request_json",
+        lambda *args, **kwargs: {"status": "ok", "service": "test", "version": "1.0.0"},
+    )
+
+    result = runner.invoke(app, ["health"])
+
+    assert result.exit_code == 0
+    assert "ready" in result.stdout
+    assert "base_url" in result.stdout
+    assert "http://127.0.0.1:18123" in result.stdout
 
 
 def test_smoke_health_returns_3_when_service_is_not_ok(tmp_path, monkeypatch):

@@ -11,7 +11,8 @@ from app.business_packages.tagged_text_translation.executor import (
     _parse_model_json,
 )
 from app.models.job import Job
-from app.schemas.jobs import CreateJobRequest, TaggedTextTranslationParams
+from app.business_packages.tagged_text_translation.schemas import TaggedTextTranslationParams
+from app.schemas.jobs import CreateJobRequest
 from app.services.jobs import validate_create_contract
 from app.services.job_runtime import build_runtime_snapshot, payload_hash, write_runtime_json
 

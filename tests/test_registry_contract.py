@@ -32,11 +32,13 @@ from app.main import app
 from app.jobs.base import JobExecutor, JobTypeSpec, PromptSpec
 from app.business_packages.register import (
     business_package_modules,
+    business_package_schemas,
     job_type_business_package_names,
     load_business_packages,
     register_all_business_packages,
 )
 from app.jobs import registry as job_registry
+from app.schemas.registry import all_schema_names
 from app.business_packages.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
     POSTER_TITLE_IMAGE_REFERENCE_INVALID,
@@ -769,15 +771,14 @@ def test_registered_job_type_names_are_layered_contract():
 
 def test_business_packages_are_explicit_lazy_composition_root():
     expected_modules = (
-        "app.business_packages.arithmetic",
-        "app.business_packages.examples",
+        "app.business_packages.arithmetic.register",
+        "app.business_packages.examples.register",
         "app.business_packages.example_lifecycle_probe.register",
-        "app.business_packages.job_real_llm_echo",
-        "app.business_packages.job_real_llm_double_echo",
+        "app.business_packages.job_real_llm_echo.register",
+        "app.business_packages.job_real_llm_double_echo.register",
         "app.business_packages.poster_title_image.register",
         "app.business_packages.tagged_text_translation.register",
         "app.business_packages.audio_stem_separation.register",
-        "app.business_packages.audio_stem_separation_triton.register",
     )
 
     assert business_package_modules() == expected_modules
@@ -791,7 +792,6 @@ def test_business_packages_are_explicit_lazy_composition_root():
         "poster_title_image",
         "tagged_text_translation",
         "audio_stem_separation",
-        "audio_stem_separation_triton",
     ]
 
     register_path = APP_DIR / "business_packages" / "register.py"
@@ -813,6 +813,60 @@ def test_business_packages_are_explicit_lazy_composition_root():
     assert unexpected_job_type_import_strings == []
 
 
+def test_business_packages_declare_schema_contracts():
+    packages = load_business_packages()
+    package_names = {package.name for package in packages}
+    schema_names = {schema.__name__ for schema in business_package_schemas()}
+
+    assert package_names == {
+        "arithmetic",
+        "examples",
+        "example_lifecycle_probe",
+        "job_real_llm_echo",
+        "job_real_llm_double_echo",
+        "poster_title_image",
+        "tagged_text_translation",
+        "audio_stem_separation",
+    }
+    assert all(package.schemas for package in packages)
+    assert {
+        "ArithmeticParams",
+        "ExampleWorkflowParams",
+        "ExampleLifecycleProbeParams",
+        "JobRealLlmEchoParams",
+        "JobRealLlmDoubleEchoParams",
+        "TaggedTextTranslationParams",
+        "PosterTitleImageParams",
+        "AudioStemSeparationParams",
+        "AudioStemSeparationTritonParams",
+    } <= schema_names <= all_schema_names()
+
+
+def test_public_job_schemas_do_not_define_business_contracts():
+    tree = ast.parse((APP_DIR / "schemas" / "jobs.py").read_text(encoding="utf-8"))
+    business_prefixes = (
+        "Arithmetic",
+        "Example",
+        "JobRealLlm",
+        "TaggedTextTranslation",
+        "PosterTitleImage",
+        "AudioStemSeparation",
+        "OssUrlRef",
+        "CanonicalObjectRef",
+        "MediaFetch",
+        "AudioDecode",
+        "AudioInputPlan",
+        "PreparedAudioInput",
+    )
+    business_classes = [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name.startswith(business_prefixes)
+    ]
+
+    assert business_classes == []
+
+
 def test_loading_business_packages_has_no_registry_side_effects():
     job_registry.clear_for_tests()
     workflow_registry.clear_for_tests()
@@ -822,6 +876,36 @@ def test_loading_business_packages_has_no_registry_side_effects():
     assert packages
     assert job_registry.all_job_types() == []
     assert workflow_registry.all_workflow_types() == []
+
+
+def test_schema_registry_import_has_no_executor_or_registry_side_effects():
+    script = """
+import sys
+from app.jobs import registry as job_registry
+from app.workflows import registry as workflow_registry
+import app.schemas.registry
+
+executor_modules = sorted(
+    name for name in sys.modules
+    if name.startswith("app.business_packages.") and name.rsplit(".", 1)[-1].endswith("executor")
+)
+if executor_modules:
+    raise SystemExit(f"executor modules imported: {executor_modules}")
+if job_registry.all_job_types():
+    raise SystemExit(f"job types registered: {job_registry.all_job_types()}")
+if workflow_registry.all_workflow_types():
+    raise SystemExit(f"workflows registered: {workflow_registry.all_workflow_types()}")
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        env=_bootstrap_env(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr or proc.stdout
 
 
 def test_business_packages_default_to_all_registered_job_types():
@@ -843,6 +927,8 @@ def test_business_packages_own_each_registered_job_type_once():
     assert owners["poster_title_image"] == "poster_title_image"
     assert owners["poster_title_image_join"] == "poster_title_image"
     assert owners["tagged_text_translation"] == "tagged_text_translation"
+    assert owners["audio_stem_separation"] == "audio_stem_separation"
+    assert owners["audio_stem_separation_triton"] == "audio_stem_separation"
 
 
 def test_business_packages_default_external_job_types_exclude_leaf_children():
@@ -1091,7 +1177,7 @@ def test_tool_definitions_only_live_in_composition_root():
 
 
 def test_audio_job_does_not_import_other_audio_executor_private_helpers():
-    imported_modules = _imported_modules(APP_DIR / "business_packages/audio_stem_separation_triton/executor.py")
+    imported_modules = _imported_modules(APP_DIR / "business_packages/audio_stem_separation/triton_executor.py")
 
     assert "app.business_packages.audio_stem_separation.executor" not in imported_modules
 
@@ -1134,6 +1220,34 @@ def test_business_packages_do_not_import_object_storage_providers_directly():
         )
         if forbidden:
             violations.append(f"{path.relative_to(ROOT)} imports {forbidden}")
+
+    assert violations == []
+
+
+def test_business_package_modules_do_not_import_sibling_packages():
+    violations: list[str] = []
+    allowed_shared_modules = {
+        "app.business_packages.base",
+        "app.business_packages.register",
+        "app.business_packages.registrar",
+    }
+    root = APP_DIR / "business_packages"
+    for package_dir in root.iterdir():
+        if not package_dir.is_dir():
+            continue
+        package_name = package_dir.name
+        package_prefix = f"app.business_packages.{package_name}"
+        for path in package_dir.rglob("*.py"):
+            module_refs = _imported_modules(path)
+            forbidden = sorted(
+                ref
+                for ref in module_refs
+                if ref.startswith("app.business_packages.")
+                and not any(ref == module or ref.startswith(f"{module}.") for module in allowed_shared_modules)
+                and not ref.startswith(f"{package_prefix}.")
+            )
+            if forbidden:
+                violations.append(f"{path.relative_to(ROOT)} imports sibling business package modules {forbidden}")
 
     assert violations == []
 

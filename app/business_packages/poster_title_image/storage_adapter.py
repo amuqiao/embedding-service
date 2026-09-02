@@ -28,7 +28,7 @@ from app.object_storage import (
     PublicUrlReadSpec,
     PutObjectResult,
 )
-from app.schemas.jobs import PosterTitleImageReferenceImage
+from app.business_packages.poster_title_image.schemas import PosterTitleImageReferenceImage
 from app.services.job_runtime import output_target_from_job
 
 from .errors import POSTER_TITLE_IMAGE_REFERENCE_INVALID

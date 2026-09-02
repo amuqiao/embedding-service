@@ -14,17 +14,20 @@ from app.tools.private.object_storage_refs import bare_sha256, sha256_digest
 from app.tools.providers.triton_audio_stem import TritonAudioStemConfig, TritonAudioStemClient, TritonAudioStemInferenceError
 from app.jobs import registry as job_registry
 from app.business_packages.audio_stem_separation import shared as audio_stem_shared
-from app.business_packages import audio_stem_separation_triton as triton_pkg
 from app.business_packages.audio_stem_separation import executor as audio_executor
 from app.business_packages.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
 from app.business_packages.audio_stem_separation.errors import AUDIO_STEM_RUNTIME_UNAVAILABLE
-from app.business_packages.audio_stem_separation_triton import executor as triton_executor
-from app.business_packages.audio_stem_separation_triton import storage_adapter as triton_storage_adapter
-from app.business_packages.audio_stem_separation_triton.storage_adapter import AudioStemSeparationTritonStorageAdapter
-from app.business_packages.audio_stem_separation_triton.storage_policy import AudioStemSeparationTritonStoragePolicy
+from app.business_packages.audio_stem_separation import triton_executor
+from app.business_packages.audio_stem_separation import triton_storage_adapter
+from app.business_packages.audio_stem_separation.triton_executor import AudioStemSeparationTritonJob
+from app.business_packages.audio_stem_separation.triton_storage_adapter import AudioStemSeparationTritonStorageAdapter
+from app.business_packages.audio_stem_separation.triton_storage_policy import AudioStemSeparationTritonStoragePolicy
 from app.business_packages.register import register_all_business_packages
 from app.models.job import Job
-from app.schemas.jobs import AudioStemSeparationTritonParams, AudioStemSeparationTritonResult
+from app.business_packages.audio_stem_separation.triton_schemas import (
+    AudioStemSeparationTritonParams,
+    AudioStemSeparationTritonResult,
+)
 from app.services.job_runtime import build_runtime_snapshot, output_target_from_job, payload_hash, write_runtime_json
 
 
@@ -568,7 +571,7 @@ async def test_audio_stem_separation_triton_executes_fake_runner_and_writes_four
     input_data = b"fake wav bytes"
     params = {"input_audio": _url_ref("input.wav", input_data)}
     job = _job(params=params)
-    handler = triton_pkg.AudioStemSeparationTritonJob()
+    handler = AudioStemSeparationTritonJob()
 
     monkeypatch.setattr(triton_executor, "settings", FakeSettings())
     monkeypatch.setattr(triton_executor, "_storage_adapter", lambda: fake_storage)

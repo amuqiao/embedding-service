@@ -9,7 +9,7 @@ from app.core.exceptions import AppError
 from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
 from app.business_packages.example_lifecycle_probe.errors import EXAMPLE_LIFECYCLE_PROBE_FORCED_FAILURE
-from app.schemas.jobs import (
+from app.business_packages.example_lifecycle_probe.schemas import (
     ExampleLifecycleProbeParams,
     ExampleLifecycleProbeResult,
     ExampleLifecycleProbeRuntimeFields,

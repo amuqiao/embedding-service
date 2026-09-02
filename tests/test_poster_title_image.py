@@ -27,7 +27,7 @@ from app.tools.private.image import (
 )
 from app.tools.private.object_storage_refs import bare_sha256, sha256_digest
 from app.tools.private.storage import LocalObjectStorage
-from app.business_packages.poster_title_image import PosterTitleImageJob
+from app.business_packages.poster_title_image.executor import PosterTitleImageJob
 from app.business_packages.poster_title_image.errors import (
     POSTER_TITLE_IMAGE_DRAW_COUNT_EXCEEDS_LIMIT,
     POSTER_TITLE_IMAGE_REFERENCE_INVALID,
@@ -40,6 +40,8 @@ from app.schemas.billing import BillingEnvelope
 from app.schemas.jobs import (
     CreateJobRequest,
     JobEnvelope,
+)
+from app.business_packages.poster_title_image.schemas import (
     POSTER_TITLE_IMAGE_MAX_TITLE_LINES,
     PosterTitleImageParams,
     PosterTitleImageStyleProbeRuntimeFields,
@@ -429,7 +431,7 @@ def test_poster_title_image_params_apply_delivery_contract_constraints():
 
 
 def test_poster_title_image_runtime_fields_preserve_system_alias(monkeypatch):
-    from app.business_packages.poster_title_image import (
+    from app.business_packages.poster_title_image.executor import (
         PosterTitleImageGenerateItemJob,
         PosterTitleImageJoinJob,
         PosterTitleImageStyleProbeJob,
@@ -1348,7 +1350,7 @@ def test_poster_title_image_missing_default_prompt_is_runtime_config_error(monke
 
 @pytest.mark.asyncio
 async def test_poster_title_image_generate_item_leaf_generates_transparent_title_layer(monkeypatch, tmp_path, caplog):
-    from app.business_packages.poster_title_image import PosterTitleImageGenerateItemJob
+    from app.business_packages.poster_title_image.executor import PosterTitleImageGenerateItemJob
 
     class RecordingLocalObjectStorage(LocalObjectStorage):
         def __init__(self, root):
@@ -1539,7 +1541,7 @@ async def test_poster_title_image_generate_item_leaf_generates_transparent_title
 
 @pytest.mark.asyncio
 async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeypatch, tmp_path):
-    from app.business_packages.poster_title_image import PosterTitleImageGenerateItemJob
+    from app.business_packages.poster_title_image.executor import PosterTitleImageGenerateItemJob
 
     class RecordingLocalObjectStorage(LocalObjectStorage):
         def __init__(self, root):
@@ -1686,7 +1688,7 @@ async def test_poster_title_image_generate_item_leaf_generates_two_draws(monkeyp
 
 @pytest.mark.asyncio
 async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeypatch, caplog):
-    from app.business_packages.poster_title_image import PosterTitleImageJoinJob
+    from app.business_packages.poster_title_image.executor import PosterTitleImageJoinJob
     from app.business_packages.poster_title_image.executor import _item_node_key
 
     ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
@@ -1759,7 +1761,7 @@ async def test_poster_title_image_join_leaf_preserves_request_item_order(monkeyp
 
 @pytest.mark.asyncio
 async def test_poster_title_image_running_result_contains_only_succeeded_items(monkeypatch):
-    from app.business_packages.poster_title_image import PosterTitleImageJob
+    from app.business_packages.poster_title_image.executor import PosterTitleImageJob
     from app.business_packages.poster_title_image.executor import _item_node_key
 
     ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
@@ -1829,7 +1831,7 @@ async def test_poster_title_image_running_result_contains_only_succeeded_items(m
 
 @pytest.mark.asyncio
 async def test_poster_title_image_running_result_is_null_before_first_succeeded_item(monkeypatch):
-    from app.business_packages.poster_title_image import PosterTitleImageJob
+    from app.business_packages.poster_title_image.executor import PosterTitleImageJob
 
     ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
     root_id = uuid.uuid4()
@@ -1862,7 +1864,7 @@ async def test_poster_title_image_running_result_is_null_before_first_succeeded_
 
 @pytest.mark.asyncio
 async def test_poster_title_image_failed_result_reuses_succeeded_item_subset(monkeypatch):
-    from app.business_packages.poster_title_image import PosterTitleImageJob
+    from app.business_packages.poster_title_image.executor import PosterTitleImageJob
     from app.business_packages.poster_title_image.executor import _item_node_key
 
     ref = _url_ref("reference/title.png", _transparent_reference_png_bytes())
@@ -1924,7 +1926,7 @@ async def test_poster_title_image_failed_result_reuses_succeeded_item_subset(mon
 
 @pytest.mark.asyncio
 async def test_get_job_response_projects_poster_title_image_running_result(monkeypatch):
-    from app.business_packages.poster_title_image import PosterTitleImageJob
+    from app.business_packages.poster_title_image.executor import PosterTitleImageJob
     from app.business_packages.poster_title_image.executor import _item_node_key
     from app.services.jobs import get_job_response
 
@@ -1988,7 +1990,7 @@ async def test_get_job_response_projects_poster_title_image_running_result(monke
 
 @pytest.mark.asyncio
 async def test_get_job_response_preserves_succeeded_items_when_poster_title_image_failed(monkeypatch):
-    from app.business_packages.poster_title_image import PosterTitleImageJob
+    from app.business_packages.poster_title_image.executor import PosterTitleImageJob
     from app.business_packages.poster_title_image.executor import _item_node_key
     from app.services.jobs import get_job_response
 
@@ -2123,7 +2125,7 @@ def test_callback_body_preserves_poster_title_image_dimensions():
 
 @pytest.mark.asyncio
 async def test_callback_body_for_failed_poster_title_image_snapshot_preserves_dimensions(monkeypatch):
-    from app.business_packages.poster_title_image import PosterTitleImageJob
+    from app.business_packages.poster_title_image.executor import PosterTitleImageJob
     from app.business_packages.poster_title_image.executor import _item_node_key
     from app.services.callbacks import build_callback_body_for_job
 
@@ -2204,7 +2206,7 @@ async def test_callback_body_for_failed_poster_title_image_snapshot_preserves_di
 
 @pytest.mark.asyncio
 async def test_poster_title_image_style_probe_leaf_logs_completion(monkeypatch, tmp_path, caplog):
-    from app.business_packages.poster_title_image import PosterTitleImageStyleProbeJob
+    from app.business_packages.poster_title_image.executor import PosterTitleImageStyleProbeJob
 
     local_storage = LocalObjectStorage(tmp_path)
     reference = _transparent_reference_png_bytes()

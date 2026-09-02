@@ -32,7 +32,7 @@ from app.business_packages.poster_title_image.errors import (
 )
 from app.business_packages.poster_title_image.storage_adapter import PosterTitleImageStorageAdapter
 from app.models.job import Job
-from app.schemas.jobs import (
+from app.business_packages.poster_title_image.schemas import (
     POSTER_TITLE_IMAGE_MAX_TITLE_LINES,
     PosterTitleImageBatchSummary,
     PosterTitleImageDurationMs,

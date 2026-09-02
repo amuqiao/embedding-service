@@ -22,10 +22,12 @@ from app.object_storage import (
     ObjectStorageValidationError,
     PutObjectResult,
 )
-from app.schemas.jobs import (
+from app.business_packages.audio_stem_separation.schemas import (
+    AudioStemSeparationInputObject,
+)
+from app.tools.private.audio_contracts import (
     AudioDecodeNormalizeSpec,
     AudioInputPlanSnapshot,
-    AudioStemSeparationInputObject,
     CanonicalObjectRefSnapshot,
     MediaFetchSpec,
 )
@@ -33,7 +35,7 @@ from app.services.job_runtime import output_target_from_job
 from app.tools.private.media_audio import decode_normalize_audio
 
 from app.business_packages.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
-from .storage_policy import (
+from .triton_storage_policy import (
     STORAGE_POLICY,
     AudioStemSeparationTritonStoragePolicy,
     allowed_input_buckets,

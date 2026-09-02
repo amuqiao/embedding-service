@@ -9,7 +9,7 @@
 新增 tool：
 
 1. 在 `app/tools/private/<name>.py` 中实现单一底层执行边界；tool 不依赖 `app/jobs` 或 `app/business_packages`。如需第三方 SDK/client，把 provider client 放在 `app/tools/providers/<provider>.py`，由 private tool 调用 provider。
-2. 如需 request / result schema，在 `app/schemas/jobs.py` 或对应 schema 模块中定义，并加入 `app/schemas/registry.py`。
+2. 如需 request / result schema，在 tool 附近的合同模块中定义，例如 `app/tools/private/<name>_contracts.py`，并加入 `app/schemas/registry.py`。
 3. 在 `app/tools/register.py` 中创建 `ToolDefinition`，声明 `tool_ref`、kind、entrypoint、schema、required settings、error codes 和 log events。
 4. 只在进程级必需依赖上使用 `startup_validators`；可选模型链路或 demo job 依赖留在执行路径或专项 smoke / verify 中 fail-fast。
 5. 补充或调整 `tests/test_registry_contract.py`、`tests/test_tool_registry.py` 和 `tests/test_tools_script.py`。
@@ -18,15 +18,15 @@
 
 ## 新增 job_type
 
-1. 在 `app/schemas/jobs.py` 中定义 Params、Runtime fields 和 Result schema。
-2. 在 `app/business_packages/<job_type>/` 中实现 `JobExecutor`。正式业务使用包目录，至少保留 `executor.py`、`register.py` 和 `__init__.py`，按需增加 `errors.py`、`prompts.yaml`、`models.yaml` 或 `model_asset.yaml` 等业务内聚文件；极小 demo 才允许继续使用单文件并在文件内声明 `PACKAGE`。
+1. 在 `app/business_packages/<package>/schemas.py` 或包内同级 schema 文件中定义 Params、Runtime fields 和 Result schema，并导出 `SCHEMAS`。
+2. 在 `app/business_packages/<package>/` 中实现 `JobExecutor`。正式业务使用包目录，至少保留 schema 文件、executor 文件、`register.py` 和轻量 `__init__.py`，按需增加 `errors.py`、`prompts.yaml`、`models.yaml` 或 `model_asset.yaml` 等业务内聚文件。一个业务包可以拥有多个 `job_type`，但它们必须属于同一个业务语义边界。
 3. 在 executor 上使用 `@register_job_type` 标记源码准入，并声明稳定 `name`、`visibility`、`role`、`params_schema`、`runtime_fields_schema_name`、`canonical_result_schema`、`public_result_schema`、`retry_policy`、`required_tool_refs` 和 side-effect 元数据。`JobTypeSpec` 是代码级事实源；不要只在文档里描述这些字段。
-4. 在业务包 `register.py` 中声明 `PACKAGE = BusinessPackage(...)`，并由 `register_job_package(register)` 注册本包 executor、errors 和 workflow definition。中心 `app/business_packages/register.py` 只维护 `BUSINESS_PACKAGE_MODULES` 显式清单，不直接 import 业务 executor。
+4. 在业务包 `register.py` 中声明 `PACKAGE = BusinessPackage(..., schemas=SCHEMAS)`，并由 `register_job_package(register)` 注册本包全部 executor、errors 和 workflow definition。`register.py` 可以顶层导入 schema 和 error 注册函数，但 executor 必须在 `register_job_package()` 内部延迟导入；业务包 `__init__.py` 不 re-export executor。中心 `app/business_packages/register.py` 只维护 `BUSINESS_PACKAGE_MODULES` 显式清单，不直接 import 业务 executor。
 5. 如需模型调用，通过 `app/ai/gateway.py` 进入，不直接调用 provider adapter。
 6. 如需大输入或大结果，使用 runtime ref、result ref 和对象存储边界，不把大 payload 直接塞进 Job response。
 7. 补充 schema、registry、workflow 和 contract 测试。
 
-`@register_job_type` 只作为静态源码标记，不在 import executor 时写入全局 registry。源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 package registrar 的注册结果；新增 executor 文件但忘记接入 package `register.py` 或中心 `BUSINESS_PACKAGE_MODULES` 会导致验证失败。
+`@register_job_type` 只作为静态源码标记，不在 import executor 时写入全局 registry。源码扫描测试会比较所有 `@register_job_type` class 的 `name` 与 package registrar 的注册结果；新增 executor 文件但忘记接入 package `register.py`、`BusinessPackage.schemas` 或中心 `BUSINESS_PACKAGE_MODULES` 会导致验证失败。
 
 标准业务包样板是 `app/business_packages/example_lifecycle_probe/`；对应 smoke 样板是 `smoke/flows/examples/lifecycle_probe.py`。
 
@@ -52,7 +52,7 @@
 
 需要 root/child 编排时，新增业务自己的 `job_type` 和 workflow definition，不开放任意 DAG 提交。
 
-1. 在 `app/schemas/jobs.py` 中定义 root `job_type` 的 Params、Runtime fields 和 Result schema。
+1. 在 `app/business_packages/<package>/schemas.py` 或包内同级 schema 文件中定义 root `job_type` 的 Params、Runtime fields 和 Result schema，并导出 `SCHEMAS`。
 2. 在 `app/business_packages/<job_type>/` 中实现 root `JobExecutor`，root executor 使用 `role="root"`，只声明 schema 和运行时字段；实际执行由 workflow orchestration 推进 internal child Jobs。正式业务 workflow 把 root、internal child executors、workflow definition、业务错误和 prompt 模板放在同一个 `job_type` 边界内。
 3. 使用 `app.workflows` 的 `task`、`chain`、`group`、`chord`、`map_items`、`starmap_items` 或 `chunks` 生成受控 `workflow_plan`。
 4. 在业务包 `register.py` 中注册 executor 和 workflow definition，并把该包 module path 加入中心 `BUSINESS_PACKAGE_MODULES`。`WorkflowDefinition` 必须声明 `workflow_type`、`root_job_type`、`workflow_version`、`failure_policy`、`max_nodes` 和 `runtime_job_type_dependencies`；当前 `workflow_type` 与 `root_job_type` 必须同名，因为外部提交使用 root `job_type` 查找 workflow。业务包被启用时，root、leaf 和 workflow definition 作为一个单元注册；创建 root Job 时，编译出的 `workflow_plan.nodes[].job_type` 必须全部落在该依赖集合内。

@@ -3,20 +3,20 @@ from __future__ import annotations
 from importlib import import_module
 
 from fastapi import FastAPI
+from pydantic import BaseModel
 
 from app.business_packages.base import BusinessPackage, BusinessRouteCollector, BusinessRouteMount
 
 
 BUSINESS_PACKAGE_MODULES: tuple[str, ...] = (
-    "app.business_packages.arithmetic",
-    "app.business_packages.examples",
+    "app.business_packages.arithmetic.register",
+    "app.business_packages.examples.register",
     "app.business_packages.example_lifecycle_probe.register",
-    "app.business_packages.job_real_llm_echo",
-    "app.business_packages.job_real_llm_double_echo",
+    "app.business_packages.job_real_llm_echo.register",
+    "app.business_packages.job_real_llm_double_echo.register",
     "app.business_packages.poster_title_image.register",
     "app.business_packages.tagged_text_translation.register",
     "app.business_packages.audio_stem_separation.register",
-    "app.business_packages.audio_stem_separation_triton.register",
 )
 
 _route_mounts: tuple[BusinessRouteMount, ...] = ()
@@ -99,6 +99,19 @@ def registered_business_package_names() -> tuple[str, ...]:
 
 def job_type_business_package_names() -> dict[str, str]:
     return dict(_job_type_package_names)
+
+
+def business_package_schemas() -> tuple[type[BaseModel], ...]:
+    schemas: list[type[BaseModel]] = []
+    schema_names: set[str] = set()
+    for package in load_business_packages():
+        for schema in package.schemas:
+            schema_name = schema.__name__
+            if schema_name in schema_names:
+                raise ValueError(f"duplicate business package schema: {schema_name}")
+            schema_names.add(schema_name)
+            schemas.append(schema)
+    return tuple(schemas)
 
 
 def registered_business_route_mounts() -> tuple[BusinessRouteMount, ...]:

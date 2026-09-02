@@ -22,10 +22,12 @@ from app.object_storage import (
     ObjectStorageValidationError,
     PutObjectResult,
 )
-from app.schemas.jobs import (
+from app.business_packages.audio_stem_separation.schemas import (
+    AudioStemSeparationInputObject,
+)
+from app.tools.private.audio_contracts import (
     AudioDecodeNormalizeSpec,
     AudioInputPlanSnapshot,
-    AudioStemSeparationInputObject,
     CanonicalObjectRefSnapshot,
     MediaFetchSpec,
 )

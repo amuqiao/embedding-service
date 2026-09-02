@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from app.core.exceptions import AppError
-from app.schemas.jobs import AudioInputPlanSnapshot
+from app.tools.private.audio_contracts import AudioInputPlanSnapshot
 from app.tools.private.media_audio import SUPPORTED_AUDIO_INPUT_CONTENT_TYPES, decode_normalize_audio
 from app.tools.private.object_storage_read import read_object_bytes
 

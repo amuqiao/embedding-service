@@ -5,7 +5,7 @@ import pytest
 
 from app.jobs import registry as job_registry
 from app.models.job import Job
-from app.schemas.jobs import ArithmeticResult
+from app.business_packages.arithmetic.schemas import ArithmeticResult
 from app.services.job_runtime import payload_hash
 from app.business_packages.register import register_all_business_packages
 

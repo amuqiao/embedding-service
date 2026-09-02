@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from app.schemas.jobs import TaggedTextTranslationParams
+from app.business_packages.tagged_text_translation.schemas import TaggedTextTranslationParams
 
 
 SYSTEM_PROMPT = """\

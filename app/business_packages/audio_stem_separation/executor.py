@@ -40,8 +40,7 @@ from app.business_packages.audio_stem_separation.errors import (
 )
 from app.business_packages.audio_stem_separation.storage_adapter import AudioStemSeparationStorageAdapter
 from app.models.job import Job
-from app.schemas.jobs import (
-    AudioInputPlanSnapshot,
+from app.business_packages.audio_stem_separation.schemas import (
     AudioStemSeparationDurationMs,
     AudioStemSeparationInputObject,
     AudioStemSeparationParams,
@@ -49,6 +48,7 @@ from app.schemas.jobs import (
     AudioStemSeparationRuntimeFields,
     AudioStemSeparationStemOutputs,
 )
+from app.tools.private.audio_contracts import AudioInputPlanSnapshot
 from app.services.job_runtime import runtime_fields_from_job
 
 logger = logging.getLogger(__name__)

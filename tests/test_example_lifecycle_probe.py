@@ -7,10 +7,11 @@ import pytest
 
 from app.core.exceptions import AppError
 from app.business_packages.example_lifecycle_probe import executor as lifecycle_probe_executor
-from app.business_packages.example_lifecycle_probe import ExampleLifecycleProbeJob
+from app.business_packages.example_lifecycle_probe.executor import ExampleLifecycleProbeJob
 from app.business_packages.example_lifecycle_probe.errors import EXAMPLE_LIFECYCLE_PROBE_FORCED_FAILURE
+from app.business_packages.example_lifecycle_probe.schemas import ExampleLifecycleProbeParams
 from app.models.job import Job
-from app.schemas.jobs import CreateJobRequest, ExampleLifecycleProbeParams
+from app.schemas.jobs import CreateJobRequest
 from app.services.job_runtime import payload_hash, write_runtime_json
 from app.services.jobs import validate_create_contract
 from app.business_packages.register import register_all_business_packages

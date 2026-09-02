@@ -17,7 +17,7 @@ from app.jobs.base import JobExecutor
 from app.jobs.registry import register_job_type
 from app.business_packages.tagged_text_translation.prompt import build_translation_messages
 from app.models.job import Job
-from app.schemas.jobs import (
+from app.business_packages.tagged_text_translation.schemas import (
     TaggedTextTranslationCharCount,
     TaggedTextTranslationItemParams,
     TaggedTextTranslationParams,

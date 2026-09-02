@@ -5,8 +5,8 @@ import uuid
 import pytest
 
 from app.core.exceptions import AppError
-from app.business_packages import examples
-from app.business_packages.examples import ExampleSleepJob
+from app.business_packages.examples import executor as examples_executor
+from app.business_packages.examples.executor import ExampleSleepJob
 from app.models.job import Job
 from app.schemas.jobs import CreateJobRequest
 from app.services.job_runtime import payload_hash, write_runtime_json
@@ -21,7 +21,7 @@ async def test_example_sleep_can_simulate_execution_delay(monkeypatch):
     async def fake_sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    monkeypatch.setattr(examples.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(examples_executor.asyncio, "sleep", fake_sleep)
     params = {"message": "load", "repeat": 2, "sleep_seconds": 15}
     job = Job(id=uuid.uuid4(), job_type="example_sleep", job_params_hash=payload_hash(params))
     job.job_params_ref = write_runtime_json(job, "job_params.json", params)

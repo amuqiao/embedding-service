@@ -13,8 +13,8 @@ from app.tools.providers.onnx_runtime import OnnxRuntimeIntegrationError, OnnxSe
 from app.tools.private.object_storage_refs import bare_sha256, sha256_digest
 from app.jobs import registry as job_registry
 from app.business_packages.audio_stem_separation import shared as audio_stem_shared
-from app.business_packages import audio_stem_separation as audio_pkg
 from app.business_packages.audio_stem_separation import executor as audio_executor
+from app.business_packages.audio_stem_separation.executor import AudioStemSeparationJob
 from app.business_packages.audio_stem_separation import storage_adapter as audio_storage_adapter
 from app.business_packages.audio_stem_separation.errors import AUDIO_STEM_INPUT_INVALID
 from app.business_packages.audio_stem_separation.errors import AUDIO_STEM_RUNTIME_UNAVAILABLE
@@ -22,7 +22,7 @@ from app.business_packages.audio_stem_separation.storage_adapter import AudioSte
 from app.business_packages.audio_stem_separation.storage_policy import AudioStemSeparationStoragePolicy
 from app.business_packages.register import register_all_business_packages
 from app.models.job import Job
-from app.schemas.jobs import AudioStemSeparationParams
+from app.business_packages.audio_stem_separation.schemas import AudioStemSeparationParams
 from app.services.job_runtime import build_runtime_snapshot, output_target_from_job, payload_hash, write_runtime_json
 
 
@@ -538,7 +538,7 @@ async def test_audio_stem_separation_executes_fake_runner_and_writes_four_stems(
     fake_storage = FakeStorage(input_data)
     params = {"input_audio": _url_ref("input.wav", input_data)}
     job = _job(params=params)
-    handler = audio_pkg.AudioStemSeparationJob()
+    handler = AudioStemSeparationJob()
 
     monkeypatch.setattr(audio_executor, "_storage_adapter", lambda: fake_storage)
     monkeypatch.setattr(

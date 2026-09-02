@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from app.jobs.base import JobExecutor
 
@@ -35,4 +36,4 @@ class BusinessPackage:
     register: Callable[[RegisterJobExecutor], None]
     register_routes: Callable[[BusinessRouteCollector], None] | None = None
     requires_object_storage: bool = False
-
+    schemas: tuple[type[BaseModel], ...] = ()

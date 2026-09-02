@@ -10,7 +10,7 @@ import pytest
 from app.core.exceptions import AppError
 from app.main import API_PREFIX
 from app.models.job import CallbackOutbox, Job
-from app.schemas.jobs import CallbackResponseEnvelope
+from app.schemas.callbacks import CallbackResponseEnvelope
 from app.services.callbacks import (
     CallbackDeliveryResult,
     build_callback_body,
@@ -361,7 +361,7 @@ async def test_build_callback_body_for_job_exposes_terminal_billing_projection(m
 
 
 def test_build_callback_body_uses_arithmetic_public_result_schema(monkeypatch):
-    from app.business_packages.arithmetic import ArithmeticJob
+    from app.business_packages.arithmetic.executor import ArithmeticJob
 
     monkeypatch.setattr("app.jobs.registry.get", lambda _job_type: ArithmeticJob())
     job = _job()
