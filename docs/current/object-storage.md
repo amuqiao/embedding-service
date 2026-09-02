@@ -77,7 +77,7 @@ Construction:
 - 不负责 Job 编排或业务对象生命周期。
 - 不负责应用级配置从 `.env` 映射到 `ObjectStorageConfig`。
 - 不负责把对象存储异常翻译成具体 HTTP 响应或 Job 错误码。
-- 不负责解释业务 URL Ref、CDN URL 与 Aliyun OSS virtual-host URL 之间的映射。
+- 不负责解释业务 URL Ref、CDN URL 与 Aliyun OSS virtual-host URL 之间的业务映射。
 
 ## 当前能力
 
@@ -88,6 +88,11 @@ Construction:
 | 对象元数据 | `head_object()` / `ObjectStorageRepository.head()` | 用于读取前预检和业务需要的元数据查询 |
 | 对象删除 | `delete_object()` / `ObjectStorageRepository.delete()` | provider 负责具体删除行为 |
 | Aliyun 签名读 URL | `AliyunOSSRepository.signed_get_url()` | Aliyun OSS provider 专属能力，不进入通用 repository 抽象 |
+| Aliyun 签名写 URL | `AliyunOSSRepository.signed_put_url()` | Aliyun OSS provider 专属能力；调用方必须传 `ObjectRef` |
+| Aliyun 公开 URL | `AliyunOSSRepository.public_url()` | 只按 provider 配置生成直连或 CDN URL，不决定业务是否可公开 |
+| Aliyun URL 身份解析 | `parse_aliyun_oss_url()` | 只解析 virtual-host URL 到 bucket/region/key/internal，不处理业务 URL Ref |
+| Aliyun access URL 身份校验 | `validate_aliyun_oss_access_url()` | 允许签名 query，但只校验 URL 指向的对象身份是否匹配 `ObjectRef` |
+| Aliyun URL 诊断脱敏 | `redact_aliyun_oss_url()` | 先校验 Aliyun OSS access URL，再移除 query/fragment，用于日志诊断 |
 | 完整性校验 | `ExpectedObjectIntegrity` + `ObjectReadPolicy` | 是否校验由 policy 显式决定 |
 | 公网 URL 输入 | `PublicUrlReader` + `PublicUrlReadSpec` | 用于只有 CDN URL 或公网可下载 URL、没有 AK/SK 的场景 |
 | provider 构建 | `ObjectStorageConfig` + `build_repository()` | 当前内置 `aliyun_oss` 和 `local` |

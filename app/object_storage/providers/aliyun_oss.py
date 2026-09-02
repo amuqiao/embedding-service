@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import time
 from typing import Any
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import SplitResult, quote, unquote, urlencode, urlsplit
 import urllib.error
 import urllib.request
 from xml.etree import ElementTree
@@ -31,6 +31,30 @@ from ..repository import ObjectStorageRepository
 
 class AliyunOSSError(ObjectStorageBackendError):
     pass
+
+
+@dataclass(frozen=True)
+class AliyunOSSObjectLocation:
+    bucket: str
+    region: str
+    key: str
+    internal: bool
+    endpoint: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "bucket", normalize_name(self.bucket, "bucket"))
+        object.__setattr__(self, "region", normalize_name(self.region, "region"))
+        object.__setattr__(self, "key", normalize_object_key(self.key))
+        if not isinstance(self.internal, bool):
+            raise ObjectStorageValidationError("internal must be a boolean")
+        object.__setattr__(self, "endpoint", _endpoint(self.endpoint))
+
+    @property
+    def object_identity(self) -> tuple[str, str, str]:
+        return self.bucket, self.region, self.key
+
+    def to_ref(self) -> ObjectRef:
+        return ObjectRef(provider="aliyun_oss", bucket=self.bucket, region=self.region, key=self.key)
 
 
 @dataclass(frozen=True)
@@ -122,7 +146,32 @@ class AliyunOSSRepository(ObjectStorageRepository):
         self._assert_ref(ref)
         self._request("DELETE", ref.key)
 
+    def public_url(self, ref: ObjectRef) -> str:
+        self._assert_ref(ref)
+        return self._public_url(ref.key)
+
     def signed_get_url(self, ref: ObjectRef, *, expires_seconds: int = 3600) -> str:
+        return self._signed_url("GET", ref, expires_seconds=expires_seconds)
+
+    def signed_put_url(
+        self,
+        ref: ObjectRef,
+        *,
+        expires_seconds: int = 3600,
+        content_type: str = "",
+    ) -> str:
+        if not isinstance(content_type, str):
+            raise ObjectStorageValidationError("content_type must be a string")
+        return self._signed_url("PUT", ref, expires_seconds=expires_seconds, content_type=content_type.strip())
+
+    def _signed_url(
+        self,
+        method: str,
+        ref: ObjectRef,
+        *,
+        expires_seconds: int,
+        content_type: str = "",
+    ) -> str:
         self._assert_ref(ref)
         if (
             not isinstance(expires_seconds, int)
@@ -130,8 +179,11 @@ class AliyunOSSRepository(ObjectStorageRepository):
             or expires_seconds <= 0
         ):
             raise ObjectStorageValidationError("expires_seconds must be a positive integer")
+        normalized_method = method.upper()
         expires_at = str(int(time.time()) + expires_seconds)
-        string_to_sign = "\n".join(["GET", "", "", expires_at, f"/{self.config.bucket}/{ref.key}"])
+        string_to_sign = "\n".join(
+            [normalized_method, "", content_type, expires_at, f"/{self.config.bucket}/{ref.key}"]
+        )
         digest = hmac.new(
             self.config.access_key_secret.encode("utf-8"),
             string_to_sign.encode("utf-8"),
@@ -247,6 +299,107 @@ def _optional_int(value: str | None) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+def parse_aliyun_oss_url(url: str) -> AliyunOSSObjectLocation:
+    if not isinstance(url, str) or not url.strip():
+        raise ObjectStorageValidationError("OSS URL must be a non-empty string")
+    try:
+        parsed = urlsplit(url.strip())
+    except ValueError as exc:
+        raise ObjectStorageValidationError("OSS URL is invalid") from exc
+    if parsed.scheme != "https":
+        raise ObjectStorageValidationError("OSS URL must use https")
+    if parsed.query or parsed.fragment:
+        raise ObjectStorageValidationError("OSS URL must not contain query string or fragment")
+    if parsed.username or parsed.password or _port(parsed) is not None:
+        raise ObjectStorageValidationError("OSS URL must not contain credentials or port")
+    identity = _aliyun_oss_identity_from_virtual_host_url(parsed)
+    if identity is None:
+        raise ObjectStorageValidationError("OSS URL host is not an Aliyun OSS virtual-host endpoint")
+    bucket, region, key, internal = identity
+    endpoint = f"oss-{region}{'-internal' if internal else ''}.aliyuncs.com"
+    return AliyunOSSObjectLocation(bucket=bucket, region=region, key=key, internal=internal, endpoint=endpoint)
+
+
+def parse_aliyun_oss_access_url(url: str) -> AliyunOSSObjectLocation:
+    if not isinstance(url, str) or not url.strip():
+        raise ObjectStorageValidationError("OSS access URL must be a non-empty string")
+    try:
+        parsed = urlsplit(url.strip())
+    except ValueError as exc:
+        raise ObjectStorageValidationError("OSS access URL is invalid") from exc
+    if parsed.scheme != "https":
+        raise ObjectStorageValidationError("OSS access URL must use https")
+    if parsed.fragment:
+        raise ObjectStorageValidationError("OSS access URL must not contain a fragment")
+    if parsed.username or parsed.password or _port(parsed) is not None:
+        raise ObjectStorageValidationError("OSS access URL must not contain credentials or port")
+    identity = _aliyun_oss_identity_from_virtual_host_url(parsed)
+    if identity is None:
+        raise ObjectStorageValidationError("OSS access URL host is not an Aliyun OSS virtual-host endpoint")
+    bucket, region, key, internal = identity
+    endpoint = f"oss-{region}{'-internal' if internal else ''}.aliyuncs.com"
+    return AliyunOSSObjectLocation(bucket=bucket, region=region, key=key, internal=internal, endpoint=endpoint)
+
+
+def validate_aliyun_oss_access_url(url: str, *, expected_ref: ObjectRef) -> AliyunOSSObjectLocation:
+    if not isinstance(expected_ref, ObjectRef):
+        raise ObjectStorageValidationError("expected_ref must be ObjectRef")
+    if expected_ref.provider != "aliyun_oss":
+        raise ObjectStorageValidationError("expected_ref provider must be aliyun_oss")
+    location = parse_aliyun_oss_access_url(url)
+    if location.object_identity != (expected_ref.bucket, expected_ref.region, expected_ref.key):
+        raise ObjectStorageValidationError("OSS access URL does not match expected object identity")
+    return location
+
+
+def redact_aliyun_oss_url(url: str) -> str:
+    if not isinstance(url, str) or not url.strip():
+        raise ObjectStorageValidationError("url must be a non-empty string")
+    parse_aliyun_oss_access_url(url)
+    try:
+        parsed = urlsplit(url.strip())
+    except ValueError as exc:
+        raise ObjectStorageValidationError("url is invalid") from exc
+    if not parsed.query and not parsed.fragment:
+        return url.strip()
+    return parsed._replace(query="", fragment="").geturl()
+
+
+def _aliyun_oss_identity_from_virtual_host_url(parsed: SplitResult) -> tuple[str, str, str, bool] | None:
+    if not parsed.hostname:
+        raise ObjectStorageValidationError("OSS URL must include a host")
+    host = parsed.hostname.lower()
+    suffix = ".aliyuncs.com"
+    marker = ".oss-"
+    if not host.endswith(suffix) or marker not in host:
+        return None
+    bucket, endpoint_part = host.split(marker, 1)
+    if not bucket or not endpoint_part.endswith(suffix.removeprefix(".")):
+        raise ObjectStorageValidationError("OSS URL host is invalid")
+    region = endpoint_part.removesuffix(suffix.removeprefix(".")).rstrip(".")
+    internal = False
+    if region.endswith("-internal"):
+        internal = True
+        region = region.removesuffix("-internal")
+    if not region:
+        raise ObjectStorageValidationError("OSS URL region is missing")
+    if not parsed.path or parsed.path == "/" or not parsed.path.startswith("/"):
+        raise ObjectStorageValidationError("OSS URL object key is missing")
+    key = unquote(parsed.path[1:])
+    if not key:
+        raise ObjectStorageValidationError("OSS URL object key is missing")
+    if any(part in {"", ".", ".."} for part in key.split("/")):
+        raise ObjectStorageValidationError("OSS URL object key contains illegal path traversal")
+    return bucket, region, normalize_object_key(key), internal
+
+
+def _port(parsed: SplitResult) -> int | None:
+    try:
+        return parsed.port
+    except ValueError as exc:
+        raise ObjectStorageValidationError("OSS URL must not contain credentials or port") from exc
 
 
 def _required_str(value: Any, field: str) -> str:

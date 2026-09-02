@@ -6,7 +6,7 @@
 
 本目录是基础设施模块，不是业务适配层。修改本目录前必须先确认改动满足以下条件：
 
-- 只新增或调整对象存储通用原语，例如读、写、删、元数据、签名 URL、provider 配置校验和底层错误。
+- 只新增或调整对象存储通用原语，例如读、写、删、元数据、provider 配置校验、底层错误、provider 专属签名 URL 和 provider URL 身份解析。
 - 不为某个业务包、POC、smoke flow、接口字段或资源命名规则增加专用逻辑。
 - 不引入业务错误码、业务 payload、业务 content type 白名单、业务 key 拼装规则或业务 URL Ref 解释。
 - 业务差异必须放在对应业务包的 storage adapter；smoke 专用差异必须放在对应 smoke flow。
@@ -39,7 +39,7 @@ Business adapter contract:
   adapter.py                 # ObjectStorageAdapterContext, BaseObjectStorageAdapter
 
 Infrastructure adapters:
-  providers/aliyun_oss.py    # Aliyun OSS read/write
+  providers/aliyun_oss.py    # Aliyun OSS read/write/sign URL/URL identity
   providers/local.py         # Local read/write for tests and development
 
 Construction:
@@ -93,6 +93,7 @@ Policy:
 - provider 配置只接受声明过的字段；未知字段必须 fail-fast。
 - 读取校验策略必须显式使用 `ObjectReadPolicy`，不要在业务主流程里散落手写 size 或 sha256 校验。
 - Job runtime artifact 读写不属于本模块；业务输入输出适配放在业务 adapter 中。
+- Aliyun OSS URL 解析只返回对象身份；业务 URL Ref、CDN 映射和允许哪些 bucket/region/content_type 由业务 adapter 判断。
 
 允许直接使用 provider 的位置：
 
@@ -321,6 +322,7 @@ storage = PublicInputStorageAdapter.from_config(
 - provider 构建与注册：`build_repository`、`register_provider_builder`
 - 内置 provider：`aliyun_oss`、`local`
 - 公网 URL 只读输入：`PublicUrlReader`
+- Aliyun OSS provider 专属能力：`signed_get_url()`、`signed_put_url()`、`public_url()`、`parse_aliyun_oss_url()`、`validate_aliyun_oss_access_url()`、`redact_aliyun_oss_url()`
 
 本目录不负责：
 

@@ -9,7 +9,12 @@ from app.object_storage import (
     AliyunOSSError,
     AliyunOSSRepository,
     ObjectRef,
+    ObjectStorageValidationError,
+    parse_aliyun_oss_access_url,
+    parse_aliyun_oss_url,
+    redact_aliyun_oss_url,
     sha256_digest,
+    validate_aliyun_oss_access_url,
 )
 
 
@@ -134,6 +139,168 @@ def test_aliyun_oss_repository_signed_get_url_applies_key_prefix_and_hides_secre
     assert query["Expires"] == ["1060"]
     assert query["Signature"]
     assert "secret-value" not in url
+
+
+def test_aliyun_oss_repository_signed_put_url_includes_content_type(monkeypatch):
+    monkeypatch.setattr("app.object_storage.providers.aliyun_oss.time.time", lambda: 1000)
+    repository = AliyunOSSRepository(
+        AliyunOSSConfig(
+            bucket="bucket-a",
+            region="cn-hangzhou",
+            access_key_id="access-key-id-value",
+            access_key_secret="secret-value",
+            key_prefix="project-a",
+        )
+    )
+
+    url = repository.signed_put_url(
+        ObjectRef(
+            provider="aliyun_oss",
+            bucket="bucket-a",
+            region="cn-hangzhou",
+            key="project-a/outputs/title-layer.png",
+        ),
+        expires_seconds=60,
+        content_type="image/png",
+    )
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "bucket-a.oss-cn-hangzhou.aliyuncs.com"
+    assert parsed.path == "/project-a/outputs/title-layer.png"
+    assert query["OSSAccessKeyId"] == ["access-key-id-value"]
+    assert query["Expires"] == ["1060"]
+    assert query["Signature"]
+    assert "secret-value" not in url
+
+
+def test_aliyun_oss_repository_public_url_uses_configured_public_base_url():
+    repository = AliyunOSSRepository(
+        AliyunOSSConfig(
+            bucket="bucket-a",
+            region="cn-hangzhou",
+            access_key_id="id",
+            access_key_secret="secret",
+            public_base_url="https://cdn.example.com/assets",
+        )
+    )
+
+    url = repository.public_url(
+        ObjectRef(
+            provider="aliyun_oss",
+            bucket="bucket-a",
+            region="cn-hangzhou",
+            key="outputs/title layer.png",
+        )
+    )
+
+    assert url == "https://cdn.example.com/assets/outputs/title%20layer.png"
+
+
+def test_parse_aliyun_oss_url_returns_object_location():
+    location = parse_aliyun_oss_url(
+        "https://bucket-a.oss-cn-hangzhou-internal.aliyuncs.com/project-a/inputs/reference.png"
+    )
+
+    assert location.bucket == "bucket-a"
+    assert location.region == "cn-hangzhou"
+    assert location.key == "project-a/inputs/reference.png"
+    assert location.internal is True
+    assert location.endpoint == "oss-cn-hangzhou-internal.aliyuncs.com"
+    assert location.object_identity == ("bucket-a", "cn-hangzhou", "project-a/inputs/reference.png")
+    assert location.to_ref() == ObjectRef(
+        provider="aliyun_oss",
+        bucket="bucket-a",
+        region="cn-hangzhou",
+        key="project-a/inputs/reference.png",
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.png",
+        "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.png?token=secret",
+        "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/../reference.png",
+        "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/./reference.png",
+        "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a//reference.png",
+        "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/reference.png/",
+        "https://example.com/project-a/reference.png",
+    ],
+)
+def test_parse_aliyun_oss_url_rejects_invalid_identity(url):
+    with pytest.raises(ObjectStorageValidationError):
+        parse_aliyun_oss_url(url)
+
+
+def test_parse_aliyun_oss_access_url_allows_signed_query_and_redacts_url():
+    access_url = (
+        "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/inputs/reference.png"
+        "?OSSAccessKeyId=access-key-id&Expires=1060&Signature=secret-signature"
+    )
+
+    location = parse_aliyun_oss_access_url(access_url)
+
+    assert location.object_identity == ("bucket-a", "cn-hangzhou", "project-a/inputs/reference.png")
+    assert location.internal is False
+    assert (
+        redact_aliyun_oss_url(access_url)
+        == "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/inputs/reference.png"
+    )
+
+
+def test_redact_aliyun_oss_url_rejects_credentials():
+    with pytest.raises(ObjectStorageValidationError, match="credentials or port"):
+        redact_aliyun_oss_url(
+            "https://user:password@bucket-a.oss-cn-hangzhou.aliyuncs.com/key.png?Signature=secret"
+        )
+
+
+def test_redact_aliyun_oss_url_rejects_non_aliyun_access_url():
+    with pytest.raises(ObjectStorageValidationError, match="Aliyun OSS virtual-host endpoint"):
+        redact_aliyun_oss_url("https://example.com/key.png?Signature=secret")
+
+
+def test_redact_aliyun_oss_url_rejects_fragment():
+    with pytest.raises(ObjectStorageValidationError, match="fragment"):
+        redact_aliyun_oss_url("https://bucket-a.oss-cn-hangzhou.aliyuncs.com/key.png#secret")
+
+
+def test_validate_aliyun_oss_access_url_matches_expected_object_ref():
+    access_url = (
+        "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/inputs/reference.png"
+        "?OSSAccessKeyId=access-key-id&Expires=1060&Signature=secret-signature"
+    )
+    expected_ref = ObjectRef(
+        provider="aliyun_oss",
+        bucket="bucket-a",
+        region="cn-hangzhou",
+        key="project-a/inputs/reference.png",
+    )
+
+    location = validate_aliyun_oss_access_url(access_url, expected_ref=expected_ref)
+
+    assert location.to_ref() == expected_ref
+
+
+def test_validate_aliyun_oss_access_url_rejects_mismatched_object_ref():
+    access_url = (
+        "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/project-a/inputs/reference.png"
+        "?OSSAccessKeyId=access-key-id&Expires=1060&Signature=secret-signature"
+    )
+    expected_ref = ObjectRef(
+        provider="aliyun_oss",
+        bucket="bucket-a",
+        region="cn-hangzhou",
+        key="project-a/inputs/other.png",
+    )
+
+    with pytest.raises(
+        ObjectStorageValidationError,
+        match="does not match expected object identity",
+    ):
+        validate_aliyun_oss_access_url(access_url, expected_ref=expected_ref)
 
 
 def test_aliyun_oss_repository_put_bytes_sends_content_disposition(monkeypatch):

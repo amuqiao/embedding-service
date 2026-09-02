@@ -29,6 +29,7 @@ from app.object_storage import (
     PublicUrlReader,
     PublicUrlReadSpec,
     PutObjectResult,
+    parse_aliyun_oss_url,
 )
 from app.business_packages.poster_title_image.schemas import PosterTitleImageReferenceImage
 from app.services.job_runtime import output_target_from_job
@@ -295,30 +296,13 @@ def _canonical_ref_from_oss_url_ref(
 
 
 def _parse_aliyun_oss_public_url(url: str) -> dict[str, str]:
-    parsed = urlsplit(url.strip())
-    if parsed.scheme != "https":
-        raise AppError("INVALID_INPUT", "OSS URL must use https")
-    if parsed.query or parsed.fragment:
-        raise AppError("INVALID_INPUT", "OSS URL must not contain query string or fragment")
-    if parsed.username or parsed.password or parsed.port is not None:
-        raise AppError("INVALID_INPUT", "OSS URL must not contain credentials or port")
-    host = (parsed.hostname or "").lower()
-    suffix = ".aliyuncs.com"
-    marker = ".oss-"
-    if not host.endswith(suffix) or marker not in host:
-        raise AppError("INVALID_INPUT", "OSS URL host is not an Aliyun OSS virtual-host endpoint")
-    bucket, endpoint_part = host.split(marker, 1)
-    region_part = endpoint_part.removesuffix(suffix.removeprefix(".")).rstrip(".")
-    if not bucket or not region_part:
-        raise AppError("INVALID_INPUT", "OSS URL host is not an Aliyun OSS virtual-host endpoint")
-    if region_part.endswith("-internal"):
+    try:
+        location = parse_aliyun_oss_url(url)
+    except ObjectStorageValidationError as exc:
+        raise AppError("INVALID_INPUT", str(exc)) from exc
+    if location.internal:
         raise AppError("INVALID_INPUT", "public_url must use a public OSS endpoint")
-    key = unquote(parsed.path.lstrip("/"))
-    if not key:
-        raise AppError("INVALID_INPUT", "OSS URL object key is missing")
-    if any(part in {"", ".", ".."} for part in key.split("/")):
-        raise AppError("INVALID_INPUT", "OSS URL object key contains illegal path traversal")
-    return {"bucket": bucket, "region": region_part, "key": key}
+    return {"bucket": location.bucket, "region": location.region, "key": location.key}
 
 
 def _parse_public_endpoint_key(url: str, *, public_endpoint: str) -> str:

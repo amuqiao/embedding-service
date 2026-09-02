@@ -33,7 +33,16 @@ from .models import (
     normalize_object_key,
     sha256_digest,
 )
-from .providers import AliyunOSSConfig, AliyunOSSError, AliyunOSSRepository
+from .providers import (
+    AliyunOSSConfig,
+    AliyunOSSError,
+    AliyunOSSObjectLocation,
+    AliyunOSSRepository,
+    parse_aliyun_oss_access_url,
+    parse_aliyun_oss_url,
+    redact_aliyun_oss_url,
+    validate_aliyun_oss_access_url,
+)
 from .providers import LocalObjectStorageRepository, LocalStorageConfig
 from .public_url import PublicUrlConfig, PublicUrlInputReader, PublicUrlReader
 from .repository import ObjectStorageRepository
@@ -42,6 +51,7 @@ from .repository import ObjectStorageRepository
 __all__ = [
     "AliyunOSSConfig",
     "AliyunOSSError",
+    "AliyunOSSObjectLocation",
     "AliyunOSSRepository",
     "BUILTIN_PROVIDERS",
     "BaseObjectStorageAdapter",
@@ -71,7 +81,11 @@ __all__ = [
     "join_key",
     "normalize_content_hash",
     "normalize_object_key",
+    "parse_aliyun_oss_access_url",
+    "parse_aliyun_oss_url",
+    "redact_aliyun_oss_url",
     "register_provider_builder",
     "registered_provider_names",
     "sha256_digest",
+    "validate_aliyun_oss_access_url",
 ]
