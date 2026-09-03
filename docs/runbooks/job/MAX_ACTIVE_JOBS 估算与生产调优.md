@@ -1,6 +1,6 @@
 # MAX_ACTIVE_JOBS 估算与生产调优
 
-本文说明生产环境中如何估算 `MAX_ACTIVE_JOBS`，以及在 K8s 上遇到瓶颈时应优先调 `MAX_ACTIVE_JOBS`、`WORKER_CONCURRENCY`、API/worker Pod 数量，还是 PostgreSQL/Redis 容量。
+本文说明生产环境中如何估算 `MAX_ACTIVE_JOBS`，以及在 K8s 上遇到瓶颈时应优先调 `MAX_ACTIVE_JOBS`、worker 执行槽位、worker Pod 数量，还是 PostgreSQL/Redis 容量。
 
 本文不是生产部署规范，也不替代压测报告。本文负责把单 API、单 worker 的压测方法扩展成生产调优判断框架。
 
@@ -35,7 +35,7 @@ active_jobs_needed ~= accepted_submit_rps * p95_job_active_seconds
 | `accepted_submit_rps` | 每秒真正成功接收多少 Job | API Pod 数、入口流量、DB 写入、Redis/Taskiq publish、限流策略 |
 | `p95_job_active_seconds` | Job 从进入 active 到终态的 p95 时长 | queued 等待、worker 并发、Job 执行耗时、CPU/内存、外部模型、DB/Redis |
 
-CPU、内存、Pod 资源、`WORKER_CONCURRENCY`、外部模型耗时，大多会反映到 `p95_job_active_seconds` 上。但 PostgreSQL 连接数、API 连接池、Redis/broker 容量也可能先形成环境硬上限，导致 HTTP 500、超时或进程重启。这部分不能只靠公式算，必须靠阶梯压测验证。
+CPU、内存、Pod 资源、worker 执行槽位、外部模型耗时，大多会反映到 `p95_job_active_seconds` 上。但 PostgreSQL 连接数、API 连接池、Redis/broker 容量也可能先形成环境硬上限，导致 HTTP 500、超时或进程重启。这部分不能只靠公式算，必须靠阶梯压测验证。
 
 当前 submit 门禁会通过 PostgreSQL advisory lock 做全局 active count 保护。也就是说，当 `MAX_ACTIVE_JOBS > 0` 时，`POST /jobs` 的部分路径不是简单随 API Pod 数线性扩展；API Pod 加多后，可能先放大 PostgreSQL 锁竞争和连接竞争。
 
@@ -69,7 +69,9 @@ CPU、内存、Pod 资源、`WORKER_CONCURRENCY`、外部模型耗时，大多�
 
 4. 只调一个旋钮
    MAX_ACTIVE_JOBS
-   WORKER_CONCURRENCY
+   WORKER_PROCESSES
+   WORKER_MAX_ASYNC_TASKS
+   WORKER_MAX_PREFETCH
    API replicas
    worker replicas
    Pod CPU/内存
@@ -83,13 +85,13 @@ CPU、内存、Pod 资源、`WORKER_CONCURRENCY`、外部模型耗时，大多�
 | 现象 | 优先判断 | 该调什么 | 不该先调什么 |
 | --- | --- | --- | --- |
 | `POST /jobs` 返回 503，响应体包含 `active_jobs` 和 `limit`，API/DB/Redis 健康，压测后可排空 | `MAX_ACTIVE_JOBS` 保护先触发 | 如果业务需要更大接单窗口，逐步增大 `MAX_ACTIVE_JOBS` | 不要直接加 worker；此时 worker 未必是瓶颈 |
-| `POST /jobs` 503，同时 queued 持续增长、排空很慢 | 接单速度大于完成速度 | 先增大 worker 消费能力：`WORKER_CONCURRENCY`、worker Pod 数、Job 执行优化 | 不要只增大 `MAX_ACTIVE_JOBS`，否则只是允许更多积压 |
+| `POST /jobs` 503，同时 queued 持续增长、排空很慢 | 接单速度大于完成速度 | 先增大 worker 消费能力：worker 执行槽位、worker Pod 数、Job 执行优化 | 不要只增大 `MAX_ACTIVE_JOBS`，否则只是允许更多积压 |
 | `POST /jobs` p95 升高或出现 500 | API、DB 写入、全局 active gate 锁竞争或 Taskiq publish 路径瓶颈 | 看 API CPU、PostgreSQL 连接数、锁等待、DB p95、Redis publish；按瓶颈扩 API/DB/Redis | 不要先增大 `MAX_ACTIVE_JOBS` |
 | `GET /jobs/{job_id}` p95 升高 | 查询接口或 DB 读瓶颈 | 扩 API 读能力、优化 DB 索引/连接池、降低轮询频率 | 不要调 `MAX_ACTIVE_JOBS` |
-| queued 增长，API `POST` p95 正常 | worker/broker 消费跟不上 | 增大 worker Pod 数或 `WORKER_CONCURRENCY`，检查 Redis/Taskiq lag | 不要只扩 API Pod |
-| running 长时间不下降，Job active p95 变长 | Job 执行慢或外部依赖慢 | 优化 executor、外部模型并发/超时、worker 资源；IO 等待型可提高 `WORKER_CONCURRENCY` | 不要先增大 `MAX_ACTIVE_JOBS` |
-| worker CPU 接近打满 | CPU 型 Job 或 worker CPU 不足 | 增大 worker Pod CPU 或 worker Pod 数；CPU 型任务优先横向扩 Pod | 不要盲目提高 `WORKER_CONCURRENCY` |
-| worker 内存接近限制或 OOM | 单 Job 内存高或并发过高 | 增大 worker 内存、降低 `WORKER_CONCURRENCY`、拆小任务 | 不要增大 `WORKER_CONCURRENCY` |
+| queued 增长，API `POST` p95 正常 | worker/broker 消费跟不上 | 增大 worker Pod 数或 worker 执行槽位，检查 Redis/Taskiq lag | 不要只扩 API Pod |
+| running 长时间不下降，Job active p95 变长 | Job 执行慢或外部依赖慢 | 优化 executor、外部模型并发/超时、worker 资源；IO 等待型可提高 `WORKER_MAX_ASYNC_TASKS` | 不要先增大 `MAX_ACTIVE_JOBS` |
+| worker CPU 接近打满 | CPU 型 Job 或 worker CPU 不足 | 增大 worker Pod CPU 或 worker Pod 数；CPU 型任务优先横向扩 Pod | 不要盲目提高 `WORKER_MAX_ASYNC_TASKS` |
+| worker 内存接近限制或 OOM | 单 Job 内存高或并发过高 | 增大 worker 内存、降低 worker 执行槽位、拆小任务 | 不要增大 `WORKER_MAX_ASYNC_TASKS` |
 | API CPU 打满，DB/Redis 正常，且不是 submit 锁竞争 | API Pod 数或 CPU 不足 | 增大 API Pod CPU 或 API replicas | 不要先扩 worker |
 | PostgreSQL `TooManyConnectionsError`、连接数打满 | DB 连接预算先到顶 | 治理连接池、降低 API/worker 总连接数、引入 PgBouncer、提高 DB 连接上限 | 不要增大 `MAX_ACTIVE_JOBS` 或 API/worker Pod 数 |
 | PostgreSQL CPU 打满、慢查询增加 | DB 执行能力不足 | 优化查询/索引、提高 DB CPU、降低轮询、拆读写压力 | 不要只加 API Pod |
@@ -122,12 +124,27 @@ CPU、内存、Pod 资源、`WORKER_CONCURRENCY`、外部模型耗时，大多�
 - PostgreSQL/Redis 已经接近上限。
 - Job active p95 已经超过业务 SLO。
 
-### WORKER_CONCURRENCY
+### Worker 执行槽位
 
 作用：提高单个 worker Pod 内的并发执行能力。
 
 ```text
-提高 WORKER_CONCURRENCY
+单 Pod 执行槽位 = WORKER_PROCESSES * WORKER_MAX_ASYNC_TASKS
+
+提高 WORKER_PROCESSES
+  -> 增加 Taskiq 子进程数
+  -> 进程隔离和多核利用更直接
+
+提高 WORKER_MAX_ASYNC_TASKS
+  -> 每个 Taskiq 子进程同时执行更多 async task
+  -> IO 等待型 Job 的吞吐可能提高
+
+提高 WORKER_MAX_PREFETCH
+  -> 每个 Taskiq 子进程最多预取更多 task
+  -> 影响 broker 消息滞留和消费公平性
+  -> 不等于真实执行并发
+
+提高 worker 执行槽位
   -> 单 Pod 同时执行更多 Job
   -> queued 可能下降
   -> CPU、内存、DB/Redis/外部模型连接压力增加
@@ -146,7 +163,7 @@ CPU、内存、Pod 资源、`WORKER_CONCURRENCY`、外部模型耗时，大多�
 - 真实 Job 是 CPU 密集型。
 - 外部模型或数据库已经限流。
 
-注意：worker 执行路径的 DB 使用方式不等同于 API 请求路径的固定 SQLAlchemy pool。提高 `WORKER_CONCURRENCY` 时，不能只看 API 的 `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` 是否够用，还要看 PostgreSQL 实际连接数、连接创建频率和 worker 执行期间的 DB 写入压力。
+注意：worker 执行路径的 DB 使用方式不等同于 API 请求路径的固定 SQLAlchemy pool。提高 `WORKER_PROCESSES` 或 `WORKER_MAX_ASYNC_TASKS` 时，不能只看 API 的 `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` 是否够用，还要看 PostgreSQL 实际连接数、连接创建频率和 worker 执行期间的 DB 写入压力。
 
 ### worker Pod 数量
 
@@ -165,7 +182,7 @@ CPU、内存、Pod 资源、`WORKER_CONCURRENCY`、外部模型耗时，大多�
 - 单 Pod CPU 或内存已接近合理上限。
 - 需要更稳定的横向扩展，而不是把单 Pod 并发堆得很高。
 
-对 CPU 密集型 Job，优先增加 worker Pod 数或 CPU request/limit；对 IO 等待型 Job，可以先小步提高 `WORKER_CONCURRENCY`，再扩 Pod。
+对 CPU 密集型 Job，优先增加 worker Pod 数或 CPU request/limit；对 IO 等待型 Job，可以先小步提高 `WORKER_MAX_ASYNC_TASKS`，再扩 Pod。
 
 ### API Pod 数量
 
@@ -218,7 +235,7 @@ PostgreSQL 是 `MAX_ACTIVE_JOBS` 调优里最容易被误伤的组件。
 ```text
 更多 API Pod
 更多 worker Pod
-更高 WORKER_CONCURRENCY
+更高 worker 执行槽位
 更高 MAX_ACTIVE_JOBS
 更高轮询 RPS
   -> 都可能增加 PostgreSQL 连接和查询压力
@@ -236,7 +253,7 @@ PostgreSQL 是 `MAX_ACTIVE_JOBS` 调优里最容易被误伤的组件。
 此时不要继续放大 `MAX_ACTIVE_JOBS`。先处理：
 
 - 应用 DB pool 上限。
-- API Pod 数、worker Pod 数和 `WORKER_CONCURRENCY` 带来的总连接压力。
+- API Pod 数、worker Pod 数和 worker 执行槽位带来的总连接压力。
 - worker 侧连接创建频率和任务执行期间的 DB 写入压力。
 - PostgreSQL `max_connections` 与实例规格是否匹配。
 - 是否需要 PgBouncer。
@@ -346,7 +363,9 @@ PostgreSQL/Redis 未触顶
 
 - API replicas。
 - worker replicas。
-- `WORKER_CONCURRENCY`。
+- `WORKER_PROCESSES`。
+- `WORKER_MAX_ASYNC_TASKS`。
+- `WORKER_MAX_PREFETCH`。
 - Pod CPU/内存 request/limit。
 - PostgreSQL 实例规格、`max_connections`、连接池。
 - Redis/Taskiq broker 规格。

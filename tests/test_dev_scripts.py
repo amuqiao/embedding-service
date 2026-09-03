@@ -792,13 +792,15 @@ def test_dev_restart_worker_escalates_residual_cleanup_to_kill(tmp_path):
 def test_dev_worker_service_command_injects_root_env(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "WORKER_CONCURRENCY=7\nWORKER_LOGLEVEL=DEBUG\n",
+        "WORKER_PROCESSES=1\nWORKER_MAX_ASYNC_TASKS=7\nWORKER_MAX_PREFETCH=7\nWORKER_LOGLEVEL=DEBUG\n",
         encoding="utf-8",
     )
 
     command = _service_command("worker", ENV_FILE=str(env_file))
 
-    assert "WORKER_CONCURRENCY=7" in command
+    assert "WORKER_PROCESSES=1" in command
+    assert "WORKER_MAX_ASYNC_TASKS=7" in command
+    assert "WORKER_MAX_PREFETCH=7" in command
     assert "WORKER_LOGLEVEL=DEBUG" in command
     assert "WORKER_RECOVERY_LOOP" not in command
     assert "start-worker-bundle.sh" in command
@@ -830,7 +832,9 @@ def test_start_worker_uses_python_module_taskiq(tmp_path):
     env.update(
         {
             "PATH": f"{fake_bin}:{env['PATH']}",
-            "WORKER_CONCURRENCY": "1",
+            "WORKER_PROCESSES": "1",
+            "WORKER_MAX_ASYNC_TASKS": "1",
+            "WORKER_MAX_PREFETCH": "1",
             "WORKER_LOGLEVEL": "INFO",
         }
     )
@@ -847,6 +851,7 @@ def test_start_worker_uses_python_module_taskiq(tmp_path):
 
     assert result.returncode == 0
     assert "python3 -m taskiq worker app.tasks.taskiq_app:broker" in result.stdout
+    assert "--workers 1 --max-async-tasks 1 --max-prefetch 1" in result.stdout
     assert "python not found" not in result.stderr
 
 
@@ -870,7 +875,9 @@ def test_start_worker_bundle_exits_when_role_exits(tmp_path):
     env.update(
         {
             "PATH": f"{fake_bin}:{env['PATH']}",
-            "WORKER_CONCURRENCY": "1",
+            "WORKER_PROCESSES": "1",
+            "WORKER_MAX_ASYNC_TASKS": "1",
+            "WORKER_MAX_PREFETCH": "1",
             "WORKER_LOGLEVEL": "INFO",
         }
     )
@@ -886,6 +893,8 @@ def test_start_worker_bundle_exits_when_role_exits(tmp_path):
     )
 
     assert result.returncode == 7
+    assert "python3 -m taskiq worker app.tasks.taskiq_app:broker" in result.stdout
+    assert "--workers 1 --max-async-tasks 1 --max-prefetch 1" in result.stdout
     assert "started dispatcher pid=" in result.stdout
     assert "role dispatcher exited status=7" in result.stderr
 
@@ -901,7 +910,9 @@ def test_compose_wrapper_injects_root_env_file_values(tmp_path):
                 "POSTGRES_HOST_PORT=35432",
                 "REDIS_HOST_PORT=36379",
                 "API_HOST_PORT=38100",
-                "WORKER_CONCURRENCY=6",
+                "WORKER_PROCESSES=1",
+                "WORKER_MAX_ASYNC_TASKS=6",
+                "WORKER_MAX_PREFETCH=6",
                 "WORKER_LOGLEVEL=DEBUG",
             ]
         )
@@ -920,7 +931,9 @@ def test_compose_wrapper_injects_root_env_file_values(tmp_path):
         "printf '%s\\n' \"POSTGRES_HOST_PORT=$POSTGRES_HOST_PORT\"\n"
         "printf '%s\\n' \"REDIS_HOST_PORT=$REDIS_HOST_PORT\"\n"
         "printf '%s\\n' \"API_HOST_PORT=$API_HOST_PORT\"\n"
-        "printf '%s\\n' \"WORKER_CONCURRENCY=$WORKER_CONCURRENCY\"\n"
+        "printf '%s\\n' \"WORKER_PROCESSES=$WORKER_PROCESSES\"\n"
+        "printf '%s\\n' \"WORKER_MAX_ASYNC_TASKS=$WORKER_MAX_ASYNC_TASKS\"\n"
+        "printf '%s\\n' \"WORKER_MAX_PREFETCH=$WORKER_MAX_PREFETCH\"\n"
         "printf '%s\\n' \"WORKER_LOGLEVEL=$WORKER_LOGLEVEL\"\n",
         encoding="utf-8",
     )
@@ -944,7 +957,9 @@ def test_compose_wrapper_injects_root_env_file_values(tmp_path):
     assert "POSTGRES_HOST_PORT=35432" in result.stdout
     assert "REDIS_HOST_PORT=36379" in result.stdout
     assert "API_HOST_PORT=38100" in result.stdout
-    assert "WORKER_CONCURRENCY=6" in result.stdout
+    assert "WORKER_PROCESSES=1" in result.stdout
+    assert "WORKER_MAX_ASYNC_TASKS=6" in result.stdout
+    assert "WORKER_MAX_PREFETCH=6" in result.stdout
     assert "WORKER_LOGLEVEL=DEBUG" in result.stdout
     assert "WORKER_RECOVERY_LOOP" not in result.stdout
 
@@ -2585,7 +2600,8 @@ def test_jobs_capacity_db_budget_reports_risk_levels():
     ok = _capacity_db_budget(
         api_pods=2,
         worker_pods=4,
-        worker_concurrency=10,
+        worker_processes=1,
+        worker_max_async_tasks=10,
         db_pool_size=5,
         db_max_overflow=5,
         db_max_connections=100,
@@ -2594,7 +2610,8 @@ def test_jobs_capacity_db_budget_reports_risk_levels():
     critical = _capacity_db_budget(
         api_pods=4,
         worker_pods=6,
-        worker_concurrency=20,
+        worker_processes=1,
+        worker_max_async_tasks=20,
         db_pool_size=5,
         db_max_overflow=10,
         db_max_connections=100,
@@ -2603,7 +2620,8 @@ def test_jobs_capacity_db_budget_reports_risk_levels():
     unknown = _capacity_db_budget(
         api_pods=None,
         worker_pods=1,
-        worker_concurrency=1,
+        worker_processes=1,
+        worker_max_async_tasks=1,
         db_pool_size=5,
         db_max_overflow=10,
         db_max_connections=100,
@@ -2617,12 +2635,14 @@ def test_jobs_capacity_db_budget_reports_risk_levels():
     assert critical["risk"] == "critical"
     assert unknown["risk"] == "unknown"
     assert unknown["missing_inputs"] == ["api_pods"]
-    assert ok["input_sources"]["worker_concurrency"] == "cli"
+    assert ok["input_sources"]["worker_processes"] == "cli"
+    assert ok["input_sources"]["worker_max_async_tasks"] == "cli"
 
 
 def test_jobs_capacity_db_budget_reports_env_input_sources(monkeypatch):
     values = {
-        "WORKER_CONCURRENCY": ("8", "environment"),
+        "WORKER_PROCESSES": ("1", ".env"),
+        "WORKER_MAX_ASYNC_TASKS": ("8", "environment"),
         "DB_POOL_SIZE": ("5", ".env"),
         "DB_MAX_OVERFLOW": ("10", ".env"),
     }
@@ -2631,20 +2651,55 @@ def test_jobs_capacity_db_budget_reports_env_input_sources(monkeypatch):
     budget = _capacity_db_budget(
         api_pods=1,
         worker_pods=2,
-        worker_concurrency=None,
+        worker_processes=None,
+        worker_max_async_tasks=None,
         db_pool_size=None,
         db_max_overflow=None,
         db_max_connections=100,
         db_usable_ratio=0.8,
     )
 
-    assert budget["worker_concurrency"] == 8
+    assert budget["worker_processes"] == 1
+    assert budget["worker_max_async_tasks"] == 8
+    assert budget["worker_slots"] == 16
     assert budget["db_pool_size"] == 5
     assert budget["db_max_overflow"] == 10
-    assert budget["input_sources"]["worker_concurrency"] == "environment"
+    assert budget["input_sources"]["worker_processes"] == ".env"
+    assert budget["input_sources"]["worker_max_async_tasks"] == "environment"
     assert budget["input_sources"]["db_pool_size"] == ".env"
     assert budget["input_sources"]["db_max_overflow"] == ".env"
     assert budget["estimated_connections"] == 31
+
+
+def test_jobs_capacity_db_budget_does_not_count_worker_prefetch(monkeypatch):
+    values = {
+        "WORKER_PROCESSES": ("2", ".env"),
+        "WORKER_MAX_ASYNC_TASKS": ("3", ".env"),
+        "WORKER_MAX_PREFETCH": ("99", ".env"),
+        "DB_POOL_SIZE": ("5", ".env"),
+        "DB_MAX_OVERFLOW": ("10", ".env"),
+    }
+
+    def fake_env_value_with_source(name: str):
+        if name == "WORKER_MAX_PREFETCH":
+            raise AssertionError("WORKER_MAX_PREFETCH must not affect DB connection budget")
+        return values.get(name, (None, "missing"))
+
+    monkeypatch.setattr("scripts.jobs.cli.db.env_value_with_source", fake_env_value_with_source)
+
+    budget = _capacity_db_budget(
+        api_pods=1,
+        worker_pods=2,
+        worker_processes=None,
+        worker_max_async_tasks=None,
+        db_pool_size=None,
+        db_max_overflow=None,
+        db_max_connections=100,
+        db_usable_ratio=0.8,
+    )
+
+    assert budget["worker_slots"] == 12
+    assert budget["estimated_connections"] == 27
 
 
 def test_jobs_capacity_recommendation_blocks_concurrency_when_db_budget_is_critical():
@@ -2657,7 +2712,7 @@ def test_jobs_capacity_recommendation_blocks_concurrency_when_db_budget_is_criti
     recommendation = _capacity_recommendation(payload, 1000)
 
     assert recommendation["db_connection_risk"] == "critical"
-    assert "不要提高 WORKER_CONCURRENCY" in recommendation["message"]
+    assert "不要提高 worker 执行槽位" in recommendation["message"]
 
 
 def test_jobs_cli_no_args_runs_overview(monkeypatch):
@@ -4621,7 +4676,9 @@ def test_jobs_runtime_command_outputs_current_pod_scope(monkeypatch):
         lambda: {
             "scope": "current_pod",
             "environment": {
-                "WORKER_CONCURRENCY": "4",
+                "WORKER_PROCESSES": "1",
+                "WORKER_MAX_ASYNC_TASKS": "4",
+                "WORKER_MAX_PREFETCH": "4",
                 "TASKIQ_BROKER_KIND": "redis_stream",
                 "MAX_ACTIVE_JOBS": "5000",
                 "DB_POOL_SIZE": "5",
@@ -4649,7 +4706,9 @@ def test_jobs_runtime_command_outputs_current_pod_scope(monkeypatch):
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["scope"] == "current_pod"
-    assert payload["environment"]["WORKER_CONCURRENCY"] == "4"
+    assert payload["environment"]["WORKER_PROCESSES"] == "1"
+    assert payload["environment"]["WORKER_MAX_ASYNC_TASKS"] == "4"
+    assert payload["environment"]["WORKER_MAX_PREFETCH"] == "4"
     assert "WORKER_RECOVERY_LOOP" not in payload["environment"]
     assert payload["processes"][0]["name"] == "taskiq_worker"
 
@@ -5597,7 +5656,9 @@ def test_jobs_capacity_json_reports_db_connection_budget(monkeypatch):
             "50",
             "--worker-pods",
             "4",
-            "--worker-concurrency",
+            "--worker-processes",
+            "1",
+            "--worker-max-async-tasks",
             "10",
             "--api-pods",
             "2",
@@ -5620,7 +5681,8 @@ def test_jobs_capacity_json_reports_db_connection_budget(monkeypatch):
     assert budget["usable_connections"] == 80
     assert budget["headroom"] == 20
     assert budget["risk"] == "ok"
-    assert budget["input_sources"]["worker_concurrency"] == "cli"
+    assert budget["input_sources"]["worker_processes"] == "cli"
+    assert budget["input_sources"]["worker_max_async_tasks"] == "cli"
     assert payload["recommendation"]["db_connection_risk"] == "ok"
 
 
@@ -6067,12 +6129,17 @@ def test_env_config_check_rejects_env_file_keys_missing_from_manifest(tmp_path):
 
 def test_env_config_check_allows_launcher_keys_inside_env_example(tmp_path):
     env_file = tmp_path / ".env.example"
-    env_file.write_text("API_PORT=8100\nWORKER_CONCURRENCY=4\n", encoding="utf-8")
+    env_file.write_text(
+        "API_PORT=8100\nWORKER_PROCESSES=1\nWORKER_MAX_ASYNC_TASKS=4\nWORKER_MAX_PREFETCH=4\n",
+        encoding="utf-8",
+    )
 
     issues = check_file(env_file)
 
     assert "API_PORT" in LAUNCHER_ENV_KEYS
-    assert "WORKER_CONCURRENCY" in LAUNCHER_ENV_KEYS
+    assert "WORKER_PROCESSES" in LAUNCHER_ENV_KEYS
+    assert "WORKER_MAX_ASYNC_TASKS" in LAUNCHER_ENV_KEYS
+    assert "WORKER_MAX_PREFETCH" in LAUNCHER_ENV_KEYS
     assert issues == []
 
 

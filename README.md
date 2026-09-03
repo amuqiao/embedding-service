@@ -78,7 +78,7 @@ K8s Pod 内运维入口只在已经部署的 Pod 中执行，不调用 `kubectl`
 
 应用默认只自动读取根目录 `.env`。`.env.dev`、`.env.test` 和 `.env.prd` 可以作为开发者本地自管的配置草稿或复制粘贴来源，但项目不维护这些文件，也不会根据 `APP_ENV` 自动选择它们。需要显式使用某份文件时，由启动或部署入口设置 `ENV_FILE`，或由平台直接注入环境变量。
 
-本地配置统一维护在仓库根目录 `.env`，模板是 `.env.example`。`API_PORT`、`API_HOST_PORT`、`POSTGRES_DB`、`POSTGRES_HOST_PORT`、`REDIS_HOST_PORT`、`COMPOSE_PROJECT_NAME`、`WORKER_CONCURRENCY` 和 `WORKER_LOGLEVEL` 等本地脚本或 compose 编排变量也写入这套文件，避免应用、脚本和 compose 使用不同配置源。
+本地配置统一维护在仓库根目录 `.env`，模板是 `.env.example`。`API_PORT`、`API_HOST_PORT`、`POSTGRES_DB`、`POSTGRES_HOST_PORT`、`REDIS_HOST_PORT`、`COMPOSE_PROJECT_NAME`、`WORKER_PROCESSES`、`WORKER_MAX_ASYNC_TASKS`、`WORKER_MAX_PREFETCH` 和 `WORKER_LOGLEVEL` 等本地脚本或 compose 编排变量也写入这套文件，避免应用、脚本和 compose 使用不同配置源。
 
 `APP_ENV=test` 或 `APP_ENV=prd` 时，启动会拒绝本地绕过认证、`ALLOW_INSECURE_CALLBACKS=true`、`TASKIQ_BROKER_KIND=redis_list` 和明显占位或过短的 `SERVICE_API_KEY` / `CALLBACK_SIGNING_SECRET`。如果当前启用的 `job_type` 需要对象存储，发布模式还会拒绝 `STORAGE_BACKEND=local`，必须使用外部对象存储后端，例如 `aliyun_oss`，避免 API / worker 节点之间读写不同本地磁盘。
 

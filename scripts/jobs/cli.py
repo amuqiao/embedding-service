@@ -226,7 +226,7 @@ CAPACITY_HELP_EPILOG = """\b
 \b
 常用示例：
   ./scripts/jobs.sh capacity --since 10m --caller-id default --max-active-jobs 1000
-  ./scripts/jobs.sh capacity --worker-pods 4 --worker-concurrency 30 --api-pods 2 --db-max-connections 100
+  ./scripts/jobs.sh capacity --worker-pods 4 --worker-processes 1 --worker-max-async-tasks 30 --api-pods 2 --db-max-connections 100
   ./scripts/jobs.sh capacity --since 10m --json
 """
 
@@ -338,7 +338,7 @@ GUIDE_TEXT = """Job 排障命令骨架
     辅助：./scripts/jobs.sh latency --since 30m
 
   能不能加并发或 pod？
-    首选：./scripts/jobs.sh capacity --worker-pods 4 --worker-concurrency 30 --api-pods 2 --db-max-connections 100
+    首选：./scripts/jobs.sh capacity --worker-pods 4 --worker-processes 1 --worker-max-async-tasks 30 --api-pods 2 --db-max-connections 100
     辅助：./scripts/jobs.sh runtime
 
   Redis/Taskiq 和 worker 是否真的在消费？
@@ -378,7 +378,7 @@ GUIDE_TEXT = """Job 排障命令骨架
 
   运输和运行时
     broker / runtime
-    看 Redis key type、length、pending、consumer groups、WORKER_CONCURRENCY、Taskiq 进程、recovery loop、CPU/memory cgroup。
+    看 Redis key type、length、pending、consumer groups、WORKER_PROCESSES、WORKER_MAX_ASYNC_TASKS、WORKER_MAX_PREFETCH、Taskiq 进程、recovery loop、CPU/memory cgroup。
 
   单 Job 轨迹
     trace / inspect / diagnose / workflow / timeline / attempts / ai-calls / callbacks
@@ -910,7 +910,9 @@ def _capacity_db_budget_columns() -> list[tuple[str, str]]:
         ("api_pods", "api_pods"),
         ("api_pool_per_pod", "api_pool_per_pod"),
         ("worker_pods", "worker_pods"),
-        ("worker_concurrency", "worker_concurrency"),
+        ("worker_processes", "worker_processes"),
+        ("worker_max_async_tasks", "worker_max_async_tasks"),
+        ("worker_slots", "worker_slots"),
         ("estimated_connections", "estimated_connections"),
         ("db_max_connections", "db_max_connections"),
         ("usable_connections", "usable_connections"),
@@ -923,7 +925,8 @@ def _capacity_db_budget_source_columns() -> list[tuple[str, str]]:
     return [
         ("api_pods", "api_pods"),
         ("worker_pods", "worker_pods"),
-        ("worker_concurrency", "worker_concurrency"),
+        ("worker_processes", "worker_processes"),
+        ("worker_max_async_tasks", "worker_max_async_tasks"),
         ("db_pool_size", "db_pool_size"),
         ("db_max_overflow", "db_max_overflow"),
         ("db_max_connections", "db_max_connections"),
@@ -994,7 +997,9 @@ def _broker_columns() -> list[tuple[str, str]]:
 
 def _runtime_env_columns() -> list[tuple[str, str]]:
     return [
-        ("WORKER_CONCURRENCY", "WORKER_CONCURRENCY"),
+        ("WORKER_PROCESSES", "WORKER_PROCESSES"),
+        ("WORKER_MAX_ASYNC_TASKS", "WORKER_MAX_ASYNC_TASKS"),
+        ("WORKER_MAX_PREFETCH", "WORKER_MAX_PREFETCH"),
         ("TASKIQ_BROKER_KIND", "TASKIQ_BROKER_KIND"),
         ("MAX_ACTIVE_JOBS", "MAX_ACTIVE_JOBS"),
         ("DB_POOL_SIZE", "DB_POOL_SIZE"),
@@ -2385,16 +2390,24 @@ def _capacity_db_budget(
     *,
     api_pods: int | None,
     worker_pods: int | None,
-    worker_concurrency: int | None,
+    worker_processes: int | None,
+    worker_max_async_tasks: int | None,
     db_pool_size: int | None,
     db_max_overflow: int | None,
     db_max_connections: int | None,
     db_usable_ratio: float,
 ) -> dict[str, Any]:
-    if worker_concurrency is not None:
-        resolved_worker_concurrency, worker_concurrency_source = worker_concurrency, "cli"
+    if worker_processes is not None:
+        resolved_worker_processes, worker_processes_source = worker_processes, "cli"
     else:
-        resolved_worker_concurrency, worker_concurrency_source = _env_int_with_source("WORKER_CONCURRENCY", min_value=1)
+        resolved_worker_processes, worker_processes_source = _env_int_with_source("WORKER_PROCESSES", min_value=1)
+    if worker_max_async_tasks is not None:
+        resolved_worker_max_async_tasks, worker_max_async_tasks_source = worker_max_async_tasks, "cli"
+    else:
+        resolved_worker_max_async_tasks, worker_max_async_tasks_source = _env_int_with_source(
+            "WORKER_MAX_ASYNC_TASKS",
+            min_value=1,
+        )
     if db_pool_size is not None:
         resolved_db_pool_size, db_pool_size_source = db_pool_size, "cli"
     else:
@@ -2406,7 +2419,8 @@ def _capacity_db_budget(
     input_sources = {
         "api_pods": "cli" if api_pods is not None else "missing",
         "worker_pods": "cli" if worker_pods is not None else "missing",
-        "worker_concurrency": worker_concurrency_source,
+        "worker_processes": worker_processes_source,
+        "worker_max_async_tasks": worker_max_async_tasks_source,
         "db_pool_size": db_pool_size_source,
         "db_max_overflow": db_max_overflow_source,
         "db_max_connections": "cli" if db_max_connections is not None else "missing",
@@ -2415,7 +2429,8 @@ def _capacity_db_budget(
     resolved_inputs = {
         "api_pods": api_pods,
         "worker_pods": worker_pods,
-        "worker_concurrency": resolved_worker_concurrency,
+        "worker_processes": resolved_worker_processes,
+        "worker_max_async_tasks": resolved_worker_max_async_tasks,
         "db_pool_size": resolved_db_pool_size,
         "db_max_overflow": resolved_db_max_overflow,
         "db_max_connections": db_max_connections,
@@ -2427,8 +2442,12 @@ def _capacity_db_budget(
         else None
     )
     worker_slots = (
-        worker_pods * resolved_worker_concurrency
-        if worker_pods is not None and resolved_worker_concurrency is not None
+        worker_pods * resolved_worker_processes * resolved_worker_max_async_tasks
+        if (
+            worker_pods is not None
+            and resolved_worker_processes is not None
+            and resolved_worker_max_async_tasks is not None
+        )
         else None
     )
     estimated_connections = (
@@ -2458,7 +2477,8 @@ def _capacity_db_budget(
         "api_pods": api_pods,
         "api_pool_per_pod": api_pool_per_pod,
         "worker_pods": worker_pods,
-        "worker_concurrency": resolved_worker_concurrency,
+        "worker_processes": resolved_worker_processes,
+        "worker_max_async_tasks": resolved_worker_max_async_tasks,
         "worker_slots": worker_slots,
         "db_pool_size": resolved_db_pool_size,
         "db_max_overflow": resolved_db_max_overflow,
@@ -2481,7 +2501,7 @@ def _capacity_recommendation(payload: dict[str, Any], max_active_jobs: int | Non
     db_budget = payload.get("db_connection_budget") if isinstance(payload, dict) else None
     db_risk = db_budget.get("risk") if isinstance(db_budget, dict) else None
     if db_risk == "critical":
-        message = "DB 连接预算已超限；不要提高 WORKER_CONCURRENCY、API pod 或 worker pod，先治理连接预算。"
+        message = "DB 连接预算已超限；不要提高 worker 执行槽位、API pod 或 worker pod，先治理连接预算。"
     elif db_risk == "warning":
         message = "DB 连接预算接近上限；提高并发或 pod 前，先确认 PostgreSQL 实际连接、等待和慢查询。"
     elif max_active_jobs is None:
@@ -3798,7 +3818,15 @@ def _runtime_cgroup_payload() -> dict[str, Any]:
 
 
 def _runtime_payload() -> dict[str, Any]:
-    env_keys = ["WORKER_CONCURRENCY", "TASKIQ_BROKER_KIND", "MAX_ACTIVE_JOBS", "DB_POOL_SIZE", "DB_MAX_OVERFLOW"]
+    env_keys = [
+        "WORKER_PROCESSES",
+        "WORKER_MAX_ASYNC_TASKS",
+        "WORKER_MAX_PREFETCH",
+        "TASKIQ_BROKER_KIND",
+        "MAX_ACTIVE_JOBS",
+        "DB_POOL_SIZE",
+        "DB_MAX_OVERFLOW",
+    ]
     env = {key: db.env_value(key) or "-" for key in env_keys}
     processes = _process_rows()
     cgroup = _runtime_cgroup_payload()
@@ -3866,7 +3894,7 @@ def _capacity_notes() -> dict[str, str]:
         "current_active_jobs": "当前全局 active 占用：queued + running 且 active_attempt_id 非空，包含 root 与 child。",
         "accepted_submit_rps": "使用窗口内 first_created_at 到 newest_created_at 的 observed span 估算；没有跨度时退回 --since 秒数。",
         "active_jobs_needed_upper_bound": "使用窗口 accepted_submit_rps * lifecycle_p95_seconds 得到的上界估算；workflow root 等待子任务时间会让它偏保守；terminal_jobs 少于 accepted_jobs 时仍应等待排空后再采信。",
-        "db_connection_budget": "估算公式：api_pods * (DB_POOL_SIZE + DB_MAX_OVERFLOW) + worker_pods * WORKER_CONCURRENCY；再与 db_max_connections * db_usable_ratio 比较。",
+        "db_connection_budget": "估算公式：api_pods * (DB_POOL_SIZE + DB_MAX_OVERFLOW) + worker_pods * WORKER_PROCESSES * WORKER_MAX_ASYNC_TASKS；再与 db_max_connections * db_usable_ratio 比较。WORKER_MAX_PREFETCH 只影响预取窗口，不计入 DB 连接预算。",
     }
 
 
@@ -3879,7 +3907,8 @@ def _capacity_payload(
     run_id: str | None = None,
     max_active_jobs: int | None,
     worker_pods: int | None,
-    worker_concurrency: int | None,
+    worker_processes: int | None,
+    worker_max_async_tasks: int | None,
     api_pods: int | None,
     db_max_connections: int | None,
     db_pool_size: int | None,
@@ -3912,7 +3941,8 @@ def _capacity_payload(
     payload["db_connection_budget"] = _capacity_db_budget(
         api_pods=api_pods,
         worker_pods=worker_pods,
-        worker_concurrency=worker_concurrency,
+        worker_processes=worker_processes,
+        worker_max_async_tasks=worker_max_async_tasks,
         db_pool_size=db_pool_size,
         db_max_overflow=db_max_overflow,
         db_max_connections=db_max_connections,
@@ -5471,7 +5501,18 @@ def capacity(
         typer.Option("--max-active-jobs", min=0, help="用于计算 active 占用比例；默认读取环境或 .env。"),
     ] = None,
     worker_pods: Annotated[int | None, typer.Option("--worker-pods", min=1, help="worker Pod 数，用于估算 DB 连接预算。")] = None,
-    worker_concurrency: Annotated[int | None, typer.Option("--worker-concurrency", min=1, help="单 worker Pod 并发；默认读取 WORKER_CONCURRENCY。")] = None,
+    worker_processes: Annotated[
+        int | None,
+        typer.Option("--worker-processes", min=1, help="单 worker Pod 的 Taskiq 子进程数；默认读取 WORKER_PROCESSES。"),
+    ] = None,
+    worker_max_async_tasks: Annotated[
+        int | None,
+        typer.Option(
+            "--worker-max-async-tasks",
+            min=1,
+            help="每个 Taskiq 子进程的 async task 并发；默认读取 WORKER_MAX_ASYNC_TASKS。",
+        ),
+    ] = None,
     api_pods: Annotated[int | None, typer.Option("--api-pods", min=1, help="API Pod 数，用于估算 DB 连接预算。")] = None,
     db_max_connections: Annotated[int | None, typer.Option("--db-max-connections", min=1, help="PostgreSQL max_connections，用于估算 DB 连接预算。")] = None,
     db_pool_size: Annotated[int | None, typer.Option("--db-pool-size", min=1, help="API 单 Pod DB_POOL_SIZE；默认读取环境。")] = None,
@@ -5497,7 +5538,8 @@ def capacity(
         record_scope=parsed_scope,
         max_active_jobs=limit,
         worker_pods=worker_pods,
-        worker_concurrency=worker_concurrency,
+        worker_processes=worker_processes,
+        worker_max_async_tasks=worker_max_async_tasks,
         api_pods=api_pods,
         db_max_connections=db_max_connections,
         db_pool_size=db_pool_size,

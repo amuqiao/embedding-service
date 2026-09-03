@@ -90,8 +90,10 @@ service_command() {
       fi
       ;;
     worker)
-      printf "env WORKER_CONCURRENCY=%q WORKER_LOGLEVEL=%q %q " \
-        "$WORKER_CONCURRENCY" \
+      printf "env WORKER_PROCESSES=%q WORKER_MAX_ASYNC_TASKS=%q WORKER_MAX_PREFETCH=%q WORKER_LOGLEVEL=%q %q " \
+        "$WORKER_PROCESSES" \
+        "$WORKER_MAX_ASYNC_TASKS" \
+        "$WORKER_MAX_PREFETCH" \
         "$WORKER_LOGLEVEL" \
         "$ROOT_DIR/start-worker-bundle.sh"
       ;;
@@ -509,7 +511,9 @@ status_service() {
     detail "health" "$API_HEALTH_URL"
     detail "log" "$display_log"
   else
-    detail "concurrency" "$WORKER_CONCURRENCY"
+    detail "processes" "$WORKER_PROCESSES"
+    detail "async_tasks" "$WORKER_MAX_ASYNC_TASKS"
+    detail "prefetch" "$WORKER_MAX_PREFETCH"
     detail "roles" "taskiq-worker,dispatcher,callbacker,reconciler"
     detail "log" "$display_log"
   fi

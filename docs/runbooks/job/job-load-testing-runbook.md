@@ -272,7 +272,7 @@ dashboard 异常样本
 
 `run_id` 只能使用字母、数字、下划线和中横线，例如 `poster-title-image-shape-baseline-1`。不要使用空格、斜杠、点号或 shell 特殊字符。
 
-容量调优和 `MAX_ACTIVE_JOBS`、`WORKER_CONCURRENCY`、API/worker Pod、PostgreSQL/Redis 的关系，不在本文重复展开；进入生产容量判断时看 [`MAX_ACTIVE_JOBS 估算与生产调优.md`](MAX_ACTIVE_JOBS%20估算与生产调优.md)。
+容量调优和 `MAX_ACTIVE_JOBS`、worker 执行槽位、API/worker Pod、PostgreSQL/Redis 的关系，不在本文重复展开；进入生产容量判断时看 [`MAX_ACTIVE_JOBS 估算与生产调优.md`](MAX_ACTIVE_JOBS%20估算与生产调优.md)。
 
 ## 查询接口压测
 

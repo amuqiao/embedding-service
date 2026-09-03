@@ -92,7 +92,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-embedding_service}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      WORKER_PROCESSES: ${WORKER_PROCESSES:-1}
+      WORKER_MAX_ASYNC_TASKS: ${WORKER_MAX_ASYNC_TASKS:-1}
+      WORKER_MAX_PREFETCH: ${WORKER_MAX_PREFETCH:-1}
       WORKER_LOGLEVEL: ${WORKER_LOGLEVEL:-INFO}
     volumes:
       - object_storage:/app/storage/objects
@@ -135,7 +137,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-embedding_service}
       REDIS_URL: redis://redis:6379/0
       LOCAL_OBJECT_STORAGE_PATH: /app/storage/objects
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      WORKER_PROCESSES: ${WORKER_PROCESSES:-1}
+      WORKER_MAX_ASYNC_TASKS: ${WORKER_MAX_ASYNC_TASKS:-1}
+      WORKER_MAX_PREFETCH: ${WORKER_MAX_PREFETCH:-1}
       WORKER_LOGLEVEL: ${WORKER_LOGLEVEL:-INFO}
     volumes:
       - object_storage:/app/storage/objects

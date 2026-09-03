@@ -136,7 +136,9 @@ LAUNCHER_ENV_KEYS: frozenset[str] = frozenset(
         "POSTGRES_DB",
         "POSTGRES_HOST_PORT",
         "REDIS_HOST_PORT",
-        "WORKER_CONCURRENCY",
+        "WORKER_PROCESSES",
+        "WORKER_MAX_ASYNC_TASKS",
+        "WORKER_MAX_PREFETCH",
         "WORKER_LOGLEVEL",
     }
 )

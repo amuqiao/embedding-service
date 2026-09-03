@@ -42,7 +42,7 @@
   辅助 -> ./scripts/jobs.sh latency --since 30m
 
 能不能加并发或 pod？
-  首选 -> ./scripts/jobs.sh capacity --worker-pods 4 --worker-concurrency 30 --api-pods 2 --db-max-connections 100
+  首选 -> ./scripts/jobs.sh capacity --worker-pods 4 --worker-processes 1 --worker-max-async-tasks 30 --api-pods 2 --db-max-connections 100
   辅助 -> ./scripts/jobs.sh runtime
 
 Redis/Taskiq 和 worker 是否真的在消费？
@@ -223,7 +223,7 @@ capacity 看当前占用 + 最近窗口的容量估算。
 | 按某轮压测估算容量？ | `capacity --since 20m --run-id <run_id>` | 过滤只作用于窗口估算，不作用于当前全局占用 |
 | 按某个 caller/job_type 估算容量？ | `capacity --since 20m --caller-id <id>` | `caller_id` 是粗过滤；压测优先用 `run_id` |
 | 入口提交速率是否突然变大？ | `ingress --since 30m --bucket 1m` | 看 created、started、terminal、failed 是否同向变化 |
-| 是否可以加 worker 并发或 pod？ | `capacity --worker-pods <n> --worker-concurrency <n> --api-pods <n> --db-max-connections <n>` | 同时看处理槽位和 DB 连接预算 |
+| 是否可以加 worker 并发或 pod？ | `capacity --worker-pods <n> --worker-processes <n> --worker-max-async-tasks <n> --api-pods <n> --db-max-connections <n>` | 同时看处理槽位和 DB 连接预算 |
 
 常用命令：
 
@@ -233,7 +233,7 @@ capacity 看当前占用 + 最近窗口的容量估算。
 ./scripts/jobs.sh capacity --since 1h --max-active-jobs 1000
 ./scripts/jobs.sh capacity --since 20m --run-id <run_id> --max-active-jobs 1000
 ./scripts/jobs.sh capacity --since 20m --caller-id load-cli --max-active-jobs 1000
-./scripts/jobs.sh capacity --worker-pods 4 --worker-concurrency 30 --api-pods 2 --db-max-connections 100
+./scripts/jobs.sh capacity --worker-pods 4 --worker-processes 1 --worker-max-async-tasks 30 --api-pods 2 --db-max-connections 100
 ./scripts/jobs.sh ingress --since 30m --bucket 1m
 ```
 
@@ -254,19 +254,19 @@ capacity
     active_jobs_needed_upper_bound 来自 Window
 
   DB Connection Budget
-    来自 --api-pods / --worker-pods / --worker-concurrency / --db-max-connections
-    未显式传 --worker-concurrency / --db-pool-size / --db-max-overflow 时，会读取当前环境或 .env，并在 input_sources 中标出来源
+    来自 --api-pods / --worker-pods / --worker-processes / --worker-max-async-tasks / --db-max-connections
+    未显式传 --worker-processes / --worker-max-async-tasks / --db-pool-size / --db-max-overflow 时，会读取当前环境或 .env，并在 input_sources 中标出来源
 ```
 
 `capacity` 的 DB 连接预算是估算，不直接查询 PostgreSQL 当前连接数。公式是：
 
 ```text
 api_pods * (DB_POOL_SIZE + DB_MAX_OVERFLOW)
-+ worker_pods * WORKER_CONCURRENCY
++ worker_pods * WORKER_PROCESSES * WORKER_MAX_ASYNC_TASKS
 <= db_max_connections * db_usable_ratio
 ```
 
-这个结果用于回答“能不能继续加 `WORKER_CONCURRENCY` 或 pod”。如果 `risk=critical`，最终建议会优先阻止继续升并发；如果 `risk=unknown`，说明缺少 pod 数、并发、pool 或 PostgreSQL `max_connections` 这类输入。读预算时同时看 `input_sources`，确认关键值来自 `cli`、`environment` 还是 `.env`。
+这个结果用于回答“能不能继续加 worker 执行槽位或 pod”。如果 `risk=critical`，最终建议会优先阻止继续升并发；如果 `risk=unknown`，说明缺少 pod 数、执行槽位、pool 或 PostgreSQL `max_connections` 这类输入。读预算时同时看 `input_sources`，确认关键值来自 `cli`、`environment` 还是 `.env`。`WORKER_MAX_PREFETCH` 只影响 broker 预取窗口，不计入 DB 连接预算。
 
 `ingress` 不是单纯按 `created_at` 查窗口。它按事件发生时间分别统计：
 

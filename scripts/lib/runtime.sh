@@ -30,10 +30,29 @@ REDIS_HOST_PORT="${REDIS_HOST_PORT:-26379}"
 
 DEV_API_RELOAD="${DEV_API_RELOAD:-false}"
 WATCHFILES_FORCE_POLLING="${WATCHFILES_FORCE_POLLING:-true}"
-WORKER_CONCURRENCY="${WORKER_CONCURRENCY:-$(env_value WORKER_CONCURRENCY)}"
-WORKER_CONCURRENCY="${WORKER_CONCURRENCY:-1}"
+WORKER_PROCESSES="${WORKER_PROCESSES:-$(env_value WORKER_PROCESSES)}"
+WORKER_PROCESSES="${WORKER_PROCESSES:-1}"
+WORKER_MAX_ASYNC_TASKS="${WORKER_MAX_ASYNC_TASKS:-$(env_value WORKER_MAX_ASYNC_TASKS)}"
+WORKER_MAX_ASYNC_TASKS="${WORKER_MAX_ASYNC_TASKS:-1}"
+WORKER_MAX_PREFETCH="${WORKER_MAX_PREFETCH:-$(env_value WORKER_MAX_PREFETCH)}"
+WORKER_MAX_PREFETCH="${WORKER_MAX_PREFETCH:-1}"
 WORKER_LOGLEVEL="${WORKER_LOGLEVEL:-$(env_value WORKER_LOGLEVEL)}"
 WORKER_LOGLEVEL="${WORKER_LOGLEVEL:-INFO}"
+
+require_positive_int() {
+  local name="$1"
+  local value="$2"
+  case "$value" in
+    ""|*[!0-9]*)
+      die "$name must be a positive integer" 2
+      ;;
+  esac
+  [[ "$value" -ge 1 ]] || die "$name must be a positive integer" 2
+}
+
+require_positive_int WORKER_PROCESSES "$WORKER_PROCESSES"
+require_positive_int WORKER_MAX_ASYNC_TASKS "$WORKER_MAX_ASYNC_TASKS"
+require_positive_int WORKER_MAX_PREFETCH "$WORKER_MAX_PREFETCH"
 
 require_project_python() {
   require_executable "$PYTHON_BIN" "run: ./scripts/dev.sh bootstrap"
