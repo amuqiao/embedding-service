@@ -13,6 +13,7 @@ from app.business_packages.asset_vector.schemas import (
     AssetVectorTextQuery,
     AssetVectorUpsertItemParams,
 )
+from app.business_packages.asset_vector.models import ASSET_VECTOR_EMBEDDING_DIMENSION
 from app.core.config import settings
 from app.core.exceptions import AppError
 
@@ -66,7 +67,7 @@ def asset_vector_embedding_config_from_settings() -> AssetVectorEmbeddingConfig:
         api_key=api_key,
         base_url=native_base_url,
         model_id=settings.job.asset_vector.embedding_model,
-        dimension=settings.job.asset_vector.embedding_dimension,
+        dimension=ASSET_VECTOR_EMBEDDING_DIMENSION,
         timeout_seconds=settings.ai_provider.model_call_timeout_seconds,
     )
 

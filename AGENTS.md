@@ -164,6 +164,10 @@
 - `app/object_storage` 不适配业务，业务 adapter 适配 `app/object_storage`。
 - 不新增跨业务“复合能力”目录。可复用但无业务语义的代码放 `app/tools/private`；第三方 SDK/client 适配放 `app/tools/providers`；业务语义、HTTP routes、Job schema、executor、workflow、错误码和 storage adapter 都留在业务包内。
 
+## 未发布收口规则
+
+在系统尚未发布且没有外部调用方或历史数据依赖时，移除旧设计应直接更新当前事实源，不保留兼容层、别名、兜底、迁移分支或专项旧合同测试；验证只覆盖当前合同和通用校验机制。只有已发布、已有调用方或已有历史数据依赖时，才设计兼容与迁移。
+
 ## 文档规则
 
 - 面向协作的说明默认使用中文。

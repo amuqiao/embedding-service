@@ -71,7 +71,6 @@ CPU、内存、Pod 资源、worker 执行槽位、外部模型耗时，大多会
    MAX_ACTIVE_JOBS
    WORKER_PROCESSES
    WORKER_MAX_ASYNC_TASKS
-   WORKER_MAX_PREFETCH
    API replicas
    worker replicas
    Pod CPU/内存
@@ -139,10 +138,10 @@ CPU、内存、Pod 资源、worker 执行槽位、外部模型耗时，大多会
   -> 每个 Taskiq 子进程同时执行更多 async task
   -> IO 等待型 Job 的吞吐可能提高
 
-提高 WORKER_MAX_PREFETCH
-  -> 每个 Taskiq 子进程最多预取更多 task
-  -> 影响 broker 消息滞留和消费公平性
-  -> 不等于真实执行并发
+Taskiq max-prefetch
+  -> 由 WORKER_MAX_ASYNC_TASKS 派生
+  -> 影响 broker 消息预取窗口
+  -> 当前不是独立调参旋钮
 
 提高 worker 执行槽位
   -> 单 Pod 同时执行更多 Job
@@ -365,7 +364,6 @@ PostgreSQL/Redis 未触顶
 - worker replicas。
 - `WORKER_PROCESSES`。
 - `WORKER_MAX_ASYNC_TASKS`。
-- `WORKER_MAX_PREFETCH`。
 - Pod CPU/内存 request/limit。
 - PostgreSQL 实例规格、`max_connections`、连接池。
 - Redis/Taskiq broker 规格。

@@ -5,7 +5,7 @@ ROOT_DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 WORKER_LOGLEVEL="${WORKER_LOGLEVEL:-INFO}"
 WORKER_PROCESSES="${WORKER_PROCESSES:-1}"
 WORKER_MAX_ASYNC_TASKS="${WORKER_MAX_ASYNC_TASKS:-1}"
-WORKER_MAX_PREFETCH="${WORKER_MAX_PREFETCH:-1}"
+TASKIQ_MAX_PREFETCH="$WORKER_MAX_ASYNC_TASKS"
 
 require_positive_int() {
   name="$1"
@@ -24,7 +24,6 @@ require_positive_int() {
 
 require_positive_int WORKER_PROCESSES "$WORKER_PROCESSES"
 require_positive_int WORKER_MAX_ASYNC_TASKS "$WORKER_MAX_ASYNC_TASKS"
-require_positive_int WORKER_MAX_PREFETCH "$WORKER_MAX_PREFETCH"
 
 if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
   PYTHON="$ROOT_DIR/.venv/bin/python"
@@ -43,4 +42,4 @@ exec "$PYTHON" -m taskiq worker app.tasks.taskiq_app:broker \
   --log-level "$WORKER_LOGLEVEL" \
   --workers "$WORKER_PROCESSES" \
   --max-async-tasks "$WORKER_MAX_ASYNC_TASKS" \
-  --max-prefetch "$WORKER_MAX_PREFETCH"
+  --max-prefetch "$TASKIQ_MAX_PREFETCH"

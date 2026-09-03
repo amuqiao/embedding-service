@@ -378,7 +378,7 @@ GUIDE_TEXT = """Job 排障命令骨架
 
   运输和运行时
     broker / runtime
-    看 Redis key type、length、pending、consumer groups、WORKER_PROCESSES、WORKER_MAX_ASYNC_TASKS、WORKER_MAX_PREFETCH、Taskiq 进程、recovery loop、CPU/memory cgroup。
+    看 Redis key type、length、pending、consumer groups、WORKER_PROCESSES、WORKER_MAX_ASYNC_TASKS、Taskiq 进程、recovery loop、CPU/memory cgroup。
 
   单 Job 轨迹
     trace / inspect / diagnose / workflow / timeline / attempts / ai-calls / callbacks
@@ -999,11 +999,17 @@ def _runtime_env_columns() -> list[tuple[str, str]]:
     return [
         ("WORKER_PROCESSES", "WORKER_PROCESSES"),
         ("WORKER_MAX_ASYNC_TASKS", "WORKER_MAX_ASYNC_TASKS"),
-        ("WORKER_MAX_PREFETCH", "WORKER_MAX_PREFETCH"),
         ("TASKIQ_BROKER_KIND", "TASKIQ_BROKER_KIND"),
         ("MAX_ACTIVE_JOBS", "MAX_ACTIVE_JOBS"),
         ("DB_POOL_SIZE", "DB_POOL_SIZE"),
         ("DB_MAX_OVERFLOW", "DB_MAX_OVERFLOW"),
+    ]
+
+
+def _runtime_derived_columns() -> list[tuple[str, str]]:
+    return [
+        ("taskiq_max_prefetch", "taskiq_max_prefetch"),
+        ("source", "source"),
     ]
 
 
@@ -3821,18 +3827,22 @@ def _runtime_payload() -> dict[str, Any]:
     env_keys = [
         "WORKER_PROCESSES",
         "WORKER_MAX_ASYNC_TASKS",
-        "WORKER_MAX_PREFETCH",
         "TASKIQ_BROKER_KIND",
         "MAX_ACTIVE_JOBS",
         "DB_POOL_SIZE",
         "DB_MAX_OVERFLOW",
     ]
     env = {key: db.env_value(key) or "-" for key in env_keys}
+    derived = {
+        "taskiq_max_prefetch": env["WORKER_MAX_ASYNC_TASKS"],
+        "source": "WORKER_MAX_ASYNC_TASKS",
+    }
     processes = _process_rows()
     cgroup = _runtime_cgroup_payload()
     return {
         "scope": "current_pod",
         "environment": env,
+        "derived": derived,
         "processes": processes,
         "cgroup": cgroup,
         "verdict": "runtime_visible" if any(row["count"] for row in processes if row["name"] != "procfs") else "runtime_processes_not_detected",
@@ -3844,6 +3854,8 @@ def _render_runtime_human(payload: dict[str, Any]) -> None:
     formatters.event(payload["verdict"].upper(), "runtime", f"scope={payload['scope']}")
     formatters.section("Environment")
     formatters.print_table([payload["environment"]], _runtime_env_columns())
+    formatters.section("Derived")
+    formatters.print_table([payload["derived"]], _runtime_derived_columns())
     formatters.section("Processes")
     formatters.print_table(payload["processes"], _runtime_process_columns())
     formatters.section("Cgroup")
@@ -3894,7 +3906,7 @@ def _capacity_notes() -> dict[str, str]:
         "current_active_jobs": "当前全局 active 占用：queued + running 且 active_attempt_id 非空，包含 root 与 child。",
         "accepted_submit_rps": "使用窗口内 first_created_at 到 newest_created_at 的 observed span 估算；没有跨度时退回 --since 秒数。",
         "active_jobs_needed_upper_bound": "使用窗口 accepted_submit_rps * lifecycle_p95_seconds 得到的上界估算；workflow root 等待子任务时间会让它偏保守；terminal_jobs 少于 accepted_jobs 时仍应等待排空后再采信。",
-        "db_connection_budget": "估算公式：api_pods * (DB_POOL_SIZE + DB_MAX_OVERFLOW) + worker_pods * WORKER_PROCESSES * WORKER_MAX_ASYNC_TASKS；再与 db_max_connections * db_usable_ratio 比较。WORKER_MAX_PREFETCH 只影响预取窗口，不计入 DB 连接预算。",
+        "db_connection_budget": "估算公式：api_pods * (DB_POOL_SIZE + DB_MAX_OVERFLOW) + worker_pods * WORKER_PROCESSES * WORKER_MAX_ASYNC_TASKS；再与 db_max_connections * db_usable_ratio 比较。Taskiq max-prefetch 由 WORKER_MAX_ASYNC_TASKS 派生，不计入 DB 连接预算。",
     }
 
 

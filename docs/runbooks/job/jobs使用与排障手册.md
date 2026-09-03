@@ -90,7 +90,7 @@ Redis/Taskiq 和 worker 是否真的在消费？
   inspect / trace / diagnose / workflow / attempts / callbacks / timeline
 ```
 
-`broker` 和 `runtime` 的作用域是当前执行环境。它们适合在 Pod 内运行，用于确认当前 Pod 看到的 Redis/Taskiq、进程、环境变量和 cgroup 资源；它们不会修改 Redis、DB 或 Job 状态。
+`broker` 和 `runtime` 的作用域是当前执行环境。它们适合在 Pod 内运行，用于确认当前 Pod 看到的 Redis/Taskiq、进程、真实环境变量、派生运行参数和 cgroup 资源；它们不会修改 Redis、DB 或 Job 状态。
 
 ## 四个最容易混淆的概念
 
@@ -266,7 +266,7 @@ api_pods * (DB_POOL_SIZE + DB_MAX_OVERFLOW)
 <= db_max_connections * db_usable_ratio
 ```
 
-这个结果用于回答“能不能继续加 worker 执行槽位或 pod”。如果 `risk=critical`，最终建议会优先阻止继续升并发；如果 `risk=unknown`，说明缺少 pod 数、执行槽位、pool 或 PostgreSQL `max_connections` 这类输入。读预算时同时看 `input_sources`，确认关键值来自 `cli`、`environment` 还是 `.env`。`WORKER_MAX_PREFETCH` 只影响 broker 预取窗口，不计入 DB 连接预算。
+这个结果用于回答“能不能继续加 worker 执行槽位或 pod”。如果 `risk=critical`，最终建议会优先阻止继续升并发；如果 `risk=unknown`，说明缺少 pod 数、执行槽位、pool 或 PostgreSQL `max_connections` 这类输入。读预算时同时看 `input_sources`，确认关键值来自 `cli`、`environment` 还是 `.env`。Taskiq `max-prefetch` 由 `WORKER_MAX_ASYNC_TASKS` 派生，不计入 DB 连接预算。
 
 `ingress` 不是单纯按 `created_at` 查窗口。它按事件发生时间分别统计：
 
@@ -466,7 +466,7 @@ payload --full
 | `doctor` | 窗口汇总说明什么？ | summary 诊断和下一步命令 | 适合不确定下一步时使用 |
 | `observe` | 系统是否正在恢复？ | 多次采样 queued、active、failed、callback due、stuck 和 verdict | 默认会等待采样间隔 |
 | `broker` | Redis/Taskiq 运输层是否有积压或 key 类型错配？ | Redis ping、key type、length、pending、consumer groups、verdict | 只读；不会清理队列 key |
-| `runtime` | 当前 Pod 内 worker/API runtime 证据是什么？ | 环境变量、Taskiq/recovery 进程、cgroup CPU/内存 | 只代表当前 Pod |
+| `runtime` | 当前 Pod 内 worker/API runtime 证据是什么？ | 真实环境变量、派生运行参数、Taskiq/recovery 进程、cgroup CPU/内存 | 只代表当前 Pod |
 | `capacity` | 当前占用、窗口容量和 DB 连接预算怎样？ | current、window estimate、estimated、db_connection_budget | current 是全局，window 才受过滤 |
 | `ingress` | 调用方流量和处理吞吐趋势怎样？ | 每个时间桶的 created、started、terminal、failed | 默认 root scope；按事件时间聚合 |
 | `latency` | 慢在哪里？ | queue/run/lifecycle p95、success_rate | 先按 `job_type` 分组看 |

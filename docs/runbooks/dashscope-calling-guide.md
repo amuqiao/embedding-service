@@ -43,7 +43,7 @@ https://dashscope-intl.aliyuncs.com/api/v1
 | 协议 | Base URL path | 典型用途 | 本项目中的常见配置 |
 |---|---|---|---|
 | OpenAI-compatible | `/compatible-mode/v1` | 用 OpenAI SDK 风格调用 chat、文本 embedding、models list | `DASHSCOPE_BASE_URL` |
-| DashScope native | `/api/v1` | 调用 DashScope 原生能力，例如多模态 embedding、`qwen3-vl-rerank` | `POC_DASHSCOPE_BASE_URL` 或由专用代码从同 host 推导 |
+| DashScope native | `/api/v1` | 调用 DashScope 原生能力，例如多模态 embedding、`qwen3-vl-rerank` | 服务代码从同 host 推导；POC 脚本可用命令行参数覆盖 |
 
 两套协议能调用的模型不是严格包含关系。
 
@@ -130,14 +130,14 @@ DASHSCOPE_API_KEY=<新加坡 workspace API Key>
 DASHSCOPE_BASE_URL=https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
 ```
 
-DashScope native 地址只改 path：
+DashScope native 地址只改 path。POC 脚本验证时建议使用 `--dashscope-base-url` 参数，不写入服务根 `.env`：
 
 ```env
 # OpenAI-compatible
 DASHSCOPE_BASE_URL=https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
 
-# DashScope native
-POC_DASHSCOPE_BASE_URL=https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/api/v1
+# DashScope native for POC
+--dashscope-base-url https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/api/v1
 ```
 
 API Key、host 的地域和 workspace 必须匹配。北京 Key 调新加坡 endpoint，或默认 workspace Key 调某个子 workspace 专属域名，都会按鉴权错误处理。
@@ -176,29 +176,33 @@ AI Models
 
 ### Asset Vector POC 配置
 
-`poc/asset-vector/asset_vector_poc.py` 调用的是 DashScope native Multimodal Embedding API。它不使用 `DASHSCOPE_BASE_URL` 作为调用地址，而是按以下优先级读取 native base URL：
+`poc/asset-vector/asset_vector_poc.py` 调用的是 DashScope native Multimodal Embedding API。推荐通过 `--dashscope-base-url` 显式传 native base URL；如果未传参数，脚本会按以下优先级读取：
 
 ```text
 POC_DASHSCOPE_BASE_URL
   -> DASHSCOPE_NATIVE_BASE_URL
   -> DASHSCOPE_API_HOST
-  -> https://dashscope.aliyuncs.com/api/v1
+  -> https://dashscope-intl.aliyuncs.com/api/v1
 ```
 
-因此国际新加坡要这样配：
+因此国际新加坡建议这样执行：
 
-```env
-DASHSCOPE_API_KEY=<新加坡地域 API Key>
-DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-POC_DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/api/v1
+```bash
+uv run python poc/asset-vector/asset_vector_poc.py \
+  --dashscope-base-url https://dashscope-intl.aliyuncs.com/api/v1 \
+  search-text "white running shoes" \
+  --top-k 10 \
+  --confirm-remote
 ```
 
 workspace 专属域名：
 
-```env
-DASHSCOPE_API_KEY=<新加坡 workspace API Key>
-DASHSCOPE_BASE_URL=https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
-POC_DASHSCOPE_BASE_URL=https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/api/v1
+```bash
+uv run python poc/asset-vector/asset_vector_poc.py \
+  --dashscope-base-url https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/api/v1 \
+  search-text "white running shoes" \
+  --top-k 10 \
+  --confirm-remote
 ```
 
 检查 POC 环境：
@@ -220,7 +224,7 @@ uv run python poc/asset-vector/asset_vector_poc.py search-text "white running sh
   /services/embeddings/multimodal-embedding/multimodal-embedding
 ```
 
-如果误填：
+如果用环境变量误填：
 
 ```env
 POC_DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1

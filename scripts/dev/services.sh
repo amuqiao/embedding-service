@@ -90,10 +90,9 @@ service_command() {
       fi
       ;;
     worker)
-      printf "env WORKER_PROCESSES=%q WORKER_MAX_ASYNC_TASKS=%q WORKER_MAX_PREFETCH=%q WORKER_LOGLEVEL=%q %q " \
+      printf "env WORKER_PROCESSES=%q WORKER_MAX_ASYNC_TASKS=%q WORKER_LOGLEVEL=%q %q " \
         "$WORKER_PROCESSES" \
         "$WORKER_MAX_ASYNC_TASKS" \
-        "$WORKER_MAX_PREFETCH" \
         "$WORKER_LOGLEVEL" \
         "$ROOT_DIR/start-worker-bundle.sh"
       ;;
@@ -513,7 +512,7 @@ status_service() {
   else
     detail "processes" "$WORKER_PROCESSES"
     detail "async_tasks" "$WORKER_MAX_ASYNC_TASKS"
-    detail "prefetch" "$WORKER_MAX_PREFETCH"
+    detail "prefetch" "$TASKIQ_MAX_PREFETCH (derived from async_tasks)"
     detail "roles" "taskiq-worker,dispatcher,callbacker,reconciler"
     detail "log" "$display_log"
   fi

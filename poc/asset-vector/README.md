@@ -64,14 +64,14 @@ OSS_PROJECT_ROOT=
 OSS_PUBLIC_ENDPOINT=
 ```
 
-可选：
+POC 可选环境变量。不要写入服务根 `.env`；需要时用命令行临时环境变量或 `--dashscope-base-url` 参数传入。
 
 ```env
 POC_DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/api/v1
 POC_ASSET_VECTOR_IMAGE_MAX_BYTES=10485760
 ```
 
-调用 DashScope 的命令包括 `index-dir`、`index-manifest`、`search-image`、`search-text`、`generate-image-reports` 和 `generate-text-reports`。如果使用百炼 workspace 专属域名，把 `POC_DASHSCOPE_BASE_URL` 配成对应的 native `api/v1` 地址。不要使用 `compatible-mode/v1`，多模态向量需要 DashScope 原生接口。
+调用 DashScope 的命令包括 `index-dir`、`index-manifest`、`search-image`、`search-text`、`generate-image-reports` 和 `generate-text-reports`。如果使用百炼 workspace 专属域名，使用 `--dashscope-base-url` 传对应的 native `api/v1` 地址。不要使用 `compatible-mode/v1`，多模态向量需要 DashScope 原生接口。
 
 会写 OSS 的命令包括 `upload_assets_to_oss.py --confirm-upload`、`index-dir`、`search-image --query-image`，以及 manifest 里只有 `local_path` 没有 `public_url` 时的 `index-manifest`。`search-resource` 和 `generate-resource-reports` 只读取本地 DB，不会使用 DashScope key 或 base URL。批量报告的完整复现命令见 [resource-to-report-runbook.md](resource-to-report-runbook.md)。
 

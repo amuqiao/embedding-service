@@ -19,7 +19,7 @@
 
 | 文件或入口 | 当前职责 |
 |---|---|
-| `.env.example` | 可提交配置模板，包含当前允许写入根 env 文件的 application key、launcher key 和 POC key |
+| `.env.example` | 可提交配置模板，包含当前允许写入根 env 文件的 application key 和 launcher key |
 | `.env` | 本地私有实例配置，不提交，可以省略可选 key 并使用代码默认值 |
 | `ENV_FILE` | 进程级选择器，只允许作为环境变量或脚本参数传入，不写进 `.env.example` 或 `.env` |
 | `app/core/config.py` | application env key、launcher env key、derived key、deprecated key、Settings 字段映射和启动校验事实源 |
@@ -60,7 +60,6 @@ ASSET_IMAGE_TAGGING_MAX_ITEMS
 ASSET_VECTOR_DASHSCOPE_API_KEY
 ASSET_VECTOR_DASHSCOPE_BASE_URL
 ASSET_VECTOR_EMBEDDING_MODEL
-ASSET_VECTOR_EMBEDDING_DIMENSION
 ASSET_VECTOR_MAX_ITEMS
 ASSET_VECTOR_DELETE_MAX_ITEMS
 ASSET_VECTOR_SEARCH_DEFAULT_TOP_K
@@ -90,8 +89,8 @@ OpenAI 多模态文本模型。图片打标使用 `OPENAI_API_KEY` / `OPENAI_BAS
 如需业务隔离，可用 `ASSET_VECTOR_DASHSCOPE_API_KEY` / `ASSET_VECTOR_DASHSCOPE_BASE_URL` 覆盖。`asset_vector`
 内部会把以 `/compatible-mode/v1` 结尾的 DashScope base URL 规范化为 `/api/v1` 后调用原生
 `/services/embeddings/multimodal-embedding/multimodal-embedding`。`ASSET_VECTOR_EMBEDDING_MODEL` 默认
-`tongyi-embedding-vision-flash`，`ASSET_VECTOR_EMBEDDING_DIMENSION` 当前固定为 `768`，必须与
-`asset_vector_items.embedding vector(768)` 保持一致。`ASSET_VECTOR_MAX_ITEMS` 控制批量新增/更新资源上限；
+`tongyi-embedding-vision-flash`。向量维度由 `asset_vector` 业务包和
+`asset_vector_items.embedding vector(768)` 固定，不作为 env 配置项暴露。`ASSET_VECTOR_MAX_ITEMS` 控制批量新增/更新资源上限；
 `ASSET_VECTOR_DELETE_MAX_ITEMS` 控制批量删除资源上限；`ASSET_VECTOR_SEARCH_DEFAULT_TOP_K` 和
 `ASSET_VECTOR_SEARCH_MAX_TOP_K` 控制同步搜索返回数量。
 
@@ -109,21 +108,10 @@ POSTGRES_HOST_PORT
 REDIS_HOST_PORT
 WORKER_PROCESSES
 WORKER_MAX_ASYNC_TASKS
-WORKER_MAX_PREFETCH
 WORKER_LOGLEVEL
 ```
 
 这些 key 可以留在 `.env.example`，因为它们是本项目本地运行形态的一部分；但应用代码不能从 `Settings` 读取它们。新增 launcher key 必须有明确脚本或 compose 消费方，不能作为业务配置变相进入应用。
-
-### POC Key
-
-POC key 不进入 `Settings`，只给 `poc/` 下的独立验证脚本读取。当前允许写入根 env 文件的 POC key 由 `POC_ENV_KEYS` 声明：
-
-```text
-POC_DASHSCOPE_BASE_URL
-```
-
-`POC_DASHSCOPE_BASE_URL` 用于 `poc/asset-vector` 这类直接调用 DashScope 原生 `api/v1` 的脚本。服务自身的 DashScope provider 仍使用 `DASHSCOPE_BASE_URL`，应用代码不能通过 `Settings` 读取 POC key。
 
 ### Process-Only Key
 

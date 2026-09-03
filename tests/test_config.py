@@ -280,7 +280,6 @@ def test_asset_image_tagging_model_id_config_defaults_and_overrides():
 def test_asset_vector_settings_validate_dashscope_model_and_limits():
     default_settings = _build_settings()
     assert default_settings.job.asset_vector.embedding_model == "tongyi-embedding-vision-flash"
-    assert default_settings.job.asset_vector.embedding_dimension == 768
     assert default_settings.job.asset_vector.max_items == 10
     assert default_settings.job.asset_vector.search_default_top_k == 20
 
@@ -301,7 +300,6 @@ def test_asset_vector_settings_validate_dashscope_model_and_limits():
         {"ASSET_VECTOR_DASHSCOPE_BASE_URL": "https://dashscope.aliyuncs.com"},
         {"ASSET_VECTOR_EMBEDDING_MODEL": ""},
         {"ASSET_VECTOR_EMBEDDING_MODEL": " tongyi-embedding-vision-flash"},
-        {"ASSET_VECTOR_EMBEDDING_DIMENSION": 1024},
         {"ASSET_VECTOR_MAX_ITEMS": 0},
         {"ASSET_VECTOR_MAX_ITEMS": 501},
         {"ASSET_VECTOR_DELETE_MAX_ITEMS": 501},
@@ -760,27 +758,6 @@ def test_settings_source_rejects_removed_business_oss_env_key_from_process_env(m
         config_module._flat_env_settings_source()
 
 
-def test_settings_source_ignores_poc_env_key_from_dotenv(monkeypatch, tmp_path):
-    (tmp_path / ".env").write_text(
-        "\n".join(
-            [
-                "APP_ENV=local",
-                "POC_DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/api/v1",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(config_module, "ROOT_DIR", tmp_path)
-    monkeypatch.delenv("ENV_FILE", raising=False)
-    for key in config_module.APPLICATION_ENV_KEYS:
-        monkeypatch.delenv(key, raising=False)
-
-    data = config_module._flat_env_settings_source()
-
-    assert data == {"runtime": {"app_env": "local"}}
-
-
 def test_env_config_examples_match_declared_manifests():
     assert _key_set(config_module.ROOT_DIR / ".env.example") == APPLICATION_ENV_KEYS | LAUNCHER_ENV_KEYS | POC_ENV_KEYS
     assert check_example_alignment() == []
@@ -832,16 +809,6 @@ def test_env_config_check_allows_launcher_keys_in_root_env(tmp_path):
 
     assert "API_PORT" in LAUNCHER_ENV_KEYS
     assert "POSTGRES_HOST_PORT" in LAUNCHER_ENV_KEYS
-    assert issues == []
-
-
-def test_env_config_check_allows_poc_keys_in_root_env(tmp_path):
-    env_file = tmp_path / ".env"
-    env_file.write_text("POC_DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/api/v1\n", encoding="utf-8")
-
-    issues = check_file(env_file)
-
-    assert "POC_DASHSCOPE_BASE_URL" in POC_ENV_KEYS
     assert issues == []
 
 

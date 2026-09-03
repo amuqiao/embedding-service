@@ -92,7 +92,6 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "ASSET_VECTOR_DASHSCOPE_API_KEY": ("job", "asset_vector", "dashscope_api_key"),
     "ASSET_VECTOR_DASHSCOPE_BASE_URL": ("job", "asset_vector", "dashscope_base_url"),
     "ASSET_VECTOR_EMBEDDING_MODEL": ("job", "asset_vector", "embedding_model"),
-    "ASSET_VECTOR_EMBEDDING_DIMENSION": ("job", "asset_vector", "embedding_dimension"),
     "ASSET_VECTOR_MAX_ITEMS": ("job", "asset_vector", "max_items"),
     "ASSET_VECTOR_DELETE_MAX_ITEMS": ("job", "asset_vector", "delete_max_items"),
     "ASSET_VECTOR_SEARCH_DEFAULT_TOP_K": ("job", "asset_vector", "search_default_top_k"),
@@ -111,11 +110,7 @@ APPLICATION_ENV_FIELD_MAP: dict[str, tuple[str, ...]] = {
 }
 
 APPLICATION_ENV_KEYS = frozenset(APPLICATION_ENV_FIELD_MAP)
-POC_ENV_KEYS: frozenset[str] = frozenset(
-    {
-        "POC_DASHSCOPE_BASE_URL",
-    }
-)
+POC_ENV_KEYS: frozenset[str] = frozenset()
 _REMOVED_JOB_TYPE_OSS_ENV_KEYS = frozenset(
     {
         "POSTER_TITLE_IMAGE_ALLOWED_OSS_BUCKETS",
@@ -138,7 +133,6 @@ LAUNCHER_ENV_KEYS: frozenset[str] = frozenset(
         "REDIS_HOST_PORT",
         "WORKER_PROCESSES",
         "WORKER_MAX_ASYNC_TASKS",
-        "WORKER_MAX_PREFETCH",
         "WORKER_LOGLEVEL",
     }
 )
@@ -661,7 +655,6 @@ class AssetVectorJobSettings(ConfigSection):
     dashscope_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
     dashscope_base_url: str = ""
     embedding_model: str = "tongyi-embedding-vision-flash"
-    embedding_dimension: int = 768
     max_items: int = 10
     delete_max_items: int = 100
     search_default_top_k: int = 20
@@ -687,7 +680,6 @@ class AssetVectorJobSettings(ConfigSection):
         if self.embedding_model != self.embedding_model.strip():
             raise ValueError("ASSET_VECTOR_EMBEDDING_MODEL must not have leading or trailing whitespace")
         positive_fields = {
-            "ASSET_VECTOR_EMBEDDING_DIMENSION": self.embedding_dimension,
             "ASSET_VECTOR_MAX_ITEMS": self.max_items,
             "ASSET_VECTOR_DELETE_MAX_ITEMS": self.delete_max_items,
             "ASSET_VECTOR_SEARCH_DEFAULT_TOP_K": self.search_default_top_k,
@@ -696,8 +688,6 @@ class AssetVectorJobSettings(ConfigSection):
         for name, value in positive_fields.items():
             if value <= 0:
                 raise ValueError(f"{name} must be greater than 0")
-        if self.embedding_dimension != 768:
-            raise ValueError("ASSET_VECTOR_EMBEDDING_DIMENSION must be 768")
         if self.max_items > _ASSET_VECTOR_SCHEMA_MAX_ITEMS:
             raise ValueError(f"ASSET_VECTOR_MAX_ITEMS must be <= {_ASSET_VECTOR_SCHEMA_MAX_ITEMS}")
         if self.delete_max_items > _ASSET_VECTOR_SCHEMA_MAX_ITEMS:

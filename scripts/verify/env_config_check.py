@@ -37,6 +37,8 @@ def constant_keys_from_config(name: str) -> frozenset[str]:
         if value_node is None:
             break
         if isinstance(value_node, ast.Call) and isinstance(value_node.func, ast.Name) and value_node.func.id == "frozenset":
+            if len(value_node.args) == 0:
+                return frozenset()
             if len(value_node.args) != 1:
                 raise RuntimeError(f"{name} frozenset must have exactly one argument: {CONFIG_PATH}")
             value = ast.literal_eval(value_node.args[0])

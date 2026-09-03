@@ -108,9 +108,10 @@ model: tongyi-embedding-vision-flash
 
 这组参数适合当前公司国际配置：
 
-```env
-DASHSCOPE_API_KEY=公司国际 sk
-POC_DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/api/v1
+```bash
+uv run python poc/asset-vector/asset_vector_poc.py \
+  --dashscope-base-url https://dashscope-intl.aliyuncs.com/api/v1 \
+  check-env
 ```
 
 如果要用个人国内已经测通的定版模型，必须把所有 `asset_vector_poc.py` 命令里的 `--table` 和 `--model` 一起替换，例如：
@@ -163,13 +164,13 @@ OSS_PROJECT_ROOT=
 OSS_PUBLIC_ENDPOINT=
 ```
 
-如果使用阿里云国际或 workspace 专属地址，确认 `.env` 里使用 DashScope 原生 `api/v1` 地址：
+如果使用阿里云国际或 workspace 专属地址，命令里显式传 DashScope 原生 `api/v1` 地址：
 
-```env
-POC_DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/api/v1
+```bash
+--dashscope-base-url https://dashscope-intl.aliyuncs.com/api/v1
 ```
 
-`asset_vector_poc.py` 读取的是 `POC_DASHSCOPE_BASE_URL`。普通 `DASHSCOPE_BASE_URL` 可以给 OpenAI 兼容接口使用，但这个 POC 的多模态向量调用不会读取它。不要用 `compatible-mode/v1` 跑多模态向量。
+普通 `DASHSCOPE_BASE_URL` 可以给 OpenAI 兼容接口使用，但这个 POC 的多模态向量调用需要 native base URL。不要用 `compatible-mode/v1` 跑多模态向量。
 
 调用 DashScope 的命令包括 `index-dir`、`index-manifest`、`search-image`、`search-text`、`generate-image-reports` 和 `generate-text-reports`。会写 OSS 的命令包括 `upload_assets_to_oss.py --confirm-upload`、`index-dir`、`search-image --query-image`，以及 manifest 里只有 `local_path` 没有 `public_url` 时的 `index-manifest`。
 

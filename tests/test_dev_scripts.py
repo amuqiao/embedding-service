@@ -792,7 +792,7 @@ def test_dev_restart_worker_escalates_residual_cleanup_to_kill(tmp_path):
 def test_dev_worker_service_command_injects_root_env(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "WORKER_PROCESSES=1\nWORKER_MAX_ASYNC_TASKS=7\nWORKER_MAX_PREFETCH=7\nWORKER_LOGLEVEL=DEBUG\n",
+        "WORKER_PROCESSES=1\nWORKER_MAX_ASYNC_TASKS=7\nWORKER_LOGLEVEL=DEBUG\n",
         encoding="utf-8",
     )
 
@@ -800,7 +800,6 @@ def test_dev_worker_service_command_injects_root_env(tmp_path):
 
     assert "WORKER_PROCESSES=1" in command
     assert "WORKER_MAX_ASYNC_TASKS=7" in command
-    assert "WORKER_MAX_PREFETCH=7" in command
     assert "WORKER_LOGLEVEL=DEBUG" in command
     assert "WORKER_RECOVERY_LOOP" not in command
     assert "start-worker-bundle.sh" in command
@@ -834,7 +833,6 @@ def test_start_worker_uses_python_module_taskiq(tmp_path):
             "PATH": f"{fake_bin}:{env['PATH']}",
             "WORKER_PROCESSES": "1",
             "WORKER_MAX_ASYNC_TASKS": "1",
-            "WORKER_MAX_PREFETCH": "1",
             "WORKER_LOGLEVEL": "INFO",
         }
     )
@@ -877,7 +875,6 @@ def test_start_worker_bundle_exits_when_role_exits(tmp_path):
             "PATH": f"{fake_bin}:{env['PATH']}",
             "WORKER_PROCESSES": "1",
             "WORKER_MAX_ASYNC_TASKS": "1",
-            "WORKER_MAX_PREFETCH": "1",
             "WORKER_LOGLEVEL": "INFO",
         }
     )
@@ -912,7 +909,6 @@ def test_compose_wrapper_injects_root_env_file_values(tmp_path):
                 "API_HOST_PORT=38100",
                 "WORKER_PROCESSES=1",
                 "WORKER_MAX_ASYNC_TASKS=6",
-                "WORKER_MAX_PREFETCH=6",
                 "WORKER_LOGLEVEL=DEBUG",
             ]
         )
@@ -933,7 +929,6 @@ def test_compose_wrapper_injects_root_env_file_values(tmp_path):
         "printf '%s\\n' \"API_HOST_PORT=$API_HOST_PORT\"\n"
         "printf '%s\\n' \"WORKER_PROCESSES=$WORKER_PROCESSES\"\n"
         "printf '%s\\n' \"WORKER_MAX_ASYNC_TASKS=$WORKER_MAX_ASYNC_TASKS\"\n"
-        "printf '%s\\n' \"WORKER_MAX_PREFETCH=$WORKER_MAX_PREFETCH\"\n"
         "printf '%s\\n' \"WORKER_LOGLEVEL=$WORKER_LOGLEVEL\"\n",
         encoding="utf-8",
     )
@@ -959,7 +954,6 @@ def test_compose_wrapper_injects_root_env_file_values(tmp_path):
     assert "API_HOST_PORT=38100" in result.stdout
     assert "WORKER_PROCESSES=1" in result.stdout
     assert "WORKER_MAX_ASYNC_TASKS=6" in result.stdout
-    assert "WORKER_MAX_PREFETCH=6" in result.stdout
     assert "WORKER_LOGLEVEL=DEBUG" in result.stdout
     assert "WORKER_RECOVERY_LOOP" not in result.stdout
 
@@ -2671,18 +2665,14 @@ def test_jobs_capacity_db_budget_reports_env_input_sources(monkeypatch):
     assert budget["estimated_connections"] == 31
 
 
-def test_jobs_capacity_db_budget_does_not_count_worker_prefetch(monkeypatch):
+def test_jobs_capacity_db_budget_uses_worker_execution_slots(monkeypatch):
     values = {
         "WORKER_PROCESSES": ("2", ".env"),
         "WORKER_MAX_ASYNC_TASKS": ("3", ".env"),
-        "WORKER_MAX_PREFETCH": ("99", ".env"),
         "DB_POOL_SIZE": ("5", ".env"),
         "DB_MAX_OVERFLOW": ("10", ".env"),
     }
-
     def fake_env_value_with_source(name: str):
-        if name == "WORKER_MAX_PREFETCH":
-            raise AssertionError("WORKER_MAX_PREFETCH must not affect DB connection budget")
         return values.get(name, (None, "missing"))
 
     monkeypatch.setattr("scripts.jobs.cli.db.env_value_with_source", fake_env_value_with_source)
@@ -4678,12 +4668,12 @@ def test_jobs_runtime_command_outputs_current_pod_scope(monkeypatch):
             "environment": {
                 "WORKER_PROCESSES": "1",
                 "WORKER_MAX_ASYNC_TASKS": "4",
-                "WORKER_MAX_PREFETCH": "4",
                 "TASKIQ_BROKER_KIND": "redis_stream",
                 "MAX_ACTIVE_JOBS": "5000",
                 "DB_POOL_SIZE": "5",
                 "DB_MAX_OVERFLOW": "10",
             },
+            "derived": {"taskiq_max_prefetch": "4", "source": "WORKER_MAX_ASYNC_TASKS"},
             "processes": [
                 {"name": "taskiq_worker", "count": 1, "sample": "taskiq worker app.tasks.taskiq_app:broker"},
                 {"name": "dispatcher", "count": 1, "sample": "python -m app.runtime.dispatcher loop"},
@@ -4708,7 +4698,9 @@ def test_jobs_runtime_command_outputs_current_pod_scope(monkeypatch):
     assert payload["scope"] == "current_pod"
     assert payload["environment"]["WORKER_PROCESSES"] == "1"
     assert payload["environment"]["WORKER_MAX_ASYNC_TASKS"] == "4"
-    assert payload["environment"]["WORKER_MAX_PREFETCH"] == "4"
+    assert "TASKIQ_MAX_PREFETCH" not in payload["environment"]
+    assert payload["derived"]["taskiq_max_prefetch"] == "4"
+    assert payload["derived"]["source"] == "WORKER_MAX_ASYNC_TASKS"
     assert "WORKER_RECOVERY_LOOP" not in payload["environment"]
     assert payload["processes"][0]["name"] == "taskiq_worker"
 
@@ -6130,7 +6122,7 @@ def test_env_config_check_rejects_env_file_keys_missing_from_manifest(tmp_path):
 def test_env_config_check_allows_launcher_keys_inside_env_example(tmp_path):
     env_file = tmp_path / ".env.example"
     env_file.write_text(
-        "API_PORT=8100\nWORKER_PROCESSES=1\nWORKER_MAX_ASYNC_TASKS=4\nWORKER_MAX_PREFETCH=4\n",
+        "API_PORT=8100\nWORKER_PROCESSES=1\nWORKER_MAX_ASYNC_TASKS=4\n",
         encoding="utf-8",
     )
 
@@ -6139,7 +6131,6 @@ def test_env_config_check_allows_launcher_keys_inside_env_example(tmp_path):
     assert "API_PORT" in LAUNCHER_ENV_KEYS
     assert "WORKER_PROCESSES" in LAUNCHER_ENV_KEYS
     assert "WORKER_MAX_ASYNC_TASKS" in LAUNCHER_ENV_KEYS
-    assert "WORKER_MAX_PREFETCH" in LAUNCHER_ENV_KEYS
     assert issues == []
 
 
