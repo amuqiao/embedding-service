@@ -1,7 +1,7 @@
 [project]
-name = "cms-ai-translation-service"
+name = "cms-embedding-service"
 version = "0.1.0"
-description = "CMS AI translation service"
+description = "CMS embedding service"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi==0.136.3",
