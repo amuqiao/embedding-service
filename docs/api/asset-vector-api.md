@@ -39,6 +39,20 @@ Content-Type: application/json
 
 `X-AI-Service-Caller-ID` 是可选调用方标识，不是多租户安全边界。`X-Request-ID` 允许 1 到 128 个 ASCII 字母、数字、点号、下划线、冒号或连字符；不传时服务端生成。
 
+## 基本信息
+
+| 项 | 内容 |
+|---|---|
+| 能力名称 | 素材向量检索 |
+| 接口形态 | 异步 Job + 同步搜索/对账 |
+| 新增/更新 `job_type` | `asset_vector_batch_upsert` |
+| 删除 `job_type` | `asset_vector_batch_delete` |
+| 搜索接口 | `POST /api/v1/ai-jobs/vector-search` |
+| 对账接口 | `POST /api/v1/ai-jobs/vector-assets:exists`、`GET /api/v1/ai-jobs/vector-assets/ids` |
+| Callback | 新增/更新资源 Job 和删除资源 Job 支持，可选 |
+| 批量形态 | 新增/更新使用 `job_params.items[]`；删除使用 `job_params.item_ids[]`；单资源是批量特例；具体上限以联调环境配置为准 |
+| 状态保存 | AI 服务保存可检索向量投影、Job 执行状态和结果快照；业务素材详情、权限、上下架、标签库事实仍由业务后端维护 |
+
 ## 接口清单
 
 | 接口 | 方法和路径 | 调用方式 | 业务用途 |
@@ -70,8 +84,8 @@ Content-Type: application/json
 
 用户发起搜索
   -> 按搜索意图选择 text / image / item_ids / hybrid
-  -> 业务后端按权限、项目、分类、标签、上下架状态预过滤出可选 candidate_item_ids
-  -> 调对应搜索接口，传 search_mode、该模式允许的查询字段和可选 candidate_item_ids
+  -> 调对应搜索接口，传 search_mode 和该模式允许的查询字段
+  -> 可选：如业务方已有权限、分类、状态等候选池，可传 candidate_item_ids 限定排序范围
   -> AI 服务返回匹配到的 item_ids
   -> 业务后端拿 item_ids 回自己的素材库拼详情
 ```
@@ -928,10 +942,6 @@ curl -sS -X POST "https://test-ai.example.com/api/v1/ai-jobs/jobs" \
           ]
         }
       ]
-    },
-    "options": {
-      "priority": "normal",
-      "idempotency_mode": "return_existing"
     }
   }'
 ```
@@ -958,10 +968,6 @@ curl -sS -X POST "https://test-ai.example.com/api/v1/ai-jobs/jobs" \
     "job_type": "asset_vector_batch_delete",
     "job_params": {
       "item_ids": ["asset_001", "asset_002"]
-    },
-    "options": {
-      "priority": "normal",
-      "idempotency_mode": "return_existing"
     }
   }'
 ```
@@ -1070,13 +1076,13 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/vector-assets/ids?li
 - 多语种标签由业务方直接展开到 `labels[]`。同一个 `label_id` 可以出现多条不同 `language` 的标签文本。
 - 标签是否可信、是否已审核、是否参与检索，由业务后端决定。本服务不调用标签库，也不保存完整标签库。
 - 资源名称、标签名、标签描述发生变化且业务方认为会影响检索时，业务方应重新提交批量新增/更新资源接口。
-- 搜索接口支持可选 `candidate_item_ids`。业务后端可以先按权限、项目、分类、标签、状态、收藏等业务规则过滤候选池，再把候选池传给 AI 服务做向量排序，避免先全局取 Top K 再过滤导致结果不足。
+- 搜索接口支持可选 `candidate_item_ids`。业务后端如果已有权限、项目、分类、标签、状态、收藏等候选池，可以把候选池传给 AI 服务做向量排序；不传时按 AI 服务已索引资源集合检索。
 - `candidate_item_ids` 只表达搜索候选池，不表达查询种子；资源 ID 搜索的查询种子仍使用 `item_ids`。
 - `candidate_item_ids=[]` 是合法请求，表示候选池为空，服务端直接返回 `item_ids=[]`。
 - `candidate_item_ids` 中尚未建向量的资源不参与排序，也不会出现在返回结果中；业务方需要严格检查缺失向量时使用正向对账接口。
 - 搜索接口的 `top_k` 是可选字段；不传时由服务端控制默认返回数量。
 - 搜索结果只返回排序后的 `item_ids`，不返回业务素材详情、分数、模型、维度或向量元信息。
-- 未传 `candidate_item_ids` 时，AI 服务按已索引资源集合检索；业务后端仍可在拿到 `item_ids` 后做最终过滤和详情拼装，但可能出现过滤后结果不足。
+- 未传 `candidate_item_ids` 时，AI 服务按已索引资源集合检索；业务后端仍可在拿到 `item_ids` 后做最终过滤和详情拼装。
 - 正向和反向对账接口只返回对账必需字段，不返回模型、维度、版本或其他向量元信息。
 - 本服务不暴露完整向量、完整图片二进制、base64 大 payload、完整模型响应或 provider raw payload。
 
@@ -1101,4 +1107,4 @@ curl -sS -X GET "https://test-ai.example.com/api/v1/ai-jobs/vector-assets/ids?li
 | `JOB_EXECUTION_FAILED` | 500 | 未归类的 Job 执行失败 | no |
 | `INTERNAL_ERROR` | 500 | 同步搜索或对账接口未预期异常 | no |
 
-错误响应中的 `code` 是数字错误码，`msg` 是错误消息；表中的 Reason 是服务内部和 `job_error.reason` 中使用的稳定错误原因。调用方做业务分支时优先根据 HTTP status、`job_status` 和 `job_error.reason` 处理。
+错误响应中的 `code` 是数字错误码，`msg` 是错误消息；表中的 Reason 是同步接口错误原因或 `job_error.reason` 中使用的稳定错误原因。调用方做业务分支时优先根据 HTTP status、`job_status` 和 `job_error.reason` 处理。
