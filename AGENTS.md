@@ -18,14 +18,17 @@
 - 包管理：`uv`
 - 本地依赖服务：`docker compose`
 
-## 运行与部署模式
+## 运行与开发入口
 
-本项目区分 1 个日常本地 recipe、1 个本地进程入口和 2 个 compose 部署入口：
+本项目区分日常本地 recipe、本地进程入口和 compose 部署入口：
 
-- `dev` recipe：日常本地开发环境，编排 `compose-deps`、Alembic migration 和宿主机 API/worker；入口是 `./scripts/run.sh up dev`。
-- `local`：宿主机运行 API/worker；入口是 `./scripts/dev.sh`。
-- `compose-deps`：只启动 PostgreSQL/Redis 依赖服务；入口是 `./scripts/deploy.sh up compose-deps`。
-- `compose-full`：API、worker、PostgreSQL、Redis 全部由 `docker compose` 管理；入口是 `./scripts/deploy.sh up compose-full`。
+- 日常本地开发使用 `./scripts/run.sh up dev`、`./scripts/run.sh status dev`、`./scripts/run.sh down dev`。
+- 本地 API / worker 进程使用 `./scripts/dev.sh`。
+- Docker compose 形态使用 `./scripts/deploy.sh`。
+- 一次性验证使用 `./scripts/verify.sh`。
+- 业务 smoke / E2E 使用 `./scripts/smoke.sh`。
+- Job 查询与运维使用 `./scripts/jobs.sh`、`./scripts/job-ops.sh`。
+- 已部署 Pod 内手动运维使用 `./scripts/k8s.sh`。
 
 部署配置加载优先级：
 
@@ -37,50 +40,11 @@
 > 应用默认值
 ```
 
-`docker-compose.yml environment` 只放容器网络地址、容器内端口和容器内路径等运行形态覆盖；业务配置、密钥、模型参数和限制参数来自 env 文件或运行时注入。
+`docker-compose.yml environment` 只放运行形态覆盖；业务配置、密钥、模型参数和限制参数来自 env 文件或运行时注入。
 
 本项目不维护生产部署、远程数据库重置、K8s 资源、云平台 Secrets 或 CI/CD 发布流水线。已部署 Pod 内的 PostgreSQL / Redis 连接检查、OSS 显式检查、Alembic 状态查询和手动 Alembic 迁移入口是 `./scripts/k8s.sh`，只使用当前 Pod 注入的应用环境变量。
 
-## 开发入口
-
-本项目的本地开发统一入口是：
-
-```bash
-./scripts/run.sh --help
-```
-
-常用命令：
-
-```bash
-./scripts/dev.sh bootstrap
-./scripts/run.sh up dev
-./scripts/run.sh status dev
-./scripts/run.sh down dev
-./scripts/verify.sh workflow-smoke
-./scripts/verify.sh check
-./scripts/deploy.sh check
-./scripts/load.sh --help
-./scripts/models.sh --help
-./scripts/media.sh --help
-./scripts/redis.sh --help
-./scripts/oss.sh --help
-./scripts/tools.sh registry
-./scripts/jobs.sh --help
-./scripts/job-ops.sh --help
-./scripts/k8s.sh --help
-```
-
-`scripts/` 维护 16 类稳定入口，职责互不重叠：`run.sh` 日常快捷 recipe、`dev.sh` 本地宿主机进程生命周期、`verify.sh` 一次性验证、`deploy.sh` compose 部署形态、`k8s.sh` 已部署 Pod 内手动运维、`redis.sh` Redis 只读排障事实源、`oss.sh` 对象存储配置、连通性和显式上传检查事实源、`load.sh` 项目级压测入口、`triton-bench.sh` Triton 推理服务直压入口、`jobs.sh` Job 只读查询与排障、`job-ops.sh` Job 写操作运维入口、`smoke.sh` 标准业务 smoke/E2E 验证入口、`models.sh` 本地模型资产下载与必需文件检查、`media.sh` 本地音视频素材探测、校验和准备、`ai.sh` 云模型厂商 API Key 可用性和远端模型列表检查入口、`tools.sh` 无默认持久副作用的本地开发辅助工具和只读代码清单查看。完整命令以各脚本 `-h` 输出和 `scripts/README.md` 为准。
-
-`start`、`stop`、`restart`、`status` 支持指定服务：
-
-```bash
-./scripts/dev.sh start api
-./scripts/dev.sh restart worker
-./scripts/dev.sh status api
-```
-
-不要绕过 `scripts/dev.sh` 直接拼散本地服务命令，除非是在排查脚本本身。一次性验证任务使用 `scripts/verify.sh`。
+不要绕过 `scripts/dev.sh` 直接拼散本地服务命令，除非是在排查脚本本身。完整命令以各脚本 `-h`、`scripts/README.md` 和 `docs/current/script-entrypoint-contract.md` 为准。
 
 ### 脚本目录维护规则
 
